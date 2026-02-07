@@ -7,323 +7,321 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: Android Telemetry Redaction Plan
 sidebar_label: Android Telemetry
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
+::: Canonical Source ကို သတိပြုပါ။
 :::
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Android Telemetry Redaction Plan (AND7)
+# Android Telemetry လျှော့ချရေးအစီအစဉ် (AND7)
 
-## Scope
+## နယ်ပယ်
 
-This document captures the proposed telemetry redaction policy and enablement
-artefacts for the Android SDK as required by roadmap item **AND7**. It aligns
-mobile instrumentation with the Rust node baseline while accounting for
-device-specific privacy guarantees. The output serves as the pre-read for the
-February 2026 SRE governance review.
+ဤစာတမ်းသည် အဆိုပြုထားသည့် တယ်လီမီတာ လျှော့ချရေးမူဝါဒနှင့် ဖွင့်ပေးမှုကို ဖမ်းယူထားသည်။
+လမ်းပြမြေပုံပါ ပစ္စည်း **AND7** လိုအပ်ချက်အရ Android SDK အတွက် လက်ရာများ။ ချိန်ညှိသည်။
+စာရင်းကိုင်နေစဉ်တွင် Rust node ၏ အခြေခံလိုင်းဖြင့် မိုဘိုင်းကိရိယာတန်ဆာပလာ
+စက်၏ သီးခြားကိုယ်ရေးကိုယ်တာ အာမခံချက်။ output သည် pre-read အဖြစ်ဆောင်ရွက်သည်။
+ဖေဖော်ဝါရီလ 2026 SRE အုပ်ချုပ်မှုပြန်လည်သုံးသပ်ခြင်း။
 
-Objectives:
+ရည်ရွယ်ချက်များ-
 
-- Catalogue every Android-emitted signal that reaches shared observability
-  backends (OpenTelemetry traces, Norito-encoded logs, metrics exports).
-- Classify fields that differ from the Rust baseline and document redaction or
-  retention controls.
-- Outline enablement and testing work so support teams can respond
-  deterministically to redaction-related alerts.
+- မျှဝေကြည့်ရှုနိုင်မှုသို့ရောက်ရှိသည့် Android မှထုတ်လွှတ်သောအချက်ပြမှုတိုင်းကို Catalog လုပ်ပါ။
+  နောက်ခံပစ္စည်းများ (OpenTelemetry ခြေရာခံများ၊ Norito-ကုဒ်လုပ်ထားသော မှတ်တမ်းများ၊ မက်ထရစ်များ တင်ပို့မှုများ)။
+- Rust အခြေခံမျဉ်းနှင့် စာရွက်စာတမ်း ပြန်လည်ပြုပြင်ခြင်း သို့မဟုတ် ကွဲပြားသော အကွက်များကို အမျိုးအစားခွဲပါ။
+  ထိန်းသိမ်းထိန်းချုပ်မှုများ။
+- ပံ့ပိုးကူညီရေးအဖွဲ့များက တုံ့ပြန်နိုင်စေရန် အကြမ်းဖျင်းလုပ်ဆောင်ခြင်းနှင့် စမ်းသပ်ခြင်းလုပ်ငန်း
+  ပြန်လည်ပြုပြင်ခြင်းနှင့်ပတ်သက်သော သတိပေးချက်များကို အတိအကျဆုံးဖြတ်ပါ။
 
-## Signal Inventory (Draft)
+## Signal Inventory (မူကြမ်း)
 
-Planned instrumentation grouped by channel. All field names follow the Android
-SDK telemetry schema (`org.hyperledger.iroha.android.telemetry.*`). Optional
-fields are marked with `?`.
+ချန်နယ်အလိုက် အုပ်စုဖွဲ့ စီစဉ်ထားသော ကိရိယာ။ အကွက်အမည်များအားလုံးသည် Android နှင့် လိုက်နာသည်။
+SDK တယ်လီမီတာစနစ် (`org.hyperledger.iroha.android.telemetry.*`)။ ရွေးချယ်ခွင့်
+အကွက်များကို `?` ဖြင့် အမှတ်အသားပြုထားသည်။
 
-| Signal ID | Channel | Key Fields | PII/PHI Classification | Redaction / Retention | Notes |
-|-----------|---------|------------|------------------------|-----------------------|-------|
-| `android.torii.http.request` | Trace span | `authority_hash`, `route`, `status_code`, `latency_ms` | Authority is public; route contains no secrets | Emit hashed authority (`blake2b_256`) before export; retain for 7 days | Mirrors Rust `torii.http.request`; hashing ensures mobile alias privacy. |
-| `android.torii.http.retry` | Event | `route`, `retry_count`, `error_code`, `backoff_ms` | None | No redaction; retain 30 days | Used for deterministic retry audits; identical to Rust fields. |
-| `android.pending_queue.depth` | Gauge metric | `queue_type`, `depth` | None | No redaction; retain 90 days | Matches Rust `pipeline.pending_queue_depth`. |
-| `android.keystore.attestation.result` | Event | `alias_label`, `security_level`, `attestation_digest`, `device_brand_bucket` | Alias (derived), device metadata | Replace alias with deterministic label, redact brand to enum bucket | Required for AND2 attestation readiness; Rust nodes do not emit device metadata. |
-| `android.keystore.attestation.failure` | Counter | `alias_label`, `failure_reason` | None after alias redaction | No redaction; retain 90 days | Supports chaos drills; alias_label derived from hashed alias. |
-| `android.telemetry.redaction.override` | Event | `override_id`, `actor_role_masked`, `reason`, `expires_at` | Actor role qualifies as operational PII | Field exports masked role category; retain 365 days with audit log | Not present in Rust; operators must file overrides through support. |
-| `android.telemetry.export.status` | Counter | `backend`, `status` | None | No redaction; retain 30 days | Parity with Rust exporter status counters. |
-| `android.telemetry.redaction.failure` | Counter | `signal_id`, `reason` | None | No redaction; retain 30 days | Required to mirror Rust `streaming_privacy_redaction_fail_total`. |
-| `android.telemetry.device_profile` | Gauge | `profile_id`, `sdk_level`, `hardware_tier` | Device metadata | Emit coarse buckets (SDK major, hardware tier); retain 30 days | Enables parity dashboards without exposing OEM specifics. |
-| `android.telemetry.network_context` | Event | `network_type`, `roaming` | Carrier may be PII | Drop `carrier_name` entirely; retain other fields 7 days | `ClientConfig.networkContextProvider` supplies the sanitised snapshot so apps can emit network type + roaming without exposing subscriber data; parity dashboards treat the signal as the mobile analogue to Rust `peer_host`. |
-| `android.telemetry.config.reload` | Event | `source`, `result`, `duration_ms` | None | No redaction; retain 30 days | Mirrors Rust config reload spans. |
-| `android.telemetry.chaos.scenario` | Event | `scenario_id`, `outcome`, `duration_ms`, `device_profile` | Device profile is bucketed | Same as `device_profile`; retain 30 days | Logged during chaos rehearsals required for AND7 readiness. |
-| `android.telemetry.redaction.salt_version` | Gauge | `salt_epoch`, `rotation_id` | None | No redaction; retain 365 days | Tracks Blake2b salt rotation; parity alert when Android hash epoch diverges from Rust nodes. |
-| `android.crash.report.capture` | Event | `crash_id`, `signal`, `process_state`, `has_native_trace`, `anr_watchdog_bucket` | Crash fingerprint + process metadata | Hash `crash_id` with the shared redaction salt, bucket watchdog state, drop stack frames before export; retain 30 days | Enabled automatically when `ClientConfig.Builder.enableCrashTelemetryHandler()` is called; feeds parity dashboards without exposing device-identifying traces. |
-| `android.crash.report.upload` | Counter | `crash_id`, `backend`, `status`, `retry_count` | Crash fingerprint | Reuse hashed `crash_id`, emit status only; retain 30 days | Emit via `ClientConfig.crashTelemetryReporter()` or `CrashTelemetryHandler.recordUpload` so uploads share the same Sigstore/OLTP guarantees as other telemetry. |
+| အချက်ပြ ID | လက်ပံ | သော့ကွက်များ | PII/PHI အမျိုးအစားခွဲခြားခြင်း | ပြန်လည်ပြုပြင်ခြင်း/ ထိန်းသိမ်းခြင်း | မှတ်စုများ |
+|-----------|---------|------------------|--------------------------------|--------------------------------|--------|
+| `android.torii.http.request` | ခြေရာကောက် ထွာ | `authority_hash`, `route`, `status_code`, `latency_ms` | အာဏာပိုင်သည် အများသူငှာ၊ လမ်းကြောင်းတွင် လျှို့ဝှက်ချက်များ | မရှိပါ။ တင်ပို့ခြင်းမပြုမီ hashed authority (`blake2b_256`) ကို ထုတ်လွှတ်ခြင်း၊ 7 ရက် | ထိန်းသိမ်းပါ။ မှန်များ သံချေး `torii.http.request`; hashing သည် mobile alias privacy ကိုသေချာစေသည်။ |
+| `android.torii.http.retry` | ပွဲ | `route`, `retry_count`, `error_code`, `backoff_ms` | အနတ္တ | တုံ့ပြန်မှုမရှိပါ။ ရက် 30 ကို ထိန်းသိမ်းပါ။ အဆုံးအဖြတ်ပေးသော ပြန်စမ်းစစ်မှုများအတွက် အသုံးပြုသည်။ Rust အကွက်များနှင့် တူညီသည်။ |
+| `android.pending_queue.depth` | တိုင်းထွာမက်ထရစ် | `queue_type`, `depth` | အနတ္တ | တုံ့ပြန်မှုမရှိပါ။ ရက် 90 ကို ထိန်းသိမ်းပါ။ Rust `pipeline.pending_queue_depth` နှင့် ကိုက်ညီသည်။ |
+| `android.keystore.attestation.result` | ပွဲ | `alias_label`, `security_level`, `attestation_digest`, `device_brand_bucket` | Alias ​​(ဆင်းသက်လာသည်)၊ စက်ပစ္စည်း မက်တာဒေတာ | အမည်တူများကို အဆုံးအဖြတ်အညွှန်းဖြင့် အစားထိုးပါ၊ အမှတ်တံဆိပ်ကို enum bucket | သို့ ပြန်လည်ပြင်ဆင်ပါ။ AND2 သက်သေခံချက်အဆင်သင့်အတွက် လိုအပ်သည် Rust node များသည် စက်၏ မက်တာဒေတာကို ထုတ်လွှတ်ခြင်းမရှိပါ။ |
+| `android.keystore.attestation.failure` | ကောင်တာ | `alias_label`, `failure_reason` | အဘယ်သူမျှမပြီးနောက် alias redaction | တုံ့ပြန်မှုမရှိပါ။ ရက် 90 ကို ထိန်းသိမ်းပါ။ ပရမ်းပတာလေ့ကျင့်မှုများကို ပံ့ပိုးပေးသည်။ hashed alias မှဆင်းသက်လာသော alias_label။ |
+| `android.telemetry.redaction.override` | ပွဲ | `override_id`, `actor_role_masked`, `reason`, `expires_at` | သရုပ်ဆောင်အခန်းကဏ္ဍသည် လုပ်ငန်းလည်ပတ်မှု PII | အဖြစ် အရည်အချင်းပြည့်မီသည်။ မျက်နှာဖုံးစွပ်ထားသော ကဏ္ဍအမျိုးအစားအလိုက် တင်ပို့မှုများ၊ စာရင်းစစ်မှတ်တမ်း | ဖြင့် 365 ရက်ကို ထိန်းသိမ်းပါ။ Rust တွင်မပါဝင်ပါ။ အော်ပရေတာများသည် ပံ့ပိုးမှုမှတစ်ဆင့် overrides များကို တင်သွင်းရမည်ဖြစ်သည်။ |
+| `android.telemetry.export.status` | ကောင်တာ | `backend`, `status` | အနတ္တ | တုံ့ပြန်မှုမရှိပါ။ ရက် 30 ကို ထိန်းသိမ်းပါ။ Rust တင်ပို့သူ အခြေအနေကောင်တာများနှင့် တူညီမှု။ |
+| `android.telemetry.redaction.failure` | ကောင်တာ | `signal_id`, `reason` | အနတ္တ | တုံ့ပြန်မှုမရှိပါ။ ရက် 30 ကို ထိန်းသိမ်းပါ။ မှန်ရန် Rust `streaming_privacy_redaction_fail_total` လိုအပ်သည်။ |
+| `android.telemetry.device_profile` | တိုင်းထွာ | `profile_id`, `sdk_level`, `hardware_tier` | စက်ပစ္စည်း မက်တာဒေတာ | ပုံးကြမ်းများ ထုတ်လွှတ်ခြင်း (SDK အဓိက၊ ဟာ့ဒ်ဝဲအဆင့်); ရက် 30 ကို ထိန်းသိမ်းပါ။ OEM အသေးစိတ်များကို မဖော်ပြဘဲ တန်းတူညီမျှသော ဒက်ရှ်ဘုတ်များကို ဖွင့်ပါ။ |
+| `android.telemetry.network_context` | ပွဲ | `network_type`, `roaming` | သယ်ဆောင်သူသည် PII | ဖြစ်နိုင်သည်။ `carrier_name` ကို လုံးဝ ချပေးပါ။ အခြားနယ်ပယ်များကို 7 ရက် | ထိန်းသိမ်းပါ။ `ClientConfig.networkContextProvider` သည် ပိုးသတ်ထားသောလျှပ်တစ်ပြက်ရိုက်ချက်အား ပံ့ပိုးပေးသောကြောင့် အပလီကေးရှင်းများသည် စာရင်းသွင်းသူဒေတာကို မဖော်ပြဘဲ ကွန်ရက်အမျိုးအစား + Roaming ကို ထုတ်လွှတ်နိုင်သည်။ parity ဒက်ရှ်ဘုတ်များသည် အချက်ပြမှုကို Rust `peer_host` သို့ မိုဘိုင်း analogue အဖြစ် ဆက်ဆံသည်။ |
+| `android.telemetry.config.reload` | ပွဲ | `source`, `result`, `duration_ms` | အနတ္တ | တုံ့ပြန်မှုမရှိပါ။ ရက် 30 ကို ထိန်းသိမ်းပါ။ Mirrors Rust config reload spans |
+| `android.telemetry.chaos.scenario` | ပွဲ | `scenario_id`, `outcome`, `duration_ms`, `device_profile` | စက်ပစ္စည်းပရိုဖိုင်ကို ထုပ်ပိုးထားသည် | `device_profile` နှင့်တူသည်။ ရက် 30 ကို ထိန်းသိမ်းပါ။ AND7 အဆင်သင့်အတွက် လိုအပ်သော ပရမ်းပတာ အစမ်းလေ့ကျင့်မှုများအတွင်း မှတ်တမ်းတင်ထားသည်။ |
+| `android.telemetry.redaction.salt_version` | တိုင်းထွာ | `salt_epoch`, `rotation_id` | အနတ္တ | တုံ့ပြန်မှုမရှိပါ။ 365 ရက် | ထိန်းသိမ်းပါ။ သီချင်းများ Blake2b ဆားလည်ပတ်; Android hash အပိုင်းသည် Rust node များနှင့် ကွဲပြားသောအခါ တူညီမှုသတိပေးချက်။ |
+| `android.crash.report.capture` | ပွဲ | `crash_id`, `signal`, `process_state`, `has_native_trace`, `anr_watchdog_bucket` | ပျက်စီးနေသော လက်ဗွေ + လုပ်ငန်းစဉ် မက်တာဒေတာ | Hash `crash_id` ဖြင့် မျှဝေထားသော ပြန်လည်တုံ့ပြန်ဆား၊ ပုံးစောင့်စောင့်ကြည့်မှုအခြေအနေ၊ တင်ပို့ခြင်းမပြုမီ စည်းဘောင်များကို ချလိုက်ပါ။ ရက် 30 ကို ထိန်းသိမ်းပါ။ `ClientConfig.Builder.enableCrashTelemetryHandler()` ကို ခေါ်သောအခါ အလိုအလျောက် ဖွင့်ပေးသည် ။ စက်ပစ္စည်း-ခြေရာများကို ဖော်ထုတ်ခြင်းမပြုဘဲ တန်းတူညီမျှသော ဒက်ရှ်ဘုတ်များကို ကျွေးမွေးပါသည်။ |
+| `android.crash.report.upload` | ကောင်တာ | `crash_id`, `backend`, `status`, `retry_count` | ပျက်စီးနေသော လက်ဗွေ | ဟက်ခ်လုပ်ထားသော `crash_id` ကို ပြန်သုံးပါ၊ အခြေအနေကိုသာ ထုတ်လွှတ်ပါ။ ရက် 30 ကို ထိန်းသိမ်းပါ။ `ClientConfig.crashTelemetryReporter()` သို့မဟုတ် `CrashTelemetryHandler.recordUpload` မှတစ်ဆင့် ထုတ်လွှတ်သောကြောင့် အပ်လုဒ်များသည် တူညီသော Sigstore/OLTP အာမခံချက်များကို အခြားသော telemetry ကဲ့သို့ မျှဝေပါသည်။ |
 
-### Implementation Hooks
+### အကောင်အထည်ဖော်ချိတ်
 
-- `ClientConfig` now threads manifest-derived telemetry data via
-  `setTelemetryOptions(...)`/`setTelemetrySink(...)`, automatically registering
-  `TelemetryObserver` so hashed authorities and salt metrics flow without bespoke observers.
-  See `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ClientConfig.java`
-  and the companion classes under
-  `java/iroha_android/src/main/java/org/hyperledger/iroha/android/telemetry/`.
-- Applications can call
-  `ClientConfig.Builder.enableAndroidNetworkContext(android.content.Context)` to register the
-  reflection-based `AndroidNetworkContextProvider`, which queries `ConnectivityManager` at runtime
-  and emits the `android.telemetry.network_context` event without introducing compile-time Android
-  dependencies.
-- Unit tests `TelemetryOptionsTests` and `TelemetryObserverTests`
-  (`java/iroha_android/src/test/java/org/hyperledger/iroha/android/telemetry/`) guard the hashing
-  helpers plus the ClientConfig integration hook so manifest regressions surface immediately.
-- The enablement kit/labs now cite concrete APIs instead of pseudocode, keeping this document and
-  the runbook aligned with the shipping SDK.
+- `ClientConfig` သည် ယခုအခါ လိုင်းများမှတစ်ဆင့် ထင်ရှားသော တယ်လီမီတာဒေတာကို ပေးပို့သည်
+  `setTelemetryOptions(...)`/`setTelemetrySink(...)`၊ အလိုအလျောက် စာရင်းသွင်းနေသည်
+  `TelemetryObserver` ထို့ကြောင့် တားမြစ်ထားသောအာဏာပိုင်များနှင့် ဆားမက်ထရစ်များသည် စိတ်ကြိုက်လေ့လာသူများမပါဘဲ စီးဆင်းနေသည်။
+  `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ClientConfig.java` ကိုကြည့်ပါ။
+  လက်အောက်ရှိ အဖော်အတန်းများ
+  `java/iroha_android/src/main/java/org/hyperledger/iroha/android/telemetry/`။
+- Application များကို ဖုန်းခေါ်ဆိုနိုင်ပါသည်။
+  မှတ်ပုံတင်ရန် `ClientConfig.Builder.enableAndroidNetworkContext(android.content.Context)`
+  runtime တွင် `ConnectivityManager` ကို မေးမြန်းသည့် ရောင်ပြန်ဟပ်မှုအခြေခံ `AndroidNetworkContextProvider`
+  compile-time Android ကိုမိတ်ဆက်ခြင်းမပြုဘဲ `android.telemetry.network_context` အစီအစဉ်ကို ထုတ်လွှတ်သည်
+  မှီခိုမှု။
+- ယူနစ်စမ်းသပ်မှုများ `TelemetryOptionsTests` နှင့် `TelemetryObserverTests`
+  (`java/iroha_android/src/test/java/org/hyperledger/iroha/android/telemetry/`) တားဆီးခြင်းအား ကာကွယ်ပါ။
+  အကူအညီပေးသူများ နှင့် ClientConfig ပေါင်းစည်းမှုချိတ် ဖြစ်သောကြောင့် ဆုတ်ယုတ်မှုများ ချက်ချင်းပေါ်လာသည်။
+- ယခု စာရွက်စာတမ်းအား ထားရှိခြင်းနှင့် pseudocode အစား ကွန်ကရစ် APIs များကို ကိုးကား၍ enablement kit/labs များသည်၊
+  Runbook သည် ပို့ဆောင်မှု SDK နှင့် ချိန်ညှိထားသည်။
 
-> **Operations note:** the owner/status worksheet lives at
-> `docs/source/sdk/android/readiness/signal_inventory_worksheet.md` and must be
-> updated alongside this table during every AND7 checkpoint.
+> **လုပ်ငန်းဆောင်ရွက်မှုမှတ်စု-** ပိုင်ရှင်/အခြေအနေ စာရွက်စာတန်းမှာ နေထိုင်ပါသည်။
+> `docs/source/sdk/android/readiness/signal_inventory_worksheet.md` နှင့် ဖြစ်ရမည်။
+> AND7 စစ်ဆေးရေးဂိတ်တိုင်းတွင် ဤဇယားနှင့်အတူ အပ်ဒိတ်လုပ်ထားသည်။
 
-## Parity allowlists & schema-diff workflow
+## Parity ခွင့်ပြုစာရင်းများနှင့် schema-ကွဲပြားသည့် အလုပ်အသွားအလာ
 
-Governance requires a dual allowlist so Android exports never leak identifiers
-that Rust services intentionally surface. This section mirrors the runbook entry
-(`docs/source/android_runbook.md` §2.3) but keeps the AND7 redaction plan
-self-contained.
+အုပ်ချုပ်မှုစနစ်သည် ခွင့်ပြုထားသောစာရင်းနှစ်ခု လိုအပ်သောကြောင့် Android တင်ပို့မှုများသည် ခွဲခြားသတ်မှတ်မှုများ ဘယ်သောအခါမှ မပေါက်ကြားစေပါ။
+Rust ဝန်ဆောင်မှုများကို ရည်ရွယ်ချက်ရှိရှိ ပေါ်အောင်ပြုလုပ်ခြင်း။ ဤအပိုင်းသည် ရှေ့ပြေးစာအုပ်ထည့်သွင်းမှုကို ထင်ဟပ်စေသည်။
+(`docs/source/android_runbook.md` §2.3) သို့သော် AND7 ပြန်လည်ဖော်ထုတ်ရေးအစီအစဉ်ကို ထိန်းသိမ်းထားသည်။
+ကိုယ်တိုင်ပါရှိသော။
 
-| Category | Android exporters | Rust services | Validation hook |
-|----------|-------------------|---------------|-----------------|
-| Authority / route context | Hash `authority`/`alias` via Blake2b-256 and drop raw Torii hostnames before export; emit `android.telemetry.redaction.salt_version` to prove salt rotation. | Emit full Torii hostnames and peer IDs for correlation. | Compare `android.torii.http.request` vs `torii.http.request` entries in the latest schema diff under `docs/source/sdk/android/readiness/schema_diffs/`, then run `scripts/telemetry/check_redaction_status.py` to confirm salt epochs. |
-| Device & signer identity | Bucket `hardware_tier`/`device_profile`, hash controller aliases, and never export serial numbers. | Emit validator `peer_id`, controller `public_key`, and queue hashes verbatim. | Align with `docs/source/sdk/mobile_device_profile_alignment.md`, exercise alias hashing tests inside `java/iroha_android/run_tests.sh`, and archive queue-inspector outputs during labs. |
-| Network metadata | Export only `network_type` + `roaming`; drop `carrier_name`. | Retain peer hostname/TLS endpoint metadata. | Store each schema diff in `readiness/schema_diffs/` and alert if Grafana’s “Network Context” widget shows carrier strings. |
-| Override / chaos evidence | Emit `android.telemetry.redaction.override`/`android.telemetry.chaos.scenario` with masked actor roles. | Emit unmasked override approvals; no chaos-specific spans. | Cross-check `docs/source/sdk/android/readiness/and7_operator_enablement.md` after drills to ensure override tokens + chaos artefacts sit alongside the unmasked Rust events. |
+| အမျိုးအစား | Android တင်ပို့သူများ | သံချေးတက်ခြင်း | တရားဝင်ချိတ် |
+|----------|--------------------------------|----------------|----------------|
+| အာဏာပိုင်/လမ်းကြောင်း ဆက်စပ် | Blake2b-256 မှတစ်ဆင့် Hash `authority`/`alias` နှင့် တင်ပို့ခြင်းမပြုမီ အကြမ်းထည် Torii ကို လက်ခံရယူလိုက်ပါ။ ဆားလည်ပတ်မှုကို သက်သေပြရန် `android.telemetry.redaction.salt_version` ကို ထုတ်လွှတ်သည်။ | ဆက်စပ်မှုအတွက် Torii အပြည့်အစုံနှင့် မျိုးတူ ID များကို ထုတ်လွှတ်ပါ။ | `android.torii.http.request` နှင့် `torii.http.request` တို့ကို `docs/source/sdk/android/readiness/schema_diffs/` အောက်တွင် နောက်ဆုံးအစီအစဉ်ကွဲပြားမှုတွင် ထည့်သွင်းမှုများကို နှိုင်းယှဉ်ပါ၊ ထို့နောက် ဆားခေတ်ကိုအတည်ပြုရန် `scripts/telemetry/check_redaction_status.py` ကိုဖွင့်ပါ။ |
+| စက်နှင့် လက်မှတ်ထိုးသူ အထောက်အထား | Bucket `hardware_tier`/`device_profile`၊ hash controller aliases နှင့် serial နံပါတ်များကို ဘယ်တော့မှ မတင်ပို့ပါ။ | တရားဝင်ကိရိယာ `peer_id`၊ ထိန်းချုပ်ကိရိယာ `public_key`၊ နှင့် တန်းစီထားသော hashes verbatim ကို ထုတ်ပါ။ | `docs/source/sdk/mobile_device_profile_alignment.md` နှင့် ချိန်ညှိပါ၊ `java/iroha_android/run_tests.sh` အတွင်းရှိ သရုပ်ခွဲစမ်းသပ်မှုများကို လေ့ကျင့်ခန်းလုပ်ခြင်း၊ နှင့် ဓာတ်ခွဲခန်းအတွင်း တန်းစီစစ်ဆေးသူ ရလဒ်များကို သိမ်းဆည်းပါ။ |
+| ကွန်ရက်မက်တာဒေတာ | `network_type` + `roaming` ကိုသာ ထုတ်ယူပါ။ `carrier_name` ကိုချလိုက်ပါ။ | သက်တူရွယ်တူ hostname/TLS အဆုံးမှတ် မက်တာဒေတာကို ထိန်းသိမ်းပါ။ | `readiness/schema_diffs/` တွင် အစီအစဉ်တစ်ခုစီ၏ ကွဲပြားမှုကို သိမ်းဆည်းပြီး Grafana ၏ “Network Context” ဝစ်ဂျက်သည် ဝန်ဆောင်မှုပေးသည့်စာကြောင်းများကို ပြသပါက သတိပေးချက်။ |
+| ပဓာန/ ပရမ်းပတာ အထောက်အထား | မျက်နှာဖုံးစွပ်သရုပ်ဆောင်ထားသော `android.telemetry.redaction.override`/`android.telemetry.chaos.scenario` ကိုထုတ်ပါ။ | ဖုံးကွယ်ထားသော ဖုံးကွယ်ထားသော ထပ်လောင်းအတည်ပြုချက်များကို ထုတ်လွှတ်ပါ။ ပရမ်းပတာ-သတ်သတ်မှတ်မှတ်အပိုင်းများမရှိပါ။ | တိုကင်များကို လွှမ်းမိုးကြောင်းသေချာစေရန် လေ့ကျင့်မှုများပြီးနောက် `docs/source/sdk/android/readiness/and7_operator_enablement.md` + ပရမ်းပတာပစ္စည်းများကို ဖုံးကွယ်ထားသော Rust ဖြစ်ရပ်များနှင့်အတူ ပူးတွဲစစ်ဆေးပါ။ |
 
-Workflow:
+အလုပ်အသွားအလာ-
 
-1. After each manifest/exporter change, run
-   `scripts/telemetry/run_schema_diff.sh --android-config <android.json> --rust-config <rust.json>` and place the JSON under `docs/source/sdk/android/readiness/schema_diffs/`.
-2. Review the diff against the table above. If Android emits a Rust-only field
-   (or vice versa), file an AND7 readiness bug and update both this plan and the
-   runbook.
-3. During weekly ops reviews, execute
+1. manifest/exporter တစ်ခုစီ ပြောင်းလဲပြီးနောက်၊ run ပါ။
+   `scripts/telemetry/run_schema_diff.sh --android-config <android.json> --rust-config <rust.json>` နှင့် JSON ကို `docs/source/sdk/android/readiness/schema_diffs/` အောက်တွင်ထားပါ။
+2. အထက်ပါဇယားနှင့် ကွာခြားချက်ကို ပြန်လည်သုံးသပ်ပါ။ အကယ်၍ Android သည် Rust-only အကွက်ကို ထုတ်လွှတ်သည်။
+   (သို့မဟုတ် အပြန်အလှန်အားဖြင့်) AND7 အဆင်သင့် ချို့ယွင်းချက်တစ်ခုတင်ပြီး ဤအစီအစဥ်နှင့် နှစ်ခုလုံးကို အပ်ဒိတ်လုပ်ပါ။
+   ရှေ့ပြေးစာအုပ်။
+3. အပတ်စဉ် ops ပြန်လည်သုံးသပ်ခြင်းများတွင် လုပ်ဆောင်ပါ။
    `scripts/telemetry/check_redaction_status.py --status-url https://android-telemetry-stg/api/redaction/status`
-   and log the salt epoch plus schema-diff timestamp in the readiness worksheet.
-4. Record any deviations in `docs/source/sdk/android/readiness/signal_inventory_worksheet.md`
-   so governance packets capture parity decisions.
+   ဆားခေတ်နှင့် ဇယား-ကွဲပြားသည့်အချိန်တံဆိပ်ကို အဆင်သင့်အလုပ်စာရွက်တွင် ရေးသွင်းပါ။
+4. `docs/source/sdk/android/readiness/signal_inventory_worksheet.md` တွင် မည်သည့်သွေဖည်မှုများကိုမဆို မှတ်တမ်းတင်ပါ။
+   ထို့ကြောင့် အုပ်ချုပ်မှု ပက်ကေ့ခ်ျများသည် တန်းတူညီမျှ ဆုံးဖြတ်ချက်များကို ဖမ်းယူသည်။
 
-> **Schema reference:** canonical field identifiers originate from
-> `android_telemetry_redaction.proto` (materialised during the Android SDK build
-> alongside the Norito descriptors). The schema exposes the `authority_hash`,
-> `alias_label`, `attestation_digest`, `device_brand_bucket`, and
-> `actor_role_masked` fields now used across the SDK and telemetry exporters.
+> **Schema ရည်ညွှန်းချက်-** canonical field identifiers မှ အစပြုပါသည်။
+> `android_telemetry_redaction.proto` (Android SDK တည်ဆောက်စဉ်အတွင်း ရုပ်ထွက်ပါ
+> Norito ဖော်ပြချက်များနှင့် အတူ)။ schema သည် `authority_hash` ကိုဖော်ထုတ်သည်၊
+> `alias_label`, `attestation_digest`, `device_brand_bucket`၊
+> `actor_role_masked` အကွက်များကို SDK နှင့် တယ်လီမက်ထရီပို့ကုန်များကြားတွင် ယခုအသုံးပြုသည်။
 
-`authority_hash` is a fixed 32-byte digest of the Torii authority value recorded
-in the proto. `attestation_digest` captures the canonical attestation statement
-fingerprint, while `device_brand_bucket` maps the raw Android brand string onto
-the approved enum (`generic`, `oem`, `enterprise`). `actor_role_masked` carries
-the redaction override actor category (`support`, `sre`, `audit`) instead of the
-raw user identifier.
+`authority_hash` သည် မှတ်တမ်းတင်ထားသော Torii အာဏာပိုင်တန်ဖိုး၏ ပုံသေ 32-byte digest တစ်ခုဖြစ်သည်။
+ပရိုတို၌။ `attestation_digest` သည် canonical သက်သေခံချက်ထုတ်ပြန်ချက်ကို ဖမ်းယူသည်။
+လက်ဗွေရာ၊ `device_brand_bucket` သည် အကြမ်းထည် Android အမှတ်တံဆိပ်ကြိုးကို မြေပုံပေါ်တင်ထားစဉ်
+အတည်ပြုစာရင်း (`generic`၊ `oem`၊ `enterprise`)။ `actor_role_masked` သယ်ဆောင်သည်။
+redaction override သရုပ်ဆောင်အမျိုးအစား (`support`၊ `sre`၊ `audit`) အစား၊
+ကုန်ကြမ်းအသုံးပြုသူသတ်မှတ်မှု။
 
-### Crash Telemetry Export Alignment
+### ပျက်စီးနေသော Telemetry Export Alignmentယခုအခါ ပျက်စီးနေသော တယ်လီမီတာစနစ်သည် တူညီသော OpenTelemetry တင်ပို့သူများနှင့် သက်သေပြချက်တို့ကို မျှဝေထားသည်။
+Torii ကွန်ရက်ချိတ်ဆက်မှု အချက်ပြမှုများအဖြစ် ပိုက်လိုင်းပိတ်ခြင်း၊
+ပွားတင်ပို့သူများ၊ ပျက်စီးမှုကိုင်တွယ်ဖြေရှင်းသူသည် `android.crash.report.capture` ကို ကျွေးမွေးသည်။
+ဖျက်ချပြီးသား `crash_id` (Blake2b-256 ကို ပြန်လည်ပြုပြင်ဆားသုံးပြီး
+`android.telemetry.redaction.salt_version`)၊ လုပ်ငန်းစဉ်-အခြေအနေပုံးများ၊
+နှင့် ANR စောင့်ကြည့်လေ့လာရေး မက်တာဒေတာကို သန့်ရှင်းရေးလုပ်ထားသည်။ အစုလိုက်ခြေရာခံများသည် စက်ပေါ်တွင် ကျန်ရှိနေပြီး တစ်ခုတည်းသာဖြစ်သည်။
+ယခင်က `has_native_trace` နှင့် `anr_watchdog_bucket` အကွက်များထဲသို့ အကျဉ်းချုံ့ထားသည်
+တင်ပို့ပါ ထို့ကြောင့် PII သို့မဟုတ် OEM ကြိုးများ စက်ပစ္စည်းကို မချန်ထားပါ။
 
-Crash telemetry now shares the same OpenTelemetry exporters and provenance
-pipeline as the Torii networking signals, closing the governance follow-up about
-duplicate exporters. The crash handler feeds the `android.crash.report.capture`
-event with a hashed `crash_id` (Blake2b-256 using the redaction salt already
-tracked by `android.telemetry.redaction.salt_version`), process-state buckets,
-and sanitized ANR watchdog metadata. Stack traces remain on-device and are only
-summarised into the `has_native_trace` and `anr_watchdog_bucket` fields before
-export so no PII or OEM strings leave the device.
+ပျက်စီးမှုတစ်ခုကို အပ်လုဒ်တင်ခြင်းသည် `android.crash.report.upload` ကောင်တာဝင်ရောက်မှုကို ဖန်တီးပေးသည်၊
+SRE နှင့်ပတ်သက်ပြီး ဘာမှလေ့လာခြင်းမရှိဘဲ backend ယုံကြည်စိတ်ချရမှုကို စစ်ဆေးရန် ခွင့်ပြုခြင်း။
+အသုံးပြုသူ သို့မဟုတ် stack သဲလွန်စ။ အချက်ပြနှစ်ခုလုံးသည် Torii တင်ပို့သူကို ပြန်သုံးသောကြောင့်၊ ၎င်းတို့သည် အမွေဆက်ခံသည်။
+တူညီသော Sigstore လက်မှတ်ရေးထိုးခြင်း၊ ထိန်းသိမ်းခြင်းမူဝါဒနှင့် သတိပေးခြင်းချိတ်များကို သတ်မှတ်ပြီးဖြစ်သည်
+AND7 အတွက် ပံ့ပိုးမှု runbooks များသည် hashed crash identifier ကို ဆက်စပ်ပေးနိုင်ပါသည်။
+Android နှင့် Rust အထောက်အထား အစုအဝေးများကြားတွင် သတ်မှတ်ထားသော ပျက်စီးမှု ပိုက်လိုင်းမပါဝင်ပါ။
 
-Uploading a crash creates the `android.crash.report.upload` counter entry,
-allowing SRE to audit backend reliability without learning anything about the
-user or stack trace. Because both signals reuse the Torii exporter, they inherit
-the same Sigstore signing, retention policy, and alerting hooks already defined
-for AND7. Support runbooks can therefore correlate a hashed crash identifier
-between Android and Rust evidence bundles without a bespoke crash pipeline.
+`ClientConfig.Builder.enableCrashTelemetryHandler()` မှတစ်ဆင့် ကိုင်တွယ်သူကို တစ်ကြိမ်ဖွင့်ပါ။
+တယ်လီမီတာ ရွေးချယ်စရာများနှင့် စုပ်ခွက်များကို ပြင်ဆင်သတ်မှတ်ထားသည်။ ပျက်ကျနေသော တံတားများကို ပြန်သုံးနိုင်သည်။
+`ClientConfig.crashTelemetryReporter()` (သို့မဟုတ် `CrashTelemetryHandler.recordUpload`)
+တူညီသောလက်မှတ်ထိုးထားသောပိုက်လိုင်းတွင် နောက်ခံရလဒ်များကို ထုတ်လွှတ်ရန်။
 
-Enable the handler via `ClientConfig.Builder.enableCrashTelemetryHandler()` once
-telemetry options and sinks are configured; crash upload bridges can reuse
-`ClientConfig.crashTelemetryReporter()` (or `CrashTelemetryHandler.recordUpload`)
-to emit backend outcomes in the same signed pipeline.
+## မူဝါဒ Deltas နှင့် Rust Baseline
 
-## Policy Deltas vs Rust Baseline
+လျော့ပါးရေးအဆင့်များဖြင့် Android နှင့် Rust telemetry မူဝါဒများအကြား ကွာခြားချက်များ။
 
-Differences between Android and Rust telemetry policies with mitigation steps.
+| အမျိုးအစား | သံချေးအခြေခံ | Android မူဝါဒ | လျော့ပါးစေခြင်း/အတည်ပြုခြင်း |
+|----------------|----------------|------------------------------------------------|
+| အာဏာပိုင်/သက်တူရွယ်တူ ခွဲခြားသတ်မှတ်ခြင်း | ရိုးရိုးအာဏာစက် | `authority_hash` (Blake2b-256၊ လှည့်ဆား) | `iroha_config.telemetry.redaction_salt` မှတဆင့် မျှဝေထားသော ဆား၊ parity test သည် ပံ့ပိုးဝန်ထမ်းအတွက် နောက်ပြန်လှည့်နိုင်သော မြေပုံကို သေချာစေသည်။ |
+| လက်ခံ/ကွန်ရက် မက်တာဒေတာ | Node hostnames/IP များကို တင်ပို့ပြီး | ကွန်ရက် အမျိုးအစား + ရိုမင် သပ်သပ် | လက်ခံနိုင်သောအမည်များအစား ရရှိနိုင်မှုအမျိုးအစားများကို အသုံးပြုရန်အတွက် ကွန်ရက်ကျန်းမာရေး ဒိုင်ခွက်များကို အပ်ဒိတ်လုပ်ထားသည်။ |
+| ကိရိယာလက္ခဏာများ | N/A (ဆာဗာ-ခြမ်း) | ပုံးထည့်ထားသော ပရိုဖိုင် (SDK 21/23/29+၊ အဆင့် `emulator`/`consumer`/`enterprise`) | ပရမ်းပတာ အစမ်းလေ့ကျင့်မှုများသည် ပုံးပုံးပုံဆွဲခြင်းကို အတည်ပြုသည်။ ပိုမိုအသေးစိတ်လိုအပ်သောအခါတွင် runbook စာရွက်စာတမ်းများတိုးမြှင့်ခြင်းလမ်းကြောင်းကိုပံ့ပိုးပါ။ |
+| Redaction overrides | မထောက်ခံပါ | တိုကင် Norito လယ်ဂျာတွင် သိမ်းဆည်းထားသော လူကိုယ်တိုင် ထပ်ရေးခြင်း (`actor_role_masked`, `reason`) | အစားထိုးမှုများသည် လက်မှတ်ရေးထိုးထားသော တောင်းဆိုချက် လိုအပ်သည်။ စာရင်းစစ်မှတ်တမ်းကို ၁ နှစ် ထိန်းသိမ်းထားသည်။ |
+| သက်သေခြေရာများ | SRE only | မှတဆင့် ဆာဗာ ထောက်ခံချက် SDK သည် ပိုးသတ်ထားသော သက်သေခံချက် အနှစ်ချုပ် | Rust သက်သေအထောက်အထားအတည်ပြုပေးသူကို အပြန်အလှန်စစ်ဆေးသည့် သက်သေပြချက် hashed alias သည် ယိုစိမ့်မှုကို ကာကွယ်ပေးသည်။ |
 
-| Category | Rust Baseline | Android Policy | Mitigation / Validation |
-|----------|---------------|----------------|-------------------------|
-| Authority / peer identifiers | Plain authority strings | `authority_hash` (Blake2b-256, rotated salt) | Shared salt published via `iroha_config.telemetry.redaction_salt`; parity test ensures reversible mapping for support staff. |
-| Host / network metadata | Node hostnames/IPs exported | Network type + roaming only | Network health dashboards updated to use availability categories instead of hostnames. |
-| Device characteristics | N/A (server-side) | Bucketed profile (SDK 21/23/29+, tier `emulator`/`consumer`/`enterprise`) | Chaos rehearsals verify bucket mapping; support runbook documents escalation path when finer detail needed. |
-| Redaction overrides | Not supported | Manual override token stored in Norito ledger (`actor_role_masked`, `reason`) | Overrides require signed request; audit log retained 1 year. |
-| Attestation traces | Server attestation via SRE only | SDK emits sanitized attestation summary | Cross-check attestation hashes against Rust attestation validator; hashed alias prevents leakage. |
+စိစစ်ရေးစာရင်း-
 
-Validation checklist:
+- ယခင်က hashed/masked အကွက်များကို စစ်ဆေးခြင်း signal တစ်ခုစီအတွက် ပြန်လည်ပြုပြင်ခြင်းယူနစ် စမ်းသပ်မှုများ
+  တင်ပို့သူ တင်ပြချက်။
+- Schema diff tool (Rust nodes များနှင့်မျှဝေထားသည်) နယ်ပယ်တူညီမှုကိုအတည်ပြုရန် ညစဉ်လုပ်ဆောင်သည်။
+- Chaos rehearsal script လေ့ကျင့်ခန်းများသည် အလုပ်အသွားအလာကို လွှမ်းမိုးပြီး စာရင်းစစ်မှတ်တမ်းကို အတည်ပြုသည်။
 
-- Redaction unit tests for each signal verifying hashed/masked fields before
-  exporter submission.
-- Schema diff tool (shared with Rust nodes) run nightly to confirm field parity.
-- Chaos rehearsal script exercises override workflow and confirms audit logging.
+## အကောင်အထည်ဖော်ခြင်းလုပ်ငန်းတာဝန်များ (Pre-SRE အုပ်ချုပ်မှု)
 
-## Implementation Tasks (Pre-SRE Governance)
-
-1. **Inventory Confirmation** — Cross-verify table above with actual Android SDK
-   instrumentation hooks and Norito schema definitions. Owners: Android
-   Observability TL, LLM.
-2. **Telemetry Schema Diff** — Run the shared diff tool against Rust metrics to
-   produce parity artefacts for the SRE review. Owner: SRE privacy lead.
-3. **Runbook Draft (Completed 2026-02-03)** — `docs/source/android_runbook.md`
-   now documents the end-to-end override workflow (Section 3) and the expanded
-   escalation matrix plus role responsibilities (Section 3.1), tying the CLI
-   helpers, incident evidence, and chaos scripts back to the governance policy.
-   Owners: LLM with Docs/Support editing.
-4. **Enablement Content** — Prepare briefing slides, lab instructions, and
-   knowledge-check questions for the Feb 2026 session. Owners: Docs/Support
-   Manager, SRE enablement team.
+1. **စာရင်းအတည်ပြုခြင်း** — အမှန်တကယ် Android SDK ဖြင့် အထက်ဖော်ပြပါဇယားကို ဖြတ်ကျော်အတည်ပြုပါ။
+   တူရိယာချိတ်များနှင့် Norito ဇယားကွက် အဓိပ္ပါယ်ဖွင့်ဆိုချက်များ။ ပိုင်ရှင်များ- Android
+   မြင်နိုင်စွမ်း TL၊ LLM
+2. **Telemetry Schema Diff** — မျှဝေထားသော diff tool ကို Rust မက်ထရစ်များဆီသို့ Run ပါ။
+   SRE ပြန်လည်သုံးသပ်မှုအတွက် တူညီသောအချက်များထုတ်လုပ်ပါ။ ပိုင်ရှင်- SRE ကိုယ်ရေးကိုယ်တာ ဦးဆောင်မှု။
+3. **Runbook Draft (2026-02-03)** — `docs/source/android_runbook.md`
+   ယခုတွင် အဆုံးမှ အဆုံးကို ပြန်ရေးသည့် အလုပ်အသွားအလာ (အပိုင်း ၃) နှင့် ချဲ့ထွင်မှုများကို မှတ်တမ်းတင်ထားသည်။
+   တိုးမြှင့်ခြင်း matrix နှင့် အခန်းကဏ္ဍတာဝန်များ (Section3.1)၊ CLI ကို ချိတ်ဆက်ခြင်း၊
+   အကူအညီပေးသူများ၊ အဖြစ်အပျက် အထောက်အထားများနှင့် ပရမ်းပတာ ဇာတ်ညွှန်းများသည် အုပ်ချုပ်မှုမူဝါဒသို့ ပြန်သွားရန်။
+   ပိုင်ရှင်များ- Docs/Support တည်းဖြတ်မှုဖြင့် LLM။
+4. **အသုံးပြုမှုအကြောင်းအရာ** — အကျဉ်းချုပ်ဆလိုက်များ၊ ဓာတ်ခွဲခန်းလမ်းညွှန်ချက်များနှင့် ပြင်ဆင်ပါ။
+   Feb 2026 စက်ရှင်အတွက် အသိပညာ-စစ်ဆေးသည့်မေးခွန်းများ။ ပိုင်ရှင်များ- Docs/ပံ့ပိုးမှု
+   မန်နေဂျာ၊ SRE enablement အဖွဲ့။
 
 ## Enablement Workflow & Runbook Hooks
 
-### 1. Local + CI smoke coverage
+### 1. Local + CI မီးခိုးလွှမ်းခြုံမှု
 
-- `scripts/android_sample_env.sh --telemetry --telemetry-duration=5m --telemetry-cluster=<host>` spins up the Torii sandbox, replays the canonical multi-source SoraFS fixture (delegating to `ci/check_sorafs_orchestrator_adoption.sh`), and seeds synthetic Android telemetry.
-  - Traffic generation is handled by `scripts/telemetry/generate_android_load.py`, which records a request/response transcript under `artifacts/android/telemetry/load-generator.log` and honours headers, path overrides, or dry-run mode.
-  - The helper copies SoraFS scoreboard/summaries into `${WORKDIR}/sorafs/` so AND7 rehearsals can prove multi-source parity before touching mobile clients.
-- CI reuses the same tooling: `ci/check_android_dashboard_parity.sh` runs `scripts/telemetry/compare_dashboards.py` against `dashboards/grafana/android_telemetry_overview.json`, the Rust reference dashboard, and the allowance file at `dashboards/data/android_rust_dashboard_allowances.json`, emitting the signed diff snapshot `docs/source/sdk/android/readiness/dashboard_parity/android_vs_rust-latest.json`.
-- Chaos rehearsals follow `docs/source/sdk/android/telemetry_chaos_checklist.md`; the sample-env script plus the dashboard parity check form the “ready” evidence bundle that feeds the AND7 burn-in audit.
+- `scripts/android_sample_env.sh --telemetry --telemetry-duration=5m --telemetry-cluster=<host>` သည် Torii သဲဘောက်စ်ကို လှည့်ပတ်ကာ၊ canonical multi-source SoraFS fixture (I18NI000000172X သို့ လွှဲအပ်ခြင်း)၊ နှင့် အစေ့ထုတ်သည့် Android တယ်လီမီတာကို ပြန်လည်ပြသသည်။
+  - `scripts/telemetry/generate_android_load.py` သည် တောင်းဆိုမှု/တုံ့ပြန်မှုမှတ်တမ်းကို `artifacts/android/telemetry/load-generator.log` အောက်တွင် မှတ်တမ်းတင်ပြီး ဂုဏ်ပြုသော ခေါင်းစီးများ၊ လမ်းကြောင်းကို အစားထိုးမှုများ သို့မဟုတ် ခြောက်သွေ့သည့်မုဒ်ကို မှတ်တမ်းတင်သည့် Traffic generation ကို ကိုင်တွယ်ပါသည်။
+  - အကူအညီပေးသူက SoraFS အမှတ်စာရင်း/အနှစ်ချုပ်များကို `${WORKDIR}/sorafs/` သို့ ကူးယူထားသောကြောင့် AND7 အစမ်းလေ့ကျင့်မှုများသည် မိုဘိုင်းကလိုင်းယင့်များမထိမီ အရင်းအမြစ်များစွာကွာဟမှုကို သက်သေပြနိုင်မည်ဖြစ်သည်။
+- CI သည် တူညီသောကိရိယာကို ပြန်လည်အသုံးပြုသည်- `ci/check_android_dashboard_parity.sh` သည် `scripts/telemetry/compare_dashboards.py` နှင့် `dashboards/grafana/android_telemetry_overview.json`၊ Rust ရည်ညွှန်းဒိုင်ခွက်နှင့် `dashboards/data/android_rust_dashboard_allowances.json` မှ ထောက်ပံ့ကြေးဖိုင်ကို ထုတ်ပေးပြီး လက်မှတ်ထိုးထားသော ကွဲပြားသောလျှပ်တစ်ပြက်ရိုက်ချက် I18000018NIX ကို ထုတ်လွှတ်သည်။
+- ပရမ်းပတာ အစမ်းလေ့ကျင့်မှုများသည် `docs/source/sdk/android/telemetry_chaos_checklist.md` အတိုင်း လိုက်နာသည်။ sample-env script နှင့် dashboard parity check သည် AND7 burn-in audit ကို ကျွေးမွေးသော "အဆင်သင့်" အထောက်အထား အတွဲအစည်းကို ဖွဲ့ဆိုသည်။
 
-### 2. Override issuance and audit trail
+### 2. ထုတ်ပေးခြင်းနှင့် စာရင်းစစ်လမ်းကြောင်းကို အစားထိုးပါ။
 
-- `scripts/android_override_tool.py` is the canonical CLI for issuing and revoking redaction overrides. `apply` ingests a signed request, emits the manifest bundle (`telemetry_redaction_override.to` by default), and appends a hashed token row into `docs/source/sdk/android/telemetry_override_log.md`. `revoke` stamps the revocation timestamp against that same row, and `digest` writes the sanitised JSON snapshot required for governance.
-- The CLI refuses to modify the audit log unless the Markdown table header is present, matching the compliance requirement captured in `docs/source/android_support_playbook.md`. Unit coverage in `scripts/tests/test_android_override_tool_cli.py` protects the table parser, manifest emitters, and error handling.
-- Operators attach the generated manifest, updated log excerpt, **and** the digest JSON under `docs/source/sdk/android/readiness/override_logs/` whenever an override is exercised; the log retains 365 days of history per the governance decision in this plan.
+- `scripts/android_override_tool.py` သည် ပြန်လည်ပြုပြင်ခြင်းများကို ဖယ်ရှားခြင်းနှင့် ဖယ်ရှားခြင်းအတွက် canonical CLI ဖြစ်သည်။ `apply` သည် လက်မှတ်ရေးထိုးထားသော တောင်းဆိုချက်ကို ထည့်သွင်းပြီး မန်နီးဖက်စ်အစုအဝေး (`telemetry_redaction_override.to` ကို မူရင်းအတိုင်း) ထုတ်လွှတ်ကာ `docs/source/sdk/android/telemetry_override_log.md` တွင် ဟက်ခ်လုပ်ထားသော တိုကင်အတန်းကို ထပ်ထည့်သည်။ `revoke` သည် ထိုအတန်းတူအား ပြန်လည်ရုပ်သိမ်းခြင်းအချိန်တံဆိပ်ကို တံဆိပ်နှိပ်ပြီး `digest` သည် အုပ်ချုပ်မှုအတွက် လိုအပ်သော သန့်စင်ထားသော JSON လျှပ်တစ်ပြက်ပုံကို ရေးပေးသည်။
+- CLI သည် `docs/source/android_support_playbook.md` တွင်ရိုက်ကူးထားသော လိုက်နာမှုလိုအပ်ချက်နှင့် ကိုက်ညီသော Markdown ဇယားခေါင်းစီးမပါပါက စာရင်းစစ်မှတ်တမ်းကို မွမ်းမံပြင်ဆင်ရန် ငြင်းဆိုပါသည်။ `scripts/tests/test_android_override_tool_cli.py` တွင် ယူနစ်လွှမ်းခြုံမှုသည် ဇယားခွဲခြမ်းစိတ်ဖြာမှု၊ ဖော်ပြချက်ထုတ်လွှတ်မှုများနှင့် အမှားအယွင်းများကို ကိုင်တွယ်ခြင်းတို့ကို ကာကွယ်ပေးသည်။
+- အော်ပရေတာများသည် ထုတ်လုပ်ထားသော မန်နီးဖက်စ်၊ မွမ်းမံထားသော မှတ်တမ်းကောက်နုတ်ချက်၊ **နှင့် ** အစားထိုးမှုတစ်ခုကို ကျင့်သုံးသည့်အခါတိုင်း `docs/source/sdk/android/readiness/override_logs/` အောက်တွင် အချေအတင် JSON ကို ပူးတွဲပါရှိသည်။ ဤအစီအစဥ်ရှိ အုပ်ချုပ်မှုဆုံးဖြတ်ချက်အရ မှတ်တမ်းသည် ၃၆၅ ရက်မြောက်သော သမိုင်းကြောင်းကို ထိန်းသိမ်းထားသည်။
 
-### 3. Evidence capture & retention
+### 3. အထောက်အထားများ ဖမ်းယူထိန်းသိမ်းခြင်း။
 
-- Every rehearsal or incident produces a structured bundle under `artifacts/android/telemetry/` containing:
-  - The load-generator transcript and aggregate counters from `generate_android_load.py`.
-  - Dashboard parity diff (`android_vs_rust-<stamp>.json`) and allowance hash emitted by `ci/check_android_dashboard_parity.sh`.
-  - Override log delta (if an override was granted), the corresponding manifest, and the refreshed digest JSON.
-- The SRE burn-in report references those artefacts plus the SoraFS scoreboard copied by `android_sample_env.sh`, giving the AND7 readiness review a deterministic chain from telemetry hashes → dashboards → override status.
+- အစမ်းလေ့ကျင့်မှု သို့မဟုတ် အဖြစ်အပျက်တိုင်းသည် `artifacts/android/telemetry/` အောက်တွင် ဖွဲ့စည်းတည်ဆောက်ထားသော အတွဲတစ်ခုကို ထုတ်လုပ်သည်-
+  - `generate_android_load.py` မှ load-generator မှတ်တမ်းများနှင့် အစုလိုက်ကောင်တာများ။
+  - Dashboard parity diff (`android_vs_rust-<stamp>.json`) နှင့် `ci/check_android_dashboard_parity.sh` မှ ထုတ်လွှတ်သော စရိတ်စက hash။
+  - မှတ်တမ်းမြစ်ဝကျွန်းပေါ်ကို အစားထိုးခြင်း (ထပ်ရေးခွင့်ပြုပါက)၊ သက်ဆိုင်ရာ မန်နီးဖက်စ်နှင့် ပြန်လည်ပြင်ဆင်ထားသော JSON။
+- SRE burn-in အစီရင်ခံစာသည် အဆိုပါပစ္စည်းများအပြင် `android_sample_env.sh` မှကူးယူထားသော SoraFS အမှတ်အသားဘုတ်ကို ကိုးကားပြီး AND7 မှ အဆင်သင့်ပြန်လည်သုံးသပ်ခြင်းအား telemetry hashes → dashboards → override status တို့မှ အဆုံးအဖြတ်ပေးသည့်ကွင်းဆက်တစ်ခုပေးသည်။
 
-## Cross-SDK Device Profile Alignment
+## Cross-SDK စက်ပစ္စည်းပရိုဖိုင် ချိန်ညှိမှု
 
-Dashboards translate Android’s `hardware_tier` into the canonical
-`mobile_profile_class` defined in
-`docs/source/sdk/mobile_device_profile_alignment.md` so AND7 and IOS7 telemetry
-compare the same cohorts:
+ဒက်ရှ်ဘုတ်များသည် Android ၏ `hardware_tier` ကို Canonical အဖြစ် ဘာသာပြန်ဆိုသည်။
+`mobile_profile_class` ဟု သတ်မှတ်ထားသည်။
+`docs/source/sdk/mobile_device_profile_alignment.md` ထို့ကြောင့် AND7 နှင့် IOS7 တယ်လီမီတာ
+တူညီသောအုပ်စုများကို နှိုင်းယှဉ်ပါ-
 
-- `lab` — emitted as `hardware_tier = emulator`, matching Swift’s
-  `device_profile_bucket = simulator`.
-- `consumer` — emitted as `hardware_tier = consumer` (with the SDK-major suffix)
-  and grouped with Swift’s `iphone_small`/`iphone_large`/`ipad` buckets.
-- `enterprise` — emitted as `hardware_tier = enterprise`, aligning with Swift’s
-  `mac_catalyst` bucket and future managed/iOS desktop runtimes.
+- `lab` — Swift နှင့် ကိုက်ညီသော `hardware_tier = emulator` အဖြစ် ထုတ်လွှတ်သည်
+  `device_profile_bucket = simulator`။
+- `consumer` — `hardware_tier = consumer` (SDK-အဓိက နောက်ဆက်တွဲနှင့်အတူ)
+  Swift ၏ `iphone_small`/`iphone_large`/`ipad` ပုံးများဖြင့် အုပ်စုဖွဲ့ထားသည်။
+- `enterprise` — Swift's နှင့် လိုက်လျောညီထွေရှိသော `hardware_tier = enterprise` အဖြစ် ထုတ်လွှတ်သည်
+  `mac_catalyst` ပုံးနှင့် အနာဂတ်စီမံထားသော/iOS ဒက်စ်တော့ အပြေးအချိန်များ။
 
-Any new tier must be added to the alignment document and schema diff artefacts
-before dashboards consume it.
+မည်သည့်အဆင့်အသစ်မဆို alignment document နှင့် schema diff artefacts များသို့ ထည့်ရပါမည်။
+ဒက်ရှ်ဘုတ်များ မစားသုံးမီ။
 
-## Governance & Distribution
+## အုပ်ချုပ်မှုနှင့် ဖြန့်ဝေခြင်း။
 
-- **Pre-read package** — This document plus appendix artefacts (schema diff,
-  runbook diff, readiness deck outline) will be distributed to the SRE governance
-  mailing list no later than **2026-02-05**.
-- **Feedback loop** — Comments collected during governance will feed into the
-  `AND7` JIRA epic; blockers are surfaced in `status.md` and the Android weekly
-  stand-up notes.
-- **Publishing** — Once approved, the policy summary will be linked from
-  `docs/source/android_support_playbook.md` and referenced by the shared
-  telemetry FAQ in `docs/source/telemetry.md`.
+- **ကြိုတင်ဖတ်ရှုခြင်း ပက်ကေ့ဂျ်** — ဤစာတမ်းနှင့် နောက်ဆက်တွဲ ပစ္စည်းများ (schema diff၊
+  runbook diff၊ readiness deck outline) SRE အုပ်ချုပ်ရေးသို့ ဖြန့်ဝေပါမည်။
+  **2026-02-05** ထက် နောက်မကျစေဘဲ စာပို့စာရင်း။
+- ** အကြံပြုချက် ကွင်းဆက်** — အုပ်ချုပ်မှုအတွင်း စုဆောင်းထားသော မှတ်ချက်များသည် နယ်ပယ်ထဲသို့ ဝင်လာမည်ဖြစ်သည်။
+  `AND7` JIRA ဇာတ်လမ်းတွဲ blockers များကို `status.md` နှင့် Android တွင် အပတ်စဉ်တွေ့နေရသည်။
+  မတ်တပ်ရပ်မှတ်စုများ။
+- **ထုတ်ဝေခြင်း** — အတည်ပြုပြီးသည်နှင့်၊ မူဝါဒအကျဉ်းချုပ်မှ လင့်ခ်ချိတ်ပါမည်။
+  `docs/source/android_support_playbook.md` ကို ကိုးကား၍ မျှဝေပါသည်။
+  `docs/source/telemetry.md` တွင် telemetry FAQ
 
-## Audit & Compliance Notes
+## စာရင်းစစ်နှင့် လိုက်နာမှုမှတ်စုများ
 
-- Policy honours GDPR/CCPA requirements by removing mobile subscriber data
-  before export; the hashed authority salt rotates quarterly and is stored in
-  the shared secrets vault.
-- Enablement artefacts and runbook updates are logged in the compliance registry.
-- Quarterly reviews confirm that overrides remain closed-loop (no stale access).
+- မိုဘိုင်းစာရင်းသွင်းသူဒေတာကို ဖယ်ရှားခြင်းဖြင့် မူဝါဒသည် GDPR/CCPA လိုအပ်ချက်များကို ဂုဏ်ပြုပါသည်။
+  တင်ပို့ခြင်းမပြုမီ; hashed authority ဆားသည် သုံးလတစ်ကြိမ် လည်ပတ်ပြီး သိုလှောင်ထားသည်။
+  မျှဝေထားသော လျှို့ဝှက်ချက်များ ဆိုပါစို့။
+- လိုက်နာမှုဆိုင်ရာ မှတ်ပုံတင်ခြင်းတွင် ထည့်သွင်းထားသော အနုပညာပစ္စည်းများနှင့် runbook အပ်ဒိတ်များကို မှတ်တမ်းတင်ထားသည်။
+- သုံးလတစ်ကြိမ် ပြန်လည်သုံးသပ်မှုများသည် အပိတ်အဝိုင်းများ ကျန်ရှိနေသေးကြောင်း အတည်ပြုပါသည်။
 
-## Governance Outcome (2026-02-12)
+## အုပ်ချုပ်မှုရလဒ် (2026-02-12)
 
-The SRE governance session on **2026-02-12** approved the Android redaction
-policy without modifications. Key decisions (see
+**2026-02-12** တွင် SRE အုပ်ချုပ်မှုကဏ္ဍမှ Android ပြန်လည်ပြင်ဆင်ခြင်းကို အတည်ပြုခဲ့သည်
+ပြုပြင်ပြောင်းလဲခြင်းမရှိဘဲ မူဝါဒ။ အဓိကဆုံးဖြတ်ချက်များ (ကြည့်ရှုပါ။
 `docs/source/sdk/android/telemetry_redaction_minutes_20260212.md`):
 
-- **Policy acceptance.** Hashed authority, device-profile bucketting, and the
-  omission of carrier names were ratified. Salt rotation tracking via
-  `android.telemetry.redaction.salt_version` becomes a quarterly audit item.
-- **Validation plan.** Unit/integration coverage, nightly schema diff runs, and
-  quarterly chaos rehearsals were endorsed. Action item: publish a dashboard
-  parity report after each rehearsal.
-- **Override governance.** Norito-recorded override tokens were approved with a
-  365-day retention window. Support engineering will own the override log
-  digest review during monthly operations syncs.
+- **မူဝါဒလက်ခံခြင်း။** Hashed authority, device-profile bucketting, and the
+  ဝန်ဆောင်မှုပေးသူအမည်များကို ချန်လှပ်ထားခြင်းကို အတည်ပြုခဲ့သည်။ ဆား လည်ပတ်မှု ခြေရာခံခြင်း များမှတဆင့်
+  `android.telemetry.redaction.salt_version` သည် သုံးလတစ်ကြိမ် စာရင်းစစ်ပစ္စည်း ဖြစ်လာသည်။
+- **အတည်ပြုခြင်းအစီအစဉ်။** ယူနစ်/ပေါင်းစပ်လွှမ်းခြုံမှု၊ ညစဉ်အစီအစဉ်ကွဲပြားမှု နှင့်
+  သုံးလတစ်ကြိမ် ပရမ်းပတာ အစမ်းလေ့ကျင့်မှုများကို ထောက်ခံခဲ့သည်။ လုပ်ဆောင်ချက် အကြောင်းအရာ- ဒက်ရှ်ဘုတ်ကို ထုတ်ဝေပါ။
+  အစမ်းလေ့ကျင့်မှုတစ်ခုစီပြီးနောက် တူညီမှုအစီရင်ခံစာ။
+- **အုပ်စိုးမှုအား အစားထိုးခြင်း။** Norito-မှတ်တမ်းတင်ထားသော ထပ်ခိုးတိုကင်များကို တစ်ခုဖြင့် အတည်ပြုခဲ့သည်
+  365 ရက်ကြာ ထိန်းသိမ်းနိုင်သော ဝင်းဒိုး။ ပံ့ပိုးမှုအင်ဂျင်နီယာသည် ထပ်လောင်းမှတ်တမ်းကို ပိုင်ဆိုင်လိမ့်မည်။
+  လစဉ် လုပ်ဆောင်ချက်များကို ထပ်တူကျစေသည့် ကာလအတွင်း အကြမ်းဖျင်း သုံးသပ်ချက်။
 
-## Follow-up Status
+## နောက်ဆက်တွဲ အခြေအနေ
 
-1. **Device-profile alignment (due 2026-03-01).** ✅ Completed — the shared
-   mapping in `docs/source/sdk/mobile_device_profile_alignment.md` defines how
-   Android `hardware_tier` values map to the canonical `mobile_profile_class`
-   consumed by the parity dashboards and schema diff tooling.
+1. **စက်ပစ္စည်း-ပရိုဖိုင် ချိန်ညှိမှု (2026-03-01 နေ့တွင်)။** ✅ ပြီးပါပြီ — မျှဝေထားသည်
+   `docs/source/sdk/mobile_device_profile_alignment.md` တွင် မြေပုံဆွဲနည်းကို သတ်မှတ်သည်။
+   Android `hardware_tier` တန်ဖိုးများသည် canonical `mobile_profile_class` သို့ မြေပုံညွှန်း
+   parity dashboards နှင့် schema diff tooling တို့မှ စားသုံးသည်။
 
-## Upcoming SRE Governance Brief (Q2 2026)
+## လာမည့် SRE အုပ်ချုပ်မှုအကျဉ်း (Q22026)လမ်းပြမြေပုံ အကြောင်းအရာ **AND7** သည် လာမည့် SRE အုပ်ချုပ်မှုကဏ္ဍတွင် လက်ခံရရှိရန် လိုအပ်ပါသည်။
+အတိုချုံး Android telemetry redaction ကို ကြိုတင်ဖတ်ပါ။ ဤကဏ္ဍကို အသက်မွေးဝမ်းကြောင်းအဖြစ် အသုံးပြုပါ။
+အကျဉ်းချုပ် ကောင်စီအစည်းအဝေးတိုင်း မတိုင်မီ ၎င်းကို မွမ်းမံထားပါ။
 
-Roadmap item **AND7** requires that the next SRE governance session receives a
-concise Android telemetry redaction pre-read. Use this section as the living
-brief; keep it updated before every council meeting.
+### ကြိုတင်ပြင်ဆင်မှုစာရင်း
 
-### Prep checklist
+1. **အထောက်အထားအစုအဝေး** — နောက်ဆုံး schema ကွဲပြားမှု၊ ဒက်ရှ်ဘုတ်ဖန်သားပြင်ဓာတ်ပုံများကို တင်ပို့ပါ၊
+   မှတ်တမ်း digest ကို အစားထိုးပြီး (အောက်ပါ matrix ကိုကြည့်ပါ) နှင့် ၎င်းတို့ကို ရက်စွဲတစ်ခုအောက်တွင် ထားရှိပါ။
+   folder (ဥပမာ
+   အရင်က `docs/source/sdk/android/readiness/and7_sre_brief/2026-02-07/`)
+   ဖိတ်ကြားလွှာပေးပို့ခြင်း။
+2. **Drill အနှစ်ချုပ်** — လတ်တလော ပရမ်းပတာ အစမ်းလေ့ကျင့်မှုမှတ်တမ်း နှင့် ပူးတွဲပါ
+   `android.telemetry.redaction.failure` မက်ထရစ်လျှပ်တစ်ပြက်ရိုက်ချက်၊ Alertmanager သေချာပါစေ။
+   မှတ်ချက်များသည် တူညီသောအချိန်တံဆိပ်ကို ရည်ညွှန်းသည်။
+3. **Override audit** — လက်ရှိအသုံးပြုနေသော overrides အားလုံးကို Norito တွင် မှတ်တမ်းတင်ထားကြောင်း အတည်ပြုပါ။
+   မှတ်ပုံတင်ပြီး အစည်းအဝေး ကုန်းပတ်တွင် အကျဉ်းချုံး။ သက်တမ်းကုန်ဆုံးရက်များ နှင့် ပါ၀င်သည်
+   သက်ဆိုင်ရာ အဖြစ်အပျက် ID များ။
+4. **Agenda note** — SRE သဘာပတိနှင့် တွေ့ဆုံမှုမတိုင်မီ ၄၈ နာရီအလိုတွင်၊
+   အတိုချုံးလင့်ခ်၊ လိုအပ်သည့် ဆုံးဖြတ်ချက်များကို မီးမောင်းထိုးပြခြင်း (အချက်ပြမှုအသစ်များ၊ ထိန်းသိမ်းမှု
+   အပြောင်းအလဲများ သို့မဟုတ် မူဝါဒအပ်ဒိတ်များကို အစားထိုးခြင်း)။
 
-1. **Evidence bundle** — export the latest schema diff, dashboard screenshots,
-   and override log digest (see matrix below) and place them under a dated
-   folder (for example
-   `docs/source/sdk/android/readiness/and7_sre_brief/2026-02-07/`) before
-   sending the invite.
-2. **Drill summary** — attach the most recent chaos rehearsal log plus the
-   `android.telemetry.redaction.failure` metric snapshot; ensure Alertmanager
-   annotations reference the same timestamp.
-3. **Override audit** — confirm all active overrides are recorded in the Norito
-   registry and summarised in the meeting deck. Include expiry dates and the
-   corresponding incident IDs.
-4. **Agenda note** — ping the SRE chair 48 hours ahead of the meeting with the
-   brief link, highlighting any decisions required (new signals, retention
-   changes, or override policy updates).
+### အထောက်အထား မက်ထရစ်
 
-### Evidence matrix
+| Artefact | တည်နေရာ | ပိုင်ရှင် | မှတ်စုများ |
+|----------|----------|------|-------|
+| Schema diff vs Rust | `docs/source/sdk/android/readiness/schema_diffs/<latest>.json` | Telemetry tooling DRI | အစည်းအဝေးမစမီ <72 နာရီအတွင်း ထုတ်ပေးရပါမည်။ |
+| ဒက်ရှ်ဘုတ်ကွဲပြားသည့် စခရင်ရှော့ပုံများ | `docs/source/sdk/android/readiness/dashboards/<date>/` | မြင်နိုင်စွမ်း TL | `sorafs.fetch.*`၊ `android.telemetry.*` နှင့် Alertmanager လျှပ်တစ်ပြက်ပုံများ ပါဝင်သည်။ |
+| ချေဖျက်မှု ပဓာန| `docs/source/sdk/android/readiness/override_logs/<date>.json` | ပံ့ပိုးအင်ဂျင်နီယာ | `scripts/android_override_tool.sh digest` (ထိုလမ်းညွှန်တွင် README ကိုကြည့်ပါ) နောက်ဆုံးထွက် `telemetry_override_log.md` ကို run ပါ။ မမျှဝေမီ တိုကင်များကို ဟက်ရှ်လုပ်ထားသည်။ |
+| ပရမ်းပတာ အစမ်းလေ့ကျင့်မှုမှတ်တမ်း | `artifacts/android/telemetry/chaos/<date>/log.ndjson` | QA အလိုအလျောက်စနစ် | KPI အနှစ်ချုပ်ကို ပူးတွဲပါ (ဆိုင်အရေအတွက်၊ ထပ်စမ်းကြည့်ပါ အချိုး၊ အသုံးပြုမှုကို အစားထိုးရန်)။ |
 
-| Artefact | Location | Owner | Notes |
-|----------|----------|-------|-------|
-| Schema diff vs Rust | `docs/source/sdk/android/readiness/schema_diffs/<latest>.json` | Telemetry tooling DRI | Must be generated <72 h before meeting. |
-| Dashboard diff screenshots | `docs/source/sdk/android/readiness/dashboards/<date>/` | Observability TL | Include `sorafs.fetch.*`, `android.telemetry.*`, and Alertmanager snapshots. |
-| Override digest | `docs/source/sdk/android/readiness/override_logs/<date>.json` | Support engineering | Run `scripts/android_override_tool.sh digest` (see README in that directory) against the latest `telemetry_override_log.md`; tokens remain hashed before sharing. |
-| Chaos rehearsal log | `artifacts/android/telemetry/chaos/<date>/log.ndjson` | QA automation | Attach KPI summary (stall count, retry ratio, override usage). |
+### ကောင်စီတွင် မေးခွန်းများဖွင့်ထားသည်။
 
-### Open questions for the council
-
-- Do we need to shorten the override retention window from 365 days now that
-  the digest is automated?
-- Should `android.telemetry.device_profile` adopt the new shared
-  `mobile_profile_class` labels in the next release, or wait for the Swift/JS
-  SDKs to ship the same change?
-- Is additional guidance required for regional data residency once Torii
-  Norito-RPC events land on Android (NRPC-3 follow-up)?
+- ယခု 365 ရက်များမှ override retention window ကို အတိုချုံ့ရန် လိုအပ်ပါသလား။
+  digest သည် အလိုအလျောက်ဖြစ်ပါသလား။
+- `android.telemetry.device_profile` မျှဝေထားသောအသစ်ကို လက်ခံသင့်ပါသလား။
+  နောက်ထွက်ရှိထားသော `mobile_profile_class` အညွှန်းများ၊ သို့မဟုတ် Swift/JS ကို စောင့်ပါ
+  တူညီသောပြောင်းလဲမှုကို တင်ပို့ရန် SDKs များလား။
+- Torii တစ်ကြိမ် ဒေသတွင်းဒေတာနေထိုင်ခွင့်အတွက် နောက်ထပ်လမ်းညွှန်ချက် လိုအပ်ပါသလား။
+  Norito-RPC ဖြစ်ရပ်များသည် Android (NRPC-3 နောက်ဆက်တွဲ) တွင် ဆင်းသက်လာပါသလား။
 
 ### Telemetry Schema Diff Procedure
 
-Run the schema diff tool at least once per release candidate (and whenever the Android
-instrumentation changes) so the SRE council receives fresh parity artefacts alongside the
-dashboard diff:
+ထုတ်ဝေမည့်ကိုယ်စားလှယ်တစ်ဦးလျှင် အနည်းဆုံးတစ်ကြိမ် schema diff tool ကိုဖွင့်ပါ (နှင့် Android တွင်အချိန်တိုင်း
+ကိရိယာတန်ဆာပလာများ အပြောင်းအလဲများ) ထို့ကြောင့် SRE ကောင်စီသည် ၎င်းနှင့် တွဲလျက် တူညီသော တူညီသော ပစ္စည်းများကို ရရှိသည်။
+ဒက်ရှ်ဘုတ် ကွာခြားချက်-
 
-1. Export the Android and Rust telemetry schemas you want to compare. For CI the configs live
-   under `configs/android_telemetry.json` and `configs/rust_telemetry.json`.
-2. Execute `scripts/telemetry/run_schema_diff.sh --android-config configs/android_telemetry.json --rust-config configs/rust_telemetry.json --out docs/source/sdk/android/readiness/schema_diffs/<date>-android_vs_rust.json`.
-   - Alternatively pass commits (`scripts/telemetry/run_schema_diff.sh android-main rust-main`) to
-     pull the configs directly from git; the script pins the hashes inside the artefact.
-3. Attach the generated JSON to the readiness bundle and link it from `status.md` +
-   `docs/source/telemetry.md`. The diff highlights added/removed fields and retention deltas so
-   auditors can confirm redaction parity without replaying the tool.
-4. When the diff reveals allowable divergence (e.g., Android-only override signals), update the
-   allowance file referenced by `ci/check_android_dashboard_parity.sh` and note the rationale in
-   the schema-diff directory README.
+1. သင်နှိုင်းယှဉ်လိုသော Android နှင့် Rust telemetry schemas ကို ထုတ်ယူပါ။ CI အတွက် configs တိုက်ရိုက်လွှင့်
+   `configs/android_telemetry.json` နှင့် `configs/rust_telemetry.json` အောက်တွင်။
+2. `scripts/telemetry/run_schema_diff.sh --android-config configs/android_telemetry.json --rust-config configs/rust_telemetry.json --out docs/source/sdk/android/readiness/schema_diffs/<date>-android_vs_rust.json` ကို လုပ်ဆောင်ပါ။
+   - တနည်းအားဖြင့် commits (`scripts/telemetry/run_schema_diff.sh android-main rust-main`) ကို ဖြတ်ပါ။
+     configs များကို git မှတိုက်ရိုက်ဆွဲထုတ်ပါ။ script သည် artefact အတွင်းတွင် hash များကို တွဲထိုးထားသည်။
+3. ထုတ်လုပ်ထားသော JSON ကို အဆင်သင့်အစုအဝေးတွင် ပူးတွဲပြီး `status.md` + မှ လင့်ခ်ချိတ်ပါ။
+   `docs/source/telemetry.md`။ ကွာခြားချက်သည် ပေါင်းထည့်/ဖယ်ရှားထားသော အကွက်များနှင့် ထိန်းထားနိုင်သည့် မြစ်ဝကျွန်းပေါ်ဒေသများကို မီးမောင်းထိုးပြထားသည်။
+   စာရင်းစစ်များသည် ကိရိယာကို ပြန်မကစားဘဲ လဲလှယ်မှု တူညီမှုကို အတည်ပြုနိုင်သည်။
+4. ကွာခြားချက်သည် ခွင့်ပြုနိုင်သော ကွဲပြားမှုကို ထုတ်ဖော်ပြသသောအခါ (ဥပမာ၊ Android တစ်ခုတည်းသာ override signals) ကို အပ်ဒိတ်လုပ်ပါ။
+   `ci/check_android_dashboard_parity.sh` မှ ကိုးကားထားသော ထောက်ပံ့ကြေးဖိုင်နှင့် ကျိုးကြောင်းဆီလျော်မှုကို မှတ်သားထားပါ။
+   schema-diff directory README။
 
-> **Archive rules:** keep the five most recent diffs under
-> `docs/source/sdk/android/readiness/schema_diffs/` and move older snapshots to
-> `artifacts/android/telemetry/schema_diffs/` so governance reviewers always see the latest data.
+> ** မှတ်တမ်း စည်းမျဉ်းများ-** နောက်ဆုံး ကွဲပြားမှု ငါးခုကို အောက်တွင် ထားရှိပါ။
+> `docs/source/sdk/android/readiness/schema_diffs/` နှင့် လျှပ်တစ်ပြက်အဟောင်းများကို ရွှေ့ပါ။
+> `artifacts/android/telemetry/schema_diffs/` ထို့ကြောင့် အုပ်ချုပ်မှုပြန်လည်သုံးသပ်သူများသည် နောက်ဆုံးထွက်ဒေတာကို အမြဲတွေ့သည်။

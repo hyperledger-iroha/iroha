@@ -10,65 +10,66 @@ translation_last_reviewed: 2026-02-07
 id: nexus-overview
 title: Sora Nexus overview
 description: High-level summary of the Iroha 3 (Sora Nexus) architecture with pointers to the canonical mono-repo docs.
+translator: machine-google-reviewed
 ---
 
-Nexus (Iroha 3) extends Iroha 2 with multi-lane execution, governance-scoped
-data spaces, and shared tooling across every SDK. This page mirrors the new
-`docs/source/nexus_overview.md` brief in the mono-repo so portal readers can
-quickly understand how the architecture pieces fit together.
+Nexus (Iroha 3) Iroha 2ን በባለብዙ ሌይን አፈጻጸም፣ በአስተዳደር-ወሰን
+የውሂብ ቦታዎች፣ እና በሁሉም ኤስዲኬ ላይ የጋራ መገልገያ። ይህ ገጽ አዲሱን ያንፀባርቃል
+`docs/source/nexus_overview.md` አጭር በ mono-repo ስለዚህ ፖርታል አንባቢዎች ይችላሉ።
+የሕንፃው ክፍሎች እንዴት እንደሚጣመሩ በፍጥነት ይረዱ።
 
-## Release lines
+## የመልቀቂያ መስመሮች
 
-- **Iroha 2** – self-hosted deployments for consortium or private networks.
-- **Iroha 3 / Sora Nexus** – the multi-lane public network where operators
-  register data spaces (DS) and inherit shared governance, settlement, and
-  observability tooling.
-- Both lines compile from the same workspace (IVM + Kotodama toolchain), so SDK
-  fixes, ABI updates, and Norito fixtures remain portable. Operators download
-  the `iroha3-<version>-<os>.tar.zst` bundle to join Nexus; refer to
-  `docs/source/sora_nexus_operator_onboarding.md` for the fullscreen checklist.
+- **Iroha 2** - ለኮንሰርቲየም ወይም ለግል አውታረ መረቦች በራስ የሚስተናገዱ ማሰማራት።
+- **Iroha 3 / Sora Nexus** - ኦፕሬተሮች ያሉበት ባለብዙ መስመር የህዝብ አውታረ መረብ
+  የውሂብ ቦታዎችን (ዲኤስ) መመዝገብ እና የጋራ አስተዳደርን, አሰፋፈርን እና
+  ታዛቢነት መሳሪያ.
+- ሁለቱም መስመሮች ከተመሳሳይ የስራ ቦታ (IVM + Kotodama Toolchain) ያጠናቅራሉ, ስለዚህ ኤስዲኬ
+  ጥገናዎች፣ የ ABI ዝማኔዎች እና Norito ቋሚዎች ተንቀሳቃሽ ሆነው ይቆያሉ። ኦፕሬተሮች ማውረድ
+  የ `iroha3-<version>-<os>.tar.zst` ጥቅል I18NT0000008X ለመቀላቀል; ተመልከት
+  `docs/source/sora_nexus_operator_onboarding.md` ለሙሉ ስክሪን ማረጋገጫ ዝርዝር።
 
-## Building blocks
+## የግንባታ ብሎኮች
 
-| Component | Summary | Portal hooks |
-|-----------|---------|--------------|
-| Data Space (DS) | Governance-defined execution/storages domain that owns one or more lanes, declares validator sets, privacy class, fee + DA policy. | See [Nexus spec](./nexus-spec) for the manifest schema. |
-| Lane | Deterministic shard of execution; emits commitments that the global NPoS ring orders. Lane classes include `default_public`, `public_custom`, `private_permissioned`, and `hybrid_confidential`. | [Lane model](./nexus-lane-model) captures geometry, storage prefixes, and retention. |
-| Transition plan | Placeholder identifiers, routing phases, and dual-profile packaging track how single-lane deployments evolve into Nexus. | [Transition notes](./nexus-transition-notes) document each migration phase. |
-| Space Directory | Registry contract that stores DS manifests + versions. Operators reconcile catalog entries against this directory before joining. | Manifest diff tracker lives under `docs/source/project_tracker/nexus_config_deltas/`. |
-| Lane catalog | `[nexus]` config section that maps lane IDs to aliases, routing policies, and DA thresholds. `irohad --sora --config … --trace-config` prints the resolved catalog for audits. | Use `docs/source/sora_nexus_operator_onboarding.md` for the CLI walk-through. |
-| Settlement router | XOR transfer orchestrator that connects private CBDC lanes with public liquidity lanes. | `docs/source/cbdc_lane_playbook.md` spells out policy knobs and telemetry gates. |
-| Telemetry/SLOs | Dashboards + alerts under `dashboards/grafana/nexus_*.json` capture lane height, DA backlog, settlement latency, and governance queue depth. | [Telemetry remediation plan](./nexus-telemetry-remediation) spells out the dashboards, alerts, and audit evidence. |
+| አካል | ማጠቃለያ | ፖርታል መንጠቆዎች |
+|--------|-----|-------------|
+| የውሂብ ክፍተት (DS) | በመንግስት የተገለፀ የማስፈጸሚያ/የማከማቻ ጎራ የአንድ ወይም ከዚያ በላይ መስመሮች ባለቤት፣አረጋጋጭ ስብስቦችን፣የግላዊነት ክፍልን፣ክፍያ +DA ፖሊሲን ያውጃል። | ለአንጸባራቂ ዕቅዱ [Nexus spec](./nexus-spec) ይመልከቱ። |
+| መስመር | የአፈፃፀም ቆራጥ ቁርጥራጭ; የአለምአቀፍ NPoS ቀለበት ያዘዘውን ቃል ኪዳን ያወጣል። የሌይን ክፍሎች I18NI0000031X፣ `public_custom`፣ `private_permissioned`፣ እና `hybrid_confidential` ያካትታሉ። | [ሌይን ሞዴል](I18NU0000017X) ጂኦሜትሪ፣ የማከማቻ ቅድመ ቅጥያዎችን እና ማቆየትን ይይዛል። |
+| የሽግግር እቅድ | የቦታ ያዥ ለዪዎች፣ የማዞሪያ ደረጃዎች እና ባለሁለት መገለጫ እሽግ እንዴት ባለ አንድ መስመር ዝርጋታ ወደ Nexus እንደሚቀየር ይከታተላሉ። | [የሽግግር ማስታወሻዎች](./nexus-transition-notes) እያንዳንዱን የፍልሰት ደረጃ ይመዝግቡ። |
+| የጠፈር ማውጫ | ዲኤስ መግለጫዎችን + ስሪቶችን የሚያከማች የመመዝገቢያ ውል። ኦፕሬተሮች ከመቀላቀላቸው በፊት የካታሎግ ግቤቶችን ከዚህ ማውጫ ጋር ያስታርቃሉ። | አንጸባራቂ ልዩነት መከታተያ በ`docs/source/project_tracker/nexus_config_deltas/` ስር ይኖራል። |
+| ሌይን ካታሎግ | የአይ18NI00000036ኤክስ ማዋቀር ክፍል መታወቂያዎችን ወደ ተለዋጭ ስሞች፣የማዞሪያ መመሪያዎች እና የዲኤ ገደቦችን የሚያዘጋጅ። `irohad --sora --config … --trace-config` ለኦዲት የተፈታ ካታሎግ ያትማል። | ለCLI የእግር ጉዞ `docs/source/sora_nexus_operator_onboarding.md` ይጠቀሙ። |
+| የሰፈራ ራውተር | የግል CBDC መስመሮችን ከሕዝብ ፈሳሽነት መስመሮች ጋር የሚያገናኝ የXOR ማስተላለፊያ ኦርኬስትራ። | `docs/source/cbdc_lane_playbook.md` የፖሊሲ ቁልፎችን እና የቴሌሜትሪ በሮች ይገልፃል። |
+| ቴሌሜትሪ/SLO | ዳሽቦርዶች + ማንቂያዎች በI18NI0000040X ቀረጻ ሌይን ቁመት፣ DA backlog፣ የሰፈራ መዘግየት እና የአስተዳደር ወረፋ ጥልቀት። | [የቴሌሜትሪ ማሻሻያ ዕቅድ](./nexus-telemetry-remediation) ዳሽቦርዶችን፣ ማንቂያዎችን እና የኦዲት ማስረጃዎችን ይገልፃል። |
 
-## Rollout snapshot
+## የልቀት ቅጽበታዊ ገጽ እይታ
 
-| Phase | Focus | Exit criteria |
-|-------|-------|---------------|
-| N0 – Closed beta | Council-managed registrar (`.sora`), manual operator onboarding, static lane catalog. | Signed DS manifests + rehearsed governance hand-offs. |
-| N1 – Public launch | Adds `.nexus` suffixes, auctions, self-service registrar, XOR settlement wiring. | Resolver/gateway sync tests, billing reconciliation dashboards, dispute tabletop drills. |
-| N2 – Expansion | Introduces `.dao`, reseller APIs, analytics, dispute portal, steward scorecards. | Compliance artefacts versioned, policy-jury toolkit online, treasury transparency reports. |
-| NX-12/13/14 gate | Compliance engine, telemetry dashboards, and documentation must ship together before partner pilots. | [Nexus overview](./nexus-overview) + [Nexus operations](./nexus-operations) published, dashboards wired, policy engine merged. |
+| ደረጃ | ትኩረት | መውጫ መስፈርት |
+|-------|-------|----------|
+| N0 – የተዘጋ ቤታ | በካውንስል የሚተዳደር ሬጅስትራር (`.sora`)፣ በእጅ የሚሰራ ኦፕሬተር፣ የማይንቀሳቀስ ሌይን ካታሎግ። | የተፈረመ DS ይገለጣል + የተለማመዱ የአስተዳደር እጃዎች። |
+| N1 - የህዝብ ማስጀመሪያ | የ `.nexus` ቅጥያዎችን፣ ጨረታዎችን፣ የራስ አገልግሎት ሬጅስትራርን፣ XOR የሰፈራ ሽቦን ይጨምራል። | የመፍትሄ/የበረንዳ ማመሳሰል ሙከራዎች፣የሂሳብ አከፋፈል ማስታረቅ ዳሽቦርዶች፣ሙግት የጠረጴዛ ልምምዶች። |
+| N2 - ማስፋፊያ | `.dao`፣ ሻጭ ኤፒአይዎችን፣ ትንታኔዎችን፣ የሙግት ፖርታልን፣ የመጋቢ የውጤት ካርዶችን ያስተዋውቃል። | ተገዢ የሆኑ ቅርሶች የተስተካከሉ፣ የፖሊሲ-ዳኞች መሣሪያ መስመር ላይ፣ የግምጃ ቤት ግልጽነት ሪፖርቶች። |
+| NX-12/13/14 በር | ተገዢነት ሞተር፣ የቴሌሜትሪ ዳሽቦርዶች እና ሰነዶች ከአጋር አብራሪዎች በፊት አብረው መላክ አለባቸው። | [Nexus አጠቃላይ እይታ](I18NU0000020X) + [Nexus ኦፕሬሽኖች](./nexus-operations) ታትሟል፣ ዳሽቦርዶች በሽቦ፣ የፖሊሲ ሞተር ተዋህዷል። |
 
-## Operator responsibilities
+## የኦፕሬተር ሀላፊነቶች
 
-1. **Config hygiene** – keep `config/config.toml` synced with the published lane &
-   dataspace catalog; archive `--trace-config` output with every release ticket.
-2. **Manifest tracking** – reconcile catalog entries with the latest Space
-   Directory bundle before joining or upgrading nodes.
-3. **Telemetry coverage** – expose the `nexus_lanes.json`, `nexus_settlement.json`,
-   and related SDK dashboards; wire alerts to PagerDuty and run quarterly reviews per the telemetry remediation plan.
-4. **Incident reporting** – follow the severity matrix in
-   [Nexus operations](./nexus-operations) and file RCAs within five business days.
-5. **Governance readiness** – attend Nexus council votes impacting your lanes and
-   rehearse rollback instructions quarterly (tracked via
+1. ** ንፅህናን ማዋቀር *** - `config/config.toml` ከታተመው ሌይን ጋር ማመሳሰል
+   የውሂብ ቦታ ካታሎግ; በእያንዳንዱ የመልቀቂያ ትኬት `--trace-config` ውፅዓት ያስቀምጡ።
+2. ** መከታተያ ይግለጹ *** - የካታሎግ ግቤቶችን ከቅርብ ጊዜው ቦታ ጋር ያስታርቁ
+   አንጓዎችን ከመቀላቀል ወይም ከማሻሻል በፊት የማውጫ ቅርቅብ።
+3. ** የቴሌሜትሪ ሽፋን *** - `nexus_lanes.json`፣ `nexus_settlement.json`፣
+   እና ተዛማጅ የኤስዲኬ ዳሽቦርዶች; የሽቦ ማንቂያዎችን ለፔጀርዱቲ እና በየሩብ ዓመቱ ግምገማዎችን በቴሌሜትሪ ማሻሻያ ዕቅድ ያሂዱ።
+4. **የአጋጣሚ ነገር ሪፖርት ማድረግ** - የክብደቱን ማትሪክስ በ ውስጥ ይከተሉ
+   [Nexus ክወናዎች](I18NU0000022X) እና RCAs በአምስት የስራ ቀናት ውስጥ ያስገቡ።
+5. **የመንግስት ዝግጁነት** - በ Nexus የምክር ቤት ድምጽ በመስመሮችዎ ላይ ተጽእኖ ያሳድራሉ
+   የመመለሻ መመሪያዎችን በየሩብ ዓመቱ ይለማመዱ (በ በኩል ክትትል የሚደረግበት
    `docs/source/project_tracker/nexus_config_deltas/`).
 
-## See also
+## ይመልከቱ
 
-- Canonical overview: `docs/source/nexus_overview.md`
-- Detailed spec: [./nexus-spec](./nexus-spec)
-- Lane geometry: [./nexus-lane-model](./nexus-lane-model)
-- Transition plan: [./nexus-transition-notes](./nexus-transition-notes)
-- Telemetry remediation plan: [./nexus-telemetry-remediation](./nexus-telemetry-remediation)
-- Operations runbook: [./nexus-operations](./nexus-operations)
-- Operator onboarding guide: `docs/source/sora_nexus_operator_onboarding.md`
+- ቀኖናዊ አጠቃላይ እይታ: `docs/source/nexus_overview.md`
+- ዝርዝር መግለጫ፡ [./nexus-spec](I18NU0000023X)
+- ሌይን ጂኦሜትሪ፡ [./nexus-lane-model](./nexus-lane-model)
+- የሽግግር እቅድ፡ [./nexus-transition-notes](./nexus-transition-notes)
+- የቴሌሜትሪ ማስተካከያ እቅድ፡ [./nexus-telemetry-remediation](./nexus-telemetry-remediation)
+- ኦፕሬሽኖች runbook፡ [./nexus-operations](./nexus-operations)
+- ኦፕሬተር የመሳፈሪያ መመሪያ: `docs/source/sora_nexus_operator_onboarding.md`

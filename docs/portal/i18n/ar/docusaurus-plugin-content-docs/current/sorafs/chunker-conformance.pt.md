@@ -4,61 +4,61 @@ direction: rtl
 source: docs/portal/docs/sorafs/chunker-conformance.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: chunker-conformance
-title: Guia de conformidade do chunker da SoraFS
-sidebar_label: Conformidade de chunker
-description: Requisitos e fluxos para preservar o perfil deterministico de chunker SF1 em fixtures e SDKs.
+المعرف: توافق القطعة
+العنوان: Guia de Conformidade do Chunker da SoraFS
+Sidebar_label: مطابقة المقطع
+الوصف: المتطلبات والتدفقات للحفاظ على تحديد ملف قطع SF1 في التركيبات ومجموعات SDK.
 ---
 
-:::note Fonte canonica
-Esta pagina espelha `docs/source/sorafs/chunker_conformance.md`. Mantenha ambas as copias sincronizadas.
+:::ملاحظة فونتي كانونيكا
+هذه الصفحة espelha `docs/source/sorafs/chunker_conformance.md`. Mantenha ambas as copias sincronzadas.
 :::
 
-Este guia codifica os requisitos que toda implementacao deve seguir para permanecer
-compativel com o perfil deterministico de chunker da SoraFS (SF1). Ele tambem
-documenta o fluxo de regeneracao, a politica de assinaturas e os passos de verificacao para que
-os consumidores de fixtures nos SDKs fiquem sincronizados.
+هذا الدليل مقنن للمتطلبات التي يجب تنفيذها جميعًا للاستمرار
+متوافق مع ملف تعريف القطع SoraFS (SF1). إنه كذلك
+وثيقة أو تدفق التجديد وسياسة الاغتيالات وخطوات التحقق من أجل ذلك
+مستهلكو التركيبات في حزم SDK متزامنة.
 
-## Perfil canonico
+## بيرفيل كانونيكو
 
-- Handle do perfil: `sorafs.sf1@1.0.0`
-- Seed de entrada (hex): `0000000000dec0ded`
-- Tamanho alvo: 262144 bytes (256 KiB)
-- Tamanho minimo: 65536 bytes (64 KiB)
-- Tamanho maximo: 524288 bytes (512 KiB)
-- Polinomio de rolling: `0x3DA3358B4DC173`
-- Seed da tabela gear: `sorafs-v1-gear`
-- Break mask: `0x0000FFFF`
+- مقبض الملف الشخصي: `sorafs.sf1@1.0.0`
+- بذرة المدخل (ست عشرية): `0000000000dec0ded`
+- تامانهو ألفو: 262144 بايت (256 كيلو بايت)
+- تامانهو مينيمو: 65536 بايت (64 كيلو بايت)
+- تامانهو ماكسيمو: 524288 بايت (512 كيلو بايت)
+- بولينوميو دي المتداول: `0x3DA3358B4DC173`
+- معدات البذور دا تابيلا: `sorafs-v1-gear`
+- قناع الاستراحة: `0x0000FFFF`
 
-Implementacao de referencia: `sorafs_chunker::chunk_bytes_with_digests_profile`.
-Qualquer aceleracao SIMD deve produzir limites e digests identicos.
+مرجع التنفيذ: `sorafs_chunker::chunk_bytes_with_digests_profile`.
+جميع أجهزة SIMD سريعة الإنتاج لديها حدود ومكونات متطابقة.
 
-## Bundle de fixtures
+## حزمة التركيبات
 
-`cargo run --locked -p sorafs_chunker --bin export_vectors` regenera as
-fixtures e emite os seguintes arquivos em `fixtures/sorafs_chunker/`:
+`cargo run --locked -p sorafs_chunker --bin export_vectors` التجديد ك
+التركيبات وإصدار الملفات التالية في `fixtures/sorafs_chunker/`:- `sf1_profile_v1.{json,rs,ts,go}` - حدود القطع الأساسية للمستهلكين
+  الصدأ، TypeScript، والذهاب. يتم الإعلان عن كل ملف أو التعامل مع Canonico كأول مرة
+  أدخل إلى `profile_aliases`، تابع للأسماء المستعارة البديلة (على سبيل المثال،
+  `sorafs.sf1@1.0.0`، depois `sorafs.sf1@1.0.0`). أمر ه imposta por
+  سيتم تغيير `ensure_charter_compliance` و NAO DEVE.
+- `manifest_blake3.json` - البيان الذي تم التحقق منه بواسطة BLAKE3 cobrindo كل ملف من التركيبات.
+- `manifest_signatures.json` - assinaturas do conselho (Ed25519) حول o ملخص do البيان.
+- `sf1_profile_v1_backpressure.json` والهيئات العامة داخل `fuzz/` -
+  سيناريوهات التدفق الحتمية المستخدمة من قبل خصيتي الضغط الخلفي للمقطع.
 
-- `sf1_profile_v1.{json,rs,ts,go}` - limites canonicos de chunk para consumidores
-  Rust, TypeScript e Go. Cada arquivo anuncia o handle canonico como a primeira
-  entrada em `profile_aliases`, seguido de quaisquer aliases alternativos (ex.,
-  `sorafs.sf1@1.0.0`, depois `sorafs.sf1@1.0.0`). A ordem e imposta por
-  `ensure_charter_compliance` e NAO DEVE ser alterada.
-- `manifest_blake3.json` - manifest verificado por BLAKE3 cobrindo cada arquivo de fixtures.
-- `manifest_signatures.json` - assinaturas do conselho (Ed25519) sobre o digest do manifest.
-- `sf1_profile_v1_backpressure.json` e corpora brutos dentro de `fuzz/` -
-  cenarios deterministicos de streaming usados por testes de back-pressure do chunker.
+### سياسة القتل
 
-### Politica de assinaturas
+تجديد التركيبات **تطوير** يتضمن نصيحة صالحة. يا جيرادور
+لقد تم الترحيب بها دون أن يتم اغتيالها على الأقل `--allow-unsigned` لقد تم تمريرها بشكل صريح (موجهة
+apenas para experienceacao محلي). مغلفات assinatura sao إلحاق فقط e
+sao deduplicados por Signatario.
 
-A regeneracao de fixtures **deve** incluir uma assinatura valida do conselho. O gerador
-rejeita saida sem assinatura a menos que `--allow-unsigned` seja passado explicitamente (destinado
-apenas para experimentacao local). Os envelopes de assinatura sao append-only e
-sao deduplicados por signatario.
-
-Para adicionar uma assinatura do conselho:
+لإضافة نصيحة إلى شخص ما:
 
 ```bash
 cargo run --locked -p sorafs_chunker --bin export_vectors \
@@ -66,33 +66,31 @@ cargo run --locked -p sorafs_chunker --bin export_vectors \
   --signature-out=fixtures/sorafs_chunker/manifest_signatures.json
 ```
 
-## Verificacao
+## التحقق
 
-O helper de CI `ci/check_sorafs_fixtures.sh` reexecuta o gerador com
-`--locked`. Se fixtures divergirem ou assinaturas faltarem, o job falha. Use
-este script em workflows noturnos e antes de enviar mudancas de fixtures.
+يتم إعادة تشغيل مساعد CI `ci/check_sorafs_fixtures.sh` أو تشغيله عبر com
+`--locked`. إذا كانت التركيبات متباينة أو متفاوتة، أو كانت المهمة خاطئة. استخدم
+هذا البرنامج النصي يتضمن سير العمل اليومي وقبل إرسال تعديلات التركيبات.
 
-Passos de verificacao manual:
+دليل Passos de verificacao:
 
-1. Execute `cargo test -p sorafs_chunker`.
-2. Execute `ci/check_sorafs_fixtures.sh` localmente.
-3. Confirme que `git status -- fixtures/sorafs_chunker` esta limpo.
+1. قم بتنفيذ `cargo test -p sorafs_chunker`.
+2. قم بتنفيذ `ci/check_sorafs_fixtures.sh` محليًا.
+3. تأكد من أن `git status -- fixtures/sorafs_chunker` قد تم الانتهاء منه.## ترقية قواعد اللعبة التي تمارسها
 
-## Playbook de upgrade
+للحصول على ملف جديد للتقطيع أو تحديث SF1:
 
-Ao propor um novo perfil de chunker ou atualizar o SF1:
+قم بالتسجيل: [`docs/source/sorafs/chunker_profile_authoring.md`](./chunker-profile-authoring.md) للفقرة
+متطلبات التعريف وقوالب الاقتراحات وقوائم التحقق من الصحة.
 
-Veja tambem: [`docs/source/sorafs/chunker_profile_authoring.md`](./chunker-profile-authoring.md) para
-requisitos de metadados, templates de proposta e checklists de validacao.
+1. Redija um `ChunkProfileUpgradeProposalV1` (veja RFC SF-1) مع معلمات جديدة.
+2. قم بإعادة إنشاء التركيبات عبر `export_vectors` وقم بالتسجيل أو عمل البيان الجديد.
+3. يجب تقديم بيان بشأن النصاب القانوني للمشورة المطلوبة. كل ما يجب فعله هو القتل
+   anexadas `manifest_signatures.json`.
+4. قم بتحديث إعدادات SDK (Rust/Go/TS) وضمان تكافؤها خلال وقت التشغيل.
+5. قم بتجديد زغب الجسم مع وضع المعلمات.
+6. قم بتنشيط هذه الأداة باستخدام المقبض الجديد للملفات والبذور والهضم.
+7. تمتع بالتغيير جنبًا إلى جنب مع الخصيتين المحدثتين وتحديث خارطة الطريق.
 
-1. Redija um `ChunkProfileUpgradeProposalV1` (veja RFC SF-1) com novos parametros.
-2. Regenere fixtures via `export_vectors` e registre o novo digest do manifest.
-3. Assine o manifest com o quorum do conselho exigido. Todas as assinaturas devem ser
-   anexadas a `manifest_signatures.json`.
-4. Atualize as fixtures de SDK afetadas (Rust/Go/TS) e garanta paridade cross-runtime.
-5. Regenere corpora fuzz se os parametros mudarem.
-6. Atualize este guia com o novo handle de perfil, seeds e digest.
-7. Envie a mudanca junto com testes atualizados e atualizacoes do roadmap.
-
-Mudancas que afetem limites de chunk ou digests sem seguir este processo
-sao invalidas e nao devem ser mergeadas.
+كل ما عليك فعله هو إضافة حدود للقطعة أو الهضم دون اتباع هذه العملية
+sao validas e nao devem ser mergeadas.

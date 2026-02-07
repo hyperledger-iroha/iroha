@@ -7,40 +7,41 @@ generator: scripts/sync_docs_i18n.py
 source_hash: b9dc9862d4806d355fd83c885de92775712a7b32c68c010d29f4fc74229d054b
 source_last_modified: "2026-01-06T05:24:53.995808+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# NoritoBridge Release Packaging
+# Norito Bridge གསར་བཏོན་འབད་ནི།
 
-This guide outlines the steps required to publish the `NoritoBridge` Swift bindings as
-an XCFramework that can be consumed from Swift Package Manager and CocoaPods. The
-workflow keeps the Swift artifacts in lock-step with the Rust crate releases that ship
-Iroha's Norito codec. For end-to-end instructions on consuming the published
-artifacts inside an app (Xcode project wiring, ChaChaPoly usage, etc.), see
+ལམ་སྟོན་འདི་གིས་ `NoritoBridge` སུའིཕཊི་བཱའིན་ཌིང་ཚུ་ དཔར་བསྐྲུན་འབད་ནི་ལུ་ གོ་རིམ་ཚུ་ གསལ་བཀོད་འབདཝ་ཨིན།
+སུའིཕཊི་ཐུམ་སྒྲིལ་འཛིན་སྐྱོང་པ་དང་ ཀོ་ཀོ་པོཌི་ཚུ་ལས་ ཨེགསི་སི་ཕེརེམ་ལས་ཀ་ཅིག། ཚིག༌ཕྲད
+ལཱ་གི་རྒྱུན་རིམ་འདི་གིས་ གྲུ་འདི་ རསཊ་ཀེརེཊ་གསར་བཏོན་འབད་མི་དང་གཅིག་ཁར་ ལྕགས་ཐག་ནང་ལུ་ སའིཕཊི་གི་ཅ་རྙིང་ཚུ་བཞགཔ་ཨིན།
+I18NT0000003X གི་ Norito. དཔར་བསྐྲུན་འབད་མི་འདི་ ཟ་སྤྱོད་འབད་ནིའི་སྐོར་ལས་ མཇུག་ལས་མཇུག་གི་བཀོད་རྒྱ་ཚུ་གི་དོན་ལུ་
+གློག་རིམ་ནང་ ཅ་རྙིང་ཚུ་ (ཨེགསི་ཀོཌི་ལས་འགུལ་གྱི་གློག་ཐག་དང་ ཅ་ཅ་པོ་ལི་ལག་ལེན་ དེ་ལས་ དེ་བཟུམ་ཚུ་) ལུ་བལྟ།
 `docs/connect_swift_integration.md`.
 
-> **Note:** CI automation for this flow will land once macOS builders with the required
-> Apple tooling come online (tracked in the Release Engineering macOS builder backlog).
-> Until then the steps below must be executed manually on a development Mac.
+> **དྲན་འཛིན་:** སི་ཨའི་ རང་བཞིན་གྱིས་ འཕྲོ་མཐུད་འདི་གི་དོན་ལུ་ མེཀ་ཨོ་ཨེསི་བཟོ་བསྐྲུན་པ་ཚུ་ དགོས་མཁོ་ཡོད་པའི་ཐོག་ལས་ ལྷོད་ཚརཝ་ཨིན།
+> ཨེ་པཱལ་ལག་ཆ་འདི་ ཡོངས་འབྲེལ་ཐོག་ལས་ འོང་ (Release Mengary macOS བཟོ་བསྐྲུན་པ་ backlog ནང་ལུ་ བརྟག་ཞིབ་འབད་ཡོདཔ་ཨིན།)
+> དེ་ལས་ཚུན་ཚོད་ འོག་གི་རིམ་པ་ཚུ་ གོང་འཕེལ་མེཀ་གུ་ལག་ཐོག་ལས་ ལག་ལེན་འཐབ་དགོ།
 
-## Prerequisites
+## སྔོན་འགྲོའི་ཆ་རྐྱེན།
 
-- A macOS host with the latest stable Xcode command line tools installed.
-- Rust toolchain that matches the workspace `rust-toolchain.toml`.
-- Swift toolchain 5.7 or newer.
-- CocoaPods (via Ruby gems) if publishing to the central specs repository.
-- Access to the Hyperledger Iroha release signing keys for tagging Swift artifacts.
+- གཞི་བཙུགས་འབད་ཡོད་པའི་ ཨེགསི་ཀོཌི་བརྡ་བཀོད་གྲལ་ཐིག་ལག་ཆས་གསརཔ་དང་གཅིག་ཁར་ མེཀ་ཨོ་ཨེསི་ཧོསིཊི་ཅིག།
+- ལཱ་གི་ས་སྒོ་ `rust-toolchain.toml` དང་མཐུན་པའི་ Rust ལག་ཆས་རིམ་སྒྲིག་།
+- ལག་ཆས་རྒྱུན་རིམ་ ༥.༧ ཡང་ན་ གསརཔ།
+- CocoaPods (bia Ruby gems) གིས་ དབུས་ཀྱི་དམིགས་བསལ་མཛོད་ཁང་ནང་ དཔར་བསྐྲུན་འབད་བ་ཅིན་
+- I18NT0000000000X Iroha ལུ་འཛུལ་སྤྱོད་འབད།
 
-## Versioning model
+## ཐོན་རིམ་གྱི་དཔེ་ཚད།
 
-1. Determine the Rust crate version for the Norito codec (`crates/norito/Cargo.toml`).
-2. Tag the workspace with the release identifier (e.g. `v2.1.0`).
-3. Use the same semantic version for the Swift package and the CocoaPods podspec.
-4. When the Rust crate increments its version, repeat the process and publish a matching
-   Swift artifact. Versions may include metadata suffixes (e.g. `-alpha.1`) while testing.
+1. Norito གསང་གྲངས་ (`crates/norito/Cargo.toml`) གི་དོན་ལུ་ རཱསི་ཀྲེཊ་ཐོན་རིམ་གཏན་འབེབས་བཟོ།
+༢ གསར་བཏོན་ངོས་འཛིན་འབད་མི་དང་གཅིག་ཁར་ ལཱ་གི་ས་སྒོ་འདི་ རྟགས་བཀལ། (དཔེར་ན་ `v2.1.0`)
+༣ སུའིཕཊི་ཐུམ་སྒྲིལ་དང་ ཀོ་ཀོ་པོཌི་ པོད་སི་པིསི་ གི་དོན་ལུ་ ཡིག་བརྡ་ཐོན་རིམ་གཅིགཔོ་འདི་ལག་ལེན་འཐབ།
+༤ རསཊི་ཀེརེཊ་གིས་ ཐོན་རིམ་ཡར་སེང་འབད་བའི་སྐབས་ བྱ་རིམ་འདི་ བསྐྱར་ལོག་འབད་དེ་ མཐུན་སྒྲིག་ཅིག་ དཔར་བསྐྲུན་འབད།
+   མགྱོགས་མྱུར་གྱི་ཅ་ཆས། ཐོན་རིམ་ཚུ་ནང་ བརྟག་དཔྱད་འབད་བའི་སྐབས་ མེ་ཊ་ཌེ་ཊ་ རྗེས་འཇུག་ (དཔེར་ན་ I18NI0000017X) ཚུད་འོང་།
 
-## Build steps
+## གོ་རིམ་བཟོ་ནི།
 
-1. From the repository root, invoke the helper script to assemble the XCFramework:
+༡ མཛོད་ཁང་གི་རྩ་བ་ལས་ ཨེགསི་སི་ཕེརེམ་ལས་ཀ་འདི་བསྡུ་སྒྲིག་འབད་ནི་ལུ་ གྲོགས་རམ་ཡིག་ཆ་འདི་ འབོ་དགོ།
 
    ```bash
    ./scripts/build_norito_xcframework.sh --workspace-root "$(pwd)" \
@@ -48,13 +49,13 @@ artifacts inside an app (Xcode project wiring, ChaChaPoly usage, etc.), see
        --profile release
    ```
 
-   The script compiles the Rust bridge library for iOS and macOS targets and bundles the
-   resulting static libraries under a single XCFramework directory.
-   It also emits `dist/NoritoBridge.artifacts.json`, capturing the bridge version and
-   per-platform SHA-256 hashes (override the version with `NORITO_BRIDGE_VERSION` if
-   needed).
+   ཡིག་ཚུགས་འདི་གིས་ iOS དང་ macOS དམིགས་གཏད་ཚུ་གི་དོན་ལུ་ Rust ཟམ་དཔེ་མཛོད་འདི་ བསྡུ་སྒྲིག་འབད་དེ་ 1 1 100 1011-08-15
+   ཨེགསི་སི་ཕེརེམ་ཝརཀ་སྣོད་ཐོ་རྐྱང་པའི་འོག་ལུ་ རྟག་བརྟན་དཔེ་མཛོད་ཚུ་གྲུབ་འབྲས་བཏོནམ་ཨིན།
+   དེ་མ་ཚད་ I18NI000000018X འདི་ ཟམ་གྱི་ཐོན་རིམ་དང་ ཟམ་གྱི་ཐོན་རིམ་དང་ བཟུང་ཡོདཔ་ཨིན།
+   རེ་ལུ་ SHA-256 ཧེ་ཤེ་ཚུ་ (ཐོན་རིམ་འདི་ `NORITO_BRIDGE_VERSION` དང་ཅིག་ཁར་ འགལ་བ་ཨིན།
+   དགོས་མཁོ་ཡོད།)
 
-2. Zip the XCFramework for distribution:
+2. བཀྲམ་སྤེལ་གྱི་དོན་ལུ་ ཨེགསི་སི་ཕེརེམ་ལས་ཀ་ ཟིཔ་ ཟིཔ་:
 
    ```bash
    ditto -c -k --sequesterRsrc --keepParent \
@@ -62,71 +63,66 @@ artifacts inside an app (Xcode project wiring, ChaChaPoly usage, etc.), see
      artifacts/NoritoBridge.xcframework.zip
    ```
 
-3. Update the Swift package manifest (`IrohaSwift/Package.swift`) to point to the new
-   version and checksum:
+3. གསརཔ་ལུ་སྟོན་ནིའི་དོན་ལུ་ སུའིཕཊི་ཐུམ་སྒྲིལ་གསལ་སྟོན་ (I18NI0000020X) དུས་མཐུན་བཟོ་ནི།
+   ཐོན་རིམ་དང་ ཅེག་སམ་:
 
    ```bash
    swift package compute-checksum artifacts/NoritoBridge.xcframework.zip
    ```
 
-   Record the checksum in `Package.swift` when defining the binary target.
+   གཉིས་ལྡན་དམིགས་གཏད་ངེས་འཛིན་འབད་བའི་སྐབས་ `Package.swift` ནང་ལུ་ ཞིབ་དཔྱད་སམ་འདི་ཐོ་བཀོད་འབད།
 
-4. Update `IrohaSwift/IrohaSwift.podspec` with the new version, checksum, and archive
-   URL.
+4. ཐོན་རིམ་གསརཔ་དང་ ཅེག་སམ་ དེ་ལས་ གཏན་མཛོད་དང་གཅིག་ཁར་ I18NI0000022X དུས་མཐུན་འབད།
+   ཡུ་ཨར་ཨེལ།
 
-5. **Regenerate headers if the bridge gained new exports.** The Swift bridge now exposes
-   `connect_norito_set_acceleration_config` so `AccelerationSettings` can toggle Metal /
-   GPU backends. Ensure `NoritoBridge.xcframework/**/Headers/connect_norito_bridge.h`
-   matches `crates/connect_norito_bridge/include/connect_norito_bridge.h` before zipping.
+5. **ཟམ་པ་དེ་ཕྱིར་ཚོང་གསརཔ་ཐོབ་པ་ཅིན་ མགོ་ཡིག་ཚུ་ ལོག་བཟོ་དགོ།
+   `connect_norito_set_acceleration_config` དེ་འབདཝ་ལས་ `AccelerationSettings` ལྕགས་རིགས་ / སོར་བསྒྱུར་འབད་ཚུགས།
+   GPU རྒྱབ་ཐག་ཚུ། I18NI0000025X ངེས་པར་དག།
+   matches I18NI000000026X ཟིང་མ་བཟོས།
 
-6. Run the Swift validation suite before tagging:
+༦ རྟགས་བཀོད་མ་འབད་བའི་ཧེ་མ་ སུའིཕཊི་བདེན་དཔྱད་ཆ་ཚན་འདི་གཡོག་བཀོལ།
 
-   ```bash
-   swift test --package-path IrohaSwift
-   make swift-ci
-   ```
+   I18NF0000008X
 
-   The first command ensures the Swift package (including `AccelerationSettings`) stays
-   green; the second validates fixture parity, renders the parity/CI dashboards, and
-   exercises the same telemetry checks enforced in Buildkite (including the
-   `ci/xcframework-smoke:<lane>:device_tag` metadata requirement).
+   བརྡ་བཀོད་དང་པ་འདི་གིས་ སུའིཕཊི་ཐུམ་སྒྲིལ་ (I18NI0000027X རྩིས་ཏེ་) འདི་ ངེས་གཏན་བཟོཝ་ཨིན།
+   ལྕང༌ཁ; བདེན་དཔྱད་གཉིས་པ་ གཏན་འཇགས་འདྲ་མཉམ་, ཆ་སྙོམས་/སི་ཨའི་ བརྡ་བཀོད་བཀོད་སྒྲིག་ཚུ་ བཀྲམ་སྟོན་འབདཝ་ཨིན།
+   སྦྱོང་བརྡར་ཚུ་ བཱུལཌ་ཀི་ཊི་ནང་ བསྟར་སྤྱོད་འབད་མི་ བརྡ་འཕྲིན་བརྟག་དཔྱད་ཚུ་ ( ༡༠ རྩིས་ཏེ་ ཚུད་དེ་ཡོདཔ་ཨིན།
+   `ci/xcframework-smoke:<lane>:device_tag` མེ་ཊ་ཌེ་ཊ་དགོས་མཁོ།)
 
-7. Commit the generated artifacts in a release branch and tag the commit.
+༧ གསར་བཏོན་ཡན་ལག་ནང་ བཟོ་ཡོད་པའི་ ཅ་རྙིང་ཚུ་ དང་ ཁས་བླངས་ལུ་ རྟགས་བཀལ་ནི།
 
-## Publishing
+## དཔར་སྐྲུན།
 
-### Swift Package Manager
+### སོར་ཆུད་ཐུམ་སྒྲིལ་འཛིན་སྐྱོང་པ།
 
-- Push the tag to the public Git repository.
-- Ensure the tag is reachable by the package index (Apple or the community mirror).
-- Consumers can now depend on `.package(url: "https://github.com/hyperledger/iroha", from: "<version>")`.
+- ངོ་རྟགས་འདི་ མི་མང་གིཊ་མཛོད་ཁང་ལུ་ ཨེབ་གཏང་།
+- ངོ་རྟགས་འདི་ ཐུམ་སྒྲིལ་ཟུར་ཐོ་ (ཨེ་པཱལ་ཡང་ན་ མི་སྡེ་མེ་ལོང་) གིས་ ལྷོད་ཚུགསཔ་ངེས་གཏན་བཟོ།
+- ཉེར་སྤྱོད་པ་ཚུ་གིས་ ད་ལྟོ་ `.package(url: "https://github.com/hyperledger/iroha", from: "<version>")` ལུ་རག་ལསཔ་ཨིན།
 
-### CocoaPods
+### ཀོ་ཀོ་པོཌ།
 
-1. Validate the pod locally:
+༡ པོད་འདི་ས་གནས་ནང་བདེན་དཔྱད་འབད།
 
-   ```bash
-   pod lib lint IrohaSwift.podspec --allow-warnings
-   ```
+   I18NF0000009X
 
-2. Push the updated podspec:
+2. དུས་མཐུན་བཟོ་ཡོད་པའི་ པོད་སི་པེག་འདི་ཨེབ།
 
    ```bash
    pod trunk push IrohaSwift.podspec
    ```
 
-3. Confirm the new version appears in the CocoaPods index.
+༣ ཐོན་རིམ་གསརཔ་འདི་ ཀོ་ཀོ་པོཌི་ཟུར་ཐོ་ནང་ལུ་འབྱུངམ་ཨིན།
 
-## CI considerations
+## CI བསམ་གཞི།
 
-- Create a macOS job that runs the packaging script, archives artifacts, and uploads the
-  generated checksum as a workflow output.
-- Gate releases on the Swift demo app building against the freshly produced framework.
-- Store build logs to assist in diagnosing failures.
+- ཐུམ་སྒྲིལ་ཡིག་གཟུགས་ གཏན་མཛོད་ ཅ་རྙིང་ཚུ་གཡོག་བཀོལ་མི་ macOS ལཱ་ཅིག་གསར་བསྐྲུན་འབད་ཞིནམ་ལས་ སྐྱེལ་བཙུགས་འབདཝ་ཨིན།
+  བཟོ་བཏོན་འབད་མི་ ཅེག་སམ་འདི་ ལཱ་གི་རྒྱུན་རིམ་ཨའུཊི་པུཊི་སྦེ་ཨིན།
+- སྒོ་སྒྲིག་གསརཔ་བཟོ་མི་ གཞི་བཀོད་ལུ་ གཱེཊ་གསར་བཏོན་འབདཝ་ཨིན།
+- འཐུས་ཤོར་ཚུ་ བརྟག་དཔྱད་འབད་ནི་ལུ་ གྲོགས་རམ་འབད་ནི་ལུ་ བཟོ་བསྐྲུན་དྲན་ཐོ་ཚུ་ གསོག་འཇོག་འབད།
 
-## Additional automation ideas
+## ཁ་སྐོང་རང་འགུལ་བསམ་ཚུལ།
 
-- Use `xcodebuild -create-xcframework` directly once all required targets are exposed.
-- Integrate signing/notarisation for distribution outside developer machines.
-- Keep integration tests in lock-step with the packaged version by pinning the SPM
-  dependency to the release tag.
+- དགོས་མཁོའི་དམིགས་ཚད་ཚུ་ཆ་མཉམ་རང་ ཕྱི་ཁར་ཐོན་ཡོདཔ་ཨིན་ - I18NI000000030X ཐད་ཀར་དུ་ལག་ལེན་འཐབ།
+- གོང་འཕེལ་གཏང་མི་འཕྲུལ་ཆས་ཚུ་གི་ཕྱི་ཁར་བཀྲམ་སྤེལ་འབད་ནིའི་དོན་ལུ་ མིང་རྟགས་/ནོཊ་རི་སི།
+- ཨེསི་པི་ཨེམ་འདི་ པིནཊི་འབད་དེ་ ཐུམ་སྒྲིལ་འབད་ཡོད་པའི་ཐོན་རིམ་དང་གཅིག་ཁར་ ལྡེ་མིག་རིམ་པ་ནང་ མཉམ་བསྡོམས་བརྟག་དཔྱད་ཚུ་།
+  གསར་བཏོན་ངོ་རྟགས་ལུ་བརྟེན་དགོ།

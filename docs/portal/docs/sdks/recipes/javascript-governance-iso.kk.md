@@ -10,25 +10,26 @@ translation_last_reviewed: 2026-02-07
 title: JavaScript governance & ISO recipe
 description: Run the governance helpers and ISO 20022 bridge flows shipped with @iroha/iroha-js, including runnable CLI samples.
 slug: /sdks/recipes/javascript-governance-iso
+translator: machine-google-reviewed
 ---
 
-import SampleDownload from '@site/src/components/SampleDownload';
+SampleDownload файлын '@site/src/components/SampleDownload' ішінен импорттау;
 
-This recipe bundles the two advanced workflows called out in the JS5 roadmap
-items: end-to-end governance helpers (proposals, ballots, council snapshots)
-and the ISO 20022 bridge walkthrough (pacs.008/pacs.009). Each sample runs
-against the published `@iroha/iroha-js` package and mirrors the snippets in
+Бұл рецепт JS5 жол картасында айтылған екі жетілдірілген жұмыс үрдісін біріктіреді
+элементтер: басқарудың түпкілікті көмекшілері (ұсыныстар, бюллетеньдер, кеңес суреттері)
+және ISO 20022 көпірі бойынша шолу (pacs.008/pacs.009). Әрбір үлгі іске қосылады
+жарияланған `@iroha/iroha-js` пакетіне қарсы және үзінділерді көрсетеді
 `docs/source/sdk/js/governance_iso_examples.md`.
 
-## Governance helper sample
+## Басқару көмекшісі үлгісі
 
-<SampleDownload
+<Үлгі жүктеп алу
   href="/sdk-recipes/javascript/governance.mjs"
-  filename="governance.mjs"
-  description="Download the runnable governance helper referenced in this recipe."
+  файл атауы = "governance.mjs"
+  description="Осы рецептте сілтеме жасалған орындалатын басқару көмекшісін жүктеп алыңыз."
 />
 
-### Prerequisites
+### Алғышарттар
 
 ```bash
 npm install @iroha/iroha-js
@@ -42,10 +43,10 @@ export GOV_REFERENDUM_ID="calc-referendum"
 export GOV_LOCKS_ID="calc-locks"
 ```
 
-Set `GOV_SUBMIT=1` to submit the signed transactions to Torii and
-`GOV_FETCH=1` to inspect the resulting governance state after submission.
+Қол қойылған транзакцияларды Torii мекенжайына жіберу үшін `GOV_SUBMIT=1` параметрін орнатыңыз және
+`GOV_FETCH=1` жібергеннен кейін алынған басқару күйін тексеру үшін.
 
-### Example script
+### Сценарий үлгісі
 
 ```ts title="governance.mjs"
 #!/usr/bin/env node
@@ -225,26 +226,26 @@ main().catch((error) => {
 });
 ```
 
-### Run & monitor
+### Іске қосу және бақылау
 
-- Execute `node governance.mjs` to generate hashes only. Add `GOV_SUBMIT=1` to
-  post the transactions to Torii and `GOV_FETCH=1` to log live governance state
-  (`getGovernanceProposal*`, `getGovernanceReferendum`, `getGovernanceLocks`, and
+- Тек хэштерді жасау үшін `node governance.mjs` орындаңыз. `GOV_SUBMIT=1` қосыңыз
+  тікелей басқару күйін тіркеу үшін транзакцияларды Torii және `GOV_FETCH=1` мекенжайларына орналастырыңыз
+  (`getGovernanceProposal*`, `getGovernanceReferendum`, `getGovernanceLocks`, және
   `getGovernanceCouncilCurrent`).
-- Capture the deterministic hashes in CI logs; every step prints the signed byte
-  length plus the recomputed hash when the optional native helper is available.
-- Attach the console output to governance review packets so auditors can trace
-  the proposal / referendum IDs back to reproducible CLI evidence.
+- CI журналдарында детерминирленген хэштерді түсіру; әрбір қадам қол қойылған байтты басып шығарады
+  Қосымша жергілікті көмекші қол жетімді болғанда ұзындық пен қайта есептелген хэш.
+- Аудиторлар қадағалай алатындай консоль шығысын басқаруды шолу пакеттеріне тіркеңіз
+  ұсыныс/референдум идентификаторлары қайталанатын CLI дәлелдеріне оралады.
 
-## ISO bridge sample
+## ISO көпірі үлгісі
 
-<SampleDownload
+<Үлгі жүктеп алу
   href="/sdk-recipes/javascript/iso-bridge.mjs"
-  filename="iso-bridge.mjs"
-  description="Download the runnable ISO 20022 helper referenced in this recipe."
+  файл атауы = "iso-bridge.mjs"
+  description="Осы рецептте сілтеме жасалған орындалатын ISO 20022 көмекшісін жүктеп алыңыз."
 />
 
-### Prerequisites
+### Алғышарттар
 
 ```bash
 npm install @iroha/iroha-js
@@ -256,11 +257,11 @@ export ISO_POLL_INTERVAL_MS=1500
 export ISO_MESSAGE_KIND=pacs.008
 ```
 
-Set `ISO_MESSAGE_ID` when you want to skip submission and only poll a known
-identifier. Use `ISO_RESOLVE_ON_ACCEPTED=1` to exit as soon as the bridge marks
-an entry `Accepted` even if the transaction hash has not yet been finalised.
+Жіберуді өткізіп жібергіңіз келсе және тек белгілі сұрау салғыңыз келгенде `ISO_MESSAGE_ID` орнатыңыз.
+идентификатор. Көпір белгіленген бойда шығу үшін `ISO_RESOLVE_ON_ACCEPTED=1` пайдаланыңыз
+`Accepted` жазбасы, тіпті транзакция хэші әлі аяқталмаған болса да.
 
-### Example script
+### Сценарий үлгісі
 
 ```ts title="iso-bridge.mjs"
 #!/usr/bin/env node
@@ -360,22 +361,22 @@ main().catch((error) => {
 });
 ```
 
-### Run & monitor
+### Іске қосу және бақылау
 
-- Execute `node iso-bridge.mjs` to submit a sample payload. Set
-  `ISO_MESSAGE_KIND=pacs.009` to exercise the PvP flow or `ISO_MESSAGE_ID` to
-  poll an existing submission without re-posting it.
-- The helper logs every poll attempt through `wait.onPoll`, making it easy to
-  capture acceptance timelines in CI logs.
-- Attach the final status + transaction hash to ISO bridge runbooks so auditors
-  can trace pacs.008/pacs.009 deliveries back to reproducible payloads, as
-  required by the JS5 roadmap deliverables.
+- Үлгі пайдалы жүктемені жіберу үшін `node iso-bridge.mjs` орындаңыз. Орнату
+  PvP ағынын орындау үшін `ISO_MESSAGE_KIND=pacs.009` немесе `ISO_MESSAGE_ID`
+  бұрыннан бар жіберуді қайта жарияламай сұрау.
+- Көмекші `wait.onPoll` арқылы әрбір сауалнама әрекетін тіркейді, бұл
+  CI журналдарында қабылдау уақыт шкаласын түсіріңіз.
+- Аудиторлар үшін соңғы мәртебені + транзакция хэшін ISO bridge runbook файлдарына тіркеңіз
+  pacs.008/pacs.009 жеткізілімдерін қайталанатын пайдалы жүктемелерге дейін бақылай алады, мысалы
+  JS5 жол картасының жеткізілімдері талап етеді.
 
-## Offline allowances & transfers
+## Офлайн төлемдер мен аударымдар
 
-`@iroha/iroha-js` ships the same allowance/transfer helpers referenced in the
-offline roadmap rows. Use them to inspect integrity policies (marker key, Play
-Integrity, HMS Safety Detect, Provisioned) without parsing raw metadata:
+`@iroha/iroha-js` құжатта сілтеме жасалған бірдей жәрдемақы/трансфер көмекшілерін жібереді.
+офлайн жол картасы жолдары. Оларды тұтастық саясаттарын тексеру үшін пайдаланыңыз (маркер кілті, Ойнату
+Integrity, HMS Safety Detect, Provisioned) шикі метадеректерді талдаусыз:
 
 ```bash
 # List recent allowances and log their integrity policies
@@ -403,19 +404,19 @@ node -e '
 '
 ```
 
-When Torii reports a Provisioned allowance the inspector public key, manifest
-schema, optional version, TTL, and digest live under
-`integrity_metadata.provisioned`, making it trivial to attach the required
-metadata to OA10.3 evidence packets.
+Torii Қамтамасыз етілген жеңілдік туралы есеп бергенде, инспектордың ашық кілті, манифест
+схема, қосымша нұсқа, TTL және дайджест астында
+`integrity_metadata.provisioned`, бұл қажеттіні тіркеуді жеңілдетеді
+OA10.3 дәлелдеме пакеттеріне метадеректер.
 
-## Next steps
+## Келесі қадамдар
 
-- Explore `javascript/iroha_js/recipes/governance.mjs` and
-  `javascript/iroha_js/recipes/iso_bridge.mjs` for expanded examples (multi-sig
-  ballots, council VRF derivation, retry policies).
-- Review the Norito-side documentation in
-  `docs/source/sdk/js/governance_iso_examples.md` and
-  `docs/source/finance/settlement_iso_mapping.md` for the canonical field
-  mappings referenced by these helpers.
-- Capture run logs and attach them to governance / ISO approvals to satisfy the
-  JS5 “documentation + publishing” requirement referenced in `roadmap.md`.
+- `javascript/iroha_js/recipes/governance.mjs` және
+  Кеңейтілген мысалдар үшін `javascript/iroha_js/recipes/iso_bridge.mjs` (көп сиг
+  бюллетеньдер, кеңестің VRF шығаруы, қайталау саясаттары).
+- Norito жағындағы құжаттаманы қараңыз
+  `docs/source/sdk/js/governance_iso_examples.md` және
+  Канондық өріс үшін `docs/source/finance/settlement_iso_mapping.md`
+  осы көмекшілер сілтеме жасаған салыстырулар.
+- Орындау журналдарын жазып алыңыз және оларды қанағаттандыру үшін басқару / ISO мақұлдауларына тіркеңіз
+  `roadmap.md` құжатында сілтеме жасалған JS5 "құжаттама + жариялау" талабы.

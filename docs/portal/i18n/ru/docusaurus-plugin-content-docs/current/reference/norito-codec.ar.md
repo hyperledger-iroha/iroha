@@ -4,45 +4,47 @@ direction: ltr
 source: docs/portal/docs/reference/norito-codec.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 # مرجع ترميز Norito
 
-Norito هو طبقة التسلسل القياسية في Iroha. كل رسالة on-wire وكل payload على القرص وكل API بين المكونات يستخدم Norito حتى تتفق العقد على نفس البايتات حتى مع اختلاف العتاد. هذه الصفحة تلخص الاجزاء المتحركة وتشير الى المواصفة الكاملة في `norito.md`.
+Norito в приложении Iroha. Для передачи данных по сети и полезной нагрузки в соответствии с API-интерфейсом Norito Это было сделано для того, чтобы сделать это. Для этого необходимо выполнить настройку `norito.md`.
 
 ## البنية الاساسية
 
-| المكون | الغرض | المصدر |
+| المكون | غرض | صدر |
 | --- | --- | --- |
-| **الرأس** | يؤطر payloads مع magic/version/schema hash و CRC64 والطول وعلامة الضغط؛ v1 يتطلب `VERSION_MINOR = 0x00` ويتحقق من header flags مقابل القناع المدعوم (الافتراضي `0x00`). | `norito::header` — راجع `norito.md` ("Header & Flags"، جذر المستودع) |
-| **Payload بدون رأس** | ترميز قيم حتمي يستخدم للـ hashing/المقارنة. النقل on-wire يستخدم دائما رأسا؛ البايتات بدون رأس داخلية فقط. | `norito::codec::{Encode, Decode}` |
-| **الضغط** | Zstd اختياري (وتسريع GPU تجريبي) يتم اختياره عبر بايت الضغط في الرأس. | `norito.md`, “Compression negotiation” |
+| **Старт** | Содержит полезные данные, хеш магии/версии/схемы и CRC64, а также хеш-код. v1 используется `VERSION_MINOR = 0x00` для флагов заголовков, указанных в разделе `0x00`. | `norito::header` — راجع `norito.md` («Заголовок и флаги», «Заголовок и флаги») |
+| **Полезная нагрузка Вы можете использовать хеширование/обмен. Онлайн-телефония Он сказал, что это не так. | `norito::codec::{Encode, Decode}` |
+| **Старт** | Zstd الختياري (отправка графического процессора) для получения дополнительной информации о графическом процессоре. | `norito.md`, «Согласование сжатия» |
 
-سجل flags الخاص بالـ layout (packed-struct, packed-seq, field bitset, compact lengths) موجود في `norito::header::flags`. تستخدم V1 افتراضيا flags `0x00` لكنها تقبل flags صريحة ضمن القناع المدعوم؛ يتم رفض البتات غير المعروفة. يتم الاحتفاظ بـ `norito::header::Flags` للفحص الداخلي والنسخ المستقبلية.
+Флаги создания макета (packed-struct, package-seq, битовый набор полей, компактная длина) создано в `norito::header::flags`. تستخدم V1 Флаги флагов `0x00` Флаги флагов صريحة ضمن القناع المدعوم؛ Он был главой государства. Он был установлен `norito::header::Flags` в режиме онлайн.
 
-## دعم derive
+## دعم получить
 
-يوفر `norito_derive` مشتقات `Encode`, `Decode`, `IntoSchema` ومساعدات JSON. اهم الاعراف:
+Для `norito_derive` используются `Encode`, `Decode`, `IntoSchema` для JSON. В ответ:
 
-- المشتقات تولد مسارات AoS و packed؛ v1 يستخدم تخطيط AoS افتراضيا (flags `0x00`) ما لم تختَر header flags متغيرات packed. التنفيذ موجود في `crates/norito_derive/src/derive_struct.rs`.
-- الميزات المؤثرة على التخطيط (`packed-struct`, `packed-seq`, `compact-len`) هي opt-in عبر header flags ويجب ترميزها/فك ترميزها بشكل متسق عبر peers.
-- مساعدات JSON (`norito::json`) توفر JSON حتميا مدعوما بـ Norito لواجهات API العامة. استخدم `norito::json::{to_json_pretty, from_json}` — ولا تستخدم `serde_json`.
+- Приложение AoS и упаковано; Версия 1 была создана в AoS (флаги `0x00`) с флагами заголовка لم تختَر, упакованными. Создан для `crates/norito_derive/src/derive_struct.rs`.
+- Добавление дополнительных файлов (`packed-struct`, `packed-seq`, `compact-len`) с дополнительными флагами заголовка. Тэхен / Тэрри Пэнсон был сверстниками.
+- Создать JSON (`norito::json`) Для JSON можно использовать Norito для API-интерфейса. `norito::json::{to_json_pretty, from_json}` — это `serde_json`.
 
-## Multicodec وجداول المعرفات
+## Мультикодек
 
-يحتفظ Norito بتعيينات multicodec في `norito::multicodec`. الجدول المرجعي (hashes، انواع المفاتيح، واصفات payload) محفوظ في `multicodec.md` بجذر المستودع. عند اضافة معرف جديد:
+Norito — мультикодек для `norito::multicodec`. Загрузка данных (хэши, полезная нагрузка данных и данных) создается для `multicodec.md` بجذر المستودع. Ответ на вопрос:
 
-1. حدث `norito::multicodec::registry`.
-2. وسع الجدول في `multicodec.md`.
-3. اعد توليد bindings downstream (Python/Java) اذا كانت تستهلك الخريطة.
+1. Код `norito::multicodec::registry`.
+2. Установите флажок `multicodec.md`.
+3. Создание привязок нижестоящих версий (Python/Java) и их обработка.
 
-## اعادة توليد docs و fixtures
+## Просмотр документов и светильников
 
-مع استضافة البوابة حاليا لملخص وصفي، استخدم مصادر Markdown الاصلية كمصدر للحقيقة:
+На странице сайта вы можете найти разметку Markdown. Ответ:
 
-- **Spec**: `norito.md`
-- **جدول multicodec**: `multicodec.md`
-- **Benchmarks**: `crates/norito/benches/`
-- **Golden tests**: `crates/norito/tests/`
+- **Спецификация**: `norito.md`
+- **Мультикодек**: `multicodec.md`
+- **Бенчмарки**: `crates/norito/benches/`
+- **Золотые тесты**: `crates/norito/tests/`
 
-عندما تعمل اتوماتة Docusaurus، سيتم تحديث البوابة عبر سكربت sync (متابع في `docs/portal/scripts/`) الذي يسحب البيانات من هذه الملفات. حتى ذلك الحين، حافظ على مواءمة هذه الصفحة يدويا كلما تغيرت المواصفة.
+Выполняется синхронизация Docusaurus, выполняется синхронизация с синхронизацией `docs/portal/scripts/`) الذي يسحب البيانات من هذه الملفات. Он сказал, что его сын Миссисипи в 2007 году провел в Вашингтоне Кейла.

@@ -8,82 +8,84 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraNet testnet rollout (SNNet-10)
 sidebar_label: Testnet Rollout (SNNet-10)
 description: Phased activation plan, onboarding kit, and telemetry gates for SoraNet testnet promotions.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
+:::དྲན་ཐོའི་འབྱུང་ཁུངས།
 :::
 
-SNNet-10 coordinates the staged activation of the SoraNet anonymity overlay across the network. Use this plan to translate the roadmap bullet into concrete deliverables, runbooks, and telemetry gates so every operator understands the expectations before SoraNet becomes the default transport.
+SNNet-10 གིས་ ཡོངས་འབྲེལ་ནང་ལུ་ SoraNetNetNet NetNet མ་བཙུགས་པའི་ བང་རིམ་གྱི་ ཤུགས་ལྡན་བཟོ་ནི་འདི་ མཉམ་འབྲེལ་འབདཝ་ཨིན། འཆར་གཞི་འདི་ལག་ལེན་འཐབ་སྟེ་ ལམ་སྟོན་གྱི་མདའ་རྟགས་འདི་ ངེས་བདེན་སྦེ་ བཀྲམ་སྤེལ་འབད་ཚུགས་མི་དང་ རྔོན་དེབ་ཚུ་ དེ་ལས་ བརྒྱུད་འཕྲིན་གྱི་སྒོ་ཚུ་ནང་ལུ་ སྐད་སྒྱུར་འབད་དེ་ བཀོལ་སྤྱོད་པ་ག་ར་གིས་ སོ་ར་ནེཊ་ སྔོན་སྒྲིག་སྐྱེལ་འདྲེན་མ་འབད་བའི་ཧེ་མ་ རེ་བ་འདི་ ཧ་གོ་ཚུགས།
 
-## Launch phases
+## འགོ་ཚད།
 
-| Phase | Timeline (target) | Scope | Required artefacts |
-|-------|-------------------|-------|--------------------|
-| **T0 — Closed Testnet** | Q4 2026 | 20–50 relays across ≥3 ASNs operated by core contributors. | Testnet onboarding kit, guard pinning smoke suite, baseline latency + PoW metrics, brownout drill log. |
-| **T1 — Public Beta** | Q1 2027 | ≥100 relays, guard rotation enabled, exit bonding enforced, SDK betas default to SoraNet with `anon-guard-pq`. | Updated onboarding kit, operator verification checklist, directory publishing SOP, telemetry dashboard pack, incident rehearsal reports. |
-| **T2 — Mainnet Default** | Q2 2027 (gated on SNNet-6/7/9 completion) | Production network defaults to SoraNet; obfs/MASQUE transports and PQ ratchet enforcement enabled. | Governance approval minutes, direct-only rollback procedure, downgrade alarms, signed success metrics report. |
+| དུས་རིམ་ | དུས་ཚོད་ (དམིགས་གཏད་) | ཁྱབ་ཁོངས། | དགོས་མཁོའི་དངོས་པོ་ཚུ། |
+| |
+| **T0 — སྒོ་བསྡམས་ཡོད་པའི་ཊེསི་ཊེན་** | Q4 2026 | 20–50 རི་ལེ་ ≥3 ASNs ནང་ ཕན་འདེབས་འབད་མི་ ལྟེ་བ་གིས་ བཀོལ་སྤྱོད་འབདཝ་ཨིན། | ཊེས་ནེཊ་ on boarding kit, darning dame suite, གཞི་རྟེན་གྱི་ འཕྲོ་མཐུད། + POW metrics, བརླན་པའི་དམག་སྦྱོང་། |
+| **T1 — མི་མང་བེ་ཊ་** | Q1 2027 | ≥100 རི་ལེ་, ཉེན་སྲུངཔ་བསྒྱིར་ལྕོགས་ཅན་བཟོ་ཡོདཔ། | དུས་མཐུན་བཟོ་ཡོད་པའི་ཅ་ཆས་ཆས་ཆས་ བཀོལ་སྤྱོད་བདེན་དཔྱད་ཞིབ་དཔྱད་ཐོ་ཡིག་ སྣོད་ཐོ་དཔར་བསྐྲུན་ ཨེསི་ཨོ་པི་ ཊེ་ལི་མི་ཊི་ ཌེཤ་བོརཌ་ བྱུང་རྐྱེན་བསྐྱར་སྦྱོང་སྙན་ཞུ་ཚུ་ དུས་མཐུན་བཟོ་ཡོདཔ། |
+| **T2 — ནེཊི་སྔོན་སྒྲིག་གཙོ་བོ་* | Q2 2027 (SNNet-6/7/9 མཇུག་བསྡུ།) | ཐོན་སྐྱེད་ཡོངས་འབྲེལ་འདི་ SoraNet ལུ་སྔོན་སྒྲིག་འབདཝ་ཨིན། ofs/MASQUE སྐྱེལ་འདྲེན་དང་ PQ རེཊི་ཅེཊ་ བཀག་འཛིན་ལྕོགས་ཅན་བཟོ་ཡོདཔ། | གཞུང་སྐྱོང་ཆ་འཇོག་སྐར་མ་དང་ ཐད་ཀར་རྐྱངམ་གཅིག་བསྐོར་བའི་བྱ་རིམ་ ཉེན་བརྡ་ཚུ་ མར་ཕབ་འབད་ནི་དང་ མཐར་འཁྱོལ་གྱི་ ཚད་གཞི་སྙན་ཞུ་ མཚན་རྟགས་བཀོད་ནི། |
 
-There is **no skip path**—each phase must ship the telemetry and governance artefacts from the preceding stage before promotion.
+དེ་ལུ་ **གོམ་འགྱོ་ནིའི་ལམ་མེདཔ་ཨིན།**— དུས་རིམ་རེ་རེ་ནང་ ཁྱབ་སྤེལ་མ་འབད་བའི་ཧེ་མ་ ཧེ་མའི་གནས་རིམ་ལས་ བརྡ་འཕྲིན་དང་ གཞུང་སྐྱོང་ཅ་ཆས་ཚུ་ བཏང་དགོ།
 
-## Testnet onboarding kit
+## ཊེག་ནེཊི་ གློག་ཐོག་ཆས་ཆ།
 
-Every relay operator receives a deterministic package with the following files:
+རི་ལེ་བཀོལ་སྤྱོད་པ་རེ་རེ་གིས་ འོག་གི་ཡིག་སྣོད་ཚུ་དང་གཅིག་ཁར་ གཏན་འབེབས་ཐུམ་སྒྲིལ་ཅིག་ཐོབ་ཨིན།
 
-| Artefact | Description |
-|----------|-------------|
-| `01-readme.md` | Overview, contact points, and timeline. |
-| `02-checklist.md` | Pre-flight checklist (hardware, network reachability, guard policy verification). |
-| `03-config-example.toml` | Minimal SoraNet relay + orchestrator configuration aligned with SNNet-9 compliance blocks, including a `guard_directory` block that pins the latest guard snapshot hash. |
-| `04-telemetry.md` | Instructions for wiring the SoraNet privacy metrics dashboards and alert thresholds. |
-| `05-incident-playbook.md` | Brownout/downgrade response procedure with escalation matrix. |
-| `06-verification-report.md` | Template operators complete and return once smoke tests pass. |
+| ཅ་ཆས། | འགྲེལ་བཤད་ |
+|------------------------------------
+| I18NI0000002X | སྤྱིར་བཏང་བལྟ་བཤལ་དང་ འབྲེལ་གཏུག་ས་ཚིགས་ དེ་ལས་ དུས་ཚོད་ཚུ། |
+| I18NI0000003X | འཕུར་འགྲུལ་གྱི་ཧེ་མའི་ཞིབ་དཔྱད་ཐོ་ཡིག་ (མཉེན་ཆས་དང་ ཡོངས་འབྲེལ་གྱི་མཐུན་རྐྱེན་ སྲུང་སྐྱོབ་སྲིད་བྱུས་བདེན་དཔྱད་)། |
+| I18NI0000004X | ཉུང་མཐའ་སོ་ར་ནེཊི་རི་ལེ་ + སྙན་ཆའི་རིམ་སྒྲིག་རིམ་སྒྲིག་འདི་ ཨེསི་ཨེན་ནེཊི་-༩ བསྟར་སྤྱོད་བཀག་ཆ་ཚུ་དང་གཅིག་ཁར་ ཕྲང་སྒྲིག་འབད་དེ་ཡོདཔ་ད་ དེ་ཡང་ གསརཔ་སྲུང་སྐྱོབ་ཀྱི་ པར་ལེན་ཧེཤ་འདི་ པིག་ཊི་འབད་མི་ `guard_directory` སྡེབ་ཚན་ཚུ་རྩིས་ཏེ་ཨིན། |
+| I18NI0000006X | སོ་ར་ནེཊི་སྒེར་གྱི་མེ་ཊིགས་ ཌེཤ་བོརཌི་དང་ དྲན་སྐུལ་ཚད་གཞི་ཚུ་ གློག་ཐག་བརྐྱབ་ནིའི་བཀོད་རྒྱ་ཚུ། |
+| `05-incident-playbook.md` | ཡར་འཕར་གྱི་མེ་ཊིགསི་དང་གཅིག་ཁར་ བཱརའོན་ཨའུཊ་/མར་གྱི་ལན་འདེབས་བྱ་རིམ། |
+| I18NI0000008X | ཊེམ་པེལེཊ་བཀོལ་སྤྱོད་པ་ཚུ་ ཐ་མག་བརྟག་དཔྱད་འབད་བའི་སྐབས་ ཆ་ཚང་སྦེ་ ལོག་འོང་། |
 
-A rendered copy lives in `docs/examples/soranet_testnet_operator_kit/`. Each promotion refreshes the kit; version numbers track the phase (for example, `testnet-kit-vT0.1`).
+འདྲ་བཤུས་བཀོད་པའི་འདྲ་བཤུས་ `docs/examples/soranet_testnet_operator_kit/` ནང་། གོང་འཕེལ་རེ་རེ་གིས་ ཅ་ཆས་འདི་ གསར་བསྐྲུན་འབདཝ་ཨིན། ཐོན་རིམ་ཨང་གྲངས་ཚུ་གིས་ དུས་རིམ་ (དཔེར་ན་ I18NI0000010X) འཚོལ་ཞིབ་འབདཝ་ཨིན།
 
-For public-beta (T1) operators, the concise onboarding brief in `docs/source/soranet/snnet10_beta_onboarding.md` summarises prerequisites, telemetry deliverables, and the submission workflow while pointing back to the deterministic kit and validator helpers.
+མི་མང་བེ་ཊ་(T1) བཀོལ་སྤྱོད་པ་ཚུ་གི་དོན་ལུ་ I18NI000000011X ནང་ལུ་ བཀོད་སྒྲིག་ཐུང་ཀུ་སྦེ་ཡོད་མི་འདི་གིས་ སྔོན་སྒྲིག་དགོས་མཁོ་དང་ བརྡ་འཕྲིན་བཀྲམ་སྤེལ་འབད་བཏུབ་མི་ཚུ་ བཅུད་བསྡུ་སྟེ་ཡོདཔ་ཨིན།
 
-`cargo xtask soranet-testnet-feed` generates the JSON feed that aggregates the promotion window, relay roster, metrics report, drill evidence, and attachment hashes referenced by the stage-gate template. Sign drill logs plus attachments with `cargo xtask soranet-testnet-drill-bundle` first so the feed can record `drill_log.signed = true`.
+I18NI0000000012X གིས་ JSON ཕིཌི་འདི་ གོང་འཕེལ་སྒོ་སྒྲིག་དང་ རི་ལེ་རོ་སི་ཊར་ མེ་ཊིགསི་སྙན་ཞུ་ དམག་སྦྱོང་གི་སྒྲུབ་བྱེད་ དེ་ལས་ མཉམ་སྦྲགས་ཀྱི་ཧེ་ཤེ་ཚུ་ གནས་རིམ་སྒོ་གི་ཊེམ་པེལེཊི་གིས་ གཞི་བསྟུན་འབད་མི་ ཁྱབ་སྤེལ་གྱི་སྒོ་སྒྲིག་ཚུ་ མཉམ་བསྡོམས་འབདཝ་ཨིན། དམག་སྦྱོང་འདི་ མཚན་རྟགས་བཀོད་ནི་དང་ དང་པ་ར་ `cargo xtask soranet-testnet-drill-bundle` དང་གཅིག་ཁར་ མཉམ་སྦྲགས་ཚུ་གིས་ I18NI000000014X ཐོ་བཀོད་འབད་ཚུགས།
 
-## Success metrics
+## མཐར་འཁྱོལཔ་མེ་ཊིག་གྲངས་འབོར།
 
-Promotion between phases is gated on the following telemetry, collected for a minimum of two weeks:
+གོ་རིམ་གྱི་བར་ན་ ཁྱབ་སྤེལ་འདི་ གཤམ་གསལ་གྱི་བརྡ་འཕྲིན་ནང་ བཙུགས་ཏེ་ ཉུང་མཐའ་བདུན་ཕྲག་གཉིས་ཀྱི་རིང་ བསྡུ་ལེན་འབད་ཡོདཔ་ཨིན།
 
-- `soranet_privacy_circuit_events_total`: 95 % of circuits complete without brownout or downgrade events; remaining 5 % capped by PQ supply.
-- `sorafs_orchestrator_policy_events_total{outcome="brownout"}`: &lt;1 % of fetch sessions per day trigger brownout outside scheduled drills.
-- `soranet_privacy_gar_reports_total`: variance within ±10 % of expected GAR category mix; spikes must be explained by approved policy updates.
-- PoW ticket success rate: ≥99 % within the 3 s target window; reported via `soranet_privacy_throttles_total{scope="congestion"}`.
-- Latency (95th percentile) per region: &lt;200 ms once circuits are fully built, captured via `soranet_privacy_rtt_millis{percentile="p95"}`.
+- `soranet_privacy_circuit_events_total`: གློག་ལམ་བརྒྱ་ཆ་ ༩༥ གི་ བརྡ་རྟགས་དང་ ཡང་ན་ མར་ཕབ་ཀྱི་བྱུང་རིམ་མེད་པར་ མཇུག་བསྡུ་ཡོདཔ། ལྷག་ལུས་ ༥% གིས་ PQ བཀྲམ་སྤེལ་གྱིས་ བསྡུ་བསྒྱོམ་འབད་ཡོདཔ།
+- I18NI000000016X: ཉིནམ་གཅིག་ལུ་ ཕེཆ་ལཱ་ཡུན་གྱི་ བརྒྱ་ཆ་༡ གིས་ ཕྱི་ཁའི་དུས་ཚོད་བཀོད་ཡོད་པའི་ སྦྱོང་བརྡར་ཚུ་ཨིན།
+- `soranet_privacy_gar_reports_total`: རེ་བ་བསྐྱེད་པའི་ GAR དབྱེ་ཁག་སླ་བསྲེ་གི་ ±10% གི་ཁྱད་པར་; ཆ་འཇོག་འབད་ཡོད་པའི་སྲིད་བྱུས་དུས་མཐུན་བཟོ་མི་ཚུ་གིས་ སྤྱང་ཀི་ཚུ་ འགྲེལ་བཤད་རྐྱབ་དགོ།
+- པོ་ཝ་ ཤོག་འཛིན་མཐར་འཁྱོལ་ཚད་: ༣s དམིགས་གཏད་སྒོ་སྒྲིག་ནང་ ≥99%; `soranet_privacy_throttles_total{scope="congestion"}` བརྒྱུད་དེ་སྙན་ཞུ་འབད་ཡོདཔ།
+- ལུང་ཕྱོགས་རེ་ལུ་ འཕྲེད་ཐིག་ (བརྒྱ་ཆ་༩༥) : གློག་ལམ་ཚུ་ ཆ་ཚང་སྦེ་བཟོ་བསྐྲུན་འབད་ཚར་བའི་ཤུལ་ལུ་ `soranet_privacy_rtt_millis{percentile="p95"}` བརྒྱུད་དེ་ བཏོན་ཡོདཔ་ཨིན།
 
-Dashboard and alert templates live in `dashboard_templates/` and `alert_templates/`; mirror them into your telemetry repository and add them to CI lint checks. Use `cargo xtask soranet-testnet-metrics` to generate the governance-facing report before requesting promotion.
+ཌེཤ་བོརཌ་དང་ དྲན་སྐུལ་ཊེམ་པེལེཊི་ཚུ་ `dashboard_templates/` དང་ I18NI000000021X ནང་ལུ་སྡོད་དོ་ཡོདཔ་ཨིན། ཁྱོད་རའི་ ཊེ་ལི་མི་ཊི་མཛོད་ཁང་ནང་ མེ་ལོང་བཟོ་སྟེ་ སི་ཨའི་ ལིནཊི་ཞིབ་དཔྱད་ཚུ་ནང་ ཁ་སྐོང་བརྐྱབ། ཁྱབ་སྤེལ་གྱི་ཞུ་བ་མ་འབད་བའི་ཧེ་མ་ གཞུང་སྐྱོང་དང་འབྲེལ་བའི་སྙན་ཞུ་བཟོ་བཏོན་འབད་ནི་ལུ་ I18NI0000002X ལག་ལེན་འཐབ།
 
-Stage-gate submissions must follow `docs/source/soranet/snnet10_stage_gate_template.md`, which links to the ready-to-copy Markdown form stored under `docs/examples/soranet_testnet_stage_gate/stage_gate_report_template.md`.
+གནས་རིམ་གྱི་ ཞུ་ཡིག་ཚུ་གིས་ `docs/source/soranet/snnet10_stage_gate_template.md` ལུ་ གཞི་བཞག་སྟེ་ འདྲ་བཤུས་བརྐྱབ་ནི་ལུ་ འབྲེལ་མཐུད་འབདཝ་ཨིན་ དེ་ཡང་ `docs/examples/soranet_testnet_stage_gate/stage_gate_report_template.md` གི་འོག་ལུ་ གསོག་འཇོག་འབད་ཡོད་པའི་ རྟགས་བཀོད་འབྲི་ཤོག་ལུ་ འབྲེལ་མཐུད་འབདཝ་ཨིན།
 
-## Verification checklist
+## བདེན་དཔྱད་ཞིབ་དཔྱད་ཐོ་ཡིག་།
 
-Operators must sign off on the following before entering each phase:
+བཀོལ་སྤྱོད་པ་ཚུ་གིས་ དུས་རིམ་རེ་རེ་མ་བཙུགས་པའི་ཧེ་མ་ འོག་གི་གུ་མཚན་རྟགས་བཀོད་དགོ།
 
-- ✅ Relay advert signed with current admission envelope.
-- ✅ Guard rotation smoke test (`tools/soranet-relay --check-rotation`) passes.
-- ✅ `guard_directory` points at the latest `GuardDirectorySnapshotV2` artefact and `expected_directory_hash_hex` matches the committee digest (relay startup logs the validated hash).
-- ✅ PQ ratchet metrics (`sorafs_orchestrator_pq_ratio`) stay above target thresholds for the requested stage.
-- ✅ GAR compliance config matches the latest tag (see SNNet-9 catalogue).
-- ✅ Downgrade alarm simulation (disable collectors, expect alert within 5 min).
-- ✅ PoW/DoS drill executed with documented mitigation steps.
+- ✅ ད་ལྟོའི་འཛུལ་ཞུགས་ཡིག་ཆ་དང་གཅིག་ཁར་ མཚན་རྟགས་བཀོད་ཡོད་པའི་ བརྒྱུད་འཕྲིན་བརྡ་ཁྱབ་འབད་ཡོདཔ།
+- ✅ སྲུང་སྐྱོབ་འཁོར་སྐྱོད་ཀྱི་ དུ་ཁའི་བརྟག་དཔྱད་ (`tools/soranet-relay --check-rotation`) ཆ་འཇོག་འབད་ཡོདཔ།
+- ✅ གསརཔ་ `GuardDirectorySnapshotV2` ནང་ I18NI000000026X གིས་ དང་ I18NI000000028X གིས་ ཚོགས་ཆུང་གི་ བཞུ་བཅོས་དང་མཐུན་སྒྲིག་འབདཝ་ཨིན།
+- ✅ ཞུ་བ་འབད་ཡོད་པའི་གནས་རིམ་གྱི་དོན་ལུ་ དམིགས་གཏད་ཚད་གཞི་ཚུ་གི་ལྟག་ལུ་སྡོད་དགོ།
+- ✅ ཇི་ཨར་ བསྟར་སྤྱོད་རིམ་སྒྲིག་གིས་ ངོ་རྟགས་གསརཔ་དང་མཐུན་སྒྲིག་འབདཝ་ཨིན་ (ཨེསི་ཨེན་ནེཊི་-༩ ཐོ་གཞུང་བལྟ།)།
+- ✅ མར་ཕབ་ཀྱི་ཉེན་བརྡ་བརྟག་དཔྱད་ (བསྡུ་སྒྲིག་འབད་མི་ཚུ་ལྕོགས་མིན་བཟོ་དོ་ཡོདཔ་ཨིན་ སྐར་མ་༥གི་ནང་འཁོད་ལུ་ ཉེན་བརྡ་རེ་བ་བསྐྱེདཔ་ཨིན།)།
+- ✅ ཡིག་ཐོག་ལུ་བཀོད་ཡོད་པའི་ ཉེན་སྲུང་རིམ་པ་ཚུ་དང་གཅིག་ཁར་ ལག་ལེན་འཐབ་ཡོད་པའི་ POW/DoS དམག་སྦྱོང་།
 
-A pre-filled template is included in the onboarding kit. Operators submit the completed report to the governance helpdesk before receiving production credentials.
+སྔོན་སྒྲིག་བཀང་ཡོད་པའི་ཊེམ་པེལེཊི་འདི་ གུ་བཀལ་ཆས་ཆས་ནང་ལུ་ཚུད་དེ་ཡོདཔ་ཨིན། བཀོལ་སྤྱོད་པ་ཚུ་གིས་ སྙན་ཞུ་འདི་ ཐོན་སྐྱེད་ཀྱི་ཡིག་ཆ་མ་ཐོབ་པའི་ཧེ་མ་ གཞུང་སྐྱོང་གྲོགས་རམ་གྱི་ གྲོགས་རམ་ལུ་ ཕུལཝ་ཨིན།
 
-## Governance & reporting
+## གཞུང་སྐྱོང་དང་སྙན་ཞུ།
 
-- **Change control:** promotions require Governance Council approval recorded in the council minutes and attached to the status page.
-- **Status digest:** publish weekly updates summarising relay count, PQ ratio, brownout incidents, and outstanding action items (stored in `docs/source/status/soranet_testnet_digest.md` once the cadence starts).
-- **Rollbacks:** maintain a signed rollback plan that returns the network to the previous phase within 30 minutes, including DNS/guard cache invalidation and client communication templates.
+- **བསྒྱུར་བཅོས་ཚད་འཛིན་:** ཡར་འཕེལ་ཚུ་ ཚོགས་སྡེ་གི་སྐར་མ་ནང་ གཞུང་ཚོགས་སྡེ་གི་ཆ་འཇོག་ཐོ་བཀོད་འབད་དེ་ གནས་ཚད་ཤོག་ལེབ་ལུ་མཉམ་སྦྲགས་འབད་དགོཔ་ཨིན།
+- **གནས་སྟངས་འཇུ་བྱེད་:** བདུན་ཕྲག་རེའི་དུས་མཐུན་ཚུ་དཔར་བསྐྲུན་འབདཝ་ཨིན་ རི་ལེ་གྱངས་ཁ་དང་ པི་ཀིའུ་ཆ་ཚད་ རྒྱ་སྨུག་བྱུང་རྐྱེན་ དེ་ལས་ ཁྱད་འཕགས་ཅན་གྱི་བྱ་བའི་རྣམ་གྲངས་ཚུ་ བཅུད་བསྡུ་སྟེ་ དཔར་བསྐྲུན་འབདཝ་ཨིན།
+- **Rollbacks:** གིས་ མཚན་རྟགས་བཀོད་ཡོད་པའི་ བཤུད་འཆར་གཞི་ཅིག་ རྒྱུན་སྐྱོང་འཐབ་སྟེ་ ཡོངས་འབྲེལ་འདི་ ཧེ་མའི་གནས་རིམ་ལུ་ 30སྐར་མ་ 30 ནང་འཁོད་ལུ་སླར་ལོག་འབདཝ་ཨིན།
 
-## Supporting assets
+## རྒྱབ་སྐྱོར་རྒྱུ་དངོས།
 
-- `cargo xtask soranet-testnet-kit [--out <dir>]` materialises the onboarding kit from `xtask/templates/soranet_testnet/` into the target directory (defaults to `docs/examples/soranet_testnet_operator_kit/`).
-- `cargo xtask soranet-testnet-metrics --input <metrics.json> [--out <path|->]` evaluates the SNNet-10 success metrics and emits a structured pass/fail report suitable for governance reviews. A sample snapshot lives in `docs/examples/soranet_testnet_metrics_sample.json`.
-- Grafana and Alertmanager templates live under `dashboard_templates/soranet_testnet_overview.json` and `alert_templates/soranet_testnet_rules.yml`; copy them into your telemetry repository or wire them into CI lint checks.
-- The downgrade communication template for SDK/portal messaging resides in `docs/source/soranet/templates/downgrade_communication_template.md`.
-- Weekly status digests should use `docs/source/status/soranet_testnet_weekly_digest.md` as the canonical form.
+- `cargo xtask soranet-testnet-kit [--out <dir>]` གིས་ `xtask/templates/soranet_testnet/` ལས་ དམིགས་གཏད་སྣོད་ཐོ་ནང་ལུ་ བརྡ་རྟགས་ཀྱི་ཅ་ཆས་འདི་ དངོས་གཞི་བཟོཝ་ཨིན་ (I18NI000000033X ལུ་སྔོན་སྒྲིག་ཚུ་)
+- I18NI000000034X གིས་ SNNet-10 མཐར་འཁྱོལ་གྱི་ཚད་གཞི་ཚུ་བརྟག་ཞིབ་འབདཝ་ཨིནམ་དང་ གཞུང་སྐྱོང་བསྐྱར་ཞིབ་ཀྱི་དོན་ལུ་འོས་འབབ་ཡོད་པའི་ བཀོད་སྒྲིག་འབད་ཡོད་པའི་ བཀོད་སྒྲིག་འབད་ཡོད་པའི་ ཆོག་ཐམ་/འཐུས་ཤོར་སྙན་ཞུ་ཅིག་ བཏོནམ་ཨིན། དཔེ་ཚད་པར་ལེན་འདི་ `docs/examples/soranet_testnet_metrics_sample.json` ནང་ལུ་སྡོད་དོ་ཡོདཔ་ཨིན།
+- I18NT000000000X དང་ དྲན་ཚད་ཅན་གྱི་ཊེམ་པེལེཊི་ཚུ་ I18NI000000036X དང་ I18NI0000000037X འོག་ལུ་སྡོད་དོ་ཡོདཔ་ཨིན། ཁྱོད་རའི་ ཊེ་ལི་མི་ཊི་ མཛོད་ཁང་ནང་ འདྲ་བཤུས་རྐྱབ་ནི་དང་ ཡང་ན་ སི་ཨའི་ ལིནཊི་ཞིབ་དཔྱད་ཚུ་ནང་ གློག་ཐག་བཏང་།
+- SDK/portal འཕྲིན་དོན་གྱི་དོན་ལུ་ མར་ཕབ་འབད་བའི་བརྒྱུད་འབྲེལ་ཊེམ་པེལེཊི་འདི་ I18NI000000038X ནང་ལུ་ཡོདཔ་ཨིན།
+- བདུན་ཕྲག་གི་གནས་རིམ་གྱི་ ཟས་བཅུད་ཚུ་གིས་ ཀེ་ནོ་ནིག་རྣམ་པ་སྦེ་ `docs/source/status/soranet_testnet_weekly_digest.md` ལག་ལེན་འཐབ་དགོ།
 
-Pull requests should update this page alongside any artefact or telemetry changes so the rollout plan stays canonical.
+འཐེན་ཞུ་བ་ཚུ་གིས་ ཤོག་ལེབ་འདི་ ཅ་རྙིང་དང་ ཡང་ན་ ཊེ་ལི་མི་ཊི་བསྒྱུར་བཅོས་ཚུ་དང་གཅིག་ཁར་ དུས་མཐུན་བཟོ་དགོཔ་ལས་ བསྐོར་ཐེངས་འཆར་གཞི་འདི་ ཀེ་ན་ནོ་ནིཀ་སྦེ་སྡོད།

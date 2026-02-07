@@ -3515,6 +3515,10 @@ pub(crate) mod valid {
             let params = world.parameters();
             let sumeragi = params.sumeragi();
             let height = block.header().height().get();
+            if world.consensus_keys().is_empty() {
+                Self::verify_signatures_against_topology(block, topology)?;
+                return Self::enforce_consensus_key_lifecycle(block, topology, state);
+            }
             let pops = Self::collect_validator_pops(
                 world,
                 height,
@@ -9200,6 +9204,24 @@ pub(crate) mod valid {
             let err = ValidBlock::validate_signatures_subset(block.as_ref(), &topology, &view)
                 .expect_err("missing pop should be rejected");
             assert_eq!(err, SignatureVerificationError::MissingPop);
+        }
+
+        #[test]
+        fn validate_signatures_subset_accepts_without_consensus_registry() {
+            let key_pairs =
+                core::iter::repeat_with(|| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
+                    .take(2)
+                    .collect::<Vec<_>>();
+            let topology = test_topology_with_keys(&key_pairs);
+            let block = ValidBlock::new_dummy(key_pairs[0].private_key());
+
+            let kura = Kura::blank_kura_for_testing();
+            let query = LiveQueryStore::start_test();
+            let state = State::new_for_testing(World::new(), kura, query);
+            let view = state.view();
+
+            ValidBlock::validate_signatures_subset(block.as_ref(), &topology, &view)
+                .expect("empty consensus key registry should use direct signature checks");
         }
 
         #[test]

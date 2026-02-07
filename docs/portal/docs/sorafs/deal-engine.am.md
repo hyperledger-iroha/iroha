@@ -11,66 +11,67 @@ id: deal-engine
 title: SoraFS Deal Engine
 sidebar_label: Deal Engine
 description: Overview of the SF-8 deal engine, Torii integration, and telemetry surfaces.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
-:::
+::: ማስታወሻ ቀኖናዊ ምንጭ
+::
 
 # SoraFS Deal Engine
 
-The SF-8 roadmap track introduces the SoraFS deal engine, providing
-deterministic accounting for storage and retrieval agreements between
-clients and providers. Agreements are described with the Norito payloads
-defined in `crates/sorafs_manifest/src/deal.rs`, covering deal terms, bond
-locking, probabilistic micropayments, and settlement records.
+የ SF-8 የመንገድ ካርታ ትራክ የ SoraFS ስምምነት ሞተርን ያስተዋውቃል ፣
+መካከል ማከማቻ እና ሰርስሮ ስምምነቶች deterministic የሂሳብ
+ደንበኞች እና አቅራቢዎች. ስምምነቶች ከ Norito ክፍያ ጭነቶች ጋር ተገልጸዋል።
+በ`crates/sorafs_manifest/src/deal.rs` ውስጥ የተገለጸ፣ የስምምነት ውሎችን የሚሸፍን ፣ ማስያዣ
+መቆለፍ፣ ፕሮባቢሊቲካል የማይክሮ ክፍያዎች እና የሰፈራ መዝገቦች።
 
-The embedded SoraFS worker (`sorafs_node::NodeHandle`) now instantiates a
-`DealEngine` instance for every node process. The engine:
+የተካተተው I18NT0000003X ሰራተኛ (`sorafs_node::NodeHandle`) አሁን ፈጣን ያደርገዋል
+ለእያንዳንዱ የመስቀለኛ መንገድ ሂደት `DealEngine` ምሳሌ። ሞተር፡-
 
-- validates and registers deals using `DealTermsV1`;
-- accrues XOR-denominated charges when replication usage is reported;
-- evaluates probabilistic micropayment windows using deterministic
-  Blake3-based sampling; and
-- produces ledger snapshots and settlement payloads suitable for governance
-  publishing.
+- `DealTermsV1` በመጠቀም ስምምነቶችን ያረጋግጣል እና ይመዘግባል;
+- የማባዛት አጠቃቀም ሪፖርት ሲደረግ በXOR የተመሰከረላቸው ክፍያዎችን ያከማቻል።
+- ቆራጥነትን በመጠቀም ፕሮባቢሊስቲክ የማይክሮ ክፍያ መስኮቶችን ይገመግማል
+  Blake3 ላይ የተመሠረተ ናሙና; እና
+- ለአስተዳደሩ ተስማሚ የሆኑ የመመዝገቢያ ቅጽበታዊ ገጽ እይታዎችን እና የሰፈራ ጭነቶችን ያዘጋጃል።
+  ማተም.
 
-Unit tests cover validation, micropayment selection, and settlement flows so
-operators can exercise the APIs with confidence. Settlements now emit
-`DealSettlementV1` governance payloads, wiring directly into the SF-12
-publishing pipeline, and update the `sorafs.node.deal_*` OpenTelemetry series
-(`deal_settlements_total`, `deal_expected_charge_nano`, `deal_client_debit_nano`,
-`deal_outstanding_nano`, `deal_bond_slash_nano`, `deal_publish_total`) for Torii dashboards and SLO
-enforcement. Follow-up items focus on auditor-initiated slashing automation and
-coordinating cancellation semantics with governance policy.
+የክፍል ፈተናዎች ማረጋገጫን፣ የማይክሮ ክፍያ ምርጫን እና የሰፈራ ፍሰቶችን ይሸፍናሉ።
+ኦፕሬተሮች ኤፒአይዎችን በልበ ሙሉነት መጠቀም ይችላሉ። ሰፈራዎች አሁን ይለቃሉ
+`DealSettlementV1` የአስተዳደር ክፍያዎች ፣ በቀጥታ ወደ SF-12 በማገናኘት
+የቧንቧ መስመር ማተም፣ እና የ`sorafs.node.deal_*` OpenTelemetry ተከታታይን አዘምን
+(`deal_settlements_total`፣ `deal_expected_charge_nano`፣ `deal_client_debit_nano`፣
+`deal_outstanding_nano`፣ `deal_bond_slash_nano`፣ `deal_publish_total`) ለTorii ዳሽቦርዶች እና SLO
+ማስፈጸም። የክትትል ዕቃዎች በኦዲተር-በተጀመረው የጭረት አውቶማቲክ እና ላይ ያተኩራሉ
+የስረዛ ትርጓሜዎችን ከአስተዳደር ፖሊሲ ጋር ማስተባበር።
 
-Usage telemetry now also feeds the `sorafs.node.micropayment_*` metrics set:
-`micropayment_charge_nano`, `micropayment_credit_generated_nano`,
-`micropayment_credit_applied_nano`, `micropayment_credit_carry_nano`,
-`micropayment_outstanding_nano`, and the ticket counters
-(`micropayment_tickets_processed_total`, `micropayment_tickets_won_total`,
-`micropayment_tickets_duplicate_total`). These totals expose the probabilistic
-lottery flow so operators can correlate micropayment wins and credit carry-over
-with settlement outcomes.
+የአጠቃቀም ቴሌሜትሪ አሁን የ`sorafs.node.micropayment_*` ሜትሪክስ ስብስብን ይመግባል።
+`micropayment_charge_nano`፣ `micropayment_credit_generated_nano`፣
+`micropayment_credit_applied_nano`፣ `micropayment_credit_carry_nano`፣
+`micropayment_outstanding_nano`፣ እና የቲኬት ቆጣሪዎቹ
+(`micropayment_tickets_processed_total`፣ `micropayment_tickets_won_total`፣
+`micropayment_tickets_duplicate_total`). እነዚህ ድምር ፕሮባቢሊቲካልን ያጋልጣሉ
+የሎተሪ ፍሰት ኦፕሬተሮች የማይክሮ ክፍያ ድሎችን እና የብድር ክፍያን ማዛመድ ይችላሉ።
+የሰፈራ ውጤቶች ጋር.
 
-## Torii Integration
+## Torii ውህደት
 
-Torii exposes dedicated endpoints so providers can report usage and drive the
-deal lifecycle without bespoke wiring:
+Torii አቅራቢዎች አጠቃቀሙን ሪፖርት ማድረግ እና መንዳት እንዲችሉ የተወሰኑ የመጨረሻ ነጥቦችን ያጋልጣል
+የህይወት ኡደትን ያለአንዳች ሽቦ ሽቦ ማስተናገድ፡-
 
-- `POST /v1/sorafs/deal/usage` accepts `DealUsageReport` telemetry and returns
-  deterministic accounting outcomes (`UsageOutcome`).
-- `POST /v1/sorafs/deal/settle` finalises the current window, streaming the
-  resulting `DealSettlementRecord` alongside a base64-encoded `DealSettlementV1`
-  ready for governance DAG publication.
-- Torii's `/v1/events/sse` feed now broadcasts `SorafsGatewayEvent::DealUsage`
-  records summarising each usage submission (epoch, metered GiB-hours, ticket
-  counters, deterministic charges), `SorafsGatewayEvent::DealSettlement`
-  records that include the canonical settlement ledger snapshot plus the
-  BLAKE3 digest/size/base64 of the on-disk governance artefact, and
-  `SorafsGatewayEvent::ProofHealth` alerts whenever PDP/PoTR thresholds are
-  exceeded (provider, window, strike/cooldown state, penalty amount). Consumers can
-  filter by provider to react to new telemetry, settlements, or proof-health alerts without polling.
+- `POST /v1/sorafs/deal/usage` `DealUsageReport` ቴሌሜትሪ ተቀብሎ ይመለሳል።
+  የሚወስኑ የሂሳብ ውጤቶች (`UsageOutcome`).
+- `POST /v1/sorafs/deal/settle` የአሁኑን መስኮት ያጠናቅቃል, በዥረት ይለቀቃል
+  ውጤቱ `DealSettlementRecord` ከ ቤዝ64 ኮድ `DealSettlementV1` ጋር
+  ለአስተዳደር DAG ህትመት ዝግጁ.
+- Torii's `/v1/events/sse` ምግብ አሁን `SorafsGatewayEvent::DealUsage` ያሰራጫል
+  እያንዳንዱን የአጠቃቀም ግቤት (epoch፣ metered GiB-hours፣ ቲኬት) የሚያጠቃልሉ መዝገቦች
+  ቆጣሪዎች፣ የሚወስኑ ክፍያዎች)፣ `SorafsGatewayEvent::DealSettlement`
+  ቀኖናዊ የሰፈራ መዝገብ ቅጽበታዊ ገጽ እይታ እና ን ያካተቱ መዝገቦች
+  BLAKE3 መፍጨት/መጠን/base64 የዲስክ አስተዳደር ቅርስ፣ እና
+  የPDP/PoTR ገደቦች ሲሆኑ የ`SorafsGatewayEvent::ProofHealth` ማንቂያዎች
+  አልፏል (አቅራቢ፣ መስኮት፣ አድማ/የማቀዝቀዝ ሁኔታ፣ የቅጣት መጠን)። ሸማቾች ይችላሉ።
+  ለአዲስ ቴሌሜትሪ፣ ሰፈራዎች ወይም የጤና ማረጋገጫ ማንቂያዎች ያለ ድምጽ ምላሽ ለመስጠት በአቅራቢ ያጣሩ።
 
-Both endpoints participate in the SoraFS quota framework via the new
-`torii.sorafs.quota.deal_telemetry` window, allowing operators to tune the
-allowed submission rate per deployment.
+ሁለቱም የመጨረሻ ነጥቦች በ SoraFS ኮታ ማዕቀፍ ውስጥ በአዲሱ በኩል ይሳተፋሉ
+`torii.sorafs.quota.deal_telemetry` መስኮት ኦፕሬተሮችን እንዲያስተካክሉ ያስችላቸዋል
+የሚፈቀደው የማስረከቢያ መጠን በአንድ ማሰማራት።

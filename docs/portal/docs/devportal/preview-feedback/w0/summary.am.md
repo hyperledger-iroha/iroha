@@ -11,54 +11,55 @@ id: preview-feedback-w0-summary
 title: W0 midpoint feedback digest
 sidebar_label: W0 feedback (midpoint)
 description: Midpoint checkpoints, findings, and action items for the core-maintainer preview wave.
+translator: machine-google-reviewed
 ---
 
-| Item | Details |
+| ንጥል | ዝርዝሮች |
 | --- | --- |
-| Wave | W0 — Core maintainers |
-| Digest date | 2025‑03‑27 |
-| Review window | 2025‑03‑25 → 2025‑04‑08 |
-| Participants | docs-core-01, sdk-rust-01, sdk-js-01, sorafs-ops-01, observability-01 |
-| Artefact tag | `preview-2025-03-24` |
+| ማዕበል | W0 - ኮር ጠባቂዎች |
+| የተፈጨበት ቀን | 2025-03-27 |
+| የግምገማ መስኮት | 2025-03-25 → 2025-04-08 |
+| ተሳታፊዎች | docs-core-01, sdk-rust-01, sdk-js-01, sorafs-ops-01, observability-01 |
+| Artefact መለያ | `preview-2025-03-24` |
 
-## Highlights
+## ድምቀቶች
 
-1. **Checksum workflow** — All reviewers confirmed `scripts/preview_verify.sh`
-   succeeded against the shared descriptor/archive pair. No manual overrides
-   required.
-2. **Navigation feedback** — Two minor sidebar ordering issues were filed
-   (`docs-preview/w0 #1–#2`). Both are routed to Docs/DevRel and do not block the
-   wave.
-3. **SoraFS runbook parity** — sorafs-ops-01 requested clearer cross-links
-   between `sorafs/orchestrator-ops` and `sorafs/multi-source-rollout`. Follow-up
-   issue filed; to be addressed before W1.
-4. **Telemetry review** — observability-01 confirmed `docs.preview.integrity`,
-   `TryItProxyErrors`, and Try-it proxy logs stayed green; no alerts fired.
+1. **የቼክተም የስራ ፍሰት** — ሁሉም ገምጋሚዎች `scripts/preview_verify.sh` አረጋግጠዋል
+   ከጋራ ገላጭ/የመዝገብ ቤት ጥንድ ጋር ተቃርቧል። በእጅ የሚሻር የለም።
+   ያስፈልጋል።
+2. **የአሰሳ ግብረመልስ** — ሁለት ጥቃቅን የጎን አሞሌ ማዘዣ ጉዳዮች ቀርበዋል።
+   (`docs-preview/w0 #1–#2`)። ሁለቱም ወደ ሰነዶች/DevRel ተወስደዋል እና አያግዱም።
+   ሞገድ.
+3. **I18NT0000000X runbook ተመሳሳይነት** — sorafs-ops-01 ይበልጥ ግልጽ የሆኑ ማገናኛዎች ጠይቋል።
+   በ `sorafs/orchestrator-ops` እና `sorafs/multi-source-rollout` መካከል። ክትትል
+   ጉዳይ ቀረበ; ከ W1 በፊት መቅረብ አለበት.
+4. ** የቴሌሜትሪ ግምገማ *** - ታዛቢነት-01 የተረጋገጠ `docs.preview.integrity`፣
+   `TryItProxyErrors`፣ እና ይሞክሩት የተኪ ምዝግብ ማስታወሻዎች አረንጓዴ ሆነው ቆዩ። ምንም ማንቂያዎች አልተተኮሱም።
 
-## Action items
+## የእርምጃ ዕቃዎች
 
-| ID | Description | Owner | Status |
+| መታወቂያ | መግለጫ | ባለቤት | ሁኔታ |
 | --- | --- | --- | --- |
-| W0-A1 | Reorder devportal sidebar entries to surface reviewer-focused docs (`preview-invite-*` group together). | Docs-core-01 | ✅ Completed — sidebar now lists the reviewer docs contiguously (`docs/portal/sidebars.js`). |
-| W0-A2 | Add explicit cross-link between `sorafs/orchestrator-ops` and `sorafs/multi-source-rollout`. | Sorafs-ops-01 | ✅ Completed — each runbook now links to the other so operators see both guides during rollouts. |
-| W0-A3 | Share telemetry snapshots + query bundle with governance tracker. | Observability-01 | ✅ Completed — bundle attached to `DOCS-SORA-Preview-W0`. |
+| W0-A1 | የዴቭፖርታል የጎን አሞሌ ግቤቶችን ወደ ገጽ ገምጋሚ-ተኮር ሰነዶች (`preview-invite-*` ቡድን አንድ ላይ) እንደገና ይዘዙ። | ሰነዶች-ኮር-01 | ✅ ተጠናቋል - የጎን አሞሌ አሁን የገምጋሚውን ሰነዶች በተከታታይ ይዘረዝራል (`docs/portal/sidebars.js`)። |
+| W0-A2 | በ`sorafs/orchestrator-ops` እና `sorafs/multi-source-rollout` መካከል ግልጽ የሆነ መስቀለኛ መንገድ ያክሉ። | Sorafs-ops-01 | ✅ ተጠናቅቋል - እያንዳንዱ የሩጫ መጽሐፍ አሁን ከሌላው ጋር ይገናኛል ስለዚህ ኦፕሬተሮች በታቀዱ ጊዜ ሁለቱንም መመሪያዎች ያዩታል። |
+| W0-A3 | የቴሌሜትሪ ቅጽበተ-ፎቶዎችን + የጥያቄ ቅርቅብ ከአስተዳደር መከታተያ ጋር ያጋሩ። | ታዛቢነት-01 | ✅ ተጠናቅቋል - ጥቅል ከ`DOCS-SORA-Preview-W0` ጋር ተያይዟል። |
 
-## Exit summary (2025-04-08)
+## የመውጣት ማጠቃለያ (2025-04-08)
 
-- All five reviewers confirmed completion, purged local builds, and exited the
-  preview window; access revocations recorded in `DOCS-SORA-Preview-W0`.
-- No incidents or alerts fired during the wave; telemetry dashboards stayed
-  green for the full period.
-- Navigation + cross-link actions (W0-A1/A2) are implemented and reflected in
-  the docs above; telemetry evidence (W0-A3) is attached to the tracker.
-- Evidence bundle archived: telemetry screenshots, invite acknowledgements, and
-  this digest are linked from the tracker issue.
+- አምስቱም ገምጋሚዎች መጠናቀቁን አረጋግጠዋል፣ የአካባቢ ግንባታዎችን አጽድተው ከወጡበት ወጥተዋል።
+  ቅድመ እይታ መስኮት; በ`DOCS-SORA-Preview-W0` ውስጥ የተመዘገቡ የመዳረሻ ስረዛዎች።
+- በማዕበል ወቅት ምንም አይነት ክስተቶች ወይም ማንቂያዎች አልተነሱም; ቴሌሜትሪ ዳሽቦርዶች ቆዩ
+  ለሙሉ ጊዜ አረንጓዴ.
+- አሰሳ + አቋራጭ እርምጃዎች (W0-A1/A2) ተተግብረዋል እና ተንጸባርቀዋል
+  ከላይ ያሉት ሰነዶች; የቴሌሜትሪ ማስረጃ (W0-A3) ከመከታተያው ጋር ተያይዟል።
+- የማስረጃ ጥቅል በማህደር ተቀምጧል፡ ቴሌሜትሪ ቅጽበታዊ ገጽ እይታዎች፣ እውቅናዎችን ይጋብዙ እና
+  ይህ መፍጨት ከክትትል ጉዳይ ጋር የተገናኘ ነው።
 
-## Next steps
+## ቀጣይ እርምጃዎች
 
-- Implement W0 action items before opening W1.
-- Obtain legal approval and proxy staging slot, then follow the partner-wave
-  preflight steps outlined in the [preview invite flow](../../preview-invite-flow.md).
+- W1 ከመክፈትዎ በፊት የ W0 የድርጊት እቃዎችን ይተግብሩ።
+- ህጋዊ ማረጋገጫ እና የተኪ ማቆያ ቦታ ያግኙ፣ ከዚያ የአጋር-ሞገድን ይከተሉ
+  የቅድመ በረራ እርምጃዎች በ [የቅድመ እይታ ግብዣ ፍሰት](../../preview-invite-flow.md) ውስጥ ተዘርዝረዋል።
 
-_This digest is linked from the [preview invite tracker](../../preview-invite-tracker.md) to
-keep the DOCS-SORA roadmap traceable._
+_ይህ መፈጨት ከ[የቅድመ እይታ ግብዣ መከታተያ](../../preview-invite-tracker.md) ጋር የተገናኘ ነው።
+የ DOCS-SORA ፍኖተ ካርታ መከታተያ እንዲኖር ያድርጉ።_

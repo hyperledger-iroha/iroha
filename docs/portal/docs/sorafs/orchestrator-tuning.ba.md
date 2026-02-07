@@ -11,97 +11,98 @@ id: orchestrator-tuning
 title: Orchestrator Rollout & Tuning
 sidebar_label: Orchestrator Tuning
 description: Practical defaults, tuning guidance, and audit checkpoints for taking the multi-source orchestrator to GA.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
-:::
+:::иҫкәртергә канонлы сығанаҡ
+::: 1990 й.
 
-# Orchestrator Rollout & Tuning Guide
+# Оркестратор рулет & Тюнинг ҡулланмаһы
 
-This guide builds on the [configuration reference](orchestrator-config.md) and the
-[multi-source rollout runbook](multi-source-rollout.md). It explains
-how to tune the orchestrator for each rollout phase, how to interpret the
-scoreboard artefacts, and which telemetry signals must be in place before
-expanding traffic. Apply the recommendations consistently across CLI, SDKs, and
-automation so every node follows the same deterministic fetch policy.
+Был ҡулланма төҙөлә [конфигурация һылтанма](I18NU000000010X) һәм
+[күп сығанаҡлы таратыу runbook](multi-source-rollout.md). Ул аңлата .
+нисек көйләү өсөн оркестратор өсөн һәр таратыу фазаһы, нисек интерпретациялау
+табло артефакттары, һәм ниндәй телеметрия сигналдары 2012 йылға тиклем урынында булырға тейеш.
+трафикты киңәйтеү. Тәҡдимдәрҙе эҙмә-эҙлекле ҡулланыу буйынса CLI, SDKs, һәм
+автоматлаштырыу, шулай итеп, һәр төйөн бер үк детерминистик фетч сәйәсәтен үтәй.
 
-## 1. Baseline Parameter Sets
+## 1. Төп параметр йыйылмалары
 
-Start from a shared configuration template and adjust a small set of knobs as
-the rollout progresses. The table below captures the recommended values for the
-most common phases; values not listed fall back to the defaults in
-`OrchestratorConfig::default()` and `FetchOptions::default()`.
+Башланғыс дөйөм конфигурация шаблон һәм бәләкәй генә ручкалар йыйылмаһы көйләү кеүек .
+йәйелдереүҙең үҫеше. Түбәндәге таблицала тәҡдим ителгән ҡиммәттәрҙе төшөрөп бирә.
+иң таралған фазалар; ҡиммәттәре исемлеккә инмәгән 2012 йылда ғәҙәттәгесә кире төшә.
+`OrchestratorConfig::default()` һәм `FetchOptions::default()`.
 
-| Phase | `max_providers` | `fetch.per_chunk_retry_limit` | `fetch.provider_failure_threshold` | `scoreboard.latency_cap_ms` | `scoreboard.telemetry_grace_secs` | Notes |
-|-------|-----------------|-------------------------------|------------------------------------|-----------------------------|------------------------------------|-------|
-| **Lab / CI** | `3` | `2` | `2` | `2500` | `300` | Tight latency cap and grace window surface noisy telemetry quickly. Keep retries low to expose invalid manifests sooner. |
-| **Staging** | `4` | `3` | `3` | `4000` | `600` | Mirrors production defaults while leaving headroom for exploratory peers. |
-| **Canary** | `6` | `3` | `3` | `5000` | `900` | Matches defaults; set `telemetry_region` so dashboards can pivot on canary traffic. |
-| **General Availability** | `None` (use all eligible) | `4` | `4` | `5000` | `900` | Increase retry and failure thresholds to absorb transient faults while audits continue to enforce determinism. |
+| Фаза | I18NI0000014X | `fetch.per_chunk_retry_limit` | `fetch.provider_failure_threshold` | `scoreboard.latency_cap_ms` | `scoreboard.telemetry_grace_secs` | Иҫкәрмәләр |
+|------------------------------------------------------------------------------------------------------ешт. -----------------------------------------------------------------|------------------|
+| **Лаб / CI** | `3` | `2` | `2` | `2500` | `300` | Тығыҙ латентлыҡ ҡапҡасы һәм рәхмәт тәҙрә өҫтө шау-шыулы телеметрия тиҙ. Туҡтауҙы түбәнерәк тотоғоҙ, дөрөҫ түгел, дөрөҫ булмаған нәжестәрҙе тиҙерәк фашлау. |
+| **Стажлау** | `4` | `3` | `3` | `4000` | `600` | Көҙгөләр етештереү дефолт, шул уҡ ваҡытта баш өҫтөнән ҡалдырырға өсөн эҙләнеүҙең тиҫтерҙәре. |
+| **Канар** | `6` | I18NI000000030X | `3` | `5000` | `900` | Матчтар ғәҙәттәгесә; `telemetry_region` ҡуйылған, шуға күрә приборҙар таҡталары канар трафикында шарнир ала. |
+| **Дөйөм доступность** | I18NI000000035X (бөтә хоҡуҡлы ҡулланыу) | `4` | `4` | `5000` | `900` | Рейтинг һәм етешһеҙлектәр сиктәрен арттырыу өсөн ваҡытлыса етешһеҙлектәрҙе үҙләштереү, ә аудиттарҙа детерминизмды үтәүен дауам итә. |
 
-- `scoreboard.weight_scale` remains at the default `10_000` unless a downstream
-  system requires a different integer resolution. Increasing the scale does not
-  change provider ordering; it only emits a denser credit distribution.
-- When migrating between phases, persist the JSON bundle and use
-  `--scoreboard-out` so the audit trail records the exact parameter set.
+- I18NI000000040X ҡала ғәҙәттәгесә I18NI0000000041X, әгәр ҙә ағым ағымы
+  системаһы икенсе бөтөн һандарҙы хәл итеүҙе талап итә. Масштабтың артыуы юҡ.
+  үҙгәрештәр менән тәьмин итеүсе заказ; ул тик тығыҙыраҡ кредит бүлелеше сығара.
+- Фазалар араһында күсеп килгәндә, JSON өйөмөн һаҡлағыҙ һәм ҡулланыу
+  I18NI000000042X шулай аудит эҙҙәре теүәл параметр йыйылмаһы теркәлә.
 
-## 2. Scoreboard Hygiene
+## 2.
 
-The scoreboard combines manifest requirements, provider adverts, and telemetry.
-Before rolling forward:
+Табель таҡтаһы асыҡ талаптарҙы берләштерә, провайдер рекламаһы, һәм телеметрия.
+Алға тәгәрмәс алдынан:
 
-1. **Validate telemetry freshness.** Ensure the snapshots referenced by
-   `--telemetry-json` were captured within the configured grace window. Entries
-   older than the configured `telemetry_grace_secs` fail with
-   `TelemetryStale { last_updated }`. Treat this as a hard stop and refresh the
-   telemetry export before continuing.
-2. **Inspect eligibility reasons.** Persist artefacts via
-   `--scoreboard-out=/var/lib/sorafs/scoreboards/preflight.json`. Each entry
-   carries an `eligibility` block with the exact failure cause. Do not override
-   capability mismatches or expired adverts; fix the upstream payload.
-3. **Review weight deltas.** Compare the `normalised_weight` field against the
-   previous release. Weight shifts >10 % should correlate with deliberate advert
-   or telemetry changes and must be acknowledged in the rollout log.
-4. **Archive artefacts.** Configure `scoreboard.persist_path` so every run emits
-   the final scoreboard snapshot. Attach the artefact to the release record
-   alongside the manifest and telemetry bundle.
-5. **Record provider mix evidence.** `scoreboard.json` metadata _and_ the
-   matching `summary.json` must expose `provider_count`,
-   `gateway_provider_count`, and the derived `provider_mix` label so reviewers
-   can prove whether the run was `direct-only`, `gateway-only`, or `mixed`.
-   Gateway captures therefore report `provider_count=0` plus
-   `provider_mix="gateway-only"`, while mixed runs require non-zero counts for
-   both sources. `cargo xtask sorafs-adoption-check` enforces these fields (and
-   fails when the counts/labels disagree), so always run it alongside
-   `ci/check_sorafs_orchestrator_adoption.sh` or your bespoke capture script to
-   produce the `adoption_report.json` evidence bundle. When Torii gateways are
-   involved, keep `gateway_manifest_id`/`gateway_manifest_cid` in the scoreboard
-   metadata so the adoption gate can correlate the manifest envelope with the
-   captured provider mix.
+1. **Телеметрияны яңылыҡ менән тәьмин итеү.**
+   `--telemetry-json` конфигурацияланған рәхмәт тәҙрәһе сиктәрендә төшөрөлгән. Яҙмалар
+   оло конфигурацияланған I18NI0000000044X менән етешһеҙлектәр менән .
+   `TelemetryStale { last_updated }`. Быны ҡаты туҡталыш тип ҡабул итегеҙ һәм яңыртыу
+   телеметрия экспорты дауам иткәнсе.
+2. **Икенселек сәбәптәрен тикшерергә.**
+   I18NI000000046X. Һәр яҙма
+   йөк ташый I18NI0000000047X блок менән теүәл етешһеҙлек сәбәбе. Өҫтөнлөккә сыҡмағыҙ .
+   мөмкинлек тап килмәүе йәки ваҡыты үткән реклама; өҫкө ағымдағы файҙалы йөктө төҙәтергә.
+3. **Ауырлыҡ дельталарын тикшерергә.** I18NI000000048X яланын ҡаршы сағыштырығыҙ.
+   алдағы релиз. Ауырлыҡ сменалары >10% аңлы реклама менән корреляция тейеш
+   йәки телеметрия үҙгәрештәре һәм танылырға тейеш логин журналы.
+4. **Архив артефакттары.** I18NI0000000049X X-ә конфигурациялау, шулай итеп, һәр йүгерә эмиссия
+   һуңғы табло снимок. Артефактты сығарыу пластинкаһына беркетегеҙ
+   асыҡ һәм телеметрия өйөмө менән бер рәттән.
+5. **Яҙма провайдер ҡатнашмаһы дәлилдәр.** I18NI000000050X метамағлүмәттәр _һәм_
+   тап килтереп I18NI000000051X I18NI000000052X фашларға тейеш,
+   I18NI000000053X, һәм алынған I18NI0000000054X лейбл шулай рецензенттар
+   иҫбатлай ала, тип йүгерә `direct-only`, I18NI000000056X, йәки I18NI000000057X.
+   Ҡапҡаларҙы тотоу, шуға күрә хәбәр итә I18NI0000000058X плюс
+   I18NI000000059X, шул уҡ ваҡытта ҡатнаш йүгереүҙәр өсөн нульдән тыш һандарҙы талап итә.
+   ике сығанаҡ. `cargo xtask sorafs-adoption-check` был өлкәләрҙе үтәй (һәм
+   уңышһыҙлыҡҡа осрай, ҡасан иҫәптәр/ярыштар риза түгел), шуға күрә һәр ваҡыт уны йөрөтөү менән бергә йүгерә
+   I18NI000000061X йәки һеҙҙең заказ буйынса скрипт алыу өсөн
+   етештереү I18NI0000000062X дәлилдәр өйөмө. Ҡасан I18NT0000000007X шлюздары .
+   йәлеп итеү, һаҡлау I18NI0000000063X/I18NI0000000064X таблода
+   метамағлүмәттәр шулай ҡабул итеү ҡапҡаһы менән корреляциялана ала асыҡ конверт менән
+   әсирлеккә провайдер ҡатнашмаһы.
 
-For detailed field definitions see
-`crates/sorafs_car/src/scoreboard.rs` and the CLI summary structure exposed by
+Ентекле ялан билдәләмәләре өсөн ҡарағыҙ
+I18NI000000065X һәм CLI йыйылма структураһы
 `sorafs_cli fetch --json-out`.
 
-## CLI & SDK Flag Reference
+## CLI & SDK флагы һылтанма
 
-`sorafs_cli fetch` (see `crates/sorafs_car/src/bin/sorafs_cli.rs`) and the
-`iroha_cli app sorafs fetch` wrapper (`crates/iroha_cli/src/commands/sorafs.rs`)
-share the same orchestrator configuration surface. Use the following flags when
-capturing rollout evidence or replaying the canonical fixtures:
+I18NI000000067X (ҡара: I18NI000000068X X) һәм
+I18NI000000069X X урау (`crates/iroha_cli/src/commands/sorafs.rs`)
+бер үк оркестр конфигурацияһы өҫтөндә бүлешергә. Ҡулланыу түбәндәге флагтар ҡасан .
+йәки канонлы ҡорамалдарҙы ҡабатлау тураһында ролл-аут дәлилдәре:
 
-Shared multi-source flag reference (keep CLI help and docs in sync by editing this file only):
+Дөйөм күп сығанаҡлы флаг һылтанмаһы (CLI ярҙам һәм docs синхронлаштырыу был файлды ғына мөхәррирләү):
 
-- `--max-peers=<count>` limits how many eligible providers survive the scoreboard filter. Leave unset to stream from every eligible provider, set to `1` only when intentionally exercising the single-source fallback. Mirrors the `maxPeers` knob in SDKs (`SorafsGatewayFetchOptions.maxPeers`, `SorafsGatewayFetchOptions.max_peers`).
-- `--retry-budget=<count>` forwards to the per-chunk retry limit enforced by `FetchOptions`. Use the rollout table in the tuning guide for recommended values; CLI runs that collect evidence must match SDK defaults to keep parity.
-- `--telemetry-region=<label>` tags `sorafs_orchestrator_*` Prometheus series (and OTLP relays) with a region/env label so dashboards can separate lab, staging, canary, and GA traffic.
-- `--telemetry-json=<path>` injects the snapshot referenced by the scoreboard. Persist the JSON next to the scoreboard so auditors can replay the run (and so `cargo xtask sorafs-adoption-check --require-telemetry` can prove which OTLP stream fed the capture).
-- `--local-proxy-*` (`--local-proxy-mode`, `--local-proxy-norito-spool`, `--local-proxy-kaigi-spool`, `--local-proxy-kaigi-policy`) enable the bridge observer hooks. When set, the orchestrator streams chunks through the local Norito/Kaigi proxy so browser clients, guard caches, and Kaigi rooms receive the same receipts emitted by Rust.
-- `--scoreboard-out=<path>` (optionally paired with `--scoreboard-now=<unix_secs>`) persists the eligibility snapshot for auditors. Always pair the persisted JSON with the telemetry and manifest artefacts referenced in the release ticket.
-- `--deny-provider name=ALIAS` / `--boost-provider name=ALIAS:delta` apply deterministic adjustments on top of the advert metadata. Use these flags only for rehearsals; production downgrades must flow through governance artefacts so every node applies the same policy bundle.
-- `--provider-metrics-out` / `--chunk-receipts-out` retain the per-provider health metrics and chunk receipts referenced by the rollout checklist; attach both artefacts when filing adoption evidence.
+- `--max-peers=<count>` сикләй, күпме хоҡуҡлы провайдерҙар йәшәй табло фильтр. Ҡалдырырға неприходный ағым өсөн һәр хоҡуҡлы провайдер, `1` тик аңлы рәүештә шөғөлләнгәндә генә бер сығанаҡ fallback. Көҙгө I18NI000000073X ручкаһы SDKs (`SorafsGatewayFetchOptions.maxPeers`, `SorafsGatewayFetchOptions.max_peers`).
+- `--retry-budget=<count>` форвардтары `FetchOptions` тарафынан үтәлгән пер-перчатка сигенә. Тәҡдим ителгән ҡиммәттәр өсөн тюнинг ҡулланмаһында таратыу таблицаһын ҡулланып; CLI йүгерә, тип йыя дәлилдәр тура килергә тейеш SDK ғәҙәттәгесә паритет һаҡлау өсөн.
+- I18NI000000078X тегтары I18NI000000079X I18NT000000000000 серияһы (һәм OTLP эстафеталары) менән төбәк/энв лейбл шулай приборҙар таҡталары лаборатория, стажировка, канари һәм GA трафикы.
+- `--telemetry-json=<path>` таблоға һылтанма яһаған снимок индерә. Персист JSON эргәһендә табло, шуға күрә аудиторҙар йүгереүҙе ҡабатлай ала (һәм шулай `cargo xtask sorafs-adoption-check --require-telemetry` иҫбатлай ала, ниндәй OTLP ағымы ашатыу тотоу).
+- `--local-proxy-*` (`--local-proxy-mode`, I18NI0000084X, `--local-proxy-kaigi-spool`, I18NI0000086X) күпер күҙәтеүселәре ҡармаҡтарына мөмкинлек бирә. Ҡасан ҡуйылған, оркестрист ағымдары аша урындағы I18NT000000000004X/Kaigi прокси шулай браузер клиенттары, һаҡ кэштары, һәм Kaigi бүлмәләре шул уҡ квитанциялар ала, тип сығарылған Rust.
+- `--scoreboard-out=<path>` (факультатив рәүештә `--scoreboard-now=<unix_secs>` менән парлаштырылған) аудиторҙар өсөн хоҡуҡлы снимок һаҡлана. Һәр ваҡыт парлы JSON менән телеметрия һәм асыҡ артефакттар һылтанма релиз билет.
+- `--deny-provider name=ALIAS` / `--boost-provider name=ALIAS:delta` реклама метамағлүмәттәренең өҫтөндә детерминистик төҙәтмәләр ҡулланыла. Был флагтарҙы репетициялар өсөн генә ҡулланығыҙ; етештереү түбәнәйтергә тейеш идара итеү артефакттары аша ағып, шуға күрә һәр төйөн шул уҡ сәйәсәт өйөмөн ҡуллана.
+- `--provider-metrics-out` / `--chunk-receipts-out` пер-провайдер һаулыҡ метрикаһын һәм өлөшө квитанцияларын һаҡлап ҡала, уларҙы тикшергән исемлеккә һылтанма яһала; беркетергә ике артефакт ҡасан ҡабул итеү дәлилдәрен тапшырыу.
 
-Example (using the published fixture):
+Миҫал (баҫылған ҡоролма ҡулланыу):
 
 ```bash
 sorafs_cli fetch \
@@ -118,110 +119,108 @@ cargo xtask sorafs-adoption-check \
   --summary artifacts/sorafs_orchestrator/latest/summary.json
 ```
 
-SDKs consume the same configuration via `SorafsGatewayFetchOptions` in the Rust
-client (`crates/iroha/src/client.rs`), the JS bindings
-(`javascript/iroha_js/src/sorafs.js`), and the Swift SDK
-(`IrohaSwift/Sources/IrohaSwift/SorafsOptions.swift`). Keep those helpers in
-lock-step with the CLI defaults so operators can copy policies across automation
-without bespoke translation layers.
+SDKs ҡулланыу шул уҡ конфигурация аша I18NI00000000093X руст .
+клиент (I18NI000000094X), JS бәйләүестәре
+(`javascript/iroha_js/src/sorafs.js`), һәм Свифт СДК
+(`IrohaSwift/Sources/IrohaSwift/SorafsOptions.swift`X). Шул ярҙамсыларҙы 2018 йылда һаҡлағыҙ.
+lock-step менән CLI ғәҙәттәгесә, шулай итеп, операторҙар автоматлаштырыу буйынса сәйәсәтте күсерә ала
+тәржемә ҡатламдары буйынса заказ буйынса.
 
-## 3. Fetch Policy Tuning
+## 3.
 
-`FetchOptions` controls retry behaviour, concurrency, and verification. When
-tuning:
+I18NI000000097X идара итеү ҡайтанан тырышып тәртип, конкурентлыҡ, һәм тикшерелгән. Ҡасан
+көйләү:
 
-- **Retries:** Raising `per_chunk_retry_limit` beyond `4` increases recovery
-  time but risks masking provider faults. Prefer keeping `4` as the ceiling and
-  relying on the provider rotation to surface poor performers.
-- **Failure threshold:** The `provider_failure_threshold` governs when a
-  provider is disabled for the remainder of the session. Align this value with
-  retry policy: a threshold lower than the retry budget forces the orchestrator
-  to eject a peer before all retries are exhausted.
-- **Concurrency:** Leave `global_parallel_limit` unset (`None`) unless a
-  specific environment cannot saturate the advertised ranges. When set, ensure
-  the value is ≤ the sum of provider stream budgets to avoid starvation.
-- **Verification toggles:** `verify_lengths` and `verify_digests` must remain
-  enabled in production. They guarantee determinism when mixed provider fleets
-  are in play; only disable them in isolated fuzzing environments.
+- **Ретрит:** `per_chunk_retry_limit` X-тан тыш, һауығыуҙы арттыра.
+  ваҡыт, әммә хәүеф маскировка провайдер етешһеҙлектәре. Өҫтөнлөк һаҡлау I18NI0000000100X түшәм һәм
+  провайдер әйләнешенә таянып, ярлы башҡарыусыларҙы ер өҫтөнә тиклем.
+- **Уңышһыҙлыҡ сиге:** I18NI000000101X идара итеү, ҡасан
+  провайдеры ҡалған сессия өсөн өҙөлгән. Был ҡиммәтте тура килтерегеҙ.
+  ҡайтанан ҡарау сәйәсәте: ҡабаттан тырышып торған бюджеттан түбәнерәк сик оркестрҙы көсләп сығара
+  тиҫтерҙе бөтә ретристар арығансы сығарыу.
+- *Быныһы:** Ҡалдырыу I18NI0000000102X необработка (`None`) әгәр ҙә
+  аныҡ мөхит рекламаланған диапазондарҙы туйындыра алмай. Ҡасан ҡуйылған, тәьмин итеү
+  ҡиммәте ≤ аслыҡтан ҡотолоу өсөн провайдер ағымы бюджеттары суммаһы.
+- **Тегеү toggles:** I18NI000000104X һәм `verify_digests` ҡалырға тейеш
+  етештереүҙә эшләй. Улар ҡатнаш провайдерҙар флотында детерминизм гарантиялай
+  уйында; уларҙы айырымланған fuzzing мөхитендә генә өҙөп.
 
-## 4. Transport & Anonymity Staging
+## 4. Транспорт & Анонимлыҡ сәхнәләштереү
 
-Use the `rollout_phase`, `anonymity_policy`, and `transport_policy` fields to
-represent the privacy posture:
+`rollout_phase`, I18NI000000107X, һәм I18NI000000108X яландарын ҡулланыу.
+хосусилыҡ позаһын күрһәтә:- `rollout_phase="snnet-5"` X һәм 1990 йылға тиклем анонимлыҡ сәйәсәтенә рөхсәт итеү.
+  SNNet-5-се этаптарҙы күҙәтеп бара. I18NI000000110X аша өҫтөнлөк итеү генә
+  идара итеү ҡасан ҡул ҡуйылған директива бирә.
+- I18NI000000111X һаҡлау башланғыс һыҙығы булараҡ, ә SNNet-4/5/5б/6а/7/8/12/13 🈺
+  (ҡара: `roadmap.md`). Ҡулланыу I18NI0000000113X тик документлаштырылған
+  түбәнгә төшөрөү/тапшырыу күнекмәләр, һәм көтөп PQ ҡаплау тикшерергә тиклем .
+  пропагандалау I18NI0000000114X-был ярус тиҙ уңышһыҙлыҡҡа осрай, әгәр
+  тик классик эстафеталар ғына ҡала.
+- I18NI000000115X һәр яҙыу юлында ғына үтәлергә тейеш (СДК,
+  оркестр, идара итеү инструменттары) ҡәнәғәтләндерә ала PQ талаптары. Ваҡытында
+  18NI000000116X ролл-ауттары һаҡлай, шуға күрә ғәҙәттән тыш хәлдәргә яуаптар таяна ала
+  туранан-тура маршруттарҙа, ә телеметрия флагы түбәнге дәрәжә.
+- Гвардия һайлау һәм схема ҡуйыу SoraNet каталогына таяна. Тәьмин итеү
+  Ҡул ҡуйҙы I18NI0000000117X снимок һәм һаҡлау I18NI0000000118X кэш шулай һаҡсы
+  churn килешелгән һаҡлау тәҙрәһе сиктәрендә ҡала. Кэш бармаҡ эҙҙәре логжен
+  `sorafs_cli fetch` тарафынан таратыу дәлилдәренең бер өлөшөн тәшкил итә.
 
-- Prefer `rollout_phase="snnet-5"` and allow the default anonymity policy to
-  track the SNNet-5 milestones. Override via `anonymity_policy_override` only
-  when governance issues a signed directive.
-- Keep `transport_policy="soranet-first"` as the baseline while SNNet-4/5/5a/5b/6a/7/8/12/13 are 🈺
-  (see `roadmap.md`). Use `transport_policy="direct-only"` only for documented
-  downgrades/compliance drills, and wait for the PQ coverage review before
-  promoting to `transport_policy="soranet-strict"`—that tier will fail fast if
-  only classical relays remain.
-- `write_mode="pq-only"` should only be enforced when every write path (SDK,
-  orchestrator, governance tooling) can satisfy PQ requirements. During
-  rollouts keep `write_mode="allow-downgrade"` so emergency responses can rely
-  on direct routes while telemetry flags the downgrade.
-- Guard selection and circuit staging rely on the SoraNet directory. Supply the
-  signed `relay_directory` snapshot and persist the `guard_set` cache so guard
-  churn stays within the agreed retention window. The cache fingerprint logged
-  by `sorafs_cli fetch` forms part of the rollout evidence.
+## 5. Донград һәм үтәү ҡармаҡтары
 
-## 5. Downgrade & Compliance Hooks
+Ике оркестр подсистемалары сәйәсәтте ҡул менән ҡыҫылыуһыҙ үтәргә ярҙам итә:
 
-Two orchestrator subsystems help enforce policy without manual intervention:
-
-- **Downgrade remediation** (`downgrade_remediation`): monitors
-  `handshake_downgrade_total` events and, after the configured `threshold` is
-  exceeded within `window_secs`, forces the local proxy into the `target_mode`
-  (metadata-only by default). Keep the defaults (`threshold=3`, `window=300`,
-  `cooldown=900`) unless incident reviews show a different pattern. Document any
-  override in the rollout log and ensure dashboards track
+- **Даунградты төҙәтеү** (I18NI000000120X): мониторҙар
+  I18NI000000121X саралары һәм, конфигурацияланғандан һуң I18NI000000122X 1000 й.
+  `window_secs` сиктәрендә артып китә, ​​урындағы проксины `target_mode`-ға мәжбүр итә.
+  (метадата-тик ғәҙәттәгесә). Ғәҙәттәгесә һаҡлау (`threshold=3`, `window=300`,
+  `cooldown=900`) әгәр ҙә инцидент тикшерелеүҙәре башҡа ҡалып күрһәтмәһә. Документ теләһә ниндәй
+  өҫтөндә йөрөү ролл-аут журналында һәм тәьмин итеү приборҙар таҡталары трек
   `sorafs_proxy_downgrade_state`.
-- **Compliance policy** (`compliance`): jurisdiction and manifest carve-outs
-  flow through governance-managed opt-out lists. Never inline ad-hoc overrides
-  in the configuration bundle; instead, request a signed update to
-  `governance/compliance/soranet_opt_outs.json` and redeploy the generated JSON.
+- **Тотолоу сәйәсәте** (I18NI000000129X): юрисдикция һәм асыҡ уйылған-аут
+  ағымы аша идара итеү менән идара итеү опт-аут исемлектәре. Бер ҡасан да рәтле реклама-хок өҫтөнлөктәре
+  конфигурация өйөмөндә; урынына, ҡул ҡуйылған яңыртыу һорап
+  `governance/compliance/soranet_opt_outs.json` һәм генерацияланған JSON-ды үҙгәртеп ҡороу.
 
-For both systems, persist the resulting configuration bundle and include it in
-release evidences so auditors can trace how downshifts were triggered.
+Ике система өсөн дә һөҙөмтәлә конфигурация өйөмөн һаҡлағыҙ һәм уны үҙ эсенә ала.
+сығарыу дәлилдәре, шулай итеп, аудиторҙар эҙләй ала, нисек нисбәттә ҡабыҙылған.
 
-## 6. Telemetry & Dashboards
+## 6. Телеметрия һәм приборҙар таҡталары
 
-Before widening the rollout, confirm that the following signals are live in the
-target environment:
+Һөйләшеүҙе киңәйтер алдынан, түбәндәге сигналдар йәшәй, тип раҫлағыҙ.
+маҡсатлы мөхит:
 
 - `sorafs_orchestrator_fetch_failures_total{reason="no_healthy_providers"}` —
-  should be zero after the canary completes.
-- `sorafs_orchestrator_retries_total` and
-  `sorafs_orchestrator_retry_ratio` — should stabilise below 10 % during the
-  canary and stay below 5 % after GA.
-- `sorafs_orchestrator_policy_events_total` — validates that the expected
-  rollout stage is active (`stage` label) and records brownouts via `outcome`.
+  канар тамамланғандан һуң нуль булырға тейеш.
+— `sorafs_orchestrator_retries_total` һәм
+  I18NI000000133X — 10 проценттан түбән тотороҡландырырға тейеш.
+  канар һәм 5% түбән ҡалырға һуң GA.
+- I18NI000000134X — көтөлгәнсә, тип раҫлай
+  18NI0000135X лейблы һәм `outcome` аша брауноттарҙы теркәй.
 - `sorafs_orchestrator_pq_candidate_ratio` /
-  `sorafs_orchestrator_pq_deficit_ratio` — track PQ relay supply against
-  policy expectations.
-- `telemetry::sorafs.fetch.*` log targets — must be streamed to the shared log
-  aggregator with saved searches for `status=failed`.
+  I18NI000000138X — PQ реле тәьмин итеүгә ҡаршы 18.
+  сәйәсәт өмөттәре.
+- I18NI000000139X журнал маҡсаттары — дөйөм журналға тапшырылырға тейеш.
+  агрегатор менән һаҡланған эҙләүҙәр I18NI000000140X.
 
-Load the canonical Grafana dashboard from
-`dashboards/grafana/sorafs_fetch_observability.json` (exported in the portal
-under **SoraFS → Fetch Observability**) so the region/manifest selectors,
-provider retry heatmap, chunk latency histograms, and stall counters match
-what SRE reviews during burn-ins. Wire the Alertmanager rules in
-`dashboards/alerts/sorafs_fetch_rules.yml` and validate the Prometheus syntax
-with `scripts/telemetry/test_sorafs_fetch_alerts.sh` (the helper automatically
-runs `promtool test rules` locally or in Docker). Alert hand-offs require the
-same routing block that the script prints so operators can pin the evidence to
-the rollout ticket.
+Канонлы I18NT000000002X приборҙар таҡтаһын 2012 йылдан тейә.
+`dashboards/grafana/sorafs_fetch_observability.json` (порталда экспортланған
+**I18NT0000000005X → Күҙәтеүсәнлек алыу мөмкинлеге
+провайдер ҡабаттан йылылыҡ картаһы, өлөш латентлыҡ гистограммалары, һәм стойка счетчиктар матч
+нимә SRE тикшерелгән ваҡытында яндырыу-ин. Сымлы иҫкәртмәнсе ҡағиҙәләре 2012 йылда.
+`dashboards/alerts/sorafs_fetch_rules.yml` һәм I18NT000000001X синтаксисын раҫлай
+`scripts/telemetry/test_sorafs_fetch_alerts.sh` менән (ярҙам автоматик рәүештә
+йүгерә `promtool test rules` урындағы йәки I18NT000000006X. Иҫкәртергә ҡул-офф талап итә
+шул уҡ маршрутлаштырыу блогы, тип скрипт баҫмалар, шулай итеп, операторҙары дәлилдәрҙе ҡаҙаҡлай ала
+йәйелдерелгән билет.
 
-### Telemetry burn-in workflow
+### Телеметрия яндырыу-эш ағымы
 
-Roadmap item **SF-6e** requires a 30-day telemetry burn-in before flipping the
-multi-source orchestrator to its GA defaults. Use the repository scripts to
-capture a reproducible artefact bundle for every day in the window:
+Юл картаһы әйбер **SF-6e** 30 көнлөк телеметрия яндырыу талап итә, ә һуңынан әйләндереп .
+күп сығанаҡлы оркестрҙа үҙенең GA ғәҙәттәгесә. Ҡулланыу өсөн һаҡлағыс сценарийҙар .
+тәҙрәлә һәр көн өсөн ҡабатланған артефакт өйөмөн тотоу:
 
-1. Run `ci/check_sorafs_orchestrator_adoption.sh` with the burn-in environment
-   knobs set. Example:
+1. Яныу мөхите менән I18NI000000145X йүгерергә
+   ручкалар ҡуйылған. Миҫал:
 
    ```bash
    SORAFS_BURN_IN_LABEL=canary-week-1 \
@@ -230,42 +229,42 @@ capture a reproducible artefact bundle for every day in the window:
    SORAFS_BURN_IN_DAY=7 \
    SORAFS_BURN_IN_WINDOW_DAYS=30 \
    ci/check_sorafs_orchestrator_adoption.sh
-   ```
+   ``` X
 
-   The helper replays `fixtures/sorafs_orchestrator/multi_peer_parity_v1`,
-   writes `scoreboard.json`, `summary.json`, `provider_metrics.json`,
-   `chunk_receipts.json`, and `adoption_report.json` under
-   `artifacts/sorafs_orchestrator/<timestamp>/`, and enforces a minimum number
-   of eligible providers via `cargo xtask sorafs-adoption-check`.
-2. When the burn-in variables are present the script also emits
-   `burn_in_note.json`, capturing the label, day index, manifest id, telemetry
-   source, and artefact digests. Attach this JSON to the rollout log so it is
-   obvious which capture satisfied each day in the 30-day window.
-3. Import the updated Grafana board (`dashboards/grafana/sorafs_fetch_observability.json`)
-   into the staging/production workspace, tag it with the burn-in label, and
-   confirm that every panel shows samples for the manifest/region under test.
-4. Run `scripts/telemetry/test_sorafs_fetch_alerts.sh` (or `promtool test rules …`)
-   whenever `dashboards/alerts/sorafs_fetch_rules.yml` changes to document that
-   alert routing matches the metrics exported during the burn-in.
-5. Archive the resulting dashboard snapshot, alert test output, and log tail
-   from the `telemetry::sorafs.fetch.*` searches alongside the orchestrator
-   artefacts so governance can replay the evidence without pulling metrics from
-   live systems.
+   Ярҙамсы `fixtures/sorafs_orchestrator/multi_peer_parity_v1`,
+   Яҙған I18NI000000147X, I18NI000000148X, `provider_metrics.json`,
+   I18NI000000150X, һәм I18NI0000000151X йәшкә тиклемге.
+   `artifacts/sorafs_orchestrator/<timestamp>/`, һәм минималь һанды үтәй
+   хоҡуҡлы провайдерҙар аша I18NI000000153X.
+2. Ҡасан яндырыу үҙгәртеүселәр бар, сценарий ҙа сыға
+   I18NI000000154X, ярлыҡ, көн индексы, асыҡ id, телеметрия тотоу
+   сығанаҡ, һәм артефакт һеңдерелгән. Был JSON беркетергә таратыу журналы, шулай итеп, ул
+   көн һайын 30 көнлөк тәҙрәлә ниндәй тотоуҙы ҡәнәғәтләндергәне асыҡ.
+3. Яңыртылған I18NT0000000003Х платаһын импортлау (I18NI000001555X)
+   стажировка/етештереү эш урыны, уны яндырыу менән тег, һәм
+   раҫлау, һәр панель күрһәтә өлгөләр өсөн манифест/төбәк һынау аҫтында.
+4. Йүгереп I18NI000000156X (йәки I18NI000000157X)
+   ҡасан да булһа I18NI0000000158X документҡа үҙгәрә, тип
+   иҫкәртмә маршрутлаштырыу тура килә метрика экспортлау ваҡытында яндырыу-ин.
+5. Архив һөҙөмтәһендә приборҙар таҡтаһы снимок, иҫкәртмә һынау сығыш, һәм лог ҡойроғо
+   I18NI000000159X XX быуаттан оркестр менән бергә эҙләүҙәр
+   артефакттар шулай идара итеү репрезентатив дәлилдәрҙе тартып, метрикаһыҙ 2012 йылдан.
+   тере системалар.
 
-## 7. Rollout Checklist
+## 7. Роллоут тикшерелгән исемлек
 
-1. Regenerate scoreboards in CI using the candidate configuration and capture
-   artefacts under version control.
-2. Run the deterministic fixture fetch in each environment (lab, staging,
-   canary, production) and attach the `--scoreboard-out` and `--json-out`
-   artefacts to the rollout record.
-3. Review telemetry dashboards with the on-call engineer, ensuring all metrics
-   above have live samples.
-4. Record the final configuration path (usually via `iroha_config`) and the
-   git commit of the governance registry used for adverts and compliance.
-5. Update the rollout tracker and notify SDK teams of new defaults so client
-   integrations stay aligned.
+1. Кандидат конфигурацияһы һәм тотоу ҡулланып, CI-ла таблоларҙы тергеҙеү
+   версиялар контроле аҫтында артефакттар.
+2. Һәр мөхиттә детерминистик ҡоролма алыуҙы эшләтегеҙ (лаборатория, стадия,
+   канар, етештереү) һәм `--scoreboard-out` һәм `--json-out` беркетергә
+   артефакттар ролик пластинкаһына тиклем.
+3. Шылтыратыу буйынса инженер менән телеметрия приборҙар таҡталарын тикшерергә, бөтә метрикаларҙы тәьмин итеү
+   өҫтәге тере өлгөләре бар.
+4. Һуңғы конфигурация юлын яҙығыҙ (ғәҙәттә I18NI000000162X аша) һәм
+   git идара итеү реестры тураһында реклама һәм үтәү өсөн ҡулланыла.
+5. Яңыртыу ролл-аут трекер һәм SDK командалары тураһында хәбәр итеү яңы ғәҙәттәгесә, шулай клиент .
+   интеграциялар тура килтереп ҡала.
 
-Following this guide keeps orchestrator deployments deterministic and auditable
-while providing clear feedback loops for tuning retry budgets, provider
-capacity, and privacy posture.
+Был ҡулланманан һуң оркестрҙы таратыуҙы һаҡлай детерминистик һәм аудит
+шул уҡ ваҡытта аныҡ кире бәйләнеш иллюминаторҙары менән тәьмин итеү өсөн көйләү ретиялы бюджеттар, провайдер
+ҡөҙрәте, һәм хосуси поза.

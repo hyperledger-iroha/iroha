@@ -4,41 +4,43 @@ direction: ltr
 source: docs/portal/docs/devportal/preview-feedback/w2/summary.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: preview-feedback-w2-summary
-title: Resumen de feedback y estado W2
-sidebar_label: Resumen W2
-description: Resumen en vivo para la ola de preview comunitaria (W2).
+id: visualização-feedback-w2-resumo
+título: Resumo de feedback e estado W2
+sidebar_label: Resumo W2
+descrição: Resumen en vivo para la ola de preview comunitaria (W2).
 ---
 
-| Item | Detalles |
+| Artigo | Detalhes |
 | --- | --- |
-| Ola | W2 - Reviewers comunitarios |
-| Ventana de invitacion | 2025-06-15 -> 2025-06-29 |
-| Tag de artefacto | `preview-2025-06-15` |
-| Issue del tracker | `DOCS-SORA-Preview-W2` |
+| Olá | W2 - Revisores comunitários |
+| Ventana de convite | 15/06/2025 -> 29/06/2025 |
+| Etiqueta de artefato | `preview-2025-06-15` |
+| Emissão do rastreador | `DOCS-SORA-Preview-W2` |
 | Participantes | comm-vol-01 ... comm-vol-08 |
 
 ## Destacados
 
-1. **Gobernanza y tooling** - La politica de intake comunitario fue aprobada por unanimidad el 2025-05-20; el template de solicitud actualizado con campos de motivacion/zona horaria vive en `docs/examples/docs_preview_request_template.md`.
-2. **Evidencia de preflight** - El cambio del proxy Try it `OPS-TRYIT-188` se ejecuto el 2025-06-09, dashboards de Grafana capturados, y los outputs de descriptor/checksum/probe de `preview-2025-06-15` archivados bajo `artifacts/docs_preview/W2/`.
-3. **Ola de invitaciones** - Ocho reviewers comunitarios invitados el 2025-06-15, con acknowledgements registrados en la tabla de invitaciones del tracker; todos completaron verificacion de checksum antes de navegar.
-4. **Feedback** - `docs-preview/w2 #1` (wording de tooltip) y `#2` (orden de sidebar de localizacion) se registraron el 2025-06-18 y se resolvieron para 2025-06-21 (Docs-core-04/05); no hubo incidentes durante la ola.
+1. **Governança e ferramentas** - A política de admissão comunitária foi aprovada por unanimidade em 20/05/2025; o modelo de solicitação atualizado com campos de motivação/zona horária viva em `docs/examples/docs_preview_request_template.md`.
+2. **Evidência de comprovação** - A mudança do proxy Try it `OPS-TRYIT-188` foi executada em 2025-06-09, os painéis de Grafana capturados e as saídas do descritor/checksum/probe de `preview-2025-06-15` arquivadas abaixo `artifacts/docs_preview/W2/`.
+3. **Ola de convites** - Outros revisores comunitários convidados em 15/06/2025, com agradecimentos registrados na tabela de convites do tracker; todos completam a verificação da soma de verificação antes de navegar.
+4. **Feedback** - `docs-preview/w2 #1` (texto da dica de ferramenta) e `#2` (ordem da barra lateral de localização) foram registrados em 18/06/2025 e foram resolvidos para 21/06/2025 (Docs-core-04/05); não há incidentes hubo durante la ola.
 
-## Acciones
+## Ações
 
-| ID | Descripcion | Responsable | Estado |
+| ID | Descrição | Responsável | Estado |
 | --- | --- | --- | --- |
-| W2-A1 | Atender `docs-preview/w2 #1` (wording de tooltip). | Docs-core-04 | Completado 2025-06-21 |
-| W2-A2 | Atender `docs-preview/w2 #2` (sidebar de localizacion). | Docs-core-05 | Completado 2025-06-21 |
-| W2-A3 | Archivar evidencia de salida + actualizar roadmap/status. | Docs/DevRel lead | Completado 2025-06-29 |
+| W2-A1 | Atender `docs-preview/w2 #1` (redação da dica de ferramenta). | Documentos-núcleo-04 | Concluído 2025-06-21 |
+| W2-A2 | Atender `docs-preview/w2 #2` (barra lateral de localização). | Documentos-núcleo-05 | Concluído 2025/06/21 |
+| W2-A3 | Arquivar evidências de saída + atualizar roteiro/status. | Líder do Documentos/DevRel | Concluído 2025/06/29 |
 
-## Resumen de salida (2025-06-29)
+## Resumo da saída (2025-06-29)
 
-- Los ocho reviewers comunitarios confirmaron finalizacion y se les revoco el acceso al preview; acknowledgements registrados en el log de invitaciones del tracker.
-- Los snapshots finales de telemetria (`docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals`) se mantuvieron verdes; logs y transcripts del proxy Try it adjuntos a `DOCS-SORA-Preview-W2`.
-- Bundle de evidencia (descriptor, checksum log, probe output, link report, screenshots de Grafana, acknowledgements de invitacion) archivado bajo `artifacts/docs_preview/W2/preview-2025-06-15/`.
-- El log de checkpoints W2 del tracker se actualizo hasta el cierre, asegurando que el roadmap mantenga un registro auditable antes de iniciar la planificacion de W3.
+- Os outros revisores comunitários confirmam a finalização e se revogam o acesso à visualização; agradecimentos registrados no log de convites do rastreador.
+- Os snapshots finais de telemetria (`docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals`) são mantidos verdes; logs e transcrições do proxy Experimente junto com `DOCS-SORA-Preview-W2`.
+- Pacote de evidências (descritor, log de soma de verificação, saída da sonda, relatório de link, capturas de tela de Grafana, reconhecimentos de convite) arquivado abaixo de `artifacts/docs_preview/W2/preview-2025-06-15/`.
+- O log de checkpoints W2 do rastreador é atualizado até o cierre, garantindo que o roadmap mantenha um registro auditável antes de iniciar o planejamento do W3.

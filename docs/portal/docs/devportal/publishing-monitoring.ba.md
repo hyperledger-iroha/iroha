@@ -11,33 +11,34 @@ id: publishing-monitoring
 title: SoraFS Publishing & Monitoring
 sidebar_label: Publishing & Monitoring
 description: Capture the end-to-end monitoring flow for SoraFS portal releases so DOCS-3c has deterministic probes, telemetry, and evidence bundles.
+translator: machine-google-reviewed
 ---
 
-Roadmap item **DOCS-3c** requires more than a packaging checklist: after every
-SoraFS publish we must continuously prove that the developer portal, Try it
-proxy, and gateway bindings remain healthy. This page documents the monitoring
-surface that accompanies the [deployment guide](./deploy-guide.md) so CI and on
-call engineers can exercise the same checks that Ops uses to enforce the SLO.
+Юл картаһы әйбер **DOCS-3c** упаковка тикшерелгән исемлектән күберәк талап итә: һәр һуң
+I18NT000000008X баҫтырып сығарыу беҙ даими иҫбатларға тейеш, тип төҙөүсе порталы, Тырышып ҡарағыҙ
+прокси, һәм шлюз бәйләүҙәре һау-сәләмәт булып ҡала. Был биттә мониторинг документы .
+ер өҫтө, тип оҙатып [йөкмәтке етәксеһе] (./deploy-guide.md) шулай CI һәм өҫтөндә
+шылтыратыу инженерҙары шул уҡ тикшерергә мөмкин, тип Ops ҡуллана, SLO үтәү өсөн.
 
-## Pipeline recap
+## Торбалы рекап
 
-1. **Build and sign** – follow the [deployment guide](./deploy-guide.md) to run
-   `npm run build`, `scripts/preview_wave_preflight.sh`, and the Sigstore +
-   manifest submission steps. The preflight script emits `preflight-summary.json`
-   so every preview carries build/link/probe metadata.
-2. **Pin and verify** – `sorafs_cli manifest submit`, `cargo xtask soradns-verify-binding`,
-   and the DNS cutover plan provide deterministic artefacts for governance.
-3. **Archive evidence** – store the CAR summary, Sigstore bundle, alias proof,
-   probe output, and `docs_portal.json` dashboard snapshots under
+1. **Төҙөү һәм ҡултамға** – үтәргә [йөкмәткеле етәксе](./deploy-guide.md) йүгерергә .
+   `npm run build`, `scripts/preview_wave_preflight.sh`, һәм Sigstore +
+   тапшырыу аҙымдарын күрһәтә. Осоу алдынан сценарий I18NI000000018X сығара.
+   тимәк, һәр алдан ҡарау тота төҙөү/һылтанма/зонд метамағлүмәттәр.
+2. **Пин һәм раҫлау** – I18NI000000019X, `cargo xtask soradns-verify-binding`,
+   һәм DNS cutover планы идара итеү өсөн детерминистик артефакттар бирә.
+3. **Архив дәлилдәре** – һаҡлау CAR резюме, I18NT00000000003Х өйөм, псевдоним иҫбатлау,
+   зонд етештереү, һәм I18NI000000021X приборҙар таҡтаһы снимоктар аҫтында
    `artifacts/sorafs/<tag>/`.
 
-## Monitoring channels
+## Мониторинг каналдары
 
-### 1. Publishing monitors (`scripts/monitor-publishing.mjs`)
+### 1. Баҫма мониторҙар (I18NI000000023X)
 
-The new `npm run monitor:publishing` command wraps the portal probe, Try it
-proxy probe, and binding verifier into a single CI-friendly check. Provide a
-JSON config (checked into CI secrets or `configs/docs_monitor.json`) and run:
+Яңы I18NI000000024X командаһы порталь зондты урап, һынап ҡарағыҙ
+прокси-зонд, һәм бәйләүсе тикшерелгән бер CI-дуҫ тикшерергә. А тәьмин итеү а .
+JSON конфиг (CI серҙәренә йәки I18NI000000025X X) һәм йүгерә:
 
 ```bash
 cd docs/portal
@@ -47,13 +48,13 @@ npm run monitor:publishing -- \
   --evidence-dir ../../artifacts/sorafs/preview-2026-02-14/monitoring
 ```
 
-Add `--prom-out ../../artifacts/docs_monitor/monitor.prom` (and optionally
-`--prom-job docs-preview`) to emit Prometheus text-format metrics suitable for
-Pushgateway uploads or direct Prometheus scrapes in staging/production. The
-metrics mirror the JSON summary so SLO dashboards and alert rules can track
-portal, Try it, binding, and DNS health without parsing the evidence bundle.
+Өҫтәү I18NI000000026X (һәм теләк буйынса
+I18NI000000027X) I18NT000000000000000000 өсөн яраҡлы текст-формат метрикаларын сығарыу өсөн.
+Pushgateway тейәү йәки туранан-тура I18NT0000000001X скраптар сәхнәләштереү/етештереү. 1990 й.
+метрика көҙгө JSON резюме шулай SLO приборҙар таҡталары һәм иҫкәртмә ҡағиҙәләрен күҙәтә ала
+портал, Һынап ҡарағыҙ, бәйләү, һәм DNS һаулыҡ анализһыҙ дәлилдәр өйөм.
 
-Example config with required knobs and multiple bindings:
+Миҫал өсөн кәрәкле ручкалар һәм күп тапҡыр бәйләүҙәр:
 
 ```json
 {
@@ -120,101 +121,101 @@ Example config with required knobs and multiple bindings:
 }
 ```
 
-The monitor writes a JSON summary (S3/SoraFS friendly) and exits non‑zero when
-any probe fails, making it suitable for Cron jobs, Buildkite steps, or
-Alertmanager webhooks. Passing `--evidence-dir` persists `summary.json`,
-`portal.json`, `tryit.json`, and `binding.json` alongside a `checksums.sha256`
-manifest so governance reviewers can diff the monitor results without having to
-re-run the probes.
+Монитор JSON резюмеһы яҙа (S3/I18NT0000000009X дуҫ) һәм нульдән нульдән сыға.
+теләһә ниндәй зонд уңышһыҙлыҡҡа осрай, уны Крон эш урындары өсөн яраҡлы итә, Bublekite аҙымдары йәки
+Иҫкәртмәнсе webhooks. `--evidence-dir` үткән `summary.json`, 1990 й.
+I18NI0000000030X, `tryit.json`, һәм I18NI0000000033X менән бергә I18NI000000032Х.
+асыҡлай, шулай идара итеү рецензенттары монитор һөҙөмтәләрен айыра ала
+ҡабаттан зондтарҙы яңынан эшләтергә.
 
-> **TLS guardrail:** `monitorPortal` rejects `http://` base URLs unless you set
-> `allowInsecureHttp: true` in the config. Keep production/staging probes on
-> HTTPS; the opt-in exists solely for local previews.
+> **TLS pergerrail:** I18NI0000000034X I18NI0000000035X база URL-адрестарын кире ҡаға, әгәр һеҙ ҡуймағыҙ.
+> I18NI000000036X конфигында. Производство/стужнеж зондтарҙы 2012 йылғы .
+> HTTPS; опт-ин тик урындағы алдан ҡарау өсөн бар.
 
-Each binding entry runs `cargo xtask soradns-verify-binding` against the captured
-`portal.gateway.binding.json` bundle (and optional `manifestJson`) so alias,
-proof status, and content CID stay aligned with the published evidence. The
-optional `hostname` guard confirms the alias-derived canonical host matches the
-gateway host you intend to promote, preventing DNS cutovers that drift from the
-recorded binding.
+Һәр бәйләүсе инеү I18NI0000000037X ҡаршы әсирлеккә эләккән
+I18NI0000000038X өйөмө (һәм опциональ I18NI0000000039X) шулай псевдоним,
+Дәлил статусы, һәм йөкмәткеһе CID ҡалыу менән тура килә баҫылған дәлилдәр. 1990 й.
+опциональ I18NI000000040X һаҡсы раҫлай псевдоним-алынған канон хост матчтары the
+шлюз алып барыусы һеҙ ниәтләйһегеҙ, пропагандалау, DNS өҙөкләндерергә, тип дрейфтан .
+теркәлгән бәйләү.
 
-The optional `dns` block wires DOCS-7’s SoraDNS rollout into the same monitor.
-Each entry resolves a hostname/record-type pair (for example the
-`docs-preview.sora.link` → `docs-preview.sora.link.gw.sora.name` CNAME) and
-confirms the answers match `expectedRecords` or `expectedIncludes`. The second
-entry in the snippet above hard-codes the canonical hashed hostname produced by
-`cargo xtask soradns-hosts --name docs-preview.sora.link`; the monitor now proves
-both the human-friendly alias and the canonical hash (`igjssx53…gw.sora.id`)
-resolve to the pinned pretty host. This makes DNS promotion evidence automatic:
-the monitor will fail if either host drifts, even when the HTTP bindings still
-staple the right manifest.
+18NI000000041X блок сымдары DOCS-7’s SoraDNS ролл-аут шул уҡ мониторға.
+Һәр яҙма хост-нам/яҙма тибындағы парҙы хәл итә (мәҫәлән,
+I18NI000000042X → `docs-preview.sora.link.gw.sora.name` CNAME) һәм
+яуаптарын раҫлай `expectedRecords` йәки I18NI000000045X. Икенсеһе
+Ҡаты кодекс өҫтөндәге өҙөккә инеү канон хешед хост-исеме етештерелгән
+I18NI000000046X; монитор хәҙер иҫбатлай
+икеһе лә кеше өсөн уңайлы псевдоним һәм канон хеш (I18NI000000047X)
+хәл итеү өсөн ҡайнатылған һылыу хужа. Был DNS промоушен дәлилдәр автоматик:
+монитор уңышһыҙлыҡҡа осрай, әгәр ҙә йәки хост дрейф, хатта ҡасан HTTP бәйләүҙәр һаман да
+штапель уң күренеш.
 
-### 2. OpenAPI version manifest guard
+### 2. I18NT000000000004X версияһы манифест һаҡсыһы
 
-DOCS-2b’s “signed OpenAPI manifest” requirement now ships an automated guard:
-`ci/check_openapi_spec.sh` calls `npm run check:openapi-versions`, which invokes
-`scripts/verify-openapi-versions.mjs` to cross-check
-`docs/portal/static/openapi/versions.json` with the actual Torii specs and
-manifests. The guard verifies that:
+DOCS-2b’s “ҡулға алынған I18NT00000000005X манифест” талап хәҙер автоматлаштырылған һаҡсы ташый:
+I18NI000000048X X шылтыратыуҙары I18NI0000000049X, был саҡырыуҙар
+I18NI000000050X кросс-тикшерергә
+I18NI000000051X менән ысын I18NT0000000010X спецификацияһы һәм
+күренә. Һаҡсы быны раҫлай:
 
-- Every version listed in `versions.json` has a matching directory under
+- I18NI0000000052Х-ла күрһәтелгән һәр версияһында 1990 йылдарҙа тап килгән каталог бар.
   `static/openapi/versions/`.
-- Each entry’s `bytes` and `sha256` fields match the on-disk spec file.
-- The `latest` alias mirrors the `current` entry (digest/size/signature metadata)
-  so the default download cannot drift.
-- Signed entries reference a manifest whose `artifact.path` points back to the
-  same spec and whose signature/public key hex values match the manifest.
+- Һәр яҙма’s `bytes` һәм OpenAPI яландары дисктағы спец файлына тап килә.
+- I18NI0000000056X псевдонимы I18NI000000057X яҙмаһын көҙгөләй (дайджест/размер/ҡултамсы метамағлүмәттәре)
+  тимәк, ғәҙәттәгесә скачать дрейф ала алмай.
+- Ҡул ҡуйылған яҙмалар һылтанма манифест, уның I18NI00000000058X мәрәйҙәре кире .
+  шул уҡ спец һәм кемдең ҡултамғаһы/йәмәғәт асҡысы гекс ҡиммәттәре манифестҡа тап килә.
 
-Run the guard locally whenever you mirror a new spec:
+Һаҡсы урындағы кимәлдә йүгерергә, ҡасан һеҙ көҙгө яңы спец:
 
 ```bash
 cd docs/portal
 npm run check:openapi-versions
 ```
 
-Failure messages include the stale-file hint (`npm run sync-openapi -- --latest`)
-so portal contributors know how to refresh the snapshots. Keeping the guard in
-CI prevents portal releases where the signed manifest and the published digest
-fall out of sync.
+Уңышһыҙлыҡ тураһында хәбәрҙәргә иҫке файл кәңәше (I18NI000000059X) инә.
+шулай итеп, порталь өлөш индереүселәр нисек яңыртырға белә снимоктар. Һаҡсыны 2018 йылда һаҡлау.
+CI портал релиздарына ҡамасаулай, унда ҡул ҡуйылған манифест һәм баҫылған distest
+синхронизациянан төшөп.
 
-### 2. Dashboards & alerts
+### 2. Приборҙар таҡталары & иҫкәртмәләр
 
-- **`dashboards/grafana/docs_portal.json`** – primary board for DOCS-3c. Panels
-  track `torii_sorafs_gateway_refusals_total`, replication SLA misses, Try it
-  proxy errors, and probe latency (`docs.preview.integrity` overlay). Export the
-  board after every release and attach it to the operations ticket.
-- **Try it proxy alerts** – Alertmanager rule `TryItProxyErrors` fires on
-  sustained `probe_success{job="tryit-proxy"}` drops or
-  `tryit_proxy_requests_total{status="error"}` spikes.
-- **Gateway SLO** – `DocsPortal/GatewayRefusals` ensures alias bindings continue
-  to advertise the pinned manifest digest; escalations link to the
-  `cargo xtask soradns-verify-binding` CLI transcript captured during publish.
+- **`dashboards/grafana/docs_portal.json`** – DOCS-3c өсөн беренсел таҡта. Панель
+  Трек I18NI0000000061X, репликация SLA һағынып, Уны һынап ҡарағыҙ
+  прокси хаталары, һәм зонд латентлығы (I18NI0000000062X өҫтәү). Экспорт
+  һәр сығарылыштан һуң плата һәм уны операциялар билетына беркетергә.
+- **Тырышып ҡарағыҙ, ул прокси-хәрәкәттәр** – Иҫкәртмәнсе ҡағиҙәһе `TryItProxyErrors` 2019 йылда янғындар .
+  I18NI000000064X тамсы йәки
+  `tryit_proxy_requests_total{status="error"}` шпиктары.
+- **Шлюз СЛО** – I18NI000000066XX псевдонимдарҙы бәйләүҙе тәьмин итә
+  реклама өсөн булавкаланған асыҡ һеңдерергә; эскалациялар бәйләнеше
+  `cargo xtask soradns-verify-binding` CLI стенограммаһы баҫтырып сығарыу ваҡытында төшөрөлгән.
 
-### 3. Evidence trail
+### 3. Дәлилдәр эҙҙәре
 
-Each monitoring run should append:
+Һәр мониторинг йүгерергә тейеш ҡушырға:
 
-- `monitor-publishing` evidence bundle (`summary.json`, per-section files, and
+- I18NI0000000068X дәлилдәр йыйылмаһы (I18NI000000069X, бер секция файлдары һәм
   `checksums.sha256`).
-- Grafana screenshots for the `docs_portal` board over the release window.
-- Try it proxy change/rollback transcripts (`npm run manage:tryit-proxy` logs).
-- Alias verification output from `cargo xtask soradns-verify-binding`.
+- I18NI000000071X өсөн плата өсөн Grafana скриншоттары сығарыу тәҙрәһе аша.
+- Ул прокси үҙгәрештәр/кире кире транскрипттар (`npm run manage:tryit-proxy` журналдар) һынап ҡарағыҙ.
+- Псевдоним тикшерелгән сығыш I18NI000000073X.
 
-Store these under `artifacts/sorafs/<tag>/monitoring/` and link them in the
-release issue so the audit trail survives after CI logs expire.
+Һаҡлау был I18NI000000074X аҫтында һәм уларҙы бәйләү 2019 йылда.
+сығарыу мәсьәләһе, шулай итеп, аудит эҙҙәре иҫән ҡала, һуңынан CI журналдар тамамланған.
 
-## Operational checklist
+## Оператив тикшерелгән исемлек
 
-1. Run the deployment guide through Step 7.
-2. Execute `npm run monitor:publishing` with production configuration; archive
-   the JSON output.
-3. Capture Grafana panels (`docs_portal`, `TryItProxyErrors`,
-   `DocsPortal/GatewayRefusals`) and attach them to the release ticket.
-4. Schedule recurring monitors (recommended: every 15 minutes) pointing at the
-   production URLs with the same config to satisfy the DOCS-3c SLO gate.
-5. During incidents, re-run the monitor command with `--json-out` to record
-   before/after evidence and attach it to the postmortem.
+1. Step7 аша таратыу етәксеһен эшләтегеҙ.
+2. Етештереүҙең конфигурацияһы менән `npm run monitor:publishing` башҡарырға; архив
+   JSON сығыш.
+3. I18NT000000007X панелдәре (I18NI000000076X, `TryItProxyErrors`,
+   `DocsPortal/GatewayRefusals`) һәм уларҙы сығарыу билетына беркетергә.
+4. График ҡабатланған мониторҙар (тәҡдим ителгән: һәр 15минут) күрһәтеп,
+   етештереү URL-адрестар менән бер үк конфиг ҡәнәғәтләндерергә DOCS-3c SLO ҡапҡаһы.
+5. Инциденттар ваҡытында, яңынан идара итеү монитор командаһы менән I18NI0000000079X теркәү өсөн
+   дәлилдәр алдынан/алдан һуң һәм уны беркетергә үлемдән һуңғы.
 
-Following this loop closes DOCS-3c: the portal build flow, publishing pipeline,
-and monitoring stack now live in a single playbook with reproducible commands,
-sample configs, and telemetry hooks.
+Был иллюзиянан һуң DOCS-3c ябыла: порталь төҙөү ағымы, баҫтырыу торбаһы,
+һәм мониторинг стека хәҙер йәшәй бер playbook менән ҡабатланған командалар,
+өлгө конфигурациялары, һәм телеметрия ҡармаҡтары.

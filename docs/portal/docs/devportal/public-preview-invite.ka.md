@@ -11,69 +11,70 @@ id: public-preview-invite
 title: Public preview invite playbook
 sidebar_label: Preview invite playbook
 description: Checklist for announcing the docs portal preview to external reviewers.
+translator: machine-google-reviewed
 ---
 
-## Program goals
+## პროგრამის მიზნები
 
-This playbook explains how to announce and run the public preview once the
-reviewer onboarding workflow is live. It keeps the DOCS-SORA roadmap honest by
-ensuring every invite ships with verifiable artefacts, security guidance, and a
-clear feedback path.
+ეს სახელმძღვანელო განმარტავს, თუ როგორ უნდა გამოაცხადოთ და გაუშვათ საჯარო გადახედვა ერთხელ
+მიმომხილველის შეყვანის სამუშაო პროცესი პირდაპირ ეთერშია. ის ინარჩუნებს DOCS-SORA საგზაო რუკას პატიოსნად
+უზრუნველყოს ყოველი მოწვეული გემი შესამოწმებელი არტეფაქტებით, უსაფრთხოების ხელმძღვანელობით და ა
+უკუკავშირის ნათელი გზა.
 
-- **Audience:** curated list of community members, partners, and maintainers who
-  signed the preview acceptable-use policy.
-- **Ceilings:** default wave size ≤ 25 reviewers, 14-day access window, incident
-  response within 24h.
+- **აუდიტორია:** საზოგადოების წევრების, პარტნიორებისა და შემსრულებლების კურირებული სია
+  ხელი მოაწერა გადახედვის მისაღები გამოყენების პოლიტიკას.
+- ** ჭერი: ** ტალღის ნაგულისხმევი ზომა ≤ 25 მიმომხილველი, 14-დღიანი წვდომის ფანჯარა, ინციდენტი
+  პასუხი 24 საათის განმავლობაში.
 
-## Launch gating checklist
+## გაუშვით კარიბჭის საკონტროლო სია
 
-Complete these tasks before sending any invitation:
+შეასრულეთ ეს ამოცანები რაიმე მოწვევის გაგზავნამდე:
 
-1. Latest preview artefacts uploaded in CI (`docs-portal-preview`,
-   checksum manifest, descriptor, SoraFS bundle).
-2. `npm run --prefix docs/portal serve` (checksum-gated) tested on the same tag.
-3. Reviewer onboarding tickets approved and linked to the invite wave.
-4. Security, observability, and incident docs validated
+1. უახლესი გადახედვის არტეფაქტები ატვირთული CI-ში (`docs-portal-preview`,
+   საკონტროლო ჯამის მანიფესტი, აღმწერი, SoraFS პაკეტი).
+2. `npm run --prefix docs/portal serve` (შემოწმების ჯამი) ტესტირება იმავე ტეგზე.
+3. მიმომხილველი საბორტო ბილეთები დამტკიცებულია და დაკავშირებულია მოწვევის ტალღასთან.
+4. უსაფრთხოების, დაკვირვებადობის და ინციდენტის დოკუმენტები დადასტურებულია
    ([`security-hardening`](./security-hardening.md),
    [`observability`](./observability.md),
    [`incident-runbooks`](./incident-runbooks.md)).
-5. Feedback form or issue template prepared (include fields for severity,
-   reproduction steps, screenshots, and environment info).
-6. Announcement copy reviewed by Docs/DevRel + Governance.
+5. მომზადებული გამოხმაურების ფორმა ან გამოცემის შაბლონი (შეიცავს ველებს სიმძიმისთვის,
+   რეპროდუქციის ნაბიჯები, ეკრანის ანაბეჭდები და გარემოს ინფორმაცია).
+6. განცხადების ასლი განხილულია Docs/DevRel + Governance-ის მიერ.
 
-## Invite package
+## მოწვევის პაკეტი
 
-Every invite must include:
+ყოველი მოწვევა უნდა შეიცავდეს:
 
-1. **Verified artefacts** — Provide the SoraFS manifest/plan or GitHub artefact
-   links plus the checksum manifest and descriptor. Reference the verification
-   command explicitly so reviewers can run it before launching the site.
-2. **Serve instructions** — Include the checksum-gated preview command:
+1. **დამოწმებული არტეფაქტები** — მოგვაწოდეთ SoraFS მანიფესტი/გეგმა ან GitHub არტეფაქტი
+   ბმულები პლუს საკონტროლო ჯამის მანიფესტი და აღმწერი. მიმართეთ გადამოწმებას
+   ბრძანება მკაფიოდ, რათა მიმომხილველებმა შეძლონ მისი გაშვება საიტის გაშვებამდე.
+2. **მიიღეთ ინსტრუქციები** — ჩართეთ გამშვები ჯამით შემოსული წინასწარი გადახედვის ბრძანება:
 
    ```bash
    DOCS_RELEASE_TAG=preview-<stamp> npm run --prefix docs/portal serve
    ```
 
-3. **Security reminders** — Call out that tokens expire automatically, links
-   must not be shared, and incidents should be reported immediately.
-4. **Feedback channel** — Link to the issue template/form and clarify response
-   time expectations.
-5. **Program dates** — Provide start/end dates, office hours or sync meetings,
-   and the next refresh window.
+3. **უსაფრთხოების შეხსენებები** — მიუთითეთ, რომ ტოკენების ვადა ავტომატურად იწურება, ბმულები
+   არ უნდა იყოს გაზიარებული და ინციდენტები დაუყოვნებლივ უნდა ეცნობოს.
+4. **გამოხმაურების არხი** — ბმული საკითხის შაბლონზე/ფორმაზე და დააზუსტეთ პასუხი
+   დროის მოლოდინი.
+5. **პროგრამის თარიღები** — მიუთითეთ დაწყების/დამთავრების თარიღები, სამუშაო საათები ან შეხვედრების სინქრონიზაცია,
+   და შემდეგი განახლების ფანჯარა.
 
-The sample email in
+ელ.ფოსტის ნიმუში
 [`docs/examples/docs_preview_invite_template.md`](../../../examples/docs_preview_invite_template.md)
-covers these requirements. Update the placeholders (dates, URLs, contacts)
-before sending.
+მოიცავს ამ მოთხოვნებს. განაახლეთ ჩანაცვლების ველები (თარიღები, URL, კონტაქტები)
+გაგზავნამდე.
 
-## Expose the preview host
+## გამოავლინეთ წინასწარი გადახედვის მასპინძელი
 
-Only promote the preview host once onboarding is complete and the change ticket
-is approved. See the [preview host exposure guide](./preview-host-exposure.md)
-for the end-to-end build/publish/verify steps used in this section.
+გადახედვის მასპინძლის პოპულარიზაცია მხოლოდ მას შემდეგ, რაც ჩართვა დასრულებულია და ბილეთი იცვლება
+დამტკიცებულია. იხილეთ [ჰოსტის ექსპოზიციის სახელმძღვანელო] (./preview-host-exposure.md)
+ამ განყოფილებაში გამოყენებული ბოლომდე აწყობის/გამოქვეყნების/შემოწმების საფეხურებისთვის.
 
-1. **Build and package:** Stamp the release tag and produce deterministic
-   artefacts.
+1. **აშენება და შეფუთვა:** გამოშვების ტეგის მარკირება და დეტერმინისტიკის წარმოება
+   არტეფაქტები.
 
    ```bash
    cd docs/portal
@@ -92,18 +93,18 @@ for the end-to-end build/publish/verify steps used in this section.
      --out artifacts/sorafs/preview-descriptor.json
    ```
 
-   The pin script writes `portal.car`, `portal.manifest.*`, `portal.pin.proposal.json`,
-   and `portal.dns-cutover.json` under `artifacts/sorafs/`. Attach those files to the
-   invite wave so every reviewer can verify the same bits.
+   პინის სკრიპტი წერს `portal.car`, `portal.manifest.*`, `portal.pin.proposal.json`,
+   და `portal.dns-cutover.json` `artifacts/sorafs/` ქვეშ. მიამაგრეთ ეს ფაილები
+   მოწვევის ტალღა, რათა ყველა მიმომხილველმა შეძლოს იგივე ბიტების გადამოწმება.
 
-2. **Publish the preview alias:** Rerun the command without `--skip-submit`
-   (supply `TORII_URL`, `AUTHORITY`, `PRIVATE_KEY[_FILE]`, and the
-   governance-issued alias proof). The script will bind the manifest to
-   `docs-preview.sora` and emit `portal.manifest.submit.summary.json` plus
-   `portal.pin.report.json` for the evidence bundle.
+2. ** გამოაქვეყნეთ წინასწარი გადახედვის მეტსახელი:** გაუშვით ბრძანება `--skip-submit`-ის გარეშე
+   (მიაწოდეთ `TORII_URL`, `AUTHORITY`, `PRIVATE_KEY[_FILE]` და
+   მმართველობის მიერ გაცემული ალიას მტკიცებულება). სკრიპტი დააკავშირებს manifest-ს
+   `docs-preview.sora` და გამოსცემს `portal.manifest.submit.summary.json` plus
+   `portal.pin.report.json` მტკიცებულებათა ნაკრებისთვის.
 
-3. **Probe the deployment:** Confirm the alias resolves and the checksum matches
-   the tag before sending invites.
+3. **გამოიკვლიეთ განლაგება:** დაადასტურეთ, რომ მეტსახელი მოგვარებულია და საკონტროლო ჯამი ემთხვევა
+   ტეგი მოწვევის გაგზავნამდე.
 
    ```bash
    npm run probe:portal -- \
@@ -111,26 +112,26 @@ for the end-to-end build/publish/verify steps used in this section.
      --expect-release="$DOCS_RELEASE_TAG"
    ```
 
-   Keep `npm run serve` (`scripts/serve-verified-preview.mjs`) handy as a
-   fallback so reviewers can spin up a local copy if the preview edge blips.
+   შეინახეთ `npm run serve` (`scripts/serve-verified-preview.mjs`) როგორც
+   ჩანაცვლება, რათა მიმომხილველებმა შეძლონ ადგილობრივი ასლის დატრიალება, თუ გადახედვის კიდე აბრკოლდება.
 
-## Communications timeline
+## კომუნიკაციების ვადები
 
-| Day | Action | Owner |
+| დღე | მოქმედება | მფლობელი |
 | --- | --- | --- |
-| D-3 | Finalise invite copy, refresh artefacts, dry-run verification | Docs/DevRel |
-| D-2 | Governance sign-off + change ticket | Docs/DevRel + Governance |
-| D-1 | Send invites using the template, update tracker with recipient list | Docs/DevRel |
-| D | Kickoff call / office hours, monitor telemetry dashboards | Docs/DevRel + On-call |
-| D+7 | Midpoint feedback digest, triage blocking issues | Docs/DevRel |
-| D+14 | Close wave, revoke temporary access, publish summary in `status.md` | Docs/DevRel |
+| D-3 | დაასრულეთ მოწვევის ასლი, განაახლეთ არტეფაქტები, მშრალი გაშვების შემოწმება | Docs/DevRel |
+| D-2 | მმართველობის ხელმოწერა + ბილეთის შეცვლა | Docs/DevRel + მმართველობა |
+| D-1 | გაგზავნეთ მოსაწვევები შაბლონის გამოყენებით, განაახლეთ ტრეკერი მიმღებთა სიით | Docs/DevRel |
+| D | დაწყების ზარი / სამუშაო საათები, ტელემეტრიის დაფების მონიტორინგი | Docs/DevRel + გამოძახებით |
+| D+7 | შუა წერტილის უკუკავშირის დაიჯესტი, ტრიაჟის დაბლოკვის საკითხები | Docs/DevRel |
+| D+14 | ტალღის დახურვა, დროებითი წვდომის გაუქმება, შეჯამების გამოქვეყნება `status.md`-ში | Docs/DevRel |
 
-## Access tracking & telemetry
+## წვდომა თვალყურის დევნებასა და ტელემეტრიაში
 
-1. Record every recipient, invite timestamp, and revocation date with the
-   preview feedback logger (see
-   [`preview-feedback-log`](./preview-feedback-log)) so every wave shares the
-   same evidence trail:
+1. ჩაწერეთ ყველა მიმღები, მოიწვიეთ დროის ანაბეჭდი და გაუქმების თარიღი
+   უკუკავშირის წინასწარი გადახედვა (იხ
+   [`preview-feedback-log`](./preview-feedback-log)) ასე რომ, ყველა ტალღა იზიარებს
+   იგივე მტკიცებულების ბილიკი:
 
    ```bash
    # Append a new invite event to artifacts/docs_portal_preview/feedback_log.json
@@ -141,41 +142,41 @@ for the end-to-end build/publish/verify steps used in this section.
      --notes "wave-01 seed"
    ```
 
-   Supported events are `invite-sent`, `acknowledged`,
-   `feedback-submitted`, `issue-opened`, and `access-revoked`. The log lives at
-   `artifacts/docs_portal_preview/feedback_log.json` by default; attach it to
-   the invite wave ticket together with consent forms. Use the summary helper
-   to produce an auditable roll-up before the close-out note:
+   მხარდაჭერილი ღონისძიებებია `invite-sent`, `acknowledged`,
+   `feedback-submitted`, `issue-opened` და `access-revoked`. ჟურნალი ცხოვრობს
+   ნაგულისხმევად `artifacts/docs_portal_preview/feedback_log.json`; მიამაგრეთ იგი
+   მოწვევის ტალღის ბილეთი თანხმობის ფორმებთან ერთად. გამოიყენეთ შემაჯამებელი დამხმარე
+   შესამოწმებლად შესამოწმებელი ჩანაწერის წარმოება დახურვის ჩანაწერამდე:
 
    ```bash
    npm run --prefix docs/portal preview:summary -- --summary-json \
      > artifacts/docs_portal_preview/preview-20250303-summary.json
    ```
 
-   The JSON summary enumerates invites per wave, open recipients, feedback
-   counts, and the timestamp of the most recent event. The helper is backed by
+   JSON-ის რეზიუმე ჩამოთვლის მოწვევებს თითო ტალღაზე, ღია მიმღებებზე, გამოხმაურებაზე
+   თვლები და უახლესი მოვლენის დროის ანაბეჭდი. დამხმარე მხარს უჭერს
    [`scripts/preview-feedback-log.mjs`](../../scripts/preview-feedback-log.mjs),
-   so the same workflow can run locally or in CI. Use the digest template in
+   ასე რომ, იგივე სამუშაო ნაკადი შეიძლება აწარმოოს ადგილობრივად ან CI-ში. გამოიყენეთ დაიჯესტის შაბლონი
    [`docs/examples/docs_preview_feedback_digest.md`](../../../examples/docs_preview_feedback_digest.md)
-   when publishing the wave recap.
-2. Tag telemetry dashboards with the `DOCS_RELEASE_TAG` used for the wave so
-   spikes can be correlated with invite cohorts.
-3. Run `npm run probe:portal -- --expect-release=<tag>` after the deploy to
-   confirm the preview environment advertises the correct release metadata.
-4. Capture any incidents in the runbook template and link them to the cohort.
+   ტალღის მიმოხილვის გამოქვეყნებისას.
+2. მონიშნეთ ტელემეტრიის დაფები ტალღისთვის გამოყენებული `DOCS_RELEASE_TAG`
+   spikes შეიძლება იყოს დაკავშირებული მოწვევის კოჰორტებთან.
+3. გაუშვით `npm run probe:portal -- --expect-release=<tag>` განლაგების შემდეგ
+   დაადასტურეთ, რომ გადახედვის გარემო რეკლამებს სწორ გამოშვების მეტამონაცემებს.
+4. აღწერეთ ნებისმიერი ინციდენტი runbook შაბლონში და დააკავშირეთ ისინი კოჰორტასთან.
 
-## Feedback & close-out
+## გამოხმაურება და დახურვა
 
-1. Aggregate feedback in a shared doc or issue board. Label items with
-   `docs-preview/<wave>` so roadmap owners can query them easily.
-2. Use the preview logger’s summary output to populate the wave report, then
-   summarise the cohort in `status.md` (participants, major findings, planned
-   fixes) and update `roadmap.md` if the DOCS-SORA milestone changed.
-3. Follow the offboarding steps from
-   [`reviewer-onboarding`](./reviewer-onboarding.md): revoke access, archive
-   requests, and thank participants.
-4. Prepare the next wave by refreshing artefacts, re-running the checksum gates,
-   and updating the invite template with new dates.
+1. საერთო გამოხმაურება გაზიარებულ დოკუმენტში ან გამოშვების დაფაში. მონიშნეთ ნივთები
+   `docs-preview/<wave>`, ასე რომ საგზაო რუქის მფლობელებს შეუძლიათ მარტივად მოიკითხონ ისინი.
+2. გამოიყენეთ წინასწარი გადახედვის ლოგერის შემაჯამებელი გამომავალი ტალღის ანგარიშის შესავსებად
+   შეაჯამეთ კოჰორტა `status.md`-ში (მონაწილეები, ძირითადი დასკვნები, დაგეგმილი
+   ასწორებს) და განაახლეთ `roadmap.md`, თუ DOCS-SORA შეიცვალა.
+3. მიჰყევით offboarding ნაბიჯებს დან
+   [`reviewer-onboarding`](./reviewer-onboarding.md): წვდომის გაუქმება, არქივი
+   თხოვნა და მადლობა მონაწილეებს.
+4. მოამზადეთ შემდეგი ტალღა არტეფაქტების განახლებით, ხელახლა გაუშვით საკონტროლო ჯამი,
+   და მოწვევის შაბლონის განახლება ახალი თარიღებით.
 
-Consistently applying this playbook keeps the preview program auditable and
-gives Docs/DevRel a repeatable way to scale invites as the portal approaches GA.
+ამ სათამაშო წიგნის თანმიმდევრული გამოყენება ინარჩუნებს გადახედვის პროგრამას აუდიტორად და
+აძლევს Docs/DevRel-ს მოწვევების მასშტაბის განმეორებით საშუალებას, როდესაც პორტალი უახლოვდება GA-ს.

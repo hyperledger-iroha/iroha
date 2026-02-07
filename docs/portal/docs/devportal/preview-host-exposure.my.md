@@ -11,25 +11,26 @@ id: preview-host-exposure
 title: Preview host exposure guide
 sidebar_label: Preview host exposure
 description: Publish and verify the beta preview host before sending invites.
+translator: machine-google-reviewed
 ---
 
-The DOCS‑SORA roadmap requires every public preview to ride on the same
-checksum‑verified bundle that reviewers exercise locally. Use this runbook
-after reviewer onboarding (and the invite approval ticket) are complete to put
-the beta preview host online.
+DOCS-SORA လမ်းပြမြေပုံသည် အများသူငှာ အကြိုကြည့်ရှုမှုတိုင်းကို တူညီစွာစီးနင်းရန် လိုအပ်သည်
+ပြန်လည်သုံးသပ်သူများသည် စက်တွင်းတွင် ကျင့်သုံးသည့် checksum-verified အတွဲ။ ဒီ runbook ကိုသုံးပါ။
+ပြန်လည်သုံးသပ်သူ စတင်တက်ရောက်ပြီးနောက် (နှင့် ဖိတ်ကြားချက်အတည်ပြုချက်လက်မှတ်) ပြီးမြောက်သွားပါပြီ။
+ဘီတာအကြိုကြည့်ရှုမှုလက်ခံသည့် အွန်လိုင်း။
 
-## Prerequisites
+## လိုအပ်ချက်များ
 
-- Reviewer onboarding wave approved and logged in the preview tracker.
-- Latest portal build present under `docs/portal/build/` and checksum
-  verified (`build/checksums.sha256`).
-- SoraFS preview credentials (Torii URL, authority, private key, submitted
-  epoch) stored either in environment variables or a JSON config such as
-  [`docs/examples/sorafs_preview_publish.json`](../../../examples/sorafs_preview_publish.json).
-- DNS change ticket opened with the desired hostname (`docs-preview.sora.link`,
-  `docs.iroha.tech`, etc.) plus on-call contacts.
+- သုံးသပ်သူသည် စတင်အသုံးပြုသည့်လှိုင်းကို အတည်ပြုပြီး အစမ်းကြည့်ရှုသည့် ခြေရာခံစနစ်တွင် အကောင့်ဝင်ထားသည်။
+- `docs/portal/build/` နှင့် checksum အောက်တွင် နောက်ဆုံးပေါ်ပေါ်တယ်တည်ဆောက်မှု
+  စစ်ဆေးပြီး (`build/checksums.sha256`)။
+- SoraFS အစမ်းကြည့်ရှုခြင်းအထောက်အထားများ (Torii URL၊ အခွင့်အာဏာ၊ သီးသန့်သော့၊ တင်ပြထားသည်
+  epoch) ပတ်ဝန်းကျင် variables သို့မဟုတ် JSON config တွင် သိမ်းဆည်းထားသည်။
+  [`docs/examples/sorafs_preview_publish.json`](../../../examples/sorafs_preview_publish.json)။
+- အလိုရှိသော hostname (`docs-preview.sora.link`၊ DNS ပြောင်းလဲခြင်းလက်မှတ်၊
+  `docs.iroha.tech` စသည်ဖြင့်) နှင့် ဖုန်းခေါ်ဆိုမှုဆိုင်ရာ အဆက်အသွယ်များ။
 
-## Step 1 – Build and verify the bundle
+## အဆင့် 1 – အစုအဝေးကို တည်ဆောက်ပြီး အတည်ပြုပါ။
 
 ```bash
 cd docs/portal
@@ -39,13 +40,13 @@ npm run build
 ./scripts/preview_verify.sh --build-dir build
 ```
 
-The verify script refuses to continue when the checksum manifest is missing or
-tampered with, keeping every preview artefact audited.
+checksum manifest ပျောက်နေသည့်အခါ သို့မဟုတ် verify script သည် ဆက်လက်လုပ်ဆောင်ရန် ငြင်းဆိုထားသည်။
+အစမ်းကြည့်ရှုသည့်အရာတိုင်းကို စာရင်းစစ်ထားရှိခြင်းဖြင့် အနှောင့်အယှက်ပေးသည်။
 
-## Step 2 – Package the SoraFS artefacts
+## အဆင့် 2 – SoraFS ပစ္စည်းများကို ထုပ်ပိုးပါ။
 
-Convert the static site into a deterministic CAR/manifest pair. `ARTIFACT_DIR`
-defaults to `docs/portal/artifacts/`.
+အငြိမ်ဆိုက်ကို အဆုံးအဖြတ်ပေးသော CAR/မန်နီးဖက်စ်အတွဲအဖြစ် ပြောင်းပါ။ `ARTIFACT_DIR`
+`docs/portal/artifacts/` သို့ ပုံသေဖြစ်သည်။
 
 ```bash
 ./scripts/sorafs-pin-release.sh \
@@ -61,13 +62,13 @@ node scripts/generate-preview-descriptor.mjs \
   --out artifacts/sorafs/preview-descriptor.json
 ```
 
-Attach the generated `portal.car`, `portal.manifest.*`, descriptor, and checksum
-manifest to the preview wave ticket.
+ထုတ်လုပ်ထားသော `portal.car`၊ `portal.manifest.*`၊ ဖော်ပြချက်နှင့် checksum ကို ပူးတွဲပါ
+အကြိုကြည့်ရှုခြင်း လှိုင်းလက်မှတ်ကို ဖော်ပြပါ။
 
-## Step 3 – Publish the preview alias
+## အဆင့် 3 – အစမ်းကြည့်ခြင်းအမည်ကို ထုတ်ဝေပါ။
 
-Re-run the pin helper **without** `--skip-submit` once you are ready to expose
-the host. Supply either the JSON config or explicit CLI flags:
+သင်ဖော်ထုတ်ရန်အဆင်သင့်ဖြစ်သောအခါတွင် pin helper ** `--skip-submit` မပါဘဲ ** ပြန်ဖွင့်ပါ။
+အိမ်ရှင်။ JSON config သို့မဟုတ် တိကျသော CLI အလံများကို ပေးဆောင်ပါ-
 
 ```bash
 ./scripts/sorafs-pin-release.sh \
@@ -78,11 +79,11 @@ the host. Supply either the JSON config or explicit CLI flags:
   --config ~/secrets/sorafs_preview_publish.json
 ```
 
-The command writes `portal.pin.report.json`,
-`portal.manifest.submit.summary.json`, and `portal.submit.response.json`, which
-must ship with the invite evidence bundle.
+command သည် `portal.pin.report.json` ရေးသည်၊
+`portal.manifest.submit.summary.json` နှင့် `portal.submit.response.json` ၊
+ဖိတ်ကြားချက် အထောက်အထား အတွဲနှင့်အတူ ပို့ဆောင်ပေးရမည်။
 
-## Step 4 – Generate the DNS cutover plan
+## အဆင့် 4 – DNS ဖြတ်တောက်ခြင်းအစီအစဉ်ကို ဖန်တီးပါ။
 
 ```bash
 node scripts/generate-dns-cutover-plan.mjs \
@@ -97,11 +98,11 @@ node scripts/generate-dns-cutover-plan.mjs \
   --out artifacts/sorafs/portal.dns-cutover.json
 ```
 
-Share the resulting JSON with Ops so the DNS switch references the exact
-manifest digest. When reusing an earlier descriptor as the rollback source,
-append `--previous-dns-plan path/to/previous.json`.
+ရလဒ် JSON ကို Ops နှင့် မျှဝေရန် DNS ခလုတ်သည် အတိအကျ ရည်ညွှန်းပါသည်။
+ထင်ရှားစွာ ချေဖျက်ပါ။ အစောပိုင်းဖော်ပြချက်အား rollback အရင်းအမြစ်အဖြစ် ပြန်လည်အသုံးပြုသောအခါ၊
+`--previous-dns-plan path/to/previous.json` ၏ နောက်ဆက်တွဲ။
 
-## Step 5 – Probe the deployed host
+## အဆင့် 5 – ဖြန့်ကျက်ထားသော host ကို စစ်ဆေးပါ။
 
 ```bash
 npm run probe:portal -- \
@@ -109,23 +110,23 @@ npm run probe:portal -- \
   --expect-release="$DOCS_RELEASE_TAG"
 ```
 
-The probe confirms the served release tag, CSP headers, and signature metadata.
-Repeat the command from two regions (or attach curl output) so auditors can see
-that the edge cache is warm.
+စုံစမ်းစစ်ဆေးမှုသည် ဝန်ဆောင်မှုပေးသည့် ထုတ်ဝေမှုတဂ်၊ CSP ခေါင်းစီးများနှင့် လက်မှတ် မက်တာဒေတာတို့ကို အတည်ပြုသည်။
+စာရင်းစစ်များမြင်နိုင်စေရန် ဒေသနှစ်ခုမှ (သို့မဟုတ် curl output ကို ပူးတွဲပါ) မှ အမိန့်ကို ပြန်လုပ်ပါ။
+edge cache က နွေးထွေးတယ်။
 
-## Evidence bundle
+## အထောက်အထား အတွဲ
 
-Include the following artefacts in the preview wave ticket and refer to them in
-the invite email:
+အစမ်းကြည့်လှိုင်းလက်မှတ်တွင် အောက်ပါပစ္စည်းများကို ထည့်သွင်းပြီး ၎င်းတို့ကို ရည်ညွှန်းပါ။
+ဖိတ်ကြားချက်အီးမေးလ်-
 
-| Artefact | Purpose |
+| Artefact | ရည်ရွယ်ချက် |
 |----------|---------|
-| `build/checksums.sha256` | Proves the bundle matches the CI build. |
-| `artifacts/sorafs/portal.tar.gz` + `portal.manifest.to` | Canonical SoraFS payload + manifest. |
-| `portal.pin.report.json`, `portal.manifest.submit.summary.json`, `portal.submit.response.json` | Shows the manifest submission + alias binding succeeded. |
-| `artifacts/sorafs/portal.dns-cutover.json` | DNS metadata (ticket, window, contacts), route promotion (`Sora-Route-Binding`) summary, the `route_plan` pointer (plan JSON + header templates), cache purge info, and rollback instructions for Ops. |
-| `artifacts/sorafs/preview-descriptor.json` | Signed descriptor tying the archive + checksum together. |
-| `probe` output | Confirms the live host advertises the expected release tag. |
+| `build/checksums.sha256` | အတွဲသည် CI တည်ဆောက်မှုနှင့် ကိုက်ညီကြောင်း သက်သေပြသည်။ |
+| `artifacts/sorafs/portal.tar.gz` + `portal.manifest.to` | Canonical SoraFS payload + manifest။ |
+| `portal.pin.report.json`, `portal.manifest.submit.summary.json`, `portal.submit.response.json` | ထင်ရှားသော တင်ပြချက် + အမည်များ ချိတ်ဆက်မှု အောင်မြင်ကြောင်း ပြသသည်။ |
+| `artifacts/sorafs/portal.dns-cutover.json` | DNS မက်တာဒေတာ (လက်မှတ်၊ ပြတင်းပေါက်၊ အဆက်အသွယ်များ)၊ လမ်းကြောင်းမြှင့်တင်ရေး (`Sora-Route-Binding`) အနှစ်ချုပ်၊ `route_plan` ညွှန်ပြချက် (အစီအစဉ် JSON + ခေါင်းစီးနမူနာများ)၊ ကက်ရှ်ရှင်းလင်းခြင်း အချက်အလက်နှင့် Ops အတွက် ပြန်လှည့်ရန် ညွှန်ကြားချက်များ။ |
+| `artifacts/sorafs/preview-descriptor.json` | မှတ်တမ်းဟောင်း + checksum ကို တွဲချိတ်ထားသည့် ဖော်ပြချက်တွင် လက်မှတ်ထိုးထားသည်။ |
+| `probe` အထွက် | တိုက်ရိုက်ထုတ်လွှလက်ခံသူသည် မျှော်လင့်ထားသည့် ဖြန့်ချိမှုတက်ဂ်ကို ကြော်ငြာကြောင်း အတည်ပြုသည်။ |
 
-Once the host is live, follow the [preview invite playbook](./public-preview-invite.md)
-to distribute the link, log invites, and monitor telemetry.
+အစီအစဉ်တင်ဆက်သူသည် တိုက်ရိုက်လွှင့်သည်နှင့်၊ [အစမ်းကြည့်ရှုရန် ဖိတ်ကြားချက်ဖွင့်စာအုပ်](./public-preview-invite.md) ကို လိုက်နာပါ
+လင့်ခ်ကိုဖြန့်ဝေရန်၊ မှတ်တမ်းဖိတ်ကြားမှုများနှင့် တယ်လီမီတာကို စောင့်ကြည့်ရန်။

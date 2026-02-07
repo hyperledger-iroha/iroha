@@ -7,48 +7,47 @@ generator: scripts/sync_docs_i18n.py
 source_hash: c56bacde8ee42c2427d06038a3a6ca65035d4055c42f6e5ded7e54b33c1fe921
 source_last_modified: "2025-12-29T18:16:35.060432+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-<!--
-  SPDX-License-Identifier: Apache-2.0
--->
+I18NH0000000X
 
-# Documentation Automation Baselines
+# ཡིག་ཆའི་རང་འཇུག རང་འགུལ།
 
-This directory captures the automation surfaces that roadmap items such as
-AND5/AND6 (Android Developer Experience + Release Readiness) and DA-1
-(Data-Availability threat-model automation) refer to when they call for
-auditable documentation evidence. Staging the command references and expected
-artefacts in-tree keeps the prerequisites for compliance reviews available even
-when CI pipelines or dashboards are offline.
+སྣོད་ཐོ་འདི་གིས་ ལམ་གྱི་ས་ཁྲ་རྣམ་གྲངས་ དཔེར་ན་ ལམ་སྟོན་འབད་མི་ རང་བཞིན་ཁ་ཐོག་ཚུ་ འཛིན་བཟུང་འབདཝ་ཨིན།
+AND5/AND6 (Android གོང་འཕེལ་གཏོང་མཁན་གྱི་ཉམས་མྱོང་ + གསར་བཏོན་གྲ་སྒྲིག་འབད་ནི) དང་ DA-15
+(གནས་སྡུད་འཐོབ་ཚུགས་པའི་ཉེན་ཁ་-དཔེ་ཚད་རང་བཞིན་) གིས་ .
+རྩིས་ཞིབ་འབད་བཏུབ་པའི་ཡིག་ཆའི་སྒྲུབ་བྱེད་ཚུ། བརྡ་བཀོད་གཞི་བསྟུན་ཚུ་དང་རེ་བ་བསྐྱེད་ནི་ཚུ་ རིམ་པ་བཟོ་དོ།
+ཤིང་ནང་གི་ ཅ་རྙིང་ཚུ་གིས་ བསྟར་སྤྱོད་བསྐྱར་ཞིབ་ཀྱི་ དགོས་མཁོ་ཚུ་ ཡང་ཅིན་ ཡང་ཅིན་ ཡང་ཅིན་ ཡང་ཅིན་ ཡང་ཅིག།
+CI མདོང་ལམ་ཡང་ན་ བརྡ་བཀོད་སྒྲོམ་ཚུ་ ཕྱི་ཁར་ཡོད་པའི་སྐབས་ལུ།
 
-## Directory Layout
+## སྣོད་ཐོའི་སྒྲིག་བཀོད་།
 
-| Path | Purpose |
-|------|---------|
-| `docs/automation/android/` | Android documentation and localization automation baselines (AND5), including i18n stub sync logs, parity summaries, and SDK publishing evidence required before AND6 sign-off. |
-| `docs/automation/da/` | Data-Availability threat-model automation outputs referenced by `cargo xtask da-threat-model-report` and the nightly docs refresh. |
+| ལམ། དམིགས་ཡུལ། |
+|------|--------------------------------------------------------------------
+| I18NI0000001X | AnDroid ཡིག་ཆ་དང་ ས་གནས་ཀྱི་རང་བཞིན་འཕྲུལ་ཆས་གཞི་རྟེན་ (AND5) ཚུ་ i18n stub sync logs དང་ ཆ་སྙོམས་བཅུད་བསྡུས་ དེ་ལས་ SDK དཔར་བསྐྲུན་གྱི་སྒྲུབ་བྱེད་ AND6 མ་བཙུགས་པའི་ཧེ་མ་ དགོཔ་ཨིན། |
+| I18NI0000002X | གནད་སྡུད་འཐོབ་ཚུགས་པའི་ཉེན་ཁ་-དཔེ་ཚད་རང་བཞིན་གྱི་ཐོན་འབྲས་ཚུ་ I18NI000000003X དང་ མཚན་མོའི་ཡིག་ཆ་ཚུ་ གསརཔ་བཟོཝ་ཨིན། |
 
-Each subdirectory documents the commands that produce the evidence along with
-the file layout we expect to check in (usually JSON summaries, run logs, or
-manifests). Teams drop new artefacts under the respective folder whenever an
-automation run materially changes the published docs, then link to the commit
-from the relevant status/roadmap entry.
+ཡན་ལག་སྣོད་ཐོ་རེ་རེ་གིས་ སྒྲུབ་བྱེད་བཏོན་མི་བརྡ་བཀོད་ཚུ་དང་མཉམ་དུ་ཡིག་ཆ་བཟོཝ་ཨིན།
+ཡིག་སྣོད་སྒྲིག་བཀོད་འདི་ ང་བཅས་ཀྱིས་ ཞིབ་དཔྱད་འབད་ནི་གི་རེ་བ་བསྐྱེདཔ་ཨིན། (སྤྱིར་བཏང་ལུ་ JSON བཅུད་བསྡུས་ གཡོག་བཀོལ་བའི་དྲན་ཐོ་ཚུ་ ཡང་ན་ ཡང་ན་
+ལས༌སྡེ༌ སྡེ་ཚན་ཚུ་གིས་ རང་སོའི་སྣོད་འཛིན་གྱི་འོག་ལུ་ ཅ་ཆས་ཚུ་ ག་དུས་འབད་རུང་ བཀོག་བཞགཔ་ཨིན།
+རང་བཞིན་གྱིས་དཔར་བསྐྲུན་འབད་ཡོད་པའི་ཡིག་ཆ་ཚུ་ དངོས་པོ་སྦེ་གཡོག་བཀོལ་ཞིནམ་ལས་ དེ་ལས་ ཁས་བླངས་ལུ་འབྲེལ་མཐུད་འབདཝ་ཨིན།
+འབྲེལ་ཡོད་གནས་རིམ་/ལམ་སབ་ཁྲ་ནང་འཛུལ་མི་ལས་།
 
-## Usage
+## ལག་ལེན།
 
-1. **Run the automation** using the commands described in the subdirectory
-   README (for example, `ci/check_android_fixtures.sh` or
-   `cargo xtask da-threat-model-report`).
-2. **Copy the resulting JSON/log artefacts** from `artifacts/…` into the
-   matching `docs/automation/<program>/…` folder with an ISO-8601 timestamp in
-   the filename so auditors can correlate the evidence with governance minutes.
-3. **Reference the commit** in `status.md`/`roadmap.md` when closing a roadmap
-   gate so reviewers can confirm the automation baseline used for that decision.
-4. **Keep the files lightweight**. The expectation is structured metadata,
-   manifests, or summaries—not bulk binary blobs. Larger dumps should stay in
-   object storage with the signed reference recorded here.
+1. **རང་བཞིན་** སྣོད་ཐོ་འོག་མ་ནང་གསལ་བཀོད་འབད་ཡོད་པའི་བརྡ་བཀོད་ཚུ་ལག་ལེན་འཐབ་ཐོག་ལས་གཡོག་བཀོལ།
+   README (དཔེར་ན་ `ci/check_android_fixtures.sh` ཡང་ན།
+   I18NI0000000X).
+2. ** གྲུབ་འབྲས་ JSON/log artects** འདི་ `artifacts/…` ལས་ འདྲ་བཤུས་རྐྱབས།
+   `docs/automation/<program>/…` སྣོད་འཛིན་དང་མཉམ་མཐུན་འབད་ནི།
+   རྩིས་ཞིབ་པ་ཚུ་གིས་ གཞུང་སྐྱོང་སྐར་མ་ཚུ་དང་ འབྲེལ་མཐུན་འབད་ཚུགས།
+3.* ལམ་གྱི་ས་ཁྲ་ཁ་བསྡམ་པའི་སྐབས་ `status.md`/`roadmap.md` ནང་ ཁས་བླངས་འདི་ བསྒྱུར་བཅོས་འབད།
+   བསྐྱར་ཞིབ་པ་ཚུ་གིས་ གྲོས་ཐག་དེ་གི་དོན་ལུ་ ལག་ལེན་འཐབ་མི་ རང་བཞིན་གྱི་གཞི་རྟེན་འདི་ ངེས་གཏན་བཟོ་ཚུགས།
+༤ **ཡིག་སྣོད་ཚུ་ ལྗིད་མེདཔ་སྦེ་བཞག་དགོ།**. རེ་བ་འདི་ བཀོད་སྒྲིག་འབད་ཡོད་པའི་ མེ་ཊ་ཌེ་ཊ་ཨིན།
+   souns, ཡང་ན་ བཅུད་བསྡུས་—གཉིས་ལྡན་གྱི་ བརྡ་རྟགས་མེན། གད་སྙིགས་སྦོམ་ཚུ་ ༢༠༡༢ ནང་སྡོད་དགོ།
+   དངོས་པོའི་གསོག་འཇོག་འདི་ནཱ་ལུ་ཐོ་བཀོད་འབད་ཡོད་པའི་རྟགས་བཀོད་ཡོད་པའི་གཞི་བསྟུན་དང་གཅིག་ཁར་།
 
-By centralising these automation notes we unblock the “docs/automation baselines
-available for audit” prerequisite that AND6 calls out and give the DA threat
-model flow a deterministic home for the nightly reports and manual spot checks.
+འ་ནི་རང་བཞིན་དྲན་ཐོ་ཚུ་ དབུས་སྒྲིག་འབད་དེ་ ང་བཅས་ཀྱིས་ “docs/automation baselines འདི་ བཏོན་གཏང་།
+རྩིས་ཞིབ་འབད་ནིའི་དོན་ལུ་” AND6 གིས་ འབོད་བརྡ་འབད་དེ་ DA ཉེན་ཁ་བྱིན་དགོ་པའི་ སྔོན་འགྲོ།
+དཔེ་སྟོན་གྱི་ མཚན་མོའི་སྙན་ཞུ་དང་ ལག་ཐོག་ལས་ བརྟག་དཔྱད་འབད་ནིའི་དོན་ལུ་ ཐག་གཅོད་ཀྱི་ཁྱིམ་ཅིག་ བཞུར་འོང་།

@@ -10,85 +10,86 @@ translation_last_reviewed: 2026-02-07
 id: nexus-operations
 title: Nexus operations runbook
 description: Field-ready summary of the Nexus operator workflow, mirroring `docs/source/nexus_operations.md`.
+translator: machine-google-reviewed
 ---
 
-Use this page as the quick-reference sibling of
-`docs/source/nexus_operations.md`. It distils the operational checklist, change
-management hooks, and telemetry coverage requirements that Nexus operators must
-follow.
+ဤစာမျက်နှာကို အမြန်ရည်ညွှန်းသော ညီအကိုအဖြစ် အသုံးပြုပါ။
+`docs/source/nexus_operations.md`။ ၎င်းသည် လုပ်ငန်းလည်ပတ်မှု စစ်ဆေးရေးစာရင်းကို ပေါင်းထည့်ကာ ပြောင်းလဲသည်။
+Nexus အော်ပရေတာများ လိုအပ်သော စီမံခန့်ခွဲမှု ချိတ်များနှင့် တယ်လီမီတာ လွှမ်းခြုံမှု လိုအပ်ချက်များ
+လိုက်နာပါ။
 
-## Lifecycle checklist
+## ဘဝသံသရာစစ်ဆေးရန်စာရင်း
 
-| Stage | Actions | Evidence |
-|-------|--------|----------|
-| Pre-flight | Verify release hashes/signatures, confirm `profile = "iroha3"`, and prepare config templates. | `scripts/select_release_profile.py` output, checksum log, signed manifest bundle. |
-| Catalog alignment | Update `[nexus]` catalog, routing policy, and DA thresholds per council-issued manifest, then capture `--trace-config`. | `irohad --sora --config … --trace-config` output stored with onboarding ticket. |
-| Smoke & cutover | Run `irohad --sora --config … --trace-config`, execute CLI smoke (`FindNetworkStatus`), validate telemetry exports, and request admission. | Smoke-test log + Alertmanager confirmation. |
-| Steady state | Monitor dashboards/alerts, rotate keys per governance cadence, and sync configs/runbooks whenever manifests change. | Quarterly review minutes, dashboard screenshots, rotation ticket IDs. |
+| ဇာတ်ခုံ | လုပ်ဆောင်ချက်များ | အထောက်အထား |
+|---------|--------|----------|
+| လေယာဉ်အကြို | ထွက်ရှိထားသော hashs/ signatures များကိုစစ်ဆေးပါ၊ `profile = "iroha3"` ကိုအတည်ပြုပြီး config templates ကိုပြင်ဆင်ပါ။ | `scripts/select_release_profile.py` အထွက်၊ checksum မှတ်တမ်း၊ လက်မှတ်ထိုးထားသော manifest အတွဲ။ |
+| Catalog တန်းညှိ | `[nexus]` ကတ်တလောက်ကို အပ်ဒိတ်လုပ်ပါ၊ လမ်းကြောင်းသတ်မှတ်ခြင်းမူဝါဒနှင့် ကောင်စီမှထုတ်ပြန်သော မန်နီးဖက်စ်တစ်ခုအတွက် DA သတ်မှတ်ချက်များကို အပ်ဒိတ်လုပ်ပါ၊ ထို့နောက် `--trace-config` ကို ဖမ်းယူပါ။ | `irohad --sora --config … --trace-config` အထွက်အထွက်ကို စတင်တက်ရောက်ခွင့်လက်မှတ်နှင့်အတူ သိမ်းဆည်းထားသည်။ |
+| မီးခိုးနှင့်ဖြတ်တောက်ခြင်း | `irohad --sora --config … --trace-config` ကိုဖွင့်ပါ၊ CLI မီးခိုး (`FindNetworkStatus`)၊ တယ်လီမီတာတင်ပို့မှုများကို တရားဝင်အောင်ပြုလုပ်ပြီး ဝင်ခွင့်တောင်းဆိုပါ။ | Smoke-test log + Alertmanager အတည်ပြုချက်။ |
+| ထုံ | ဒက်ရှ်ဘုတ်များ/သတိပေးချက်များကို စောင့်ကြည့်ပါ၊ အုပ်ချုပ်မှုပုံစံအလိုက် သော့များကို လှည့်ပါ၊ နှင့် manifests များပြောင်းလဲသည့်အခါတိုင်း configs/runbooks များကို စင့်ခ်လုပ်ပါ။ | သုံးလတစ်ကြိမ် သုံးသပ်ချက် မိနစ်များ၊ ဒက်ရှ်ဘုတ် ဖန်သားပြင်ဓာတ်ပုံများ၊ အလှည့်ကျ လက်မှတ် ID များ။ |
 
-Detailed onboarding (key replacement, routing templates, release profile steps)
-remain in `docs/source/sora_nexus_operator_onboarding.md`.
+အသေးစိတ်စတင်အသုံးပြုခြင်း (သော့အစားထိုးခြင်း၊ လမ်းကြောင်းတင်းပလိတ်များ၊ ပရိုဖိုင်အဆင့်များ ထုတ်ပြန်ခြင်း)
+`docs/source/sora_nexus_operator_onboarding.md` တွင် ရှိနေသည်။
 
-## Change management
+## အပြောင်းအလဲစီမံခန့်ခွဲမှု
 
-1. **Release updates** – track announcements in `status.md`/`roadmap.md`; attach
-   the onboarding checklist to every release PR.
-2. **Lane manifest changes** – verify signed bundles from the Space Directory and
-   archive them under `docs/source/project_tracker/nexus_config_deltas/`.
-3. **Configuration deltas** – every `config/config.toml` change requires a ticket
-   referencing the lane/data-space. Store a redacted copy of the effective config
-   whenever nodes join or upgrade.
-4. **Rollback drills** – quarterly rehearse stop/restore/smoke procedures; log
-   outcomes under `docs/source/project_tracker/nexus_config_deltas/<date>-rollback.md`.
-5. **Compliance approvals** – private/CBDC lanes must secure compliance sign-off
-   before modifying DA policy or telemetry redaction knobs (see
-   `docs/source/cbdc_lane_playbook.md`).
+1. **ဖြန့်ချိသည့်အပ်ဒိတ်များ** – `status.md`/`roadmap.md` တွင် ကြေငြာချက်များကို ခြေရာခံပါ။ ပူးတွဲ
+   ထုတ်ဝေမှု PR တိုင်းအတွက် စတင်စစ်ဆေးသည့်စာရင်း။
+2. **Lane manifest အပြောင်းအလဲများ** – Space Directory မှ လက်မှတ်ထိုးထားသော အစုအဝေးများကို စစ်ဆေးအတည်ပြုပါ။
+   သူတို့ကို `docs/source/project_tracker/nexus_config_deltas/` အောက်တွင် သိမ်းဆည်းပါ။
+3. **Configuration deltas** – `config/config.toml` ပြောင်းလဲမှုတိုင်း လက်မှတ်တစ်ခု လိုအပ်သည်
+   လမ်းကြော/ဒေတာ-အာကာသကို ရည်ညွှန်းခြင်း။ ထိရောက်သော config ၏ ပြန်လည်ပြင်ဆင်ထားသောမိတ္တူကို သိမ်းဆည်းပါ။
+   node များ ချိတ်ဆက်သည့်အခါတိုင်း သို့မဟုတ် အဆင့်မြှင့်ပါ။
+4. **ပြန်လည်လေ့ကျင့်ခြင်း** – သုံးလတစ်ကြိမ် အစမ်းလေ့ကျင့်မှု ရပ်တန့်/ပြန်လည်ရယူခြင်း/မီးခိုးထုတ်ခြင်းဆိုင်ရာ လုပ်ထုံးလုပ်နည်းများ။ မှတ်တမ်း
+   `docs/source/project_tracker/nexus_config_deltas/<date>-rollback.md` အောက်တွင် ရလဒ်များ။
+5. **လိုက်နာမှုအတည်ပြုချက်များ** – သီးသန့်/CBDC လမ်းကြောင်းများသည် လိုက်နာမှုဆိုင်ရာ ဆိုင်းဘုတ်ပိတ်ခြင်းကို လုံခြုံစေရမည်
+   DA ပေါ်လစီ သို့မဟုတ် တယ်လီမီတာ တုံ့ပြန်မှုခလုတ်များကို မွမ်းမံပြင်ဆင်ခြင်းမပြုမီ (ကြည့်ရှုပါ။
+   `docs/source/cbdc_lane_playbook.md`)။
 
-## Telemetry & SLOs
+## Telemetry & SLO များ
 
-- Dashboards: `dashboards/grafana/nexus_lanes.json`, `nexus_settlement.json`, plus
-  SDK-specific views (e.g., `android_operator_console.json`).
-- Alerts: `dashboards/alerts/nexus_audit_rules.yml` and Torii/Norito transport
-  rules (`dashboards/alerts/torii_norito_rpc_rules.yml`).
-- Metrics to watch:
-  - `nexus_lane_height{lane_id}` – alert on zero progress for three slots.
-  - `nexus_da_backlog_chunks{lane_id}` – alert above lane-specific thresholds
-    (default 64 public / 8 private).
-  - `nexus_settlement_latency_seconds{lane_id}` – alert when P99 exceeds 900 ms
-    (public) or 1200 ms (private).
-  - `torii_request_failures_total{scheme="norito_rpc"}` – alert if 5-minute error
-    ratio >2 %.
-  - `telemetry_redaction_override_total` – Sev 2 immediately; ensure overrides
-    have compliance tickets.
-- Run the telemetry remediation checklist in
-  [Nexus telemetry remediation plan](./nexus-telemetry-remediation) at least
-  quarterly and attach the filled form to operations review notes.
+- ဒက်ရှ်ဘုတ်များ- `dashboards/grafana/nexus_lanes.json`၊ `nexus_settlement.json`၊ အပေါင်း
+  SDK သီးသန့်ကြည့်ရှုမှုများ (ဥပမာ၊ `android_operator_console.json`)။
+- သတိပေးချက်များ- `dashboards/alerts/nexus_audit_rules.yml` နှင့် Torii/Norito သယ်ယူပို့ဆောင်ရေး
+  စည်းမျဉ်းများ (`dashboards/alerts/torii_norito_rpc_rules.yml`)။
+- ကြည့်ရှုရန် မက်ထရစ်များ
+  - `nexus_lane_height{lane_id}` - အပေါက်သုံးခုအတွက် သုညတိုးတက်မှုကို သတိပေးချက်။
+  - `nexus_da_backlog_chunks{lane_id}` - သတ်မှတ်ထားသော လမ်းကြောသတ်မှတ်နှုန်းများထက် သတိပေးချက်
+    (ပုံမှန် 64 အများပိုင် / 8 သီးသန့်)။
+  - `nexus_settlement_latency_seconds{lane_id}` - P99 သည် 900ms ကျော်လွန်သည့်အခါ သတိပေးချက်
+    (အများပြည်သူ) သို့မဟုတ် 1200ms (သီးသန့်)။
+  - `torii_request_failures_total{scheme="norito_rpc"}` - 5 မိနစ် error ရှိပါကသတိပေးပါ။
+    အချိုး>2%
+  - `telemetry_redaction_override_total` – Sev2 ချက်ချင်း၊ overrides သေချာပါစေ။
+    လိုက်နာမှုလက်မှတ်များရှိသည်။
+- တယ်လီမီတာပြုပြင်ခြင်းစစ်ဆေးခြင်းစာရင်းကိုဖွင့်ပါ။
+  အနည်းဆုံး [Nexus တယ်လီမီတာ ပြုပြင်ခြင်းအစီအစဉ်](./nexus-telemetry-remediation)
+  သုံးလတစ်ကြိမ် ဖြည့်သွင်းထားသော ဖောင်ကို လုပ်ငန်းဆောင်ရွက်မှု သုံးသပ်ချက် မှတ်စုများတွင် ပူးတွဲပါ ။
 
-## Incident matrix
+## ဖြစ်ရပ်မက်ထရစ်
 
-| Severity | Definition | Response |
-|----------|------------|----------|
-| Sev 1 | Data-space isolation breach, settlement halt >15 min, or governance vote corruption. | Page Nexus Primary + Release Engineering + Compliance, freeze admission, collect artefacts, publish comms ≤60 min, RCA ≤5 business days. |
-| Sev 2 | Lane backlog SLA breach, telemetry blind spot >30 min, failed manifest rollout. | Page Nexus Primary + SRE, mitigate ≤4 h, file follow-ups within 2 business days. |
-| Sev 3 | Non-blocking drift (docs, alerts). | Log in tracker, schedule fix inside the sprint. |
+| ပြင်းထန်မှု | အဓိပ္ပါယ် | တုံ့ပြန်မှု |
+|----------|--------------------|----------|
+| Sev1 | ဒေတာ-နေရာလွတ် အထီးကျန်မှု ချိုးဖောက်မှု၊ ဖြေရှင်းမှု ရပ်တန့်ခြင်း > 15 မိနစ် သို့မဟုတ် အုပ်ချုပ်မှုမဲပေးခြင်း အကျင့်ပျက်ခြစားမှု။ | စာမျက်နှာ Nexus မူလတန်း + ထုတ်ဝေမှု အင်ဂျင်နီယာ + လိုက်နာမှု၊ ဝင်ခွင့် ခေတ္တရပ်၊ စုဆောင်းထားသော ကွန်မန့်များ ထုတ်ဝေရန် ≤60min၊ RCA ≤5 လုပ်ငန်းရက်။ |
+| Sev2 | လမ်းကြောနောက်ကွယ်မှ SLA ချိုးဖောက်မှု၊ တယ်လီမီတာ ကန်းသည့်နေရာ > 30 မိနစ်၊ ထင်ရှားစွာပြသခြင်း မအောင်မြင်ပါ။ | စာမျက်နှာ Nexus Primary + SRE၊ ≤4h လျော့ပါးစေကာ လုပ်ငန်း 2 ရက်အတွင်း နောက်ဆက်တွဲများကို ဖိုင်တင်ပါ။ |
+| Sev3 | ပိတ်ဆို့ခြင်းမဟုတ်သော ပျံ့လွင့်မှု (စာရွက်စာတမ်းများ၊ သတိပေးချက်များ)။ | ခြေရာခံကိရိယာကို လော့ဂ်အင်ဝင်ပါ၊ ပြေးပွဲအတွင်း ပြင်ဆင်ရန် အချိန်ဇယားဆွဲပါ။ |
 
-Incident tickets must record affected lane/data-space IDs, manifest hashes,
-timeline, supporting metrics/logs, and follow-up tasks/owners.
+အခင်းဖြစ်ပွားမှု လက်မှတ်များသည် ထိခိုက်မှုရှိသော လမ်းကြော/ဒေတာ-နေရာ ID များ၊ ထင်ရှားသည့် ဟက်ရှ်များကို မှတ်တမ်းတင်ရမည်၊
+အချိန်ဇယား၊ မက်ထရစ်များ/မှတ်တမ်းများကို ပံ့ပိုးပေးပြီး နောက်ဆက်တွဲလုပ်ဆောင်စရာများ/ပိုင်ရှင်များ။
 
-## Evidence archive
+## အထောက်အထားများ တင်ထားပါတယ်။
 
-- Store bundles/manifests/telemetry exports under `artifacts/nexus/<lane>/<date>/`.
-- Keep redacted configs + `--trace-config` output for each release.
-- Attach council minutes + signed decisions when config or manifest changes land.
-- Preserve weekly Prometheus snapshots relevant to Nexus metrics for 12 months.
-- Record runbook edits in `docs/source/project_tracker/nexus_config_deltas/README.md`
-  so auditors know when responsibilities changed.
+- `artifacts/nexus/<lane>/<date>/` အောက်တွင် အစုအစည်းများ/ဖော်ပြချက်များ/တယ်လီမီတာတင်ပို့မှုများကို သိမ်းဆည်းပါ။
+- ထုတ်ဝေမှုတစ်ခုစီအတွက် ပြန်လည်ပြင်ဆင်ထားသော configs + `--trace-config` အထွက်ကို သိမ်းဆည်းထားပါ။
+- config သို့မဟုတ် manifest သည် မြေယာကို ပြောင်းလဲသည့်အခါ ကောင်စီမိနစ်များ + လက်မှတ်ရေးထိုးထားသော ဆုံးဖြတ်ချက်များကို ပူးတွဲပါ။
+- Nexus မက်ထရစ်များနှင့် သက်ဆိုင်သော အပတ်စဉ် Prometheus လျှပ်တစ်ပြက်များကို 12 လကြာ ထိန်းသိမ်းပါ။
+- `docs/source/project_tracker/nexus_config_deltas/README.md` တွင် runbook တည်းဖြတ်မှုများကို မှတ်တမ်းတင်ပါ။
+  ဒါကြောင့် စာရင်းစစ်တွေက တာဝန်တွေ ပြောင်းလဲလာတဲ့အခါ သိတယ်။
 
-## Related material
+## ဆက်စပ်ပစ္စည်း
 
-- Overview: [Nexus overview](./nexus-overview)
-- Specification: [Nexus spec](./nexus-spec)
-- Lane geometry: [Nexus lane model](./nexus-lane-model)
-- Transition & routing shims: [Nexus transition notes](./nexus-transition-notes)
-- Operator onboarding: [Sora Nexus operator onboarding](./nexus-operator-onboarding)
-- Telemetry remediation: [Nexus telemetry remediation plan](./nexus-telemetry-remediation)
+- ခြုံငုံသုံးသပ်ချက်- [Nexus အကျဉ်းချုပ်](./nexus-overview)
+သတ်မှတ်ချက်- [Nexus spec](./nexus-spec)
+- လမ်းကြောဂျီသြမေတြီ- [Nexus လမ်းသွားမော်ဒယ်](./nexus-lane-model)
+- အကူးအပြောင်းနှင့် လမ်းကြောင်းသတ်မှတ်ခြင်း- [Nexus အကူးအပြောင်းမှတ်စုများ](./nexus-transition-notes)
+- အော်ပရေတာ စတင်အသုံးပြုခြင်း- [Sora Nexus အော်ပရေတာ စတင်အသုံးပြုခြင်း](./nexus-operator-onboarding)
+- တယ်လီမီတာ ပြုပြင်ခြင်း- [Nexus တယ်လီမီတာ ပြုပြင်ခြင်း အစီအစဉ်](./nexus-telemetry-remediation)

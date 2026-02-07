@@ -10,41 +10,42 @@ translation_last_reviewed: 2026-02-07
 id: nexus-settlement-faq
 title: Settlement FAQ
 description: Operator-facing answers covering settlement routing, XOR conversion, telemetry, and audit evidence.
+translator: machine-google-reviewed
 ---
 
-This page mirrors the internal settlement FAQ (`docs/source/nexus_settlement_faq.md`)
-so portal readers can review the same guidance without digging through the
-mono-repo. It explains how the Settlement Router processes payouts, what metrics
-to monitor, and how SDKs should integrate the Norito payloads.
+Энэ хуудас нь дотоод төлбөр тооцооны түгээмэл асуултуудыг толилуулж байна (`docs/source/nexus_settlement_faq.md`)
+Ингэснээр портал уншигчид ухахгүйгээр ижил удирдамжтай танилцах боломжтой
+моно репо. Энэ нь Төлбөр тооцооны чиглүүлэгч төлбөрийг хэрхэн боловсруулдаг, ямар хэмжүүрүүдийг тайлбарладаг
+хянах, мөн SDK-ууд Norito ачааллыг хэрхэн нэгтгэх ёстой.
 
-## Highlights
+## Онцлох үйл явдал
 
-1. **Lane mapping** — each data space declares a `settlement_handle`
-   (`xor_global`, `xor_lane_weighted`, `xor_hosted_custody`, or
-   `xor_dual_fund`). Consult the latest lane catalog under
+1. **Эгнээний зураглал** — өгөгдлийн орон зай бүр `settlement_handle` гэж зарладаг.
+   (`xor_global`, `xor_lane_weighted`, `xor_hosted_custody`, эсвэл
+   `xor_dual_fund`). Хамгийн сүүлийн үеийн эгнээний каталогийг доороос үзнэ үү
    `docs/source/project_tracker/nexus_config_deltas/`.
-2. **Deterministic conversion** — the router converts all settlements to XOR via
-   the governance-approved liquidity sources. Private lanes pre-fund XOR buffers;
-   haircuts apply only when buffers drift outside policy.
-3. **Telemetry** — watch `nexus_settlement_latency_seconds`, conversion counters,
-   and haircut gauges. Dashboards live in `dashboards/grafana/nexus_settlement.json`
-   and alerts in `dashboards/alerts/nexus_audit_rules.yml`.
-4. **Evidence** — archive configs, router logs, telemetry exports, and
-   reconciliation reports for audits.
-5. **SDK responsibilities** — every SDK must expose settlement helpers, lane IDs,
-   and Norito payload encoders to keep parity with the router.
+2. **Deterministic conversion** — чиглүүлэгч нь бүх тооцоог XOR руу хөрвүүлдэг
+   засаглалын баталсан хөрвөх чадварын эх үүсвэр. Хувийн замууд нь XOR буферийг урьдчилан санхүүжүүлдэг;
+   Үс засах нь зөвхөн буфер нь бодлогоос гадуур гарах үед л хамаарна.
+3. **Телеметри** — `nexus_settlement_latency_seconds` цаг, хөрвүүлэх тоолуур,
+   мөн үс засах хэмжигч. Хяналтын самбарууд `dashboards/grafana/nexus_settlement.json` дээр амьдардаг
+   болон `dashboards/alerts/nexus_audit_rules.yml` дахь дохиолол.
+4. **Нотлох баримт** — архивын тохиргоо, чиглүүлэгчийн бүртгэл, телеметрийн экспорт болон
+   аудитын нэгтгэлийн тайлан.
+5. **SDK-ийн үүрэг хариуцлага** — SDK бүр төлбөр тооцооны туслахууд, эгнээний ID,
+   болон Norito даацын кодлогч нь чиглүүлэгчтэй тэгш байдлыг хадгалах.
 
-## Example flows
+## Урсгалын жишээ
 
-| Lane type | Evidence to capture | What it proves |
-|-----------|--------------------|----------------|
-| Private `xor_hosted_custody` | Router log + `nexus_settlement_latency_seconds{lane}` + `settlement_router_haircut_total{lane}` | CBDC buffers debit deterministic XOR and haircuts stay within policy. |
-| Public `xor_global` | Router log + DEX/TWAP reference + latency/conversion metrics | Shared liquidity path priced the transfer at the published TWAP with zero haircut. |
-| Hybrid `xor_dual_fund` | Router log showing public vs shielded split + telemetry counters | Shielded/public mix respected governance ratios and recorded the haircut applied to each leg. |
+| эгнээний төрөл | Баривчлах нотлох баримт | Энэ нь юуг баталж байна |
+|----------|--------------------|----------------|
+| Хувийн `xor_hosted_custody` | Чиглүүлэгчийн бүртгэл + `nexus_settlement_latency_seconds{lane}` + `settlement_router_haircut_total{lane}` | CBDC буфер нь дебит детерминистик XOR ба үсний засалтууд нь бодлогод үлддэг. |
+| Нийтийн `xor_global` | Чиглүүлэгчийн бүртгэл + DEX/TWAP лавлагаа + хоцролт/хувиргах хэмжүүр | Хуваалцсан хөрвөх чадварын зам нь хэвлэгдсэн TWAP дээр үсээ огтлохгүйгээр шилжүүлгийг үнэлсэн. |
+| Гибрид `xor_dual_fund` | Нийтийн ба хамгаалалттай хуваах + телеметрийн тоолуурыг харуулсан чиглүүлэгчийн бүртгэл | Хамгаалагдсан/олон нийтийн холимог засаглалын харьцааг хүндэтгэж, хөл тус бүрт үсний засалтыг тэмдэглэв. |
 
-## Need more detail?
+## Илүү дэлгэрэнгүй мэдээлэл хэрэгтэй байна уу?
 
-- Full FAQ: `docs/source/nexus_settlement_faq.md`
-- Settlement router spec: `docs/source/settlement_router.md`
-- CBDC policy playbook: `docs/source/cbdc_lane_playbook.md`
-- Operations runbook: [Nexus operations](./nexus-operations)
+- Бүрэн түгээмэл асуултууд: `docs/source/nexus_settlement_faq.md`
+- Төлбөр тооцооны чиглүүлэгчийн үзүүлэлт: `docs/source/settlement_router.md`
+- CBDC бодлогын заавар: `docs/source/cbdc_lane_playbook.md`
+- Үйлдлийн дэвтэр: [Nexus үйлдлүүд](./nexus-operations)

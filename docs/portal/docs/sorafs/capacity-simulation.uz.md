@@ -11,41 +11,42 @@ id: capacity-simulation
 title: SoraFS Capacity Simulation Runbook
 sidebar_label: Capacity Simulation Runbook
 description: Exercising the SF-2c capacity marketplace simulation toolkit with reproducible fixtures, Prometheus exports, and Grafana dashboards.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
+::: Eslatma Kanonik manba
 :::
 
-This runbook explains how to run the SF-2c capacity marketplace simulation kit and visualise the resulting metrics. It validates quota negotiation, failover handling, and slashing remediation end-to-end using the deterministic fixtures in `docs/examples/sorafs_capacity_simulation/`. Capacity payloads still use `sorafs_manifest_stub capacity`; use `iroha app sorafs toolkit pack` for manifest/CAR packaging flows.
+Ushbu runbook SF-2c sig'imli bozor simulyatsiyasi to'plamini qanday ishga tushirish va natijada olingan ko'rsatkichlarni vizualizatsiya qilishni tushuntiradi. U `docs/examples/sorafs_capacity_simulation/` da deterministik moslamalar yordamida kvotalar bo'yicha muzokaralar, nosozliklarni qayta ishlash va tuzatishni oxirigacha tasdiqlaydi. Imkoniyatli foydali yuklar hali ham `sorafs_manifest_stub capacity` dan foydalanadi; manifest/CAR qadoqlash oqimlari uchun `iroha app sorafs toolkit pack` dan foydalaning.
 
-## 1. Generate CLI artefacts
+## 1. CLI artefaktlarini yarating
 
 ```bash
 cd $REPO_ROOT/docs/examples/sorafs_capacity_simulation
 ./run_cli.sh ./artifacts
 ```
 
-`run_cli.sh` wraps `sorafs_manifest_stub capacity` to emit Norito payloads, base64 blobs, Torii request bodies, and JSON summaries for:
+`run_cli.sh` `sorafs_manifest_stub capacity` ni oʻrab, Norito foydali yuklarni, base64 bloblarini, Torii soʻrov qismlarini va JSON xulosalarini chiqarish uchun:
 
-- Three provider declarations participating in the quota negotiation scenario.
-- A replication order allocating the staged manifest across those providers.
-- Telemetry snapshots for the pre-outage baseline, outage interval, and failover recovery.
-- A dispute payload requesting slashing after the simulated outage.
+- Kvota bo'yicha muzokaralar stsenariysida ishtirok etuvchi uchta provayder deklaratsiyasi.
+- Ushbu provayderlar bo'ylab bosqichli manifestni taqsimlovchi takrorlash tartibi.
+- Uzilishdan oldingi boshlang'ich chiziq, uzilishlar oralig'i va uzilishlarni tiklash uchun telemetriya suratlari.
+- Simulyatsiya qilingan uzilishdan keyin qisqartirishni talab qiladigan nizo.
 
-All artefacts land under `./artifacts` (override by passing a different directory as the first argument). Inspect the `_summary.json` files for human-readable context.
+Barcha artefaktlar `./artifacts` ostida joylashadi (birinchi argument sifatida boshqa katalogni o'tkazish orqali bekor qiling). `_summary.json` fayllarini inson o'qiy oladigan kontekst mavjudligini tekshiring.
 
-## 2. Aggregate results & emit metrics
+## 2. Natijalarni jamlash va ko'rsatkichlarni chiqarish
 
 ```bash
 ./analyze.py --artifacts ./artifacts
 ```
 
-The analyzer produces:
+Analizator ishlab chiqaradi:
 
-- `capacity_simulation_report.json` - aggregated allocations, failover deltas, and dispute metadata.
-- `capacity_simulation.prom` - Prometheus textfile metrics (`sorafs_simulation_*`) suitable for the node-exporter textfile collector or a standalone scrape job.
+- `capacity_simulation_report.json` - yig'ilgan taqsimotlar, o'chirish deltalari va bahsli metama'lumotlar.
+- `capacity_simulation.prom` - Prometheus matn fayli ko'rsatkichlari (`sorafs_simulation_*`) tugunni eksport qiluvchi matn fayli yig'uvchisi yoki mustaqil qirqish ishi uchun mos keladi.
 
-Example Prometheus scrape configuration:
+Prometheus qirqish konfiguratsiyasiga misol:
 
 ```yaml
 scrape_configs:
@@ -60,22 +61,22 @@ scrape_configs:
       format: ["prometheus"]
 ```
 
-Point the textfile collector at `capacity_simulation.prom` (when using node-exporter copy it into the directory passed via `--collector.textfile.directory`).
+Matn fayli kollektorini `capacity_simulation.prom` ga yo'naltiring (tugun eksportchisidan foydalanganda uni `--collector.textfile.directory` orqali uzatiladigan katalogga nusxalash).
 
-## 3. Import the Grafana dashboard
+## 3. Grafana asboblar panelini import qiling
 
-1. In Grafana, import `dashboards/grafana/sorafs_capacity_simulation.json`.
-2. Bind the `Prometheus` datasource variable to the scrape target configured above.
-3. Verify the panels:
-   - **Quota Allocation (GiB)** shows committed/assigned balances for each provider.
-   - **Failover Trigger** flips to *Failover Active* when the outage metrics stream in.
-   - **Uptime Drop During Outage** charts the percentage loss for provider `alpha`.
-   - **Requested Slash Percentage** visualises the remediation ratio extracted from the dispute fixture.
+1. Grafana da `dashboards/grafana/sorafs_capacity_simulation.json` import qiling.
+2. `Prometheus` ma'lumotlar manbai o'zgaruvchisini yuqorida sozlangan qirqish maqsadiga bog'lang.
+3. Panellarni tekshiring:
+   - **Kvota taqsimoti (GiB)** har bir provayder uchun ajratilgan/tayinlangan qoldiqlarni ko'rsatadi.
+   - **To'xtash triggeri** uzilish ko'rsatkichlari oqimga kirganda *Failover Active* rejimiga o'tadi.
+   - **Toʻxtash vaqtida ish vaqtining pasayishi** `alpha` provayderi uchun foiz yoʻqotish jadvalini koʻrsatadi.
+   - **So'ralgan slash foizi** nizo tuzatmasidan olingan tuzatish nisbatini ko'rsatadi.
 
-## 4. Expected checks
+## 4. Kutilayotgan tekshiruvlar
 
-- `sorafs_simulation_quota_total_gib{scope="assigned"}` equals `600` while the committed total remains >=600.
-- `sorafs_simulation_failover_triggered` reports `1` and the replacement provider metric highlights `beta`.
-- `sorafs_simulation_slash_requested` reports `0.15` (15% slash) for the `alpha` provider identifier.
+- `sorafs_simulation_quota_total_gib{scope="assigned"}` `600` ga teng bo'lib, qabul qilingan jami >=600 bo'lib qoladi.
+- `sorafs_simulation_failover_triggered` hisobotlari `1` va almashtiruvchi provayder metrikasi `beta` belgilarini ta'kidlaydi.
+- `sorafs_simulation_slash_requested` `alpha` provayder identifikatori uchun `0.15` (15% slash) haqida xabar beradi.
 
-Run `cargo test -p sorafs_car --features cli --test capacity_simulation_toolkit` to confirm the fixtures are still accepted by the CLI schema.
+Armatura hali ham CLI sxemasi tomonidan qabul qilinganligini tasdiqlash uchun `cargo test -p sorafs_car --features cli --test capacity_simulation_toolkit` ni ishga tushiring.

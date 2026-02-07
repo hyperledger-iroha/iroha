@@ -4,102 +4,102 @@ direction: rtl
 source: docs/portal/docs/sorafs/provider-advert-multisource.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Adverts de provedores multi-origem e agendamento
+# פרסומות של רב-אורג'ים וסדר היום
 
-Esta pagina resume a especificacao canonica em
+דף קורות חיים אפרטיקאאו קאנוניקה
 [`docs/source/sorafs/provider_advert_multisource.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/provider_advert_multisource.md).
-Use esse documento para schemas Norito verbatim e changelogs; a copia do portal
+השתמש ב-esse documento para schemas Norito מילה במילה יומני שינויים; פורטל עותק דו
 mantem a orientacao para operadores, notas de SDK e referencias de telemetria perto do restante
 dos runbooks SoraFS.
 
 ## Adicoes ao esquema Norito
 
-### Range capability (`CapabilityType::ChunkRangeFetch`)
-- `max_chunk_span` - maior span continuo (bytes) por requisicao, `>= 1`.
+### יכולת טווח (`CapabilityType::ChunkRangeFetch`)
+- `max_chunk_span` - טווח טווח גדול (בתים) פור requisicao, `>= 1`.
 - `min_granularity` - resolucao de seek, `1 <= valor <= max_chunk_span`.
-- `supports_sparse_offsets` - permite offsets nao contiguos em uma requisicao.
+- `supports_sparse_offsets` - היתר קיזוז nao contiguos em uma requisicao.
 - `requires_alignment` - quando true, offsets devem alinhar com `min_granularity`.
-- `supports_merkle_proof` - indica suporte a testemunhas PoR.
+- `supports_merkle_proof` - אינדיקציה תומכת ב-PoR.
 
-`ProviderCapabilityRangeV1::to_bytes` / `from_bytes` aplicam encoding canonico
+`ProviderCapabilityRangeV1::to_bytes` / `from_bytes` קידוד אפליקם canonico
 para que payloads de gossip permanecam deterministas.
 
 ### `StreamBudgetV1`
-- Campos: `max_in_flight`, `max_bytes_per_sec`, `burst_bytes` opcional.
+- קמפוס: `max_in_flight`, `max_bytes_per_sec`, `burst_bytes` אופציונלי.
 - Regras de validacao (`StreamBudgetV1::validate`):
   - `max_in_flight >= 1`, `max_bytes_per_sec > 0`.
-  - `burst_bytes`, quando presente, deve ser `> 0` e `<= max_bytes_per_sec`.
+  - `burst_bytes`, quando presente, deve ser `> 0` ו `<= max_bytes_per_sec`.
 
 ### `TransportHintV1`
-- Campos: `protocol: TransportProtocol`, `priority: u8` (janela 0-15 aplicada por
+- קמפוס: `protocol: TransportProtocol`, `priority: u8` (janela 0-15 aplicada por
   `TransportHintV1::validate`).
-- Protocolos conhecidos: `torii_http_range`, `quic_stream`, `soranet_relay`,
+- פרוטוקולים: `torii_http_range`, `quic_stream`, `soranet_relay`,
   `vendor_reserved`.
 - Entradas duplicadas de protocolo por provedor sao rejeitadas.
 
 ### Adicoes a `ProviderAdvertBodyV1`
-- `stream_budget` opcional: `Option<StreamBudgetV1>`.
-- `transport_hints` opcional: `Option<Vec<TransportHintV1>>`.
+- `stream_budget` אופציונלי: `Option<StreamBudgetV1>`.
+- `transport_hints` אופציונלי: `Option<Vec<TransportHintV1>>`.
 - Ambos os campos agora passam por `ProviderAdmissionProposalV1`, envelopes de governanca,
-  fixtures de CLI e JSON de telemetria.
+  מתקנים של CLI e JSON de telemetria.
 
 ## Validacao e vinculacao com governanca
 
 `ProviderAdvertBodyV1::validate` e `ProviderAdmissionProposalV1::validate`
 rejeitam metadata malformada:
 
-- Range capabilities devem decodificar e cumprir limites de span/granularidade.
-- Stream budgets / transport hints exigem um TLV `CapabilityType::ChunkRangeFetch`
-  correspondente e lista de hints nao vazia.
+- יכולות טווח מפתחות פענוח ומגבלות טווח/גרגירים.
+- זרם תקציבים / רמזים לתחבורה exigem um TLV `CapabilityType::ChunkRangeFetch`
+  correspondente e list de hints nao vazia.
 - Protocolos de transporte duplicados e prioridades invalidas geram erros de validacao
-  antes de adverts serem gossiped.
-- Admission envelopes comparam proposal/adverts para metadata de range via
+  אנטס דה פרסומות שרכלו.
+- מעטפות קבלה להשוואת הצעות/פרסומות ל-metadata de range via
   `compare_core_fields` para que payloads de gossip divergentes sejam rejeitados cedo.
 
 A cobertura de regressao vive em
 `crates/sorafs_manifest/src/{provider_advert,provider_admission}.rs`.
 
-## Tooling e fixtures
+## מכשירים אלקטרוניים
 
-- Payloads de adverts de provedor devem incluir metadata `range_capability`,
-  `stream_budget` e `transport_hints`. Valide via respostas de `/v1/sorafs/providers`
-  e admission fixtures; resumos JSON devem incluir a capability parseada, o stream
+- עומסי פרסומות המוכיחים את הפיתוח כוללים מטא נתונים `range_capability`,
+  `stream_budget` e `transport_hints`. תקף דרך respostas de `/v1/sorafs/providers`
+  e אביזרי קבלה; קורות חיים בפיתוח JSON כוללים יכולת ניתוח, או זרם
   budget e arrays de hints para ingestao de telemetria.
-- `cargo xtask sorafs-admission-fixtures` mostra stream budgets e transport hints dentro
-  de seus artefatos JSON para que dashboards acompanhem a adocao da feature.
-- Fixtures sob `fixtures/sorafs_manifest/provider_admission/` agora incluem:
-  - adverts multi-origem canonicos,
+- `cargo xtask sorafs-admission-fixtures` תקציבי זרם מוסטרה ותחבורה רמזים dentro
+  de seus artefatos JSON עבור לוחות מחוונים נלווים לתכונה אדוקאו.
+- מתקנים יפחתי `fixtures/sorafs_manifest/provider_admission/` אגורה כולל:
+  - מפרסמת קנוניקוס רב-אורג'מים,
   - `multi_fetch_plan.json` para que suites de SDK reproduzam um plano de fetch
-    multi-peer deterministico.
+    דטרמיניסטי מרובה עמיתים.
 
-## Integracao com orchestrator e Torii
-
-- Torii `/v1/sorafs/providers` retorna metadata de range parseada junto com
-  `stream_budget` e `transport_hints`. Avisos de downgrade disparam quando
-  provedores omitem a nova metadata, e endpoints de range do gateway aplicam as
+## Integracao com מתזמר e Torii- Torii `/v1/sorafs/providers` retorna metadata de range parseada junto com
+  `stream_budget` e `transport_hints`. אביזוס דירוג לאחור disparam quando
+  מוכיחים להשמיט מטא נתונים חדשניים, ונקודות קצה של טווח לעשות אפליקציית שער כמו
   mesmas restricoes para clientes diretos.
 - O orchestrator multi-origem (`sorafs_car::multi_fetch`) agora aplica limites de
-  range, alinhamento de capabilities e stream budgets ao atribuir trabalho. Unit
-  tests cobrem cenarios de chunk muito grande, sparse-seek e throttling.
-- `sorafs_car::multi_fetch` transmite sinais de downgrade (falhas de alinhamento,
+  טווח, ניהול יכולות ותקציבי זרם כגון אtribuir trabalho. יחידה
+  בוחן את ה-cobrem cenarios de chunk muito grande, חיפוש דליל ומצערת.
+- `sorafs_car::multi_fetch` שדר ירידה בדרגה (falhas de alinhamento,
   requisicoes throttled) para que operadores rastreiem por que provedores especificos
   foram ignorados durante o planejamento.
 
 ## Referencia de telemetria
 
-A instrumentacao de range fetch de Torii alimenta o dashboard Grafana
-**SoraFS Fetch Observability** (`dashboards/grafana/sorafs_fetch_observability.json`) e
-as regras de alerta associadas (`dashboards/alerts/sorafs_fetch_rules.yml`).
+מכשירי טווח להביא את Torii מזון ללוח המחוונים Grafana
+**SoraFS תצפית אחזור** (`dashboards/grafana/sorafs_fetch_observability.json`) ה
+כמו regras de alerta associadas (`dashboards/alerts/sorafs_fetch_rules.yml`).
 
-| Metrica | Tipo | Labels | Descricao |
-|---------|------|--------|-----------|
-| `torii_sorafs_provider_range_capability_total` | Gauge | `feature` (`providers`, `supports_sparse_offsets`, `requires_alignment`, `supports_merkle_proof`, `stream_budget`, `transport_hints`) | Provedores que anunciam features de range capability. |
-| `torii_sorafs_range_fetch_throttle_events_total` | Counter | `reason` (`quota`, `concurrency`, `byte_rate`) | Tentativas de range fetch throttled agrupadas por politica. |
-| `torii_sorafs_range_fetch_concurrency_current` | Gauge | - | Streams ativos protegidos consumindo o budget compartilhado de concorrencia. |
+| מטריקה | טיפו | תוויות | תיאור |
+|--------|-------|--------|----------|
+| `torii_sorafs_provider_range_capability_total` | מד | `feature` (`providers`, `supports_sparse_offsets`, `requires_alignment`, `supports_merkle_proof`, `stream_budget`, `transport_hints`) | הוכחות que anunciam תכונות של יכולת טווח. |
+| `torii_sorafs_range_fetch_throttle_events_total` | מונה | `reason` (`quota`, `concurrency`, `byte_rate`) | טנטטיביות של טווח להביא אגרופים מצערים לפוליטיקה. |
+| `torii_sorafs_range_fetch_concurrency_current` | מד | - | זרמים אטיוווס protegidos consumindo או חלוקת תקציבים של קונקורנסיה. |
 
-Exemplos de PromQL:
+דוגמאות של PromQL:
 
 ```promql
 sum(rate(torii_sorafs_range_fetch_throttle_events_total[5m])) by (reason)
@@ -107,6 +107,6 @@ max(torii_sorafs_range_fetch_concurrency_current)
 torii_sorafs_provider_range_capability_total
 ```
 
-Use o contador de throttling para confirmar a aplicacao de quotas antes de ativar
-aos defaults do orchestrator multi-origem e alerte quando a concorrencia se aproximar
+השתמש ב-o contador de throttling para confirmar aplicacao de quotas antes de ativar
+ברירת המחדל של aos do orchestrator multi-origem e alerte quando a concorrencia se aproximar
 dos maximos do stream budget da sua frota.

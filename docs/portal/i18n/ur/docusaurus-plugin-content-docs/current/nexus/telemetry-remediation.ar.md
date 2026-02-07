@@ -4,32 +4,32 @@ direction: rtl
 source: docs/portal/docs/nexus/telemetry-remediation.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: nexus-telemetry-remediation
-title: خطة معالجة تيليمترية Nexus (B2)
-description: نسخة مطابقة لـ `docs/source/nexus_telemetry_remediation_plan.md` توثق مصفوفة فجوات القياس ومسار العمل التشغيلي.
+ID: گٹھ جوڑ-ٹیلی میٹری-ریمیڈیشن
+عنوان: ٹیلی میٹرک پروسیسنگ پلان Nexus (B2)
+تفصیل: `docs/source/nexus_telemetry_remediation_plan.md` کی عین مطابق کاپی پیمائش کے فرق میٹرکس اور آپریشنل ورک فلو کی دستاویزات۔
 ---
 
-# نظرة عامة
+# جائزہ
 
-عنصر خارطة الطريق **B2 - ملكية فجوات القياس** يتطلب خطة منشورة تربط كل فجوة قياس متبقية في Nexus باشارة وحاجز تنبيه ومالك وموعد نهائي واثر تحقق قبل بدء نوافذ تدقيق Q1 2026. تعكس هذه الصفحة `docs/source/nexus_telemetry_remediation_plan.md` لكي يتمكن فريق هندسة الاصدار وعمليات القياس ومالكو SDK من تاكيد التغطية قبل تمارين routed-trace و `TRACE-TELEMETRY-BRIDGE`.
+روڈ میپ عنصر ** بی 2 - پیمائش گیپ کی ملکیت ** کے لئے ایک شائع شدہ منصوبے کی ضرورت ہوتی ہے جو Nexus میں ہر باقی پیمائش کے فرق کو سگنل ، الرٹ رکاوٹ ، مالک ، ڈیڈ لائن ، اور تصدیقی ٹریس سے Q1 2026 آڈٹ ونڈوز کے آغاز سے پہلے جوڑتا ہے۔ یہ صفحہ `docs/source/nexus_telemetry_remediation_plan.md` کی عکاسی کرتا ہے تاکہ ریلیز انجینئرنگ ٹیم ، پیمائش کی کارروائیوں ، اور ایس ڈی کے مالکان روٹ ٹریس مشقوں اور `TRACE-TELEMETRY-BRIDGE` سے پہلے کوریج کی تصدیق کرسکیں۔
 
-# مصفوفة الفجوات
+# گیپس میٹرکس
 
-| معرف الفجوة | الاشارة وحاجز التنبيه | المالك / التصعيد | الاستحقاق (UTC) | الدليل والتحقق |
-|--------|-------------------------|--------------------|-----------|-------------------------|
-| `GAP-TELEM-001` | مخطط تكراري `torii_lane_admission_latency_seconds{lane_id,endpoint}` مع تنبيه **`SoranetLaneAdmissionLatencyDegraded`** يعمل عندما `histogram_quantile(0.95, rate(bucket[5m])) * 1000 > 750` لمدة 5 دقائق (`dashboards/alerts/soranet_lane_rules.yml`). | `@torii-sdk` (اشارة) + `@telemetry-ops` (تنبيه)؛ التصعيد عبر on-call routed-trace الخاص بـ Nexus. | 2026-02-23 | اختبارات التنبيه تحت `dashboards/alerts/tests/soranet_lane_rules.test.yml` مع لقطة تمرين `TRACE-LANE-ROUTING` التي تظهر التنبيه عند الاطلاق/التعافي وارشفة scrape لـ Torii `/metrics` في [Nexus transition notes](./nexus-transition-notes). |
-| `GAP-TELEM-002` | عداد `nexus_config_diff_total{knob,profile}` مع حاجز `increase(nexus_config_diff_total{profile="active"}[5m]) > 0` يمنع عمليات النشر (`docs/source/telemetry.md`). | `@nexus-core` (ادوات القياس) -> `@telemetry-ops` (تنبيه)؛ يتم تنبيه مسؤول الحوكمة المناوب عند زيادة العداد بشكل غير متوقع. | 2026-02-26 | مخرجات dry-run للحوكمة محفوظة بجوار `docs/source/project_tracker/nexus_config_deltas/2026Q1.md`؛ تشمل قائمة الاصدار لقطة استعلام Prometheus مع مقتطف سجل يثبت ان `StateTelemetry::record_nexus_config_diff` اصدر الفارق. |
-| `GAP-TELEM-003` | حدث `TelemetryEvent::AuditOutcome` (المترية `nexus.audit.outcome`) مع تنبيه **`NexusAuditOutcomeFailure`** عندما تستمر حالات الفشل او النتائج المفقودة لاكثر من 30 دقيقة (`dashboards/alerts/nexus_audit_rules.yml`). | `@telemetry-ops` (pipeline) مع تصعيد الى `@sec-observability`. | 2026-02-27 | بوابة CI `scripts/telemetry/check_nexus_audit_outcome.py` تؤرشف payloads NDJSON وتفشل عندما تخلو نافذة TRACE من حدث نجاح؛ لقطات التنبيه مرفقة بتقرير routed-trace. |
-| `GAP-TELEM-004` | Gauge `nexus_lane_configured_total` مع حاجز `nexus_lane_configured_total != EXPECTED_LANE_COUNT` يغذي قائمة التحقق الخاصة بـ SRE المناوب. | `@telemetry-ops` (gauge/export) مع تصعيد الى `@nexus-core` عندما تبلغ العقد عن احجام كتالوج غير متناسقة. | 2026-02-28 | اختبار تيليمترية المجدول `crates/iroha_core/tests/scheduler_telemetry.rs::records_lane_catalog_size` يثبت الاصدار؛ يرفق المشغلون فرق Prometheus + مقتطف سجل `StateTelemetry::set_nexus_catalogs` بحزمة تمرين TRACE. |
+| گیپ آئی ڈی | سگنل اور انتباہ رکاوٹ مالک / اضافے | پختگی (UTC) | ثبوت اور توثیق |
+| -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+| `GAP-TELEM-001` | ہسٹگرام `torii_lane_admission_latency_seconds{lane_id,endpoint}` انتباہ کے ساتھ ** `SoranetLaneAdmissionLatencyDegraded` ** جاری ہے جب `histogram_quantile(0.95, rate(bucket[5m])) * 1000 > 750` 5 منٹ (`dashboards/alerts/soranet_lane_rules.yml`) سے چل رہا ہے۔ | `@torii-sdk` (سگنل) + `@telemetry-ops` (الرٹ) ؛ Nexus کے لئے آن کال روٹ ٹریس کے ذریعے بڑھتی ہوئی۔ | 02-23-2026 | `dashboards/alerts/tests/soranet_lane_rules.test.yml` کے تحت Prometheus کے ایک مشق اسنیپ شاٹ کے ساتھ الرٹ ٹیسٹ کرتا ہے جس میں [Nexus [Nexus کے لانچ/بازیافت اور آرکائیوز کو [Prometheus] (./nexus-transition-notes) پر انتباہ دکھایا گیا ہے۔ |
+| `GAP-TELEM-002` | کاؤنٹر `nexus_config_diff_total{knob,profile}` رکاوٹ کے ساتھ `increase(nexus_config_diff_total{profile="active"}[5m]) > 0` تعیناتی (`docs/source/telemetry.md`) سے بچتا ہے۔ | `@nexus-core` (آلات) -> `@telemetry-ops` (الرٹ) ؛ جب کاؤنٹر غیر متوقع طور پر بڑھتا ہے تو ڈیوٹی پر موجود گورننس آفیسر کو الرٹ کردیا جاتا ہے۔ | 02-26-2026 | گورننس ڈرائی رن آؤٹ پٹ `docs/source/project_tracker/nexus_config_deltas/2026Q1.md` کے ساتھ ہی محفوظ ہے۔ ریلیز کی فہرست میں Prometheus کا ایک سوال سنیپ شاٹ بھی شامل ہے جس کے ساتھ ہی یہ ثابت ہوتا ہے کہ `StateTelemetry::record_nexus_config_diff` نے فرق جاری کیا ہے۔ |
+| `GAP-TELEM-003` | ایک `TelemetryEvent::AuditOutcome` (میٹرک `nexus.audit.outcome`) واقعہ ایک انتباہ کے ساتھ پیش آیا ** `NexusAuditOutcomeFailure` ** جب ناکامی یا گمشدہ نتائج 30 منٹ سے زیادہ (`dashboards/alerts/nexus_audit_rules.yml`) تک برقرار رہتے ہیں۔ | `@telemetry-ops` (پائپ لائن) `@sec-observability` میں اضافے کے ساتھ۔ | 02-27-2026 | سی آئی گیٹ وے `scripts/telemetry/check_nexus_audit_outcome.py` آرکائیوز پے لوڈ NDJSON اور ناکام ہوجاتا ہے جب ٹریس ونڈو میں کامیابی کا کوئی واقعہ نہیں ہوتا ہے۔ الرٹ سنیپ شاٹس روٹ ٹریس رپورٹ کے ساتھ منسلک ہیں۔ |
+| `GAP-TELEM-004` | گیج `nexus_lane_configured_total` بفر `nexus_lane_configured_total != EXPECTED_LANE_COUNT` کے ساتھ ڈیوٹی پر SRE کی چیک لسٹ کو کھانا کھلاتا ہے۔ | `@telemetry-ops` (گیج/برآمد) `@nexus-core` میں اضافے کے ساتھ جب نوڈس متضاد کیٹلاگ سائز کی اطلاع دیتے ہیں۔ | 02-28-2026 | شیڈولر ٹیلی میٹری ٹیسٹ `crates/iroha_core/tests/scheduler_telemetry.rs::records_lane_catalog_size` انسٹال ورژن ؛ آپریٹرز Prometheus DIFF + `StateTelemetry::set_nexus_catalogs` لاگ انپیٹ کو ٹریس ورزش پیکیج سے جوڑیں۔ |
 
-# سير العمل التشغيلي
+# آپریشنل ورک فلو1. ** ہفتہ وار ٹریج۔ ** مالکان تیاری پر پیشرفت کی اطلاع دیتے ہیں Nexus ؛ رکاوٹیں اور الارم ٹیسٹ کے اشارے `status.md` پر رجسٹرڈ ہیں۔
+2. ** الارم کے تجربات۔
+3. ** آڈٹ ثبوت۔
+4. ** اضافے۔
 
-1. **فرز اسبوعي.** يبلغ المالكون عن التقدم في مكالمة جاهزية Nexus؛ يتم تسجيل العوائق وادلة اختبار التنبيه في `status.md`.
-2. **تجارب التنبيه.** تشحن كل قاعدة تنبيه مع مدخل `dashboards/alerts/tests/*.test.yml` بحيث ينفذ CI الامر `promtool test rules` عند تغير الحاجز.
-3. **ادلة التدقيق.** خلال تمارين `TRACE-LANE-ROUTING` و `TRACE-TELEMETRY-BRIDGE` يلتقط المناوب نتائج استعلامات Prometheus وسجل التنبيهات ومخرجات السكربتات ذات الصلة (`scripts/telemetry/check_nexus_audit_outcome.py`, `scripts/telemetry/check_redaction_status.py` للاشارات المترابطة) ويخزنها مع اثباتات routed-trace.
-4. **تصعيد.** اذا تم اطلاق اي حاجز خارج نافذة تمرين، يفتح الفريق المالك تذكرة حادث Nexus تشير الى هذه الخطة، مع تضمين لقطة المترية وخطوات التخفيف قبل استئناف عمليات التدقيق.
-
-مع نشر هذه المصفوفة - والاشارة اليها من `roadmap.md` و `status.md` - يفي عنصر roadmap **B2** الان بمعايير القبول "المسؤولية، الموعد النهائي، التنبيه، التحقق".
+اس میٹرکس کے ساتھ شائع ہوا - اور `roadmap.md` اور Nexus کے ذریعہ حوالہ دیا گیا ہے - روڈ میپ عنصر ** B2 ** اب قبولیت کے معیار کو پورا کرتا ہے "ذمہ داری ، ڈیڈ لائن ، انتباہ ، توثیق"۔

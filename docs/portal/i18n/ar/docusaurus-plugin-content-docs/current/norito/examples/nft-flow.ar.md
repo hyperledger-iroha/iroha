@@ -4,24 +4,26 @@ direction: rtl
 source: docs/portal/docs/norito/examples/nft-flow.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-slug: /norito/examples/nft-flow
-title: سك ونقل وحرق NFT
-description: يسرد دورة حياة NFT من البداية إلى النهاية: السك للمالك، النقل، ووسم بيانات التعريف، والحرق.
-source: crates/ivm/docs/examples/12_nft_flow.ko
+سبيكة: /norito/examples/nft-flow
+العنوان: سك المتوقع وحرق NFT
+الوصف: يسرد دورة حياة NFT من البداية إلى النهاية: السك للمالك، النقل، ووسم بيانات التعريف، والحرق.
+المصدر: صناديق/ivm/docs/examples/12_nft_flow.ko
 ---
 
 يسرد دورة حياة NFT من البداية إلى النهاية: السك للمالك، النقل، ووسم بيانات التعريف، والحرق.
 
-## جولة دفتر الأستاذ
+## جولة أستاذ الأستاذ
 
-- تأكد من وجود تعريف NFT (مثل `n0#wonderland`) إلى جانب حسابات المالك/المستلم المستخدمة في المقتطف (`ih58...`, `ih58...`).
-- استدعِ نقطة الدخول `nft_issue_and_transfer` لسك NFT ونقله من Alice إلى Bob وإرفاق علامة بيانات تعريف تصف الإصدار.
-- افحص حالة دفتر NFT باستخدام `iroha_cli ledger nfts list --account <id>` أو مكافئات SDK للتحقق من النقل، ثم أكد إزالة الأصل بعد تنفيذ تعليمة الحرق.
+- تأكد من وجود تعريف NFT (مثل `n0#wonderland`) إلى جانب الحسابات التجارية/المستعملة المستلمة في المقتطف (`ih58...`, `ih58...`).
+- المؤكد نقطة الدخول `nft_issue_and_transfer` لسك NFT متوقعه من Alice إلى Bob ويرافق علامة تعريف بيانات تعريف تصف الإصدار.
+- فحص حالة الكمبيوتر NFT باستخدام `iroha_cli ledger nfts list --account <id>` أو مكافئات SDK مؤكدًا على التغيير، ثم شدد على إزالة الأصل بعد تنفيذ تعليمة الحرق.
 
-## أدلة SDK ذات صلة
+## دليل SDK ذات صلة
 
 - [البدء السريع لـ Rust SDK](/sdks/rust)
 - [البدء السريع لـ Python SDK](/sdks/python)

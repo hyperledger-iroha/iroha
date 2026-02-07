@@ -10,24 +10,25 @@ translation_last_reviewed: 2026-02-07
 title: JavaScript Connect preview recipe
 description: Stage Connect preview sessions, emit queue telemetry, and dial the `/v1/connect/ws` socket with `@iroha/iroha-js`.
 slug: /sdks/recipes/javascript-connect-preview
+translator: machine-google-reviewed
 ---
 
-import SampleDownload from '@site/src/components/SampleDownload';
+ներմուծել SampleDownload-ից '@site/src/components/SampleDownload';
 
-This recipe shows how to combine `bootstrapConnectPreviewSession` with the
-WebSocket dialer exposed by `ToriiClient.openConnectWebSocket()`. The script
-mirrors the Connect section of the JS SDK roadmap: it mints deterministic
-preview URIs, records queue depth telemetry, and opens the canonical
-`/v1/connect/ws` endpoint using the `ws` package so Node.js apps can exercise the
-same flow as browsers.
+Այս բաղադրատոմսը ցույց է տալիս, թե ինչպես համատեղել `bootstrapConnectPreviewSession`-ը
+WebSocket հավաքիչը ցուցադրվում է `ToriiClient.openConnectWebSocket()`-ի կողմից: Սցենարը
+արտացոլում է JS SDK ճանապարհային քարտեզի Connect բաժինը. այն դետերմինիստական է
+նախադիտեք URI-ները, գրանցում է հերթի խորության հեռաչափությունը և բացում կանոնականը
+`/v1/connect/ws` վերջնակետը՝ օգտագործելով `ws` փաթեթը, որպեսզի Node.js հավելվածները կարողանան իրականացնել
+նույն հոսքը, ինչ բրաուզերները:
 
-<SampleDownload
+<Նմուշի ներբեռնում
   href="/sdk-recipes/javascript/connect-preview.mjs"
-  filename="connect-preview.mjs"
-  description="Download the runnable script referenced in this recipe."
+  filename = "connect-preview.mjs"
+  description="Ներբեռնեք այս բաղադրատոմսում նշված runnable script-ը։"
 />
 
-## Prerequisites
+## Նախադրյալներ
 
 ```bash
 npm install @iroha/iroha-js ws
@@ -40,10 +41,10 @@ export IROHA_TORII_API_TOKEN="sandbox-token"
 export CONNECT_REGISTRATION_NODE="https://torii.backup.example"
 ```
 
-Set `CONNECT_ROLE` to `app` when you need to dial the application side of the
-handshake. The default role is `wallet`.
+Սահմանեք `CONNECT_ROLE`-ը `app`-ի, երբ անհրաժեշտ է հավաքել հավելվածի կողքին
+ձեռքսեղմում. Լռելյայն դերը `wallet` է:
 
-## Example script
+## Օրինակ սցենար
 
 ```ts title="connect-preview.mjs"
 #!/usr/bin/env node
@@ -138,21 +139,21 @@ main().catch((error) => {
 });
 ```
 
-## Run & monitor
+## Գործարկել և վերահսկել
 
-- Execute the script with `node --env-file=.env connect-preview.mjs` (or export
-  the variables manually). The script logs the preview wallet URI, deeplink, and
-  queue depth before opening the WebSocket.
-- Feed telemetry dashboards by scraping the queue metrics the script prints for
-  overflow/expiry cases (`connect.queue_depth`, `connect.queue_overflow_total`,
-  `connect.queue_expired_total`). The `ConnectQueueError` helpers emit the
-  roadmap taxonomy (`queueOverflow`, `timeout`) so OTEL exporters can stay
-  consistent with Android/Swift clients.
-- Swap the role to `app` to inspect the application leg of the handshake. The
-  dialer automatically chooses the correct token (`token_app` vs. `token_wallet`)
-  and upgrades `http→ws`/`https→wss` so both roles share the same snippet.
+- Կատարեք սցենարը `node --env-file=.env connect-preview.mjs`-ով (կամ արտահանում
+  փոփոխականները ձեռքով): Սցենարը գրանցում է նախադիտման դրամապանակի URI, deeplink և
+  Հերթի խորությունը WebSocket-ը բացելուց առաջ:
+- Սնուցեք հեռաչափության վահանակները՝ քերելով հերթի չափումները, որոնց համար տպագրվում է սցենարը
+  հորդառատ/ժամկետանց դեպքեր (`connect.queue_depth`, `connect.queue_overflow_total`,
+  `connect.queue_expired_total`): `ConnectQueueError` օգնականներն արտանետում են
+  ճանապարհային քարտեզի տաքսոնոմիա (`queueOverflow`, `timeout`), որպեսզի OTEL արտահանողները կարողանան մնալ
+  համահունչ Android/Swift հաճախորդների հետ:
+- Փոխեք դերը `app`-ի հետ՝ ստուգելու ձեռքսեղմման կիրառական ոտքը: Այն
+  Dialer ավտոմատ կերպով ընտրում է ճիշտ նշանը (`token_app` ընդդեմ `token_wallet`)
+  և թարմացնում է `http→ws`/`https→wss`, այնպես որ երկու դերերն էլ կիսում են նույն հատվածը:
 
-This recipe closes the remaining JS5 documentation gap for the Connect preview
-story called out in `roadmap.md`: the portal now ships a turnkey sample plus
-queue telemetry guidance, matching the roadmap requirement to document the
-WebSocket walkthrough alongside the Connect session helpers.
+Այս բաղադրատոմսը փակում է JS5 փաստաթղթերի մնացած բացը Connect նախադիտման համար
+պատմությունը նկարագրված է `roadmap.md`-ում. պորտալն այժմ ուղարկում է բանտապահ նմուշ գումարած
+Հերթի հեռաչափության ուղեցույց, որը համապատասխանում է ճանապարհային քարտեզի պահանջին փաստաթղթավորման համար
+WebSocket ուղեցույցը Connect նիստի օգնականների կողքին:

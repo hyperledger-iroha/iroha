@@ -4,65 +4,65 @@ direction: rtl
 source: docs/portal/docs/devportal/reviewer-onboarding.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Onboarding des relecteurs de preview
+# پیش نظارہ جائزہ لینے والوں کی بورڈنگ
 
-## Vue d'ensemble
+## جائزہ
 
-DOCS-SORA suit un lancement par etapes du portail developpeur. Les builds avec gate de checksum
-(`npm run serve`) et les flux Try it durcis debloquent le prochain jalon:
-onboarding de relecteurs verifies avant que la preview publique ne s'ouvre largement. Ce guide
-decrit comment collecter les demandes, verifier l'eligibilite, provisionner l'acces et offboarder
-les participants en securite. Reportez-vous au
-[preview invite flow](./preview-invite-flow.md) pour la planification des cohortes, la cadence
-d'invitation et les exports de telemetrie; les etapes ci-dessous se concentrent sur les actions
-a prendre une fois qu'un relecteur a ete selectionne.
+DOCS-SORA ڈویلپر پورٹل کی شروعات کی شروعات کرتا ہے۔ چیکسم گیٹ کے ساتھ تعمیر کرتا ہے
+.
+عوامی پیش نظارہ وسیع پیمانے پر کھلنے سے پہلے تصدیق شدہ جائزہ لینے والوں کی جہاز پر سوار ہونا۔ یہ گائیڈ
+درخواستوں کو اکٹھا کرنے ، اہلیت کی تصدیق ، فراہمی تک رسائی ، اور آف بورڈ کی وضاحت کرتا ہے
+شرکاء محفوظ۔ حوالہ دیں
+[پیش نظارہ انوائٹ فلو] (./preview-invite-flow.md) کوہورٹ پلاننگ ، کیڈینس کے لئے
+دعوت اور ٹیلی میٹری برآمدات ؛ اقدامات پر فوکس کرنے کے نیچے اقدامات
+ایک بار جائزہ لینے والے کو منتخب کرنے کے لئے لینے کے لئے۔
 
-- **Perimetre:** relecteurs qui ont besoin d'acces au preview docs (`docs-preview.sora`,
-  builds GitHub Pages ou bundles SoraFS) avant GA.
-- **Hors perimetre:** operateurs Torii ou SoraFS (couverts par leurs propres kits d'onboarding)
-  et deploiements de portail en production (voir
-  [`devportal/deploy-guide`](./deploy-guide.md)).
+- ** دائرہ کار: ** جائزہ لینے والے جنھیں پیش نظارہ دستاویزات (`docs-preview.sora` ، تک رسائی کی ضرورت ہے ،
+  GA سے پہلے گٹ ہب صفحات SoraFS) بناتے ہیں یا بنڈل بناتے ہیں۔
+۔
+  اور پیداوار میں پورٹل تعیناتی (دیکھیں
+  [`devportal/deploy-guide`] (./deploy-guide.md))۔
 
-## Roles et prerequis
+## کردار اور شرطیں
 
-| Role | Objectifs typiques | Artefacts requis | Notes |
+| کردار | عام اہداف | مطلوبہ نمونے | نوٹ |
 | --- | --- | --- | --- |
-| Core maintainer | Verifier les nouveaux guides, executer des smoke tests. | Handle GitHub, contact Matrix, CLA signee au dossier. | Souvent deja dans l'equipe GitHub `docs-preview`; deposer quand meme une demande pour que l'acces soit auditable. |
-| Partner reviewer | Valider des snippets SDK ou du contenu de gouvernance avant release publique. | Email corporate, POC legal, termes preview signes. | Doit reconnaitre les exigences de telemetrie + traitement des donnees. |
-| Community volunteer | Fournir du feedback d'utilisabilite sur les guides. | Handle GitHub, contact prefere, fuseau horaire, acceptation du CoC. | Garder les cohortes petites; prioriser les relecteurs ayant signe l'accord de contribution. |
+| کور برقرار رکھنے والا | نئے گائڈز چیک کریں ، دھواں کے ٹیسٹ چلائیں۔ | گٹ ہب ہینڈل ، میٹرکس سے رابطہ ، فائل پر سی ایل اے پر دستخط شدہ۔ | اکثر پہلے ہی گٹ ہب ٹیم `docs-preview` میں ؛ پھر بھی قابل آڈٹ ہونے تک رسائی کے لئے درخواست جمع کروائیں۔ |
+| پارٹنر جائزہ لینے والا | عوامی رہائی سے پہلے ایس ڈی کے کے ٹکڑوں یا گورننس کے مواد کی توثیق کریں۔ | کارپوریٹ ای میل ، پی او سی قانونی ، شرائط پیش نظارہ نشانیاں۔ | ٹیلی میٹری + ڈیٹا پروسیسنگ کی ضروریات کو تسلیم کرنا ضروری ہے۔ |
+| کمیونٹی رضاکار | گائڈز پر استعمال کے قابل تاثرات فراہم کریں۔ | گٹ ہب ہینڈل ، ترجیحی رابطہ ، ٹائم زون ، سی او سی قبولیت۔ | ہم آہنگی کو چھوٹا رکھیں ؛ جائزہ لینے والوں کو ترجیح دیں جنہوں نے شراکت کے معاہدے پر دستخط کیے ہیں۔ |
 
-Tous les types de reviewers doivent:
+جائزہ لینے والے تمام اقسام کو لازمی ہے:
 
-1. Reconnaitre la politique d'usage acceptable pour les artefacts de preview.
-2. Lire les annexes securite/observabilite
-   ([`security-hardening`](./security-hardening.md),
-   [`observability`](./observability.md),
-   [`incident-runbooks`](./incident-runbooks.md)).
-3. S'engager a executer `docs/portal/scripts/preview_verify.sh` avant de servir un
-   snapshot localement.
+1. پیش نظارہ نمونے کے لئے قابل قبول استعمال کی پالیسی کو تسلیم کریں۔
+2. سیکیورٹی/مشاہدہ کرنے والے ضمیموں کو پڑھیں
+   ([`security-hardening`] (./security-hardening.md) ،
+   [`observability`] (./observability.md) ،
+   [`incident-runbooks`] (./incident-runbooks.md))۔
+3. خدمت کرنے سے پہلے `docs/portal/scripts/preview_verify.sh` کو انجام دینے کا عہد
+   مقامی طور پر اسنیپ شاٹ۔
 
-## Workflow d'intake
+## انٹیک ورک فلو1. درخواست دہندہ کو مکمل کرنے کے لئے کہیں
+   [`docs/examples/docs_preview_request_template.md`] (../../../examples/docs_preview_request_template.md)
+   فارم (یا کسی مسئلے میں کاپی/پیسٹ کریں)۔ کم از کم گرفتاری: شناخت ، رابطے کے ذرائع ،
+   گٹ ہب ہینڈل ، منصوبہ بند جائزہ کی تاریخیں ، اور اس بات کی تصدیق کہ سیکیورٹی دستاویزات پڑھی گئی ہیں۔
+2. ٹریکر `docs-preview` میں درخواست کو محفوظ کریں (گٹ ہب ایشو یا گورننس ٹکٹ)
+   اور ایک منظوری تفویض کریں۔
+3. شرائط کو چیک کریں:
+   - فائل میں سی ایل اے / شراکت کا معاہدہ (یا پارٹنر معاہدہ کا حوالہ)۔
+   - درخواست میں محفوظ قابل استعمال استعمال کا اعتراف۔
+   - رسک تشخیص مکمل ہوا (مثال کے طور پر: جائزہ لینے والے شراکت دار قانونی کے ذریعہ منظور شدہ)۔
+4. منظوری درخواست پر دستخط کرتی ہے اور فالو اپ کے نتائج کو کسی بھی تبدیلی کے انتظام کے ان پٹ سے جوڑتی ہے
+   (مثال کے طور پر: `DOCS-SORA-Preview-####`)۔
 
-1. Demander au demandeur de remplir le
-   [`docs/examples/docs_preview_request_template.md`](../../../examples/docs_preview_request_template.md)
-   formulaire (ou le copier/coller dans une issue). Capturer au minimum: identite, moyen de contact,
-   handle GitHub, dates prevues de revue, et confirmation que les docs de securite ont ete lues.
-2. Enregistrer la demande dans le tracker `docs-preview` (issue GitHub ou ticket de gouvernance)
-   et assigner un approbateur.
-3. Verifier les prerequis:
-   - CLA / accord de contribution au dossier (ou reference de contrat partner).
-   - Accuse d'usage acceptable stocke dans la demande.
-   - Evaluation des risques terminee (exemple: reviewers partner approuves par Legal).
-4. L'approbateur signe la demande et lie l'issue de suivi a toute entree de change-management
-   (exemple: `DOCS-SORA-Preview-####`).
+## فراہمی اور ٹولنگ
 
-## Provisioning et outillage
-
-1. **Partager les artefacts** - Fournir le dernier descriptor + archive de preview depuis
-   le workflow CI ou le pin SoraFS (artefact `docs-portal-preview`). Rappeler aux reviewers
-   d'executer:
+1.
+   CI ورک فلو یا پن SoraFS (نمونہ `docs-portal-preview`)۔ جائزہ لینے والوں کو یاد دلائیں
+   پھانسی دینے کے لئے:
 
    ```bash
    ./docs/portal/scripts/preview_verify.sh \
@@ -71,59 +71,57 @@ Tous les types de reviewers doivent:
      --archive artifacts/preview-site.tar.gz
    ```
 
-2. **Servir avec enforcement de checksum** - Orienter les reviewers vers la commande gatee:
+2. ** چیکسم نفاذ کے ساتھ پیش کریں ** - گیٹڈ کمانڈ پر براہ راست جائزہ لینے والے:
 
    ```bash
    DOCS_RELEASE_TAG=preview-<stamp> npm run --prefix docs/portal serve
    ```
 
-   Cela reutilise `scripts/serve-verified-preview.mjs` pour qu'aucun build non verifie
-   ne soit lance par accident.
+   یہ `scripts/serve-verified-preview.mjs` کو دوبارہ استعمال کرتا ہے تاکہ کوئی غیر تصدیق شدہ تعمیر نہ ہو
+   حادثے سے لانچ نہیں کیا جاتا ہے۔
 
-3. **Donner l'acces GitHub (optionnel)** - Si les reviewers ont besoin de branches non publiees,
-   les ajouter a l'equipe GitHub `docs-preview` pour la duree de la revue et consigner le changement
-   de membership dans la demande.
+3. ** گٹ ہب تک رسائی (اختیاری) ** - اگر جائزہ لینے والوں کو غیر مطبوعہ شاخوں کی ضرورت ہو ،
+   جائزہ لینے کی مدت کے لئے انہیں گٹ ہب ٹیم `docs-preview` میں شامل کریں اور تبدیلی کو لاگ ان کریں
+   درخواست میں رکنیت کی۔
 
-4. **Communiquer les canaux de support** - Partager le contact on-call (Matrix/Slack) et la
-   procedure d'incident de [`incident-runbooks`](./incident-runbooks.md).
+4.
+   [`incident-runbooks`] (./incident-runbooks.md) کا واقعہ کا طریقہ کار۔
 
-5. **Telemetrie + feedback** - Rappeler aux reviewers que des analytics anonymisees sont collectees
-   (voir [`observability`](./observability.md)). Fournir le formulaire de feedback ou le template
-   d'issue mentionne dans l'invitation et journaliser l'evenement avec l'helper
-   [`preview-feedback-log`](./preview-feedback-log) pour que le resume de vague reste a jour.
+5. ** ٹیلی میٹری + فیڈ بیک ** - جائزہ لینے والوں کو یاد دلائیں کہ گمنام تجزیات جمع کیے جاتے ہیں
+   (ملاحظہ کریں [`observability`] (./observability.md))۔ آراء فارم یا ٹیمپلیٹ فراہم کریں
+   دعوت نامے میں ذکر کیا گیا ہے اور مددگار کے ساتھ ایونٹ کو لاگ ان کریں
+   [`preview-feedback-log`] (./preview-feedback-log) لہر کا خلاصہ تازہ رکھنے کے لئے۔
 
-## Checklist du reviewer
+## جائزہ لینے والے کی چیک لسٹ
 
-Avant d'acceder au preview, les reviewers doivent completer:
+پیش نظارہ تک رسائی حاصل کرنے سے پہلے ، جائزہ لینے والوں کو مکمل کرنا ہوگا:
 
-1. Verifier les artefacts telecharges (`preview_verify.sh`).
-2. Lancer le portail via `npm run serve` (ou `serve:verified`) pour s'assurer que le guard checksum est actif.
-3. Lire les notes securite et observabilite referencees ci-dessus.
-4. Tester la console OAuth/Try it via device-code login (si applicable) et eviter de reutiliser des tokens de production.
-5. Deposer les constats dans le tracker convenu (issue, doc partage ou formulaire) et les tagger
-   avec le tag de release preview.
+1. ڈاؤن لوڈ شدہ نمونے (`preview_verify.sh`) چیک کریں۔
+2. `npm run serve` (یا `serve:verified`) کے ذریعے پورٹل لانچ کریں تاکہ یہ یقینی بنایا جاسکے کہ گارڈ چیکسم فعال ہے۔
+3. اوپر حوالہ کردہ سیکیورٹی اور مشاہدہ کے نوٹ پڑھیں۔
+4. اووت کی جانچ کریں/ڈیوائس کوڈ لاگ ان (اگر قابل اطلاق ہوں) کے ذریعے کنسول کی کوشش کریں اور پروڈکشن ٹوکن کو دوبارہ استعمال کرنے سے گریز کریں۔
+5. متفقہ ٹریکر (ایشو ، شیئرنگ دستاویز یا فارم) میں نتائج کو پوسٹ کریں اور ان کو ٹیگ کریں
+   ریلیز پیش نظارہ ٹیگ کے ساتھ۔
 
-## Responsabilites des maintainers et offboarding
-
-| Phase | Actions |
+## دیکھ بھال کرنے والوں اور آف بورڈنگ کی ذمہ داریاں| مرحلہ | اعمال |
 | --- | --- |
-| Kickoff | Confirmer que la checklist d'intake est jointe a la demande, partager les artefacts + instructions, ajouter une entree `invite-sent` via [`preview-feedback-log`](./preview-feedback-log), et planifier un point mi-parcours si la revue dure plus d'une semaine. |
-| Monitoring | Surveiller la telemetrie preview (trafic Try it inhabituel, echec de probe) et suivre le runbook d'incident si quelque chose parait suspect. Journaliser les evenements `feedback-submitted`/`issue-opened` au fur et a mesure que les constats arrivent pour que les metriques de vague restent exactes. |
-| Offboarding | Revoquer l'acces temporaire GitHub ou SoraFS, consigner `access-revoked`, archiver la demande (inclure resume de feedback + actions en attente), et mettre a jour le registre des reviewers. Demander au reviewer de purger les builds locaux et joindre le digest genere a partir de [`docs/examples/docs_preview_feedback_digest.md`](../../../examples/docs_preview_feedback_digest.md). |
+| کک آف | اس بات کی تصدیق کریں کہ انٹیک چیک لسٹ درخواست کے ساتھ منسلک ہے ، نمونے + ہدایات کا اشتراک کریں ، [`preview-feedback-log`] (./preview-feedback-log) کے ذریعے اندراج `invite-sent` شامل کریں ، اور اگر جائزہ ایک ہفتہ سے زیادہ چلتا ہے تو درمیانی نقطہ شیڈول کریں۔ |
+| نگرانی | پیش نظارہ ٹیلی میٹری کی نگرانی کریں (غیر معمولی کوشش کریں ٹریفک ، تحقیقات کی ناکامی) اور اگر کچھ مشکوک معلوم ہوتا ہے تو واقعہ کی رن بک پر عمل کریں۔ لاگ ان `feedback-submitted`/`issue-opened` واقعات کے طور پر ویو میٹرکس کو درست رکھنے کے لئے نتائج پہنچے۔ |
+| آف بورڈنگ | عارضی گٹ ہب تک رسائی یا SoraFS ، لاگ `access-revoked` کو منسوخ کریں ، درخواست کو محفوظ کریں (فیڈ بیک سمری + زیر التوا کارروائیوں کو شامل کریں) ، اور جائزہ لینے والے رجسٹری کو اپ ڈیٹ کریں۔ جائزہ لینے والے سے کہیں کہ مقامی تعمیرات کو صاف کریں اور [`docs/examples/docs_preview_feedback_digest.md`] (../../../examples/docs_preview_feedback_digest.md) سے تیار کردہ ڈائجسٹ کو منسلک کریں۔ |
 
-Utilisez le meme processus lors de la rotation des reviewers entre vagues. Garder la trace dans le repo
-(issue + templates) aide DOCS-SORA a rester auditable et permet a la gouvernance de confirmer que l'acces
-preview a suivi les controles documentes.
+لہروں کے مابین جائزہ لینے والوں کو گھوماتے وقت اسی عمل کا استعمال کریں۔ ریپو میں ٹریک رکھیں
+۔
+پیش نظارہ دستاویزی کنٹرولوں کی پیروی کرتا ہے۔
 
-## Templates d'invitation et suivi
+## دعوت ٹیمپلیٹس اور ٹریکنگ
 
-- Commencer chaque outreach avec le
-  [`docs/examples/docs_preview_invite_template.md`](../../../examples/docs_preview_invite_template.md)
-  fichier. Il capture le minimum de langage legal, les instructions de checksum preview et l'attente
-  que les reviewers reconnaissent la politique d'usage acceptable.
-- Lors de l'edition du template, remplacer les placeholders pour `<preview_tag>`, `<request_ticket>`
-  et les canaux de contact. Stocker une copie du message final dans le ticket d'intake pour que reviewers,
-  approbateurs et auditeurs puissent referencer le texte exact envoye.
-- Apres l'envoi de l'invitation, mettre a jour le spreadsheet de suivi ou l'issue avec le timestamp
-  `invite_sent_at` et la date de fin attendue pour que le rapport
-  [preview invite flow](./preview-invite-flow.md) puisse capturer la cohorte automatiquement.
+- ہر آؤٹ ریچ کے ساتھ شروع کریں
+  [`docs/examples/docs_preview_invite_template.md`] (../../../examples/docs_preview_invite_template.md)
+  فائل یہ کم سے کم قانونی زبان ، چیکسم پیش نظارہ ہدایات اور انتظار کے منتظر ہے
+  کہ جائزہ لینے والے قابل قبول استعمال کی پالیسی کو تسلیم کرتے ہیں۔
+- ٹیمپلیٹ میں ترمیم کرتے وقت ، `<preview_tag>` ، `<request_ticket>` کے لئے پلیس ہولڈرز کو تبدیل کریں
+  اور چینلز سے رابطہ کریں۔ جائزہ لینے والوں کے لئے انٹیک ٹکٹ میں حتمی پیغام کی ایک کاپی اسٹور کریں ،
+  منظوری دینے والے اور سامعین بھیجے گئے عین مطابق متن کا حوالہ دے سکتے ہیں۔
+- دعوت بھیجنے کے بعد ، ٹریکنگ اسپریڈشیٹ یا اس مسئلے کو ٹائم اسٹیمپ کے ساتھ اپ ڈیٹ کریں
+  `invite_sent_at` اور رپورٹ کے لئے متوقع اختتامی تاریخ
+  ۔

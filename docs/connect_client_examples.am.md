@@ -7,20 +7,21 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 2ecdf23dc61024ae4c509806700773d9b34ddd36076c1182cbeccd3654b29144
 source_last_modified: "2026-01-05T18:22:23.392202+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-## Iroha Connect Client Examples (TypeScript and Kotlin)
+## Iroha አገናኝ የደንበኛ ምሳሌዎች (TypeScript እና Kotlin)
 
-This document shows minimal client-side snippets implementing v0 rules:
-- AEAD AAD binds outer header (version, sid, dir, seq, kind=Ciphertext).
-- Nonce derived from `seq` (12-byte IETF nonce: 0x00000000 || seq_le).
-- Post‑Approve control frames (Close/Reject) sent encrypted.
+ይህ ሰነድ v0 ደንቦችን በመተግበር ላይ ያሉ አነስተኛ የደንበኛ-ጎን ቅንጥቦችን ያሳያል፡
+- AEAD AAD የውጨኛውን ራስጌ (ስሪት፣ ሲድ፣ ዲር፣ ሴክ፣ ዓይነት=የምስጥር ጽሑፍ) ያስራል
+- ምንም ከ `seq` (12-ባይት IETF ምንም: 0x00000000 || seq_le) የተወሰደ.
+- የድህረ-አጽድቅ መቆጣጠሪያ ፍሬሞች (ዝጋ/ ውድቅ) የተላኩ የተመሰጠሩ ናቸው።
 
-These are illustrative; hardening/production checks omitted.
+እነዚህ ምሳሌያዊ ናቸው; የማጠናከሪያ/የምርት ቼኮች ቀርተዋል።
 
-### TypeScript (libsodium + WebCrypto)
+### ዓይነት ስክሪፕት (ሊብሶዲየም + ድር ክሪፕቶ)
 
-Dependencies: `libsodium-wrappers` (X25519, BLAKE2b, ChaCha20‑Poly1305), WebCrypto (HKDF‑SHA‑256).
+ጥገኛዎች፡ I18NI0000005X (X25519፣ BLAKE2b፣ ChaCha20-Poly1305)፣ WebCrypto (HKDF‑SHA‑256)።
 
 ```ts
 import sodium from 'libsodium-wrappers';
@@ -99,9 +100,9 @@ async function openEnvelope(k: Uint8Array, sid: Uint8Array, dir: 'A2W'|'W2A', se
 })();
 ```
 
-### Kotlin (JDK 11 + BouncyCastle)
+### ኮትሊን (JDK 11 + BouncyCastle)
 
-Dependencies:
+ጥገኛዎች፡-
 
 ```kotlin
 dependencies { implementation("org.bouncycastle:bcprov-jdk15on:1.78.1") }
@@ -199,7 +200,7 @@ fun main() {
 }
 ```
 
-Notes:
-- Client computes `sid` (32 bytes; base64url/hex) and POSTs it to `/v1/connect/session` to obtain one‑time tokens; server echoes `sid`. Join WS with `Authorization: Bearer <token>` or `Sec-WebSocket-Protocol: iroha-connect.token.v1.<base64url(token)>`.
-- After keys exist (Approve), send Close/Reject in encrypted payloads.
-- Dedupe keys and `seq` must be monotonic per direction for app/wallet frames; `Envelope.seq == frame.seq`. Server events use a separate server-side sequence and are excluded from AEAD/dedupe.
+ማስታወሻዎች፡-
+- ደንበኛ `sid` (32 ባይት፤ base64url/hex) ያሰላል እና የአንድ ጊዜ ቶከን ለማግኘት ወደ `/v1/connect/session` ይለጠፋል። አገልጋይ `sid` ያስተጋባል. WSን በI18NI0000009X ወይም I18NI0000010X ይቀላቀሉ።
+- ቁልፎች ካሉ በኋላ (አጽድቁ) ፣ በተመሰጠሩ የጭነት ጭነቶች ውስጥ ዝጋ / ውድቅ ላክ።
+- የመቀየሪያ ቁልፎች እና I18NI0000011X ለመተግበሪያ/የኪስ ቦርሳ ክፈፎች በአንድ አቅጣጫ ነጠላ መሆን አለባቸው። `Envelope.seq == frame.seq`. የአገልጋይ ክስተቶች የተለየ የአገልጋይ-ጎን ቅደም ተከተል ይጠቀማሉ እና ከ AEAD/የተቀነሱ ናቸው።

@@ -8,85 +8,85 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: Preview feedback logging
 sidebar_label: Feedback logging
 description: How DOCS-SORA records invite waves, telemetry events, and feedback digests for the docs portal preview.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-import previewFeedbackSummary from '@site/src/data/previewFeedbackSummary.json';
-
-function FeedbackSummaryTable() {
-  const waves = previewFeedbackSummary?.waves ?? [];
-  if (waves.length === 0) {
-    return (
+ներմուծել նախադիտման FeedbackSummary «@site/src/data/previewFeedbackSummary.json»-ից;ֆունկցիա FeedbackSummaryTable() {
+  const waves = նախադիտում Հետադարձ կապ Ամփոփում?.ալիքներ ?? [];
+  եթե (ալիքներ.երկարություն === 0) {
+    վերադարձ (
       <p>
-        No preview feedback entries have been recorded in
+        Նախադիտման հետադարձ կապի գրառումներ չեն գրանցվել
         {' '}
-        <code>{previewFeedbackSummary?.source ?? 'artifacts/docs_portal_preview/feedback_log.json'}</code>
+        <code>{previewFeedbackSummary?.աղբյուր ?? 'artifacts/docs_portal_preview/feedback_log.json'}</code>
         .
       </p>
     );
   }
-  return (
-    <table>
-      <thead>
+  վերադարձ (
+    <աղյուսակ>
+      <գլուխ>
         <tr>
-          <th>Wave</th>
-          <th>Status</th>
-          <th>Total events</th>
-          <th>Invites</th>
-          <th>Open invites</th>
-          <th>Acknowledged</th>
-          <th>Revoked</th>
-          <th>Feedback</th>
-          <th>Issues</th>
-          <th>Completion %</th>
-          <th>Ack %</th>
-          <th>Response rate</th>
-          <th>Ack latency (avg h)</th>
-          <th>Feedback latency (avg h)</th>
-          <th>Last event</th>
-          <th>Days since last event</th>
+          <th>Ալիք</th>
+          <th>Կարգավիճակ</th>
+          <th>Ընդամենը իրադարձություններ</th>
+          <th>Հրավիրումներ</th>
+          <th>Բաց հրավերներ</th>
+          <th>Հաստատված է</th>
+          <th>Չեղարկված է</th>
+          <th>Հետադարձ կապ</th>
+          <th>Խնդիրներ</th>
+          <th>Ավարտման %</th>
+          <th>Ընդունել %</th>
+          <th>Արձագանքման տոկոսադրույքը</th>
+          <th>Ընդունել ուշացում (միջին ժ)</th>
+          <th>Հետադարձ կապի ուշացում (միջին ժ)</th>
+          <th>Վերջին իրադարձություն</th>
+          <th>Վերջին իրադարձությունից օրեր</th>
         </tr>
       </thead>
       <tbody>
-        {waves.map((wave) => {
-          const feedback = wave.feedbackCount ?? wave.eventCounts?.['feedback-submitted'] ?? 0;
-          const issues = wave.issuesCount ?? wave.eventCounts?.['issue-opened'] ?? 0;
-          const acknowledgements =
-            wave.acknowledgements ?? wave.eventCounts?.acknowledged ?? 0;
+        {waves.map((ալիք) => {
+          const հետադարձ = wave.feedbackCount ?? wave.event Counts?.['feedback-submitted'] ?? 0;
+          const issue = wave.issuesCount ?? wave.event Counts?.['issue-opened'] ?? 0;
+          const acknowledgments =
+            wave.acknowledgements ?? wave.event Counts?.ccowleded ?? 0;
           const revocations =
-            wave.revocations ?? wave.eventCounts?.['access-revoked'] ?? 0;
+            wave.revocations ?? wave.event Counts?.['access-revoked'] ?? 0;
           const responseRate =
-            wave.responseRatePercent == null ? '—' : `${wave.responseRatePercent}%`;
+            wave.responseRatePercent == null: '—': `${wave.responseRatePercent}%`;
           const completionPercent =
             wave.inviteCompletionPercent == null
               ? '—'
-              : `${wave.inviteCompletionPercent}%`;
-          const ackPercent =
-            wave.ackRatePercent == null ? '—' : `${wave.ackRatePercent}%`;
+              `${wave.inviteCompletionPercent}%`;
+          const acPercent =
+            wave.ackRatePercent == զրոյական: '—': `${wave.ackRatePercent}%`;
           const ackLatency =
-            wave.ackLatencyHoursAvg == null ? '—' : wave.ackLatencyHoursAvg;
+            wave.ackLatencyHoursAvg == null: '—': wave.ackLatencyHoursAvg;
           const feedbackLatency =
-            wave.feedbackLatencyHoursAvg == null ? '—' : wave.feedbackLatencyHoursAvg;
-          return (
+            wave.feedbackLatencyHoursAvg == null: '—': wave.feedbackLatencyHoursAvg;
+          վերադարձ (
             <tr key={wave.wave}>
               <td>{wave.wave}</td>
-              <td>{wave.status ?? 'pending'}</td>
+              <td>{wave.status ?? 'սպասում է'}</td>
               <td>{wave.totalEvents}</td>
               <td>{wave.invites?.total ?? 0}</td>
               <td>{wave.invites?.open ?? 0}</td>
-              <td>{acknowledgements}</td>
-              <td>{revocations}</td>
-              <td>{feedback}</td>
-              <td>{issues}</td>
+              <td>{շնորհավորում</td>
+              <td>{չեղարկումներ}</td>
+              <td>{հետադարձ կապ}</td>
+              <td>{հարցեր</td>
               <td>{completionPercent}</td>
               <td>{ackPercent}</td>
               <td>{responseRate}</td>
-              <td title={wave.ackLatencyHoursP95 == null ? undefined : `p95 ${wave.ackLatencyHoursP95}h`}>
+              <td title={wave.ackLatencyHoursP95 == null: չսահմանված՝ `p95 ${wave.ackLatencyHoursP95}h`}>
                 {ackLatency}
               </td>
               <td
-                title={
+                վերնագիր={
                   wave.feedbackLatencyHoursP95 == null
-                    ? undefined
+                    ? չսահմանված
                     : `p95 ${wave.feedbackLatencyHoursP95}h`
                 }
               >
@@ -95,82 +95,79 @@ function FeedbackSummaryTable() {
               <td>{wave.lastEventTimestamp ?? '—'}</td>
               <td>{wave.daysSinceLastEvent ?? '—'}</td>
             </tr>
-          );
-        })}
+          );})}
       </tbody>
     </table>
   );
 }
 
-The roadmap calls for verifiable evidence whenever we invite reviewers into the
-docs portal preview. This note explains how to capture that evidence with the
-`preview-feedback-log` helper, how to share the resulting artefacts with
-governance, and where to file digests once a wave closes.
+Ճանապարհային քարտեզը պահանջում է ստուգելի ապացույցներ, երբ մենք հրավիրում ենք վերանայողներին
+փաստաթղթերի պորտալի նախադիտում: Այս նշումը բացատրում է, թե ինչպես կարելի է գրավել այդ ապացույցը
+`preview-feedback-log` օգնական, ինչպես կիսվել ստացված արտեֆակտներով
+կառավարում, և որտեղ պետք է ներկայացնել ամփոփագրեր, երբ ալիքը փակվի:
 
-## Why we log feedback
+## Ինչու ենք գրանցում արձագանքները
 
-- **Compliance:** every invite must record who accessed the preview, when they
-  acknowledged the acceptable-use policy, and when their access was revoked.
-- **Telemetry correlation:** the log lets us correlate portal telemetry spikes
-  or Try it traffic with specific invite cohorts.
-- **Governance evidence:** each DOCS-SORA checkpoint needs a machine-readable
-  summary showing invite counts, open reviewers, and the state of outstanding
-  issues.
+- **Համապատասխանություն.** յուրաքանչյուր հրավեր պետք է արձանագրի, թե ով է մուտք գործել նախադիտում, երբ նրանք
+  ճանաչեցին ընդունելի օգտագործման քաղաքականությունը, և երբ նրանց մուտքը չեղարկվեց:
+- **Հեռաչափության հարաբերակցություն.** գրանցամատյանը թույլ է տալիս մեզ փոխկապակցել պորտալի հեռաչափության հասկերը
+  կամ Փորձեք այն երթեւեկությունը հատուկ հրավիրյալ խմբերի հետ:
+- **Կառավարման ապացույց.** յուրաքանչյուր DOCS-SORA անցակետի կարիք ունի մեքենայաընթեռնելի
+  ամփոփագիրը, որը ցույց է տալիս հրավիրյալների թիվը, բաց գրախոսները և չմարվածների վիճակը
+  հարցեր.
 
-All evidence lives under `artifacts/docs_portal_preview/` so it can be attached
-to the invite wave ticket or governance review without scraping CI logs.
+Բոլոր ապացույցները գործում են `artifacts/docs_portal_preview/`-ի ներքո, ուստի այն կարող է կցվել
+հրավիրելու ալիքի տոմսի կամ կառավարման վերանայման՝ առանց CI տեղեկամատյանները քերելու:
 
-## Live invite summary
+## Ուղիղ հրավերի ամփոփում
 
-`docs/portal/scripts/preview-feedback-summary.mjs` ingests the shared log and
-writes `src/data/previewFeedbackSummary.json` during `npm run build`. The table
-below renders that JSON so reviewers can see the current invite footprint
-without running the CLI helper.
+`docs/portal/scripts/preview-feedback-summary.mjs`-ը կլանում է ընդհանուր մատյանը և
+գրում է `src/data/previewFeedbackSummary.json` `npm run build`-ի ժամանակ։ Սեղան
+ստորև բերված է JSON-ը, որպեսզի գրախոսները կարողանան տեսնել ընթացիկ հրավերի հետքը
+առանց CLI օգնականի գործարկման:
 
 <FeedbackSummaryTable />
 
-In addition to the invite totals, the summary now surfaces acknowledgement and
-revocation counts, the derived response rate (feedback submissions divided by
-total invites), and the average latency (with a hoverable p95) between an
-invite and the reviewer’s acknowledgement or feedback submission. The new
-**Completion %** column shows how many invites have been closed (acknowledged or
-revoked), while **Ack %** highlights how many recipients explicitly confirmed
-the acceptable-use steps. These derived percentages—plus the JSON-only
-revocation/issue rates—feed the governance dashboards so reviewers can confirm
-both participation levels and turnaround time without running the CLI helper.
-The **Status** column highlights whether a wave is still
-active (`active`), closed but within the 14-day monitoring window (`closed`), or
-ready for archival (`archived`). The **Days since last event** metric shows how
-long it has been since the final invite/feedback action so councils can spot
-waves that need to be wrapped up or re-engage lingering recipients.
+Ի հավելումն հրավերների ընդհանուր գումարների, այժմ ամփոփագիրը հայտնվում է հաստատման և
+չեղյալ համարվող հաշվարկները, ստացված պատասխանների մակարդակը (հետադարձ կապի ներկայացումները բաժանված են
+ընդհանուր հրավերներ) և միջին ուշացումը (հովերելի p95-ով) an-ի միջև
+հրավիրել և գրախոսի հաստատում կամ արձագանքի ներկայացում: Նորը
+**Ավարտման %** սյունակը ցույց է տալիս, թե քանի հրավեր է փակվել (հաստատվել է կամ
+չեղյալ է հայտարարված), մինչդեռ **Ack %** ընդգծում է, թե քանի հասցեատեր է բացահայտորեն հաստատված
+ընդունելի օգտագործման քայլերը: Այս ստացված տոկոսները՝ գումարած միայն JSON-ը
+չեղյալ համարելու/թողարկման դրույքաչափերը՝ սնուցեք կառավարման վահանակները, որպեսզի վերանայողները կարողանան հաստատել
+ինչպես մասնակցության մակարդակները, այնպես էլ շրջադարձային ժամանակը առանց CLI օգնականի գործարկման:
+**Կարգավիճակ** սյունակը ընդգծում է, թե արդյոք ալիքը անշարժ է
+ակտիվ (`active`), փակ, բայց 14-օրյա մոնիտորինգի պատուհանում (`closed`), կամ
+պատրաստ է արխիվային (`archived`): **Վերջին իրադարձությունից հետո անցած օրերը** չափիչը ցույց է տալիս, թե ինչպես
+Վերջնական հրավերի/հետադարձ կապի գործողությունից շատ է անցել, որպեսզի ավագանիները կարողանան նկատել
+ալիքներ, որոնք պետք է փաթաթվեն կամ նորից ներգրավվեն երկարատև ստացողներին:
 
-### Wave `preview-20260218` recap
+### Wave `preview-20260218` ամփոփում- **Ծավալը.** Ֆինանսական բետա, դիտարկելիության օպերացիաներ, SDK գործընկեր և էկոհամակարգի փաստաբանների վերանայողներ հրավիրվել են **2026-02-18** հաջորդ DOCS-SORA անցակետից առաջ:
+- **Չափանիշներ.** 4 հրավեր, 4 երախտագիտություն, 4 չեղյալ հայտարարում և 4 հետադարձ ներկայացում (`responseRatePercent = 100`) մեկ հաջորդական հարցով (`DOCS-SORA-Preview-20260218`), որը ներկայացվել է դիտարկելիության խմբի կողմից:
+- **Ապացույց.** `artifacts/docs_portal_preview/feedback_log.json`-ն այժմ ներառում է այս ալիքի իրադարձությունների մանրամասն ժամանակացույցը, և `artifacts/docs_portal_preview/preview-20260218-summary.json`-ն արտացոլում է նորմալացված չափումները, որոնք մենք կցում ենք կառավարման փաթեթներին: `npm run --prefix docs/portal preview:log -- --summary --summary-json`-ի միջոցով պորտալի տվյալների վերականգնումը նույն թվերը քաշում է դեպի `src/data/previewFeedbackSummary.json`:
+- **Ալիքի օգնական.** `npm run --prefix docs/portal preview:wave -- --wave preview-20260218 --invite-start 2026-02-18 --invite-end 2026-02-28 --report-date 2026-03-01 --notes "Finance/observability beta wave"`-ը մեկ քայլով թողարկում է յուրաքանչյուր ալիքի ամփոփումը, մարսումը և թարմացված պորտալի տվյալները:
+- **Հետևողություններ.** Դիտորդական հետադարձ կապը ներառել է լրացուցիչ CSP օրինակներ «Փորձիր այն» հարցումների համար; Docs/DevRel-ը հետևում է `docs/portal/docs/sorafs/observability-plan.md`-ի (§4.2) գրառմանը, որպեսզի հաջորդ հրավերի ալիքը կարողանա վավերացնել ուղղումը: Ամբողջական ամփոփումն ապրում է [`preview-feedback/w3/summary.md`]-ում (./preview-feedback/w3/summary.md), իսկ ժամանակագրությունը՝ [`preview-feedback/w3/log.md`] (./preview-feedback/w3/log.md)-ում:
 
-- **Scope:** Finance beta, observability ops, SDK partner, and ecosystem advocate reviewers invited on **2026‑02‑18** ahead of the next DOCS-SORA checkpoint.
-- **Metrics:** 4 invites, 4 acknowledgements, 4 revocations, and 4 feedback submissions (`responseRatePercent = 100`) with a single follow-up issue (`DOCS-SORA-Preview-20260218`) filed by the observability cohort.
-- **Evidence:** `artifacts/docs_portal_preview/feedback_log.json` now includes the detailed event timeline for this wave and `artifacts/docs_portal_preview/preview-20260218-summary.json` captures the normalized metrics we attach to governance packets. Regenerating the portal data via `npm run --prefix docs/portal preview:log -- --summary --summary-json` pulls the same numbers into `src/data/previewFeedbackSummary.json`.
-- **Wave helper:** `npm run --prefix docs/portal preview:wave -- --wave preview-20260218 --invite-start 2026-02-18 --invite-end 2026-02-28 --report-date 2026-03-01 --notes "Finance/observability beta wave"` emits the per-wave summary, digest, and refreshed portal data in one step.
-- **Follow-ups:** Observability feedback scoped additional CSP examples for Try it requests; Docs/DevRel are tracking the write-up under `docs/portal/docs/sorafs/observability-plan.md` (§4.2) so the next invite wave can validate the fix. The full recap lives in [`preview-feedback/w3/summary.md`](./preview-feedback/w3/summary.md) with the timeline captured in [`preview-feedback/w3/log.md`](./preview-feedback/w3/log.md).
+## Իրադարձությունների տաքսոնոմիա
 
-## Event taxonomy
-
-| Event | When to record it | Notes |
+| Միջոցառում | Երբ գրանցել այն | Ծանոթագրություններ |
 | --- | --- | --- |
-| `invite-sent` | Immediately after sending an invite email. | Append one entry per recipient so invite counts stay accurate. |
-| `acknowledged` | When the reviewer confirms they read the security/observability docs and ran the checksum gate. | Optional but recommended for partner cohorts. |
-| `feedback-submitted` | When a reviewer files a finding via the agreed tracker. | Include the issue/link in the `--notes` field. |
-| `issue-opened` | When DOCS-SORA files a follow-up issue derived from feedback. | Helps governance correlate roadmap items to preview feedback. |
-| `access-revoked` | Once the reviewer’s preview window ends or access is revoked early. | Required so the “open recipients” count stays accurate. |
+| `invite-sent` | Հրավեր ուղարկելուց անմիջապես հետո: | Յուրաքանչյուր ստացողի համար ավելացրեք մեկ գրառում, որպեսզի հրավերների հաշվարկը մնա ճշգրիտ: |
+| `acknowledged` | Երբ վերանայողը հաստատում է, որ նրանք կարդացել են անվտանգության/դիտարկման փաստաթղթերը և գործարկել ստուգիչ գումարի դարպասը: | Ընտրովի, բայց խորհուրդ է տրվում գործընկեր խմբերի համար: |
+| `feedback-submitted` | Երբ գրախոսը եզրակացություն է ներկայացնում համաձայնեցված հետագծով: | Ներառեք խնդիրը/հղումը `--notes` դաշտում: |
+| `issue-opened` | Երբ DOCS-SORA-ը ներկայացնում է հետադարձ կապից բխող հետագա խնդիր: | Օգնում է կառավարմանը փոխկապակցել ճանապարհային քարտեզի տարրերը՝ հետադարձ կապի նախադիտման համար: |
+| `access-revoked` | Երբ վերանայողի նախադիտման պատուհանն ավարտվի կամ մուտքը վաղաժամկետ չեղարկվի: | Պահանջվում է, որպեսզի «բաց ստացողների» հաշվարկը մնա ճշգրիտ: |
 
-If you need an additional event, add it to
-`VALID_EVENTS` inside `docs/portal/scripts/preview-feedback-log.mjs` and update
-this table in the same change.
+Եթե Ձեզ անհրաժեշտ է լրացուցիչ իրադարձություն, ավելացրեք այն
+`VALID_EVENTS` `docs/portal/scripts/preview-feedback-log.mjs` ներսում և թարմացնել
+այս աղյուսակը նույն փոփոխությամբ:
 
-## Logging workflow
+## Գրանցման աշխատանքային հոսք
 
-The helper behind `npm run preview:log` writes a single JSON log that captures
-all events. Each entry contains the wave label, recipient, event, timestamp, and
-optional notes. Example:
+`npm run preview:log`-ի ետևում գտնվող օգնականը գրում է մեկ JSON մատյան, որը գրավում է
+բոլոր իրադարձությունները. Յուրաքանչյուր գրառում պարունակում է ալիքի պիտակ, ստացող, իրադարձություն, ժամանակի դրոշմակնիք և
+ընտրովի նշումներ: Օրինակ՝
 
 ```json
 {
@@ -195,7 +192,7 @@ optional notes. Example:
 }
 ```
 
-Commands:
+Հրամաններ.
 
 ```bash
 # Append a new event (defaults to artifacts/docs_portal_preview/feedback_log.json)
@@ -227,49 +224,47 @@ npm run --prefix docs/portal preview:digest -- \
 
 Tips:
 
-- Place the log under version control when working in a feature branch so other
-  maintainers can review changes. For long-running waves store the log in the
-  governance ticket and attach the final version to the release artefacts.
-- `preview:log` accepts `--log <path>` when you need to log directly inside a
-  SoraFS bundle or CI workspace.
-- Always include a `--notes` hint (issue link, GitHub handle, cohort ID) so the
-  summary is useful during the retrospective.
-- When you need deterministic summary timestamps (for CI or docs snapshots),
-  set `PREVIEW_FEEDBACK_NOW=<iso8601 timestamp>` before running the summary
-  helper. This keeps the `generatedAt`, status, and day counters consistent
-  across rebuilds.
+- Տեղադրեք տեղեկամատյանը տարբերակի հսկողության տակ, երբ աշխատում եք գործառույթների ճյուղում, որպեսզի այլ կերպ
+  սպասարկողները կարող են վերանայել փոփոխությունները: Երկարատև ալիքների համար գերանը պահեք
+  կառավարման տոմս և վերջնական տարբերակը կցեք թողարկման արտեֆակտներին:
+- `preview:log` ընդունում է `--log <path>`, երբ դուք պետք է մուտք գործեք անմիջապես ներսում
+  SoraFS փաթեթ կամ CI աշխատանքային տարածք:
+- Միշտ ներառեք `--notes` հուշում (խնդրի հղում, GitHub բռնակ, կոհորտային ID), որպեսզի
+  ամփոփումն օգտակար է հետահայաց ընթացքում:
+- Երբ ձեզ անհրաժեշտ են դետերմինիստական ամփոփ ժամանակային դրոշմներ (CI կամ փաստաթղթերի ակնթարթային նկարների համար),
+  սահմանել `PREVIEW_FEEDBACK_NOW=<iso8601 timestamp>` նախքան ամփոփումը գործարկելը
+  օգնական. Սա պահպանում է `generatedAt`-ի, կարգավիճակի և օրվա հաշվիչները հետևողական
+  վերակառուցումների ընթացքում:
 
-## Summaries, digests, and archives
-
-1. **Per-wave summary:** generate the JSON summary and attach it to the invite
-   ticket together with the raw log. The summary enumerates total invites, open
-   recipients, and feedback counts so governance can confirm we captured every
-   reviewer. The portal build also publishes an aggregate summary at
-   `src/data/previewFeedbackSummary.json` so stakeholders can see the current
-   snapshot without running the CLI.
-2. **Weekly digest:** run `npm run --prefix docs/portal preview:digest -- --wave <label>`
-   to pre-populate the Markdown metrics, then tailor the placeholder sections
-   using the template in
+## Ամփոփումներ, ամփոփումներ և արխիվներ1. **Ալիքի ամփոփում.** ստեղծեք JSON ամփոփագիրը և կցեք այն հրավերին
+   տոմսը չմշակված գերանի հետ միասին: Ամփոփագիրը թվարկում է ընդհանուր հրավերներ, բաց
+   հասցեատերերը և հետադարձ կապը հաշվում են, որպեսզի կառավարումը կարողանա հաստատել, որ մենք ֆիքսել ենք բոլորը
+   գրախոս. Պորտալի կառուցումը նաև հրապարակում է համախառն ամփոփագիր՝ հասցեով
+   `src/data/previewFeedbackSummary.json`, որպեսզի շահագրգիռ կողմերը կարողանան տեսնել ընթացիկը
+   լուսանկար առանց CLI-ն գործարկելու:
+2. **Շաբաթական ամփոփում.** գործարկել `npm run --prefix docs/portal preview:digest -- --wave <label>`
+   նախապես լրացնել Markdown-ի չափումները, այնուհետև հարմարեցնել տեղապահի բաժինները
+   օգտագործելով ձևանմուշը
    [`docs/examples/docs_preview_feedback_digest.md`](../../../examples/docs_preview_feedback_digest.md)
-   before sharing it with stakeholders. Include at least: wave label, open
-   reviewers, notable findings, and next actions.
-3. **Archival:** move closed-wave logs into
-   `artifacts/docs_portal_preview/archive/<wave>/` and keep only the most recent
-   active wave at the root. This keeps CI artefacts small while preserving the
-   audit trail.
+   նախքան այն շահագրգիռ կողմերի հետ կիսելը: Ներառեք առնվազն՝ ալիքի պիտակ, բաց
+   վերանայողներ, նշանավոր բացահայտումներ և հաջորդ գործողություններ:
+3. **Արխիվ.** տեղափոխեք փակ ալիքների տեղեկամատյանները
+   `artifacts/docs_portal_preview/archive/<wave>/` և պահել միայն ամենավերջինը
+   ակտիվ ալիք արմատից: Սա փոքր է պահում CI արտեֆակտները՝ պահպանելով դրանք
+   աուդիտի հետք.
 
-## Linking to the roadmap
+## Կապակցում ճանապարհային քարտեզին
 
-- Reference this document from invite and onboarding playbooks whenever you ask
-  reviewers to file feedback (see
+- Հղում կատարեք այս փաստաթղթին հրավիրելու և մուտքագրելու գրքույկներից, երբ խնդրեք
+  վերանայողները հետադարձ կապ ուղարկելու համար (տես
   [`preview-invite-flow`](./preview-invite-flow.md),
-  [`reviewer-onboarding`](./reviewer-onboarding.md), and
-  [`public-preview-invite`](./public-preview-invite.md)).
-- Mention the generated summary in `status.md` when closing a wave so DOCS-SORA
-  roadmap items (e.g., DOCS-1b/2b/3c) can cite the artefact.
-- Store hash digests alongside the summary when uploading to SoraFS so external
-  reviewers can verify the evidence bundle.
+  [`reviewer-onboarding`](./reviewer-onboarding.md) և
+  [`public-preview-invite`](./public-preview-invite.md)):
+- Նշեք ստեղծված ամփոփագիրը `status.md`-ում ալիքը փակելիս DOCS-SORA
+  ճանապարհային քարտեզի տարրերը (օրինակ՝ DOCS-1b/2b/3c) կարող են մեջբերել արտեֆակտը:
+- SoraFS-ում վերբեռնելիս պահեք հեշի բովանդակությունը ամփոփագրի կողքին
+  վերանայողները կարող են ստուգել ապացույցների փաթեթը:
 
-Keeping the logging workflow codified here unblocks the roadmap requirement to
-“capture feedback/telemetry for governance” and reduces the time spent
-reconstructing invite history at every milestone.
+Այստեղ գրանցման աշխատանքային հոսքը կոդավորված պահելը ապաշրջափակում է դեպի ճանապարհային քարտեզի պահանջը
+«գրել հետադարձ կապ/հեռաչափություն կառավարման համար» և կրճատում է ծախսվող ժամանակը
+վերակառուցելով հրավիրելու պատմությունը յուրաքանչյուր հանգրվանում:

@@ -4,68 +4,70 @@ direction: ltr
 source: docs/portal/docs/devportal/preview-feedback/w1/plan.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: preview-feedback-w1-plan
-title: Plan de preflight partenaires W1
-sidebar_label: Plan W1
-description: Taches, responsables et checklist de preuve pour la cohorte de preview partenaires.
+id: プレビュー-フィードバック-w1-plan
+タイトル: 飛行前パートナー計画 W1
+サイドバーラベル: プラン W1
+説明: タスク、責任者、およびプレビュー パートナーの協力のためのチェックリスト。
 ---
 
-| Element | Details |
+|要素 |詳細 |
 | --- | --- |
-| Vague | W1 - Partenaires et integrateurs Torii |
-| Fenetre cible | Q2 2025 semaine 3 |
-| Tag d'artefact (planifie) | `preview-2025-04-12` |
-| Issue tracker | `DOCS-SORA-Preview-W1` |
+|あいまい | W1 - パートナーと統合者 Torii |
+|フェネトレ・シブル | 2025 年第 2 四半期セメイン 3 |
+|タグダルティファクト (planifie) | `preview-2025-04-12` |
+|問題追跡ツール | `DOCS-SORA-Preview-W1` |
 
-## Objectifs
+## 目的
 
-1. Obtenir les approbations legales et governance pour les termes de preview partenaires.
-2. Preparer le proxy Try it et les snapshots de telemetrie utilises dans le bundle d'invitation.
-3. Rafraichir l'artefact de preview verifie par checksum et les resultats de probes.
-4. Finaliser le roster des partenaires et les templates de demande avant l'envoi des invitations.
+1. 法的承認およびガバナンスに関するプレビュー契約を取得します。
+2. プロキシの作成者は、招待状のバンドルを利用してテレメトリのスナップショットやスナップショットを試してみます。
+3. チェックサムとプローブの結果をプレビュー検証するためのアーティファクトを作成します。
+4. 参加者名簿および招待状の事前要求のテンプレートをファイナライズします。
 
-## Decoupage des taches
+## デコパージュ デ タッシュ
 
-| ID | Tache | Responsable | Echeance | Statut | Notes |
+| ID |タチェ |責任者 |エシャンス |法令 |メモ |
 | --- | --- | --- | --- | --- | --- |
-| W1-P1 | Obtenir l'approbation legale pour l'addendum des termes de preview | Docs/DevRel lead -> Legal | 2025-04-05 | Termine | Ticket legal `DOCS-SORA-Preview-W1-Legal` valide le 2025-04-05; PDF attache au tracker. |
-| W1-P2 | Capturer la fenetre de staging du proxy Try it (2025-04-10) et valider la sante du proxy | Docs/DevRel + Ops | 2025-04-06 | Termine | `npm run manage:tryit-proxy -- --stage preview-w1 --expires-in=21d --target https://tryit-preprod.sora` execute le 2025-04-06; transcription CLI + `.env.tryit-proxy.bak` archivees. |
-| W1-P3 | Construire l'artefact de preview (`preview-2025-04-12`), executer `scripts/preview_verify.sh` + `npm run probe:portal`, archiver descriptor/checksums | Portal TL | 2025-04-08 | Termine | Artefact + logs de verification stockes sous `artifacts/docs_preview/W1/preview-2025-04-12/`; sortie de probe attachee au tracker. |
-| W1-P4 | Revoir les formulaires d'intake partenaires (`DOCS-SORA-Preview-REQ-P01...P08`), confirmer contacts + NDAs | Governance liaison | 2025-04-07 | Termine | Les huit demandes approuvees (les deux dernieres le 2025-04-11); approbations liees dans le tracker. |
-| W1-P5 | Rediger le texte d'invitation (base sur `docs/examples/docs_preview_invite_template.md`), definir `<preview_tag>` et `<request_ticket>` pour chaque partenaire | Docs/DevRel lead | 2025-04-08 | Termine | Brouillon d'invitation envoye le 2025-04-12 15:00 UTC avec les liens d'artefact. |
+| W1-P1 |プレビューの追加条項を適用する法的承認を取得する |ドキュメント/DevRel リード -> 法務 | 2025-04-05 |ターミナル |チケット法定 `DOCS-SORA-Preview-W1-Legal` 有効期間 2025 年 4 月 5 日。 auトラッカーをPDF添付。 |
+| W1-P2 |プロキシのステージングをキャプチャーする 試してみてください (2025-04-10) およびプロキシの検証者 |ドキュメント/DevRel + オペレーション | 2025-04-06 |ターミナル | `npm run manage:tryit-proxy -- --stage preview-w1 --expires-in=21d --target https://tryit-preprod.sora` ファイル 2025-04-06 を実行します。転写 CLI + `.env.tryit-proxy.bak` アーカイブ。 |
+| W1-P3 |プレビューのアーティファクト (`preview-2025-04-12`)、実行者 `scripts/preview_verify.sh` + `npm run probe:portal`、アーカイバ記述子/チェックサムを構築します。ポータルTL | 2025-04-08 |ターミナル |アーティファクト + 検証ログ `artifacts/docs_preview/W1/preview-2025-04-12/` をストックします。探査武官オートラッカー出撃。 |
+| W1-P4 | Revoir les Formulaires d'intake partenaires (`DOCS-SORA-Preview-REQ-P01...P08`)、確認者連絡先 + NDA |ガバナンス連絡窓口 | 2025-04-07 |ターミナル | Les huit requestes approuvees (les deux dernieres le 2025-04-11)。評価は追跡者に嘘をつきます。 |
+| W1-P5 |招待状のテキスト (`docs/examples/docs_preview_invite_template.md` のベース)、`<preview_tag>` と `<request_ticket>` の招待状の定義 |ドキュメント/DevRel リード | 2025-04-08 |ターミナル | Brouillon d'invitation envoye le 2025-04-12 15:00 UTC avec les liens d'artefact。 |
 
-## Checklist preflight
+## チェックリストのプリフライト
 
-> Astuce: lancez `scripts/preview_wave_preflight.sh --tag preview-2025-04-12 --base-url https://preview.staging.sora --descriptor artifacts/preview-2025-04-12/descriptor.json --archive artifacts/preview-2025-04-12/docs-portal-preview.tar.zst --tryit-target https://tryit-proxy.staging.sora --output-json artifacts/preview-2025-04-12/preflight-summary.json` pour executer automatiquement les etapes 1-5 (build, verification checksum, probe du portal, link checker, et mise a jour du proxy Try it). Le script enregistre un log JSON a joindre au tracker.
+> Astuce: lancez `scripts/preview_wave_preflight.sh --tag preview-2025-04-12 --base-url https://preview.staging.sora --descriptor artifacts/preview-2025-04-12/descriptor.json --archive artifacts/preview-2025-04-12/docs-portal-preview.tar.zst --tryit-target https://tryit-proxy.staging.sora --output-json artifacts/preview-2025-04-12/preflight-summary.json` 実行プログラム自動ファイル 1 ～ 5 (ビルド、検証チェックサム、ポータルのプローブ、リンク チェッカー、プロキシの実行など)。このスクリプトは、JSON のログを登録し、トラッカーに結合します。
 
-1. `npm run build` (avec `DOCS_RELEASE_TAG=preview-2025-04-12`) pour regenerer `build/checksums.sha256` et `build/release.json`.
-2. `docs/portal/scripts/preview_verify.sh --build-dir docs/portal/build --descriptor artifacts/<tag>/descriptor.json --archive artifacts/<tag>/docs-portal-preview.tar.zst`.
-3. `PORTAL_BASE_URL=https://preview.staging.sora DOCS_RELEASE_TAG=preview-2025-04-12 npm run probe:portal -- --expect-release=preview-2025-04-12`.
-4. `DOCS_RELEASE_TAG=preview-2025-04-12 npm run check:links` et archiver `build/link-report.json` a cote du descriptor.
-5. `npm run manage:tryit-proxy -- update --target https://tryit-proxy.staging.sora` (ou fournir la cible appropriee via `--tryit-target`); committer le `.env.tryit-proxy` mis a jour et conserver la `.bak` pour rollback.
-6. Mettre a jour l'issue W1 avec les chemins de logs (checksum du descriptor, sortie probe, changement du proxy Try it et snapshots Grafana).
+1. `npm run build` (avec `DOCS_RELEASE_TAG=preview-2025-04-12`) 再生器 `build/checksums.sha256` および `build/release.json` を注ぎます。
+2.`docs/portal/scripts/preview_verify.sh --build-dir docs/portal/build --descriptor artifacts/<tag>/descriptor.json --archive artifacts/<tag>/docs-portal-preview.tar.zst`。
+3. `PORTAL_BASE_URL=https://preview.staging.sora DOCS_RELEASE_TAG=preview-2025-04-12 npm run probe:portal -- --expect-release=preview-2025-04-12`。
+4. `DOCS_RELEASE_TAG=preview-2025-04-12 npm run check:links` およびアーカイバ `build/link-report.json` は記述子です。
+5. `npm run manage:tryit-proxy -- update --target https://tryit-proxy.staging.sora` (`--tryit-target` 経由で適切な 4 つを選択);コミッター le `.env.tryit-proxy` は、ロールバックを行う `.bak` のジャーナルとコンサーバーをミスしました。
+6. 1 時間ごとに W1 の安全なログを発行します (記述子のチェックサム、プローブの出撃、プロキシの変更、Try it とスナップショット Grafana)。
 
-## Checklist de preuve
+## 事前チェックリスト
 
-- [x] Approbation legale signee (PDF ou lien du ticket) attachee a `DOCS-SORA-Preview-W1`.
-- [x] Screenshots Grafana pour `docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals`.
-- [x] Descriptor et log de checksum `preview-2025-04-12` stockes sous `artifacts/docs_preview/W1/`.
-- [x] Tableau de roster d'invitations avec `invite_sent_at` renseignes (voir le log W1 du tracker).
-- [x] Artefacts de feedback repris dans [`preview-feedback/w1/log.md`](./log.md) avec une ligne par partenaire (mis a jour 2025-04-26 avec roster/telemetria/issues).
+- [x] 承認法的署名者 (PDF ou lien du ticket) 添付者 a `DOCS-SORA-Preview-W1`。
+- [x] スクリーンショット Grafana、`docs.preview.integrity`、`TryItProxyErrors`、`DocsPortal/GatewayRefusals`。
+- [x] 記述子とチェックサムのログ `preview-2025-04-12` は、`artifacts/docs_preview/W1/` をストックします。
+- [x] 招待状のテーブル リスト、平均 `invite_sent_at` レンセーニュ (ログ W1 デュ トラッカーを参照)。
+- [x] フィードバック再現のアーティファクト [`preview-feedback/w1/log.md`](./log.md) avec une ligne par partenaire (mis a jour 2025-04-26 avec roster/telemetria/issues)。
 
-Mettre a jour ce plan a mesure de l'avancement; le tracker s'y refere pour garder le roadmap auditable.
+時間をかけて計画を立て、事前に計画を立てます。トラッカーは監査可能なロードマップを参照します。
 
-## Flux de feedback
+## フィードバックの流動性
 
-1. Pour chaque reviewer, dupliquer le template dans
-   [`docs/examples/docs_preview_feedback_form.md`](../../../../../examples/docs_preview_feedback_form.md),
-   remplir les metadonnees et stocker la copie complete sous
-   `artifacts/docs_preview/W1/preview-2025-04-12/feedback/<partner-id>/`.
-2. Resumer invitations, checkpoints de telemetrie et issues ouvertes dans le log vivant
-   [`preview-feedback/w1/log.md`](./log.md) pour que les reviewers governance puissent rejouer la vague
-   sans quitter le depot.
-3. Quand les exports de knowledge-check ou de sondages arrivent, les joindre dans le chemin d'artefact note dans le log
-   et lier l'issue du tracker.
+1. チャック レビュアー、デュプリケ ル テンプレートを注ぐ
+   [`docs/examples/docs_preview_feedback_form.md`](../../../../../examples/docs_preview_feedback_form.md)、
+   レムプリル レ メタドンネとストッカー ラ コピー コンプリート スー
+   `artifacts/docs_preview/W1/preview-2025-04-12/feedback/<partner-id>/`。
+2. 履歴書の招待状、テレメトリーのチェックポイント、およびログ ヴィヴァンの発行に関する問題
+   [`preview-feedback/w1/log.md`](./log.md) 審査員のガバナンスを注ぐ、曖昧なレジュエを提供する
+   ル・デポを辞める必要はありません。
+3. 知識の輸出や到着の確認、ログの作成や化学製品の記録の確認
+   トラッカーの問題について。

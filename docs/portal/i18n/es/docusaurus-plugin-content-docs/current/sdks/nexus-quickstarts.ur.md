@@ -4,9 +4,11 @@ direction: ltr
 source: docs/portal/docs/sdks/nexus-quickstarts.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-مکمل quickstart `docs/source/nexus_sdk_quickstarts.md` میں موجود ہے۔ یہ پورٹل خلاصہ مشترکہ پیشگی تقاضوں اور ہر SDK کے کمانڈز کو نمایاں کرتا ہے تاکہ ڈویلپرز اپنی سیٹ اپ جلدی جانچ سکیں۔
+Inicio rápido del programa `docs/source/nexus_sdk_quickstarts.md` Programa del usuario ہے۔ یہ پورٹل خلاصہ مشترکہ پیشگی تقاضوں اور ہر SDK کے کمانڈز کو نمایاں کرتا ہے تاکہ ڈویلپرز اپنی سیٹ اپ جلدی جانچ سکیں۔
 
 ## مشترکہ سیٹ اپ
 
@@ -19,7 +21,7 @@ export NEXUS_TRUSTED_PUBKEY="<peer-public-key>"
 
 Nexus کنفیگریشن بنڈل ڈاؤن لوڈ کریں، ہر SDK کی ڈپینڈنسیاں انسٹال کریں، اور یقینی بنائیں کہ TLS سرٹیفکیٹس ریلیز پروفائل سے میل کھاتے ہیں (دیکھیے `docs/source/sora_nexus_operator_onboarding.md`).
 
-## Rust
+## Óxido
 
 ```bash
 cargo run --bin nexus_quickstart \
@@ -28,17 +30,17 @@ cargo run --bin nexus_quickstart \
   --chain "${NEXUS_CHAIN_ID}"
 ```
 
-حوالہ: `docs/source/sdk/rust.md`
+Nombre: `docs/source/sdk/rust.md`
 
-## JavaScript / TypeScript
+## JavaScript/Mecanografiado
 
 ```bash
 npm run demo:nexus
 ```
 
-اسکرپٹ اوپر والی ماحولیات متغیرات کے ساتھ `ToriiClient` بناتا ہے اور تازہ ترین بلاک پرنٹ کرتا ہے۔
+اسکرپٹ اوپر y ماحولیات متغیرات کے ساتھ `ToriiClient` بناتا ہے اور تازہ ترین بلاک پرنٹ کرتا ہے۔
 
-## Swift
+## Rápido
 
 ```bash
 make swift-nexus-demo
@@ -46,7 +48,7 @@ make swift-nexus-demo
 
 `IrohaSwift` کے `Torii.Client` سے `FindNetworkStatus` حاصل کرتا ہے۔
 
-## Android
+## androide
 
 ```bash
 ./gradlew :iroha-android:nexusQuickstartTest \
@@ -56,7 +58,7 @@ make swift-nexus-demo
 
 منظم ڈیوائس ٹیسٹ چلاتا ہے جو Nexus کے staging endpoint کو ہٹ کرتا ہے۔
 
-## CLI
+##CLI
 
 ```bash
 iroha_cli app nexus quickstart \
@@ -68,7 +70,7 @@ iroha_cli app nexus quickstart \
 ## مسئلہ حل
 
 - TLS ناکامیاں -> Nexus ریلیز tarball سے CA بنڈل کی توثیق کریں۔
-- `ERR_UNKNOWN_LANE` -> جب multi-lane routing نافذ ہو تو `--lane-id`/`--dataspace-id` دیں۔
-- `ERR_SETTLEMENT_PAUSED` -> واقعہ عمل کے لیے [Nexus operations](../nexus/nexus-operations) دیکھیں؛ ممکن ہے گورننس نے lane روک دی ہو۔
+- `ERR_UNKNOWN_LANE` -> جب enrutamiento de carriles múltiples نافذ ہو تو `--lane-id`/`--dataspace-id` دیں۔
+- `ERR_SETTLEMENT_PAUSED` -> واقعہ عمل کے لیے [operaciones Nexus](../nexus/nexus-operations) دیکھیں؛ ممکن ہے گورننس نے carril روک دی ہو۔
 
-مزید سیاق و سباق اور SDK مخصوص وضاحتوں کے لیے `docs/source/nexus_sdk_quickstarts.md` دیکھیں۔
+Software y software SDK Dispositivos de software `docs/source/nexus_sdk_quickstarts.md` دیکھیں۔

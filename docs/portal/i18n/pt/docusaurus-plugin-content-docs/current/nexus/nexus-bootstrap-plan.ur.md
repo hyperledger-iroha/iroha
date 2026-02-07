@@ -4,101 +4,101 @@ direction: ltr
 source: docs/portal/docs/nexus/nexus-bootstrap-plan.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: nexus-bootstrap-plan
-title: Sora Nexus بوٹ اسٹریپ اور آبزرویبیلٹی
-description: Nexus کے بنیادی validator cluster کو آن لائن لانے سے پہلے SoraFS اور SoraNet خدمات شامل کرنے کا آپریشنل پلان۔
+id: plano nexus-bootstrap
+título: Sora Nexus بوٹ اسٹریپ اور آبزرویبیلٹی
+description: Nexus کے بنیادی cluster de validador کو آن لائن لانے سے پہلے SoraFS اور SoraNet خدمات شامل کرنے کا آپریشنل پلان۔
 ---
 
-:::note کینونیکل ماخذ
+:::nota کینونیکل ماخذ
 یہ صفحہ `docs/source/soranexus_bootstrap_plan.md` کی عکاسی کرتا ہے۔ لوکلائزڈ ورژنز پورٹل تک پہنچنے تک دونوں نقول ہم آہنگ رکھیں۔
 :::
 
-# Sora Nexus Bootstrap & Observability Plan
+# Sora Nexus Plano de inicialização e observabilidade
 
-## اہداف
-- گورننس کیز، Torii APIs، اور consensus monitoring کے ساتھ Sora Nexus validator/observer نیٹ ورک کی بنیاد قائم کریں۔
-- بنیادی سروسز (Torii، consensus، persistence) کو SoraFS/SoraNet piggyback deployments سے پہلے ویلیڈیٹ کریں۔
-- CI/CD workflows اور observability dashboards/alerts قائم کریں تاکہ نیٹ ورک کی صحت یقینی ہو۔
+##
+- گورنس کیز, APIs Torii, e monitoramento de consenso کے ساتھ Validador/observador Sora Nexus نیٹ ورک کی بنیاد قائم کریں۔
+- بنیادی سروسز (Torii, consenso, persistência) کو SoraFS/SoraNet piggyback implantações سے پہلے ویلیڈیٹ کریں۔
+- Fluxos de trabalho de CI/CD e painéis/alertas de observabilidade.
 
 ## پیشگی شرائط
-- Governance key material (council multisig، committee keys) HSM یا Vault میں دستیاب ہو۔
-- بنیادی انفراسٹرکچر (Kubernetes clusters یا bare-metal nodes) بنیادی/ثانوی ریجنز میں موجود ہو۔
-- اپ ڈیٹ شدہ bootstrap configuration (`configs/nexus/bootstrap/*.toml`) جو جدید consensus parameters دکھائے۔
+- Material chave de governança (multisig do conselho, chaves do comitê) HSM یا Vault میں دستیاب ہو۔
+- بنیادی انفراسٹرکچر (clusters Kubernetes ou nós bare-metal).
+- اپ ڈیٹ شدہ configuração de bootstrap (`configs/nexus/bootstrap/*.toml`) e parâmetros de consenso دکھائے۔
 
 ## نیٹ ورک ماحول
-- دو Nexus environments کو الگ نیٹ ورک prefixes کے ساتھ چلائیں:
-- **Sora Nexus (mainnet)** - پروڈکشن نیٹ ورک prefix `nexus` جو canonical governance اور SoraFS/SoraNet piggyback services میزبان بناتا ہے (chain ID `0x02F1` / UUID `00000000-0000-0000-0000-000000000753`).
-- **Sora Testus (testnet)** - staging نیٹ ورک prefix `testus` جو mainnet configuration کو integration testing اور pre-release validation کے لئے mirror کرتا ہے (chain UUID `809574f5-fee7-5e69-bfcf-52451e42d50f`).
-- ہر environment کے لئے الگ genesis files، governance keys، اور infrastructure footprints رکھیں۔ Testus تمام SoraFS/SoraNet rollouts کے لئے proving ground ہے، Nexus میں promote کرنے سے پہلے۔
-- CI/CD pipelines پہلے Testus پر deploy کریں، automated smoke tests چلائیں، اور checks پاس ہونے پر Nexus میں manual promotion درکار ہو۔
-- Reference configuration bundles `configs/soranexus/nexus/` (mainnet) اور `configs/soranexus/testus/` (testnet) کے تحت ہیں، ہر ایک میں نمونہ `config.toml`, `genesis.json` اور Torii admission directories شامل ہیں۔
+- Nos ambientes Nexus کو الگ نیٹ ورک prefixos کے ساتھ چلائیں:
+- **Sora Nexus (mainnet)** - پروڈکشن نیٹ ورک prefixo `nexus` e governança canônica اور SoraFS/SoraNet piggyback services میزبان بناتا ہے (ID da cadeia `0x02F1` / UUID `00000000-0000-0000-0000-000000000753`).
+- **Sora Testus (testnet)** - staging نیٹ ورک prefixo `testus` جو configuração mainnet کو teste de integração اور validação de pré-lançamento کے لئے espelho کرتا ہے (cadeia UUID `809574f5-fee7-5e69-bfcf-52451e42d50f`).
+- ہر ambiente کے لئے الگ arquivos genesis, chaves de governança, e pegadas de infraestrutura رکھیں۔ Testus تمام SoraFS/SoraNet rollouts کے لئے campo de provas ہے, Nexus میں promover کرنے سے پہلے۔
+- Pipelines CI/CD پہلے Testus پر implantar کریں, testes de fumaça automatizados چلائیں, e verificações پاس ہونے پر Nexus میں promoção manual درکار ہو۔
+- Pacotes de configuração de referência `configs/soranexus/nexus/` (mainnet) e `configs/soranexus/testus/` (testnet) کے تحت ہیں, ہر ایک میں نمونہ `config.toml`, `genesis.json` Diretórios de admissão Torii شامل ہیں۔
 
-## مرحلہ 1 - Configuration Review
-1. موجودہ documentation کا audit کریں:
-   - `docs/source/nexus/architecture.md` (consensus, Torii layout).
-   - `docs/source/nexus/deployment_checklist.md` (infra requirements).
-   - `docs/source/nexus/governance_keys.md` (key custody procedures).
-2. Genesis files (`configs/nexus/genesis/*.json`) کو validate کریں کہ وہ موجودہ validator roster اور staking weights سے align ہیں۔
-3. نیٹ ورک parameters کنفرم کریں:
-   - Consensus committee size اور quorum.
-   - Block interval / finality thresholds.
-   - Torii service ports اور TLS certificates.
+## Passo 1 - Revisão de configuração
+1. Qual documentação e auditoria کریں:
+   - `docs/source/nexus/architecture.md` (consenso, layout Torii).
+   - `docs/source/nexus/deployment_checklist.md` (requisitos de infra-estrutura).
+   - `docs/source/nexus/governance_keys.md` (procedimentos de custódia de chaves).
+2. Arquivos Genesis (`configs/nexus/genesis/*.json`) کو validar کریں کہ وہ موجودہ lista de validadores اور pesos de piquetagem سے alinhar ہیں۔
+3. Quais são os parâmetros necessários para definir:
+   - Tamanho do comitê de consenso e quórum.
+   - Intervalo de bloqueio / limites de finalidade.
+   - Portas de serviço Torii e certificados TLS.
 
-## مرحلہ 2 - Bootstrap Cluster Deployment
-1. Validator nodes provision کریں:
-   - `irohad` instances (validators) کو persistent volumes کے ساتھ deploy کریں۔
-   - نیٹ ورک firewall rules کو یقینی بنائیں کہ consensus اور Torii traffic nodes کے درمیان allowed ہو۔
-2. ہر validator پر Torii services (REST/WebSocket) کو TLS کے ساتھ شروع کریں۔
-3. اضافی resilience کے لئے observer nodes (read-only) deploy کریں۔
-4. Bootstrap scripts (`scripts/nexus_bootstrap.sh`) چلائیں تاکہ genesis تقسیم ہو، consensus شروع ہو، اور nodes رجسٹر ہوں۔
-5. Smoke tests چلائیں:
-   - Torii کے ذریعے test transactions submit کریں (`iroha_cli tx submit`).
-   - Telemetry کے ذریعے block production/finality verify کریں۔
-   - Validators/observers کے درمیان ledger replication چیک کریں۔
+## Passo 2 - Implantação de cluster Bootstrap
+1. Provisão de nós validadores کریں:
+   - Instâncias `irohad` (validadores) کو volumes persistentes کے ساتھ implantar کریں۔
+   - نیٹ ورک regras de firewall کو یقینی بنائیں کہ consenso اور Torii nós de tráfego کے درمیان permitido ہو۔
+2. Validador de serviços Torii (REST/WebSocket) e TLS کے ساتھ شروع کریں۔
+3. اضافی resiliência کے لئے nós observadores (somente leitura) implantar کریں۔
+4. Scripts de bootstrap (`scripts/nexus_bootstrap.sh`) چلائیں تاکہ genesis تقسیم ہو, consenso شروع ہو, اور nós رجسٹر ہوں۔
+5. Testes de fumaça:
+   - Torii کے ذریعے envio de transações de teste کریں (`iroha_cli tx submit`).
+   - Telemetria کے ذریعے produção de blocos/verificação de finalidade کریں۔
+   - Validadores/observadores کے درمیان replicação de razão چیک کریں۔
 
-## مرحلہ 3 - Governance اور Key Management
-1. Council multisig configuration لوڈ کریں؛ تصدیق کریں کہ governance proposals submit اور ratify ہو سکتی ہیں۔
-2. Consensus/committee keys کو محفوظ رکھیں؛ access logging کے ساتھ automatic backups configure کریں۔
-3. Emergency key rotation procedures (`docs/source/nexus/key_rotation.md`) سیٹ اپ کریں اور runbook verify کریں۔
+## Passo 3 - Governança e Gerenciamento de Chaves
+1. Configuração multisig do conselho لوڈ کریں؛ تصدیق کریں کہ propostas de governança apresentadas اور ratificar ہو سکتی ہیں۔
+2. Chaves de consenso/comitê کو محفوظ رکھیں؛ registro de acesso کے ساتھ backups automáticos configurar کریں۔
+3. Procedimentos de rotação de chave de emergência (`docs/source/nexus/key_rotation.md`) سیٹ اپ کریں اور verificação de runbook کریں۔
 
-## مرحلہ 4 - CI/CD Integration
-1. Pipelines configure کریں:
-   - Validator/Torii images build اور publish کریں (GitHub Actions یا GitLab CI).
-   - Automated configuration validation (lint genesis, verify signatures).
-   - Deployment pipelines (Helm/Kustomize) برائے staging اور production clusters.
-2. CI میں smoke tests شامل کریں (ephemeral cluster اٹھائیں، canonical transaction suite چلائیں).
-3. ناکام deployments کے لئے rollback scripts شامل کریں اور runbooks دستاویز کریں۔
+## Passo 4 - Integração CI/CD
+1. Configuração de pipelines:
+   - Imagens Validator/Torii construídas e publicadas (GitHub Actions ou GitLab CI).
+   - Validação automatizada de configuração (lint genesis, verificação de assinaturas).
+   - Pipelines de implantação (Helm/Kustomize) para preparação e clusters de produção.
+2. CI میں testes de fumaça شامل کریں (cluster efêmero اٹھائیں, conjunto de transações canônicas چلائیں).
+3. Principais implantações para scripts de reversão e runbooks## Passo 5 - Observabilidade e Alertas
+1. Pilha de monitoramento (Prometheus + Grafana + Alertmanager) e região میں implantar کریں۔
+2. Métricas principais:
+  -`nexus_consensus_height`, `nexus_finality_lag`, `torii_request_duration_seconds`, `validator_peer_count`.
+   - Torii para serviços de consenso کے لئے Loki/ELK کے ذریعے logs۔
+3. Painéis:
+   - Saúde do consenso (altura do bloco, finalidade, status dos pares).
+   - Taxas de latência/erro da API Torii.
+   - Transações de governança e status de propostas.
+4. Alertas:
+   - Bloqueio de produção de blocos (>2 intervalos de blocos).
+   - Quorum de contagem de pares سے نیچے گر جائے۔
+   - Picos de taxa de erro Torii.
+   - Atraso na fila de propostas de governança.
 
-## مرحلہ 5 - Observability اور Alerts
-1. Monitoring stack (Prometheus + Grafana + Alertmanager) ہر region میں deploy کریں۔
-2. Core metrics جمع کریں:
-  - `nexus_consensus_height`, `nexus_finality_lag`, `torii_request_duration_seconds`, `validator_peer_count`.
-   - Torii اور consensus services کے لئے Loki/ELK کے ذریعے logs۔
-3. Dashboards:
-   - Consensus health (block height, finality, peer status).
-   - Torii API latency/error rates.
-   - Governance transactions اور proposal statuses.
-4. Alerts:
-   - Block production stall (>2 block intervals).
-   - Peer count quorum سے نیچے گر جائے۔
-   - Torii error rate spikes.
-   - Governance proposal queue backlog.
+## Passo 6 - Validação e transferência
+1. Validação ponta a ponta:
+   - Enviar proposta de governança کریں (مثلاً alteração de parâmetro).
+   - Aprovação do conselho کے ذریعے processo کریں تاکہ pipeline de governança درست ہو۔
+   - Diferença de estado do razão چلائیں تاکہ consistência یقینی ہو۔
+2. Runbook de plantão دستاویز کریں (resposta a incidentes, failover, escalonamento).
+3. SoraFS/SoraNet ٹیموں کو prontidão بتائیں؛ تصدیق کریں کہ implantações nas costas Nexus nós کو ponto کر سکتے ہیں۔
 
-## مرحلہ 6 - Validation & Handoff
-1. End-to-end validation چلائیں:
-   - Governance proposal submit کریں (مثلاً parameter change).
-   - Council approval کے ذریعے process کریں تاکہ governance pipeline درست ہو۔
-   - Ledger state diff چلائیں تاکہ consistency یقینی ہو۔
-2. On-call runbook دستاویز کریں (incident response, failover, scaling).
-3. SoraFS/SoraNet ٹیموں کو readiness بتائیں؛ تصدیق کریں کہ piggyback deployments Nexus nodes کو point کر سکتے ہیں۔
-
-## Implementation Checklist
-- [ ] Genesis/configuration audit مکمل۔
-- [ ] Validator اور observer nodes deploy ہوئے اور consensus صحت مند ہے۔
-- [ ] Governance keys لوڈ ہوئے، proposal test ہوا۔
-- [ ] CI/CD pipelines چل رہے ہیں (build + deploy + smoke tests).
-- [ ] Observability dashboards فعال ہیں اور alerting موجود ہے۔
-- [ ] Handoff documentation downstream ٹیموں کو دے دی گئی۔
+## Lista de verificação de implementação
+- [] Auditoria de gênese/configuração مکمل۔
+- [] Validador ou nós observadores implantados e consenso صحت مند ہے۔
+- [] Chaves de governança لوڈ ہوئے، teste de proposta ہوا۔
+- [ ] Pipelines CI/CD چل رہے ہیں (construção + implantação + testes de fumaça).
+- [] Painéis de observabilidade فعال ہیں اور alertando موجود ہے۔
+- [ ] Transferência de documentação downstream ٹیموں کو دے دی گئی۔

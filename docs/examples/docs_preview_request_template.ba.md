@@ -7,13 +7,14 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 59948351a84b27efe0d9741545d8f93c7525fa5f545605a0942d9f2f574f6f06
 source_last_modified: "2025-12-29T18:16:35.072823+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Docs Portal Preview Access Request (Template)
+# Доктар порталы алдан ҡарау инеү запросы (Шаблон)
 
-Use this template when capturing reviewer details before granting access to the
-public preview environment. Copy the markdown into an issue or request form and
-replace the placeholder values.
+Был ҡалыпты ҡулланыу, ҡасан реквизанттар реквизиттарын тотоу алдынан рөхсәт алыу өсөн .
+йәмәғәт алдан ҡарау мөхите. Күсермә маркдаун мәсьәлә йәки үтенес формаһында һәм
+урын хужалары ҡиммәттәрен алмаштырыу.
 
 ```markdown
 ## Request Summary
@@ -44,9 +45,9 @@ replace the placeholder values.
 
 ---
 
-## Community-Specific Questions (W2+)
-- Motivation for preview access (one sentence):
-- Primary review focus (SDK, governance, Norito, SoraFS, other):
-- Weekly time commitment & availability window (UTC):
-- Localization or accessibility needs (yes/no + details):
-- Community Code of Conduct + preview acceptable-use addendum acknowledged (yes/no):
+## Йәмәғәтселек-специфик һорауҙар (W2+)
+- Алдан ҡарау өсөн мотивация (бер һөйләм):
+- Беренсел тикшерелгән йүнәлеш (СДК, идара итеү, I18NT0000000000X, SoraFS, башҡа):
+- Аҙналыҡ ваҡыт йөкләмәһе & доступность тәҙрә (UTC):
+- Локализация йәки ҡулайлыҡ ихтыяждары (эйе/юҡ + ентекле):
+- Йәмәғәтселек тәртибе кодексы + алдан ҡарау ҡабул итеү-ҡулланыу өҫтәмә танылған (эйе/юҡ):

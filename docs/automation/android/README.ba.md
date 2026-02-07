@@ -7,45 +7,46 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 676798a4cf7c3e7737a0f80640f3f268a2f625f92afdd359ac528881d2aeb046
 source_last_modified: "2025-12-29T18:16:35.060950+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Android Documentation Automation Baseline (AND5)
+# Android Документация автоматлаштырыу базаһы (AND5)
 
-Roadmap item AND5 requires documentation, localization, and publishing
-automation to be auditable before AND6 (CI & Compliance) can start. This folder
-records the commands, artefacts, and evidence layout that AND5/AND6 reference,
-mirroring the plans captured in
-`docs/source/sdk/android/developer_experience_plan.md` and
+Юл картаһы пункты AND5 документация, локализация һәм баҫтырыу талап итә
+автоматлаштырыу өсөн аудит алдынан AND6 (CI & үтәү) башлай ала. Был папка
+бойороҡтар, артефакттар һәм дәлилдәр макетын теркәй, тип AND5/AND6 һылтанма,
+2012 йылда төшөрөлгән пландарҙы көҙгөләү.
+`docs/source/sdk/android/developer_experience_plan.md` һәм
 `docs/source/sdk/android/parity_dashboard_plan.md`.
 
-## Pipelines & Commands
+## торбалар & Командалар
 
-| Task | Command(s) | Expected Artefacts | Notes |
-|------|------------|--------------------|-------|
-| Localization stub sync | `python3 scripts/sync_docs_i18n.py` (optionally pass `--lang <code>` per run) | Log file stored under `docs/automation/android/i18n/<timestamp>-sync.log` plus the translated stub commits | Keeps `docs/i18n/manifest.json` in sync with translated stubs; the log records language codes touched and the git commit captured in the baseline. |
-| Norito fixture + parity verification | `ci/check_android_fixtures.sh` (wraps `python3 scripts/check_android_fixtures.py --json-out artifacts/android/parity/<stamp>/summary.json`) | Copy the generated summary JSON into `docs/automation/android/parity/<stamp>-summary.json` | Verifies `java/iroha_android/src/test/resources` payloads, manifest hashes, and signed fixture lengths. Attach the summary alongside the cadence evidence under `artifacts/android/fixture_runs/`. |
-| Sample manifest & publishing proof | `scripts/publish_android_sdk.sh --version <semver> [--repo-url …]` (runs tests + SBOM + provenance) | Provenance bundle metadata plus the resulting `sample_manifest.json` from `docs/source/sdk/android/samples/` stored under `docs/automation/android/samples/<version>/` | Ties AND5 sample apps and release automation together—capture the generated manifest, SBOM hash, and provenance log for the beta review. |
-| Parity dashboard feed | `python3 scripts/check_android_fixtures.py … --json-out artifacts/android/parity/<stamp>/summary.json` followed by `python3 scripts/android_parity_metrics.py --summary <summary> --output artifacts/android/parity/<stamp>/metrics.prom` | Copy the `metrics.prom` snapshot or the Grafana export JSON into `docs/automation/android/parity/<stamp>-metrics.prom` | Feeds the dashboard plan so AND5/AND7 governance can verify invalid submission counters and telemetry adoption. |
+| Эш | Команда(тар) | Көтөлгән артефакттар | Иҫкәрмәләр |
+|-----|------------|------------------|--------|
+| Локализация стаб синхронлаштырыу | `python3 scripts/sync_docs_i18n.py` (эскеһе буйынса I18NI000000006X бер йүгерә. `docs/automation/android/i18n/<timestamp>-sync.log` буйынса һаҡланған журнал файлы плюс тәржемә ителгән стаб коммиттары | `docs/i18n/manifest.json` синхронизацияла тәржемә ителгән стабтар менән һаҡлай; логик яҙмалар тел кодтары ҡағыла һәм git йөкләмә йөкләмәһе база һыҙығында төшөрөлгән. |
+| Norito ҡоролма + паритет тикшерелеүе | `ci/check_android_fixtures.sh` X (уҡыу I18NI000000010X) | генерацияланған резюме JSON күсермә I18NI000000011X | `java/iroha_android/src/test/resources` файҙалы йөктәрҙе, асыҡ хештарҙы һәм ҡул ҡуйылған ҡоролма оҙонлоғон тикшерә. Йыйынтыҡҡа `artifacts/android/fixture_runs/` буйынса каденция дәлилдәре менән бер рәттән беркетергә. |
+| Өлгө манифест & баҫтырыу дәлиле | `scripts/publish_android_sdk.sh --version <semver> [--repo-url …]` (йүгерә һынауҙар + SBOM + провенанс) | Провенанс өйөм метамағлүмәттәр плюс һөҙөмтәлә I18NI000000015X I18NI000000016X in I18NI000000017X буйынса һаҡланған | Галстуктар AND5 өлгө ҡушымталар һәм автоматлаштырыуҙы бергә сығарыу — генерацияланған манифест, SBOM хеш, һәм провенанс журналы өсөн бета-обзор тотоу. |
+| Паритет приборҙар таҡтаһы канал | I18NI000000018X, унан һуң I18NI000000019X | `metrics.prom` снимок йәки I18NT000000000000 экспорты JSON I18NI000000021X | Ҡайһы бер осраҡта был йүнәлештәге эштәрҙең планын туҡландыра. |
 
-## Evidence Capture
+## Дәлилдәр тотоу
 
-1. **Timestamp everything.** Name files using UTC timestamps
-   (`YYYYMMDDTHHMMSSZ`) so parity dashboards, governance minutes, and published
-   docs can reference the same run deterministically.
-2. **Reference commits.** Each log should include the git commit hash of the run
-   plus any relevant configuration (e.g., `ANDROID_PARITY_PIPELINE_METADATA`).
-   When privacy requires redaction, include a note and link to the secure vault.
-3. **Archive minimal context.** We only check in structured summaries (JSON,
-   `.prom`, `.log`). Heavy artefacts (APK bundles, screenshots) should remain in
-   `artifacts/` or object storage with a signed hash recorded in the log.
-4. **Update status entries.** When AND5 milestones advance in `status.md`, cite
-   the corresponding file (e.g., `docs/automation/android/parity/20260324T010203Z-summary.json`)
-   so auditors can trace the baseline without scraping CI logs.
+1. **Барыһын да Timestam
+   (I18NI000000022X) шулай паритет таҡталары, идара итеү минуттары, һәм баҫылған
+   docs һылтанма яһай ала, шул уҡ йүгерә детерминистик.
+2. **Һылтанмалар йөкләмәләр.** Һәр журнал git truction хэш йүгерергә тейеш .
+   плюс теләһә ниндәй тейешле конфигурация (мәҫәлән, `ANDROID_PARITY_PIPELINE_METADATA`).
+   Ҡасан хосуси редакция талап итә, иҫкәрмә һәм һылтанма индереү өсөн хәүефһеҙ көмбәҙ.
+3. **Архив минималь контекст.** Беҙ структуралы резюмеларҙа ғына тикшерәбеҙ (JSON,
+   `.prom`, I18NI000000025X X). Ауыр артефакттар (АПК өйөмдәре, скриншоттар) 1990 йылда ҡалырға тейеш.
+   `artifacts/` йәки объекттар һаҡлау менән ҡул ҡуйылған хеш теркәлгән журнал.
+4. **Яңыртыу статус яҙмалары.** Ҡасан AND5 гимндар алға I18NI000000027X, цитироваться
+   тейешле файл (мәҫәлән, I18NI000000028X X)
+   шулай итеп, аудиторҙар эҙләй ала база һыҙығын ҡырҡып, CI журналдар.
 
-Following this layout satisfies the “docs/automation baselines available for
-audit” prerequisite that AND6 cites and keeps the Android documentation program
-in lockstep with the published plans.
+Был макеттан һуң ҡәнәғәтләндерә “доктар/автоматизация база линиялары өсөн мөмкин
+аудит» тип аталған AND6 цитаталар һәм Android документация программаһын һаҡлай.
+баҫылған пландар менән lockstep.

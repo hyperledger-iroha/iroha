@@ -10,60 +10,61 @@ translation_last_reviewed: 2026-02-07
 id: nexus-lane-model
 title: Nexus lane model
 description: Logical lane taxonomy, configuration geometry, and world-state merge rules for Sora Nexus.
+translator: machine-google-reviewed
 ---
 
-# Nexus Lane Model & WSV Partitioning
+# Nexus Lane загвар & WSV хуваалт
 
-> **Status:** NX-1 deliverable — lane taxonomy, configuration geometry, and storage layout are ready for implementation.  
-> **Owners:** Nexus Core WG, Governance WG  
-> **Roadmap reference:** NX-1 in `roadmap.md`
+> ** Статус:** NX-1-ийг ашиглах боломжтой — эгнээний ангилал зүй, тохиргооны геометр, хадгалах байгууламжийг хэрэгжүүлэхэд бэлэн байна.  
+> **Эзэмшигчид:** Nexus Үндсэн АЖ, Засаглалын ажлын хэсэг  
+> **Замын зургийн лавлагаа:** `roadmap.md` дээрх NX-1
 
-This portal page mirrors the canonical `docs/source/nexus_lanes.md` brief so Sora
-Nexus operators, SDK owners, and reviewers can read the lane guidance without
-diving into the mono-repo tree. The target architecture keeps the world state
-deterministic while allowing individual data spaces (lanes) to run public or
-private validator sets with isolated workloads.
+Энэ портал хуудас нь Sora каноник `docs/source/nexus_lanes.md` товчийг толилуулж байна
+Nexus операторууд, SDK эзэмшигчид болон хянагч нар эгнээний удирдамжийг ямар ч мэдээлэлгүйгээр унших боломжтой.
+моно-репо мод руу шумбах. Зорилтот архитектур нь дэлхийн төлөв байдлыг хадгалж байдаг
+хувь хүний өгөгдлийн орон зайг (зам) олон нийтэд ажиллуулахыг зөвшөөрөхийн зэрэгцээ тодорхойлогч эсвэл
+тусгаарлагдсан ажлын ачаалал бүхий хувийн баталгаажуулагчийн багц.
 
-## Concepts
+## Үзэл баримтлал
 
-- **Lane:** Logical shard of the Nexus ledger with its own validator set and
-  execution backlog. Identified by a stable `LaneId`.
-- **Data Space:** Governance bucket grouping one or more lanes that share
-  compliance, routing, and settlement policies.
-- **Lane Manifest:** Governance-controlled metadata describing validators, DA
-  policy, gas token, settlement rules, and routing permissions.
-- **Global Commitment:** Proof emitted by a lane summarising new state roots,
-  settlement data, and optional cross-lane transfers. The global NPoS ring
-  orders commitments.
+- **Lane:** Өөрийн баталгаажуулагчтай Nexus дэвтэрийн логик хэлтэрхий ба
+  гүйцэтгэлийн хоцрогдол. Тогтвортой `LaneId`-ээр тодорхойлогддог.
+- **Өгөгдлийн орон зай:** Хуваалцдаг нэг буюу хэд хэдэн эгнээг бүлэглэсэн засаглалын хувин
+  дагаж мөрдөх, чиглүүлэлт, төлбөр тооцооны бодлого.
+- **Lane Manifest:** Баталгаажуулагчийг тайлбарласан засаглалын хяналттай мета өгөгдөл, DA
+  бодлого, хийн жетон, төлбөр тооцооны дүрэм, чиглүүлэлтийн зөвшөөрөл.
+- **Дэлхийн амлалт:** Шинэ төлөвийн үндэсийг нэгтгэн харуулсан эгнээний гаргасан нотолгоо,
+  төлбөр тооцооны өгөгдөл, нэмэлт эгнээ хоорондын шилжүүлэг. Дэлхийн NPoS бөгж
+  үүрэг даалгавар өгдөг.
 
-## Lane taxonomy
+## эгнээний ангилал зүй
 
-Lane types canonically describe their visibility, governance surface, and
-settlement hooks. The configuration geometry (`LaneConfig`) captures these
-attributes so nodes, SDKs, and tooling can reason about the layout without
-bespoke logic.
+Эгнээний төрлүүд нь тэдгээрийн харагдах байдал, засаглалын гадаргуу болон
+тооцооны дэгээ. Тохиргооны геометр (`LaneConfig`) эдгээрийг агуулна
+шинж чанарууд тул зангилаа, SDK болон багаж хэрэгсэл нь байршлын талаар ямар ч үндэслэлгүйгээр тайлбарлах боломжтой
+захиалгат логик.
 
-| Lane type | Visibility | Validator membership | WSV exposure | Default governance | Settlement policy | Typical use |
-|-----------|------------|----------------------|--------------|--------------------|-------------------|-------------|
-| `default_public` | public | Permissionless (global stake) | Full state replica | SORA Parliament | `xor_global` | Baseline public ledger |
-| `public_custom` | public | Permissionless or stake-gated | Full state replica | Stake weighted module | `xor_lane_weighted` | High-throughput public applications |
-| `private_permissioned` | restricted | Fixed validator set (governance approved) | Commitments & proofs | Federated council | `xor_hosted_custody` | CBDC, consortium workloads |
-| `hybrid_confidential` | restricted | Mixed membership; wraps ZK proofs | Commitments + selective disclosure | Programmable money module | `xor_dual_fund` | Privacy-preserving programmable money |
+| эгнээний төрөл | Харагдах байдал | Баталгаажуулагчийн гишүүнчлэл | WSV өртөлт | Үндсэн засаглал | Төлбөр тооцооны бодлого | Ердийн хэрэглээ |
+|----------|------------|----------------------|--------------|--------------------|-------------------|-------------|
+| `default_public` | олон нийтийн | Зөвшөөрөлгүй (дэлхийн хувьцаа) | Төрийн бүрэн хуулбар | SORA УИХ | `xor_global` | Үндсэн нийтийн дэвтэр |
+| `public_custom` | олон нийтийн | Зөвшөөрөлгүй эсвэл гадасны хаалгатай | Төрийн бүрэн хуулбар | Гадасны жигнэсэн модуль | `xor_lane_weighted` | Өндөр хүчин чадалтай нийтийн хэрэглээний програмууд |
+| `private_permissioned` | хязгаарлагдмал | Тогтмол валидаторын багц (засаглал батлагдсан) | Амлалт ба нотлох баримтууд | Холбооны зөвлөл | `xor_hosted_custody` | CBDC, консорциумын ажлын ачаалал |
+| `hybrid_confidential` | хязгаарлагдмал | Холимог гишүүнчлэл; ороосон ZK баталгаа | Амлалт + сонгомол тодруулга | Програмчлагдсан мөнгөний модуль | `xor_dual_fund` | Хувийн нууцлалыг хамгаалах програмчлагдсан мөнгө |
 
-All lane types must declare:
+Бүх төрлийн эгнээ нь дараахь зүйлийг тунхаглах ёстой.
 
-- Dataspace alias — human-readable grouping that binds compliance policies.
-- Governance handle — identifier resolved through `Nexus.governance.modules`.
-- Settlement handle — identifier consumed by the settlement router to debit XOR
-  buffers.
-- Optional telemetry metadata (description, contact, business domain) surfaced
-  through `/status` and dashboards.
+- Dataspace alias — дагаж мөрдөх бодлогыг холбосон хүний унших боломжтой бүлэглэл.
+- Засаглалын бариул — танигчийг `Nexus.governance.modules`-ээр шийдсэн.
+- Төлбөр тооцооны бариул — төлбөр тооцооны чиглүүлэгчээс XOR дебит хийхэд ашигладаг танигч
+  буфер.
+- Нэмэлт телеметрийн мета өгөгдөл (тайлбар, холбоо барих, бизнесийн домэйн) гарч ирэв
+  `/status` болон хяналтын самбараар дамжуулан.
 
-## Lane configuration geometry (`LaneConfig`)
+## Эгнээний тохиргооны геометр (`LaneConfig`)
 
-`LaneConfig` is the runtime geometry derived from the validated lane catalog. It
-does **not** replace governance manifests; instead it provides deterministic
-storage identifiers and telemetry hints for every configured lane.
+`LaneConfig` нь баталгаажуулсан эгнээний каталогоос авсан ажиллах цагийн геометр юм. Энэ
+засаглалын манифестуудыг **орлохгүй**; оронд нь энэ нь детерминистикийг өгдөг
+тохируулсан эгнээ бүрт хадгалах танигч болон телеметрийн зөвлөмжүүд.
 
 ```text
 LaneConfigEntry {
@@ -80,112 +81,112 @@ LaneConfigEntry {
 }
 ```
 
-- `LaneConfig::from_catalog` recomputes the geometry whenever configuration is
-  loaded (`State::set_nexus`).
-- Aliases are sanitised into lowercase slugs; consecutive non-alphanumeric
-  characters collapse into `_`. If the alias yields an empty slug we fall back
-  to `lane{id}`.
-- `shard_id` is derived from the catalog metadata key `da_shard_id` (defaulting
-  to `lane_id`) and drives the persisted shard cursor journal to keep DA replay
-  deterministic across restarts/resharding.
-- Key prefixes ensure the WSV keeps per-lane key ranges disjoint even when the
-  same backend is shared.
-- Kura segment names are deterministic across hosts; auditors can cross-check
-  segment directories and manifests without bespoke tooling.
-- Merge segments (`lane_{id:03}_merge`) hold the latest merge-hint roots and
-  global state commitments for that lane.
+- `LaneConfig::from_catalog` тохиргоо хийгдсэн үед геометрийг дахин тооцоолдог.
+  ачаалагдсан (`State::set_nexus`).
+- Алс нэрсийг жижиг үсгээр ялгаж ариутгасан; дараалсан үсэг, тоон бус
+  тэмдэгтүүд `_` руу унав. Хэрэв нэр нь хоосон лаг гарвал бид буцаж унана
+  `lane{id}` руу.
+- `shard_id` нь каталогийн мета өгөгдлийн түлхүүр `da_shard_id` (өгөгдмөл
+  `lane_id` руу) ба DA-г дахин тоглуулахын тулд тогтмол хэлтэрхий курсорын тэмдэглэлийг хөтлөнө.
+  Дахин эхлүүлэх/дахин хуваах явцад тодорхойлогч.
+- Түлхүүрийн угтварууд нь WSV нь нэг эгнээний түлхүүрийн мужийг холбосон үед ч гэсэн салангид байлгахыг баталгаажуулдаг
+  ижил backend хуваалцсан байна.
+- Кура сегментийн нэрс нь хостуудаар тодорхойлогддог; аудиторууд харилцан шалгах боломжтой
+  захиалгын хэрэгсэлгүйгээр сегментийн лавлахууд болон манифестууд.
+- Нэгтгэх сегментүүд (`lane_{id:03}_merge`) нь хамгийн сүүлийн үеийн нэгтгэх зөвлөмжийн үндэстэй бөгөөд
+  тэр эгнээний талаарх дэлхийн төрийн амлалт.
 
-## World-state partitioning
+## Дэлхийн төлөвийг хуваах
 
-- The logical Nexus world state is the union of per-lane state spaces. Public
-  lanes persist full state; private/confidential lanes export Merkle/commitment
-  roots to the merge ledger.
-- MV storage prefixes every key with the 4-byte lane prefix from
-  `LaneConfigEntry::key_prefix`, yielding keys such as `[00 00 00 01] ++
+- Логик Nexus дэлхийн төлөв нь нэг эгнээний төлөвийн орон зайн нэгдэл юм. Олон нийтийн
+  эгнээ бүрэн төлөв хэвээр байна; хувийн/нууц эгнээ экспорт Merkle/commitment
+  нэгтгэх дэвтэрт үндэс.
+- MV санах ой нь 4 байт эгнээний угтвар бүхий товчлуур бүрийг
+  `LaneConfigEntry::key_prefix`, `[00 00 00 01] ++ гэх мэт өгөгдсөн түлхүүрүүд
   PackedKey`.
-- Shared tables (accounts, assets, triggers, governance records) therefore store
-  entries grouped by lane prefix, keeping range scans deterministic.
-- Merge-ledger metadata mirrors the same layout: each lane writes merge-hint
-  roots and reduced global state roots to `lane_{id:03}_merge`, allowing
-  targeted retention or eviction when a lane retires.
-- Cross-lane indexes (account aliases, asset registries, governance manifests)
-  store explicit lane prefixes so operators can reconcile entries quickly.
-- **Retention policy** — public lanes retain full block bodies; commitment-only
-  lanes may compact older bodies after checkpoints because commitments are
-  authoritative. Confidential lanes keep ciphertext journals in dedicated
-  segments to avoid blocking other workloads.
-- **Tooling** — maintenance utilities (`kagami`, CLI admin commands) should
-  reference the slugged namespace when exposing metrics, Prometheus labels, or
-  archiving Kura segments.
+- Хуваалцсан хүснэгтүүд (данс, хөрөнгө, триггер, засаглалын бүртгэл) Тиймээс хадгалдаг
+  оруулгуудыг эгнээний угтвараар бүлэглэж, хүрээний сканнерыг тодорхойлогч байлгах.
+- Merge-ledger мета өгөгдөл нь ижил байрлалыг тусгадаг: эгнээ бүр нь нэгтгэх зөвлөмжийг бичдэг.
+  roots болон багасгасан глобал төлөв үндэс `lane_{id:03}_merge`, зөвшөөрөх
+  эгнээ гарах үед зорилтот байлгах эсвэл нүүлгэх.
+- Хөндлөнгийн индексүүд (дансны нэр, хөрөнгийн бүртгэл, засаглалын манифест)
+  тодорхой эгнээний угтваруудыг хадгалснаар операторууд оруулгуудыг хурдан нэгтгэх боломжтой.
+- **Хадгалах бодлого** — нийтийн замууд бүхэлдээ блокийн биеийг хадгалдаг; зөвхөн амлалт
+  Замууд нь хяналтын цэгийн дараа хуучин биетүүдийг нягтруулж болно, учир нь үүрэг хариуцлага байдаг
+  эрх мэдэлтэй. Нууцлалтай зурвасууд нь шифрлэгдсэн текстийг тусгайлан хадгалдаг
+  бусад ажлын ачааллыг хаахаас зайлсхийхийн тулд сегментүүд.
+- **Tooling** — засвар үйлчилгээний хэрэгслүүд (`kagami`, CLI админ командууд)
+  хэмжигдэхүүн, Prometheus шошго, эсвэл ил гаргахдаа гацсан нэрийн орон зайд лавлана уу.
+  Кура сегментүүдийг архивлах.
 
-## Routing & APIs
+## Чиглүүлэлт ба API
 
-- Torii REST/gRPC endpoints accept an optional `lane_id`; absence implies
+- Torii REST/gRPC төгсгөлийн цэгүүд нь нэмэлт `lane_id` хүлээн авдаг; байхгүй байна гэсэн үг
   `lane_default`.
-- SDKs surface lane selectors and map user-friendly aliases to `LaneId` using
-  the lane catalog.
-- Routing rules operate on the validated catalog and may pick both lane and
-  dataspace. `LaneConfig` provides telemetry-friendly aliases for dashboards and
-  logs.
+- SDK-ийн гадаргуугийн эгнээ сонгогч болон хэрэглэгчдэд ээлтэй бусад нэрийг `LaneId`-д буулгах
+  эгнээний каталог.
+- Чиглүүлэлтийн дүрмүүд нь баталгаажуулсан каталог дээр ажилладаг бөгөөд эгнээ болон аль алиныг нь сонгож болно
+  өгөгдлийн орон зай. `LaneConfig` хяналтын самбар болон телеметрт ээлтэй өөр нэрээр хангадаг.
+  бүртгэлүүд.
 
-## Settlement & fees
+## Төлбөр, хураамж
 
-- Every lane pays XOR fees to the global validator set. Lanes may collect native
-  gas tokens but must escrow XOR equivalents alongside commitments.
-- Settlement proofs include amount, conversion metadata, and proof of escrow
-  (for example, transfer to the global fee vault).
-- The unified settlement router (NX-3) debits buffers using the same lane
-  prefixes, so settlement telemetry lines up with storage geometry.
+- Эгнээ бүр дэлхийн баталгаажуулагчийн багцад XOR хураамж төлдөг. Замууд нь уугуул хүмүүсийг цуглуулж болно
+  хийн жетон боловч амлалтын хажуугаар XOR-тэй тэнцэх мөнгийг барьцаалах ёстой.
+- Төлбөр тооцооны нотолгоонд дүн, хөрвүүлэлтийн мета өгөгдөл, барьцааны баталгаа орно
+  (жишээлбэл, дэлхийн хураамжийн сан руу шилжүүлэх).
+- Нэгдсэн тооцооны чиглүүлэгч (NX-3) нь нэг эгнээ ашиглан буферийг дебит болгодог
+  угтвар, тиймээс төлбөр тооцооны телеметр нь хадгалах геометртэй зэрэгцдэг.
 
-## Governance
+## Засаглал
 
-- Lanes declare their governance module via the catalog. `LaneConfigEntry`
-  carries the original alias and slug to keep telemetry and audit trails
-  readable.
-- The Nexus registry distributes signed lane manifests that include the
-  `LaneId`, dataspace binding, governance handle, settlement handle, and
-  metadata.
-- Runtime-upgrade hooks continue to enforce governance policies
-  (`gov_upgrade_id` by default) and log diffs via the telemetry bridge
-  (`nexus.config.diff` events).
+- Lanes өөрсдийн удирдлагын модулийг каталогоор дамжуулан зарладаг. `LaneConfigEntry`
+  телеметрийн болон аудитын мөрийг хадгалахын тулд анхны нэр болон slug-ийг авч явдаг
+  унших боломжтой.
+- Nexus бүртгэл нь гарын үсэг зурсан эгнээний манифестуудыг түгээдэг.
+  `LaneId`, өгөгдлийн орон зайг холбох, засаглалын бариул, тооцооны бариул болон
+  мета өгөгдөл.
+- Ажиллах цагийг шинэчлэх дэгээ нь засаглалын бодлогыг үргэлжлүүлэн хэрэгжүүлсээр байна
+  (Анхдагчаар `gov_upgrade_id`) ба лог нь телеметрийн гүүрээр дамждаг.
+  (`nexus.config.diff` үйл явдал).
 
-## Telemetry & status
+## Телеметр ба статус
 
-- `/status` exposes lane aliases, dataspace bindings, governance handles, and
-  settlement profiles, derived from the catalog and `LaneConfig`.
-- Scheduler metrics (`nexus_scheduler_lane_teu_*`) render lane aliases/slugs so
-  operators can map backlog and TEU pressure quickly.
-- `nexus_lane_configured_total` counts the number of derived lane entries and is
-  recomputed when configuration changes. Telemetry emits signed diffs whenever
-  lane geometry changes.
-- Dataspace backlog gauges include the alias/description metadata to help
-  operators associate queue pressure with business domains.
+- `/status` нь эгнээний бусад нэр, өгөгдлийн орон зайн холболт, удирдлагын зохицуулалт, болон
+  Каталог болон `LaneConfig`-ээс авсан тооцооны профайл.
+- Хуваарьлагч хэмжигдэхүүнүүд (`nexus_scheduler_lane_teu_*`) эгнээний бусад нэр/слагуудыг харуулдаг.
+  операторууд хоцрогдол болон TEU даралтыг хурдан тодорхойлох боломжтой.
+- `nexus_lane_configured_total` нь үүсмэл эгнээний оруулгуудын тоог тоолох ба
+  тохиргоо өөрчлөгдөх үед дахин тооцоолно. Телеметр нь хэзээ ч тэмдэглэгдсэн зөрүү гаргадаг
+  эгнээний геометрийн өөрчлөлт.
+- Өгөгдлийн орон зайн хоцрогдол хэмжигч нь туслах нэр/тайлбарын мета өгөгдлийг агуулдаг
+  Операторууд дарааллын дарамтыг бизнесийн домэйнтэй холбодог.
 
-## Configuration & Norito types
+## Тохиргоо & Norito төрлүүд
 
-- `LaneCatalog`, `LaneConfig`, and `DataSpaceCatalog` live in
-  `iroha_data_model::nexus` and provide Norito-format structures for
-  manifests and SDKs.
-- `LaneConfig` lives in `iroha_config::parameters::actual::Nexus` and is derived
-  automatically from the catalog; it does not require Norito encoding because it
-  is an internal runtime helper.
-- The user-facing configuration (`iroha_config::parameters::user::Nexus`)
-  continues to accept declarative lane and dataspace descriptors; parsing now
-  derives the geometry and rejects invalid aliases or duplicate lane IDs.
+- `LaneCatalog`, `LaneConfig`, `DataSpaceCatalog`-д амьдардаг
+  `iroha_data_model::nexus` ба Norito форматын бүтцийг хангана.
+  манифест ба SDK.
+- `LaneConfig` `iroha_config::parameters::actual::Nexus`-д амьдардаг бөгөөд үүсэлтэй
+  каталогоос автоматаар; Энэ нь Norito кодчилол шаарддаггүй, учир нь энэ
+  нь ажиллах цагийн дотоод туслах юм.
+- Хэрэглэгчдэд зориулсан тохиргоо (`iroha_config::parameters::user::Nexus`)
+  тунхаглалын эгнээ болон өгөгдлийн орон зайн тодорхойлогчдыг үргэлжлүүлэн хүлээн авах; одоо задлан шинжилж байна
+  геометрийг гаргаж, хүчингүй нэр эсвэл давхардсан эгнээний ID-аас татгалздаг.
 
-## Outstanding work
+## Гайхалтай ажил
 
-- Integrate settlement router updates (NX-3) with the new geometry so XOR buffer
-  debits and receipts are tagged by lane slug.
-- Extend admin tooling to list column families, compact retired lanes, and
-  inspect per-lane block logs using the slugged namespace.
-- Finalise the merge algorithm (ordering, pruning, conflict detection) and
-  attach regression fixtures for cross-lane replay.
-- Add compliance hooks for whitelists/blacklists and programmable-money
-  policies (tracked under NX-12).
+- Тооцооллын чиглүүлэгчийн шинэчлэлтүүдийг (NX-3) шинэ геометртэй нэгтгэснээр XOR буфер болно.
+  Дебит болон төлбөрийн баримтыг эгнээний slug-ээр тэмдэглэсэн.
+- Баганын гэр бүлүүдийг жагсаах, тэтгэвэрт гарсан эгнээг нягтруулах, админ хэрэгслийг өргөтгөх
+  slugged namespace ашиглан эгнээ тус бүрийн блокийн бүртгэлийг шалгах.
+- Нэгтгэх алгоритмыг дуусгах (захиалга өгөх, тайрах, зөрчил илрүүлэх) болон
+  хөндлөн эгнээ дахин тоглуулахын тулд регрессийн бэхэлгээг хавсаргана.
+- Зөвшөөрөгдсөн жагсаалт/хар жагсаалт болон програмчлагдсан мөнгө зэрэгт нийцүүлэх дэгээ нэмнэ үү
+  бодлого (NX-12 дагуу хянадаг).
 
 ---
 
-*This page will continue to track NX-1 follow-ups as NX-2 through NX-18 land.
-Please surface open questions in `roadmap.md` or the governance tracker so the
-portal stays aligned with the canonical docs.*
+*Энэ хуудас нь NX-1-ийн дарааллыг NX-2-оос NX-18 хүртэлх газар болгон үргэлжлүүлэн хянах болно.
+Нээлттэй асуултуудыг `roadmap.md` эсвэл засаглалын мөрдөгч рүү илгээнэ үү.
+Портал нь каноник баримт бичигтэй нийцсэн хэвээр байна.*

@@ -4,30 +4,32 @@ direction: ltr
 source: docs/portal/docs/norito/examples/register-and-mint.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
 slug: /norito/examples/register-and-mint
-title: Registrar dominio y acuñar activos
-description: Demuestra la creación de dominios con permisos, el registro de activos y la acuñación determinista.
-source: crates/ivm/docs/examples/13_register_and_mint.ko
+título: Registrador de domínio e aquisição de ativos
+descrição: Demonstra a criação de domínios com permissões, o registro de ativos e a acuñación determinista.
+fonte: crates/ivm/docs/examples/13_register_and_mint.ko
 ---
 
-Demuestra la creación de dominios con permisos, el registro de activos y la acuñación determinista.
+Demonstra a criação de domínios com permissões, o registro de ativos e a acumulação determinista.
 
-## Recorrido del libro mayor
+## Recorrido do livro prefeito
 
-- Asegúrate de que exista la cuenta de destino (por ejemplo `ih58...`), reflejando la fase de configuración en cada quickstart del SDK.
-- Invoca el entrypoint `register_and_mint` para crear la definición de activo ROSE y acuñar 250 unidades para Alice en una sola transacción.
-- Verifica los balances mediante `client.request(FindAccountAssets)` o `iroha_cli ledger assets list --account ih58...` para confirmar que la acuñación tuvo éxito.
+- Certifique-se de que existe a conta de destino (por exemplo, `ih58...`), refletindo a fase de configuração em cada início rápido do SDK.
+- Invoque o ponto de entrada `register_and_mint` para criar a definição de ativo ROSE e acumular 250 unidades para Alice em uma única transação.
+- Verifique os saldos através de `client.request(FindAccountAssets)` ou `iroha_cli ledger assets list --account ih58...` para confirmar que sua acuñación foi exitosa.
 
-## Guías de SDK relacionadas
+## Guias do SDK relacionados
 
-- [Quickstart del SDK de Rust](/sdks/rust)
-- [Quickstart del SDK de Python](/sdks/python)
-- [Quickstart del SDK de JavaScript](/sdks/javascript)
+- [Início rápido do SDK de Rust](/sdks/rust)
+- [Início rápido do SDK de Python](/sdks/python)
+- [Início rápido do SDK de JavaScript](/sdks/javascript)
 
-[Descarga la fuente de Kotodama](/norito-snippets/register-and-mint.ko)
+[Descarregue a fonte de Kotodama](/norito-snippets/register-and-mint.ko)
 
 ```text
 // Register a new asset and mint some to the specified account.

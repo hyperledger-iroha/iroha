@@ -4,55 +4,57 @@ direction: ltr
 source: docs/portal/docs/sorafs/reports/sf2c-capacity-soak.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# SF-2c Capacity Accrual Soak Report
+# SF-2c አቅም Accrual Soak ሪፖርት
 
-Date: 2026-03-21
+ቀን፡- 2026-03-21
 
-## Scope
+## ወሰን
 
-This report records the deterministic SoraFS capacity accrual and payout soak
-tests requested under the SF-2c roadmap track.
+ይህ ሪፖርት የሚወስነውን SoraFS የአቅም ማጠራቀምን እና የክፍያ መጠመድን ይመዘግባል
+በSF-2c የመንገድ ካርታ ትራክ ስር የተጠየቁ ሙከራዎች።
 
-- **30-day multi-provider soak:** Exercised by
-  `capacity_fee_ledger_30_day_soak_deterministic` in
+- ** የ30-ቀን ባለብዙ አቅራቢ ማጥለቅለቅ፡** የሚለማመዱ
+  `capacity_fee_ledger_30_day_soak_deterministic` ውስጥ
   `crates/iroha_core/src/smartcontracts/isi/sorafs.rs`.
-  The harness instantiates five providers, spans 30 settlement windows, and
-  validates that ledger totals match an independently computed reference
-  projection. The test emits a Blake3 digest (`capacity_soak_digest=...`) so
-  CI can capture and diff the canonical snapshot.
-- **Under-delivery penalties:** Enforced by
+  ማሰሪያው አምስት አቅራቢዎችን ያፋጥናል፣ 30 የሰፈራ መስኮቶችን ይሸፍናል እና
+  የሂሳብ ደብተር ድምር በራሱ ከተሰላ ማጣቀሻ ጋር የሚዛመድ መሆኑን ያረጋግጣል
+  ትንበያ. ፈተናው Blake3 ዲጀስት (`capacity_soak_digest=...`) ያወጣል።
+  CI ቀኖናዊውን ቅጽበታዊ ገጽ እይታ ሊይዝ እና ሊለያይ ይችላል።
+- ** ከአቅርቦት በታች ቅጣቶች: ** በ ተፈጻሚነት
   `record_capacity_telemetry_penalises_persistent_under_delivery`
-  (same file). The test confirms strike thresholds, cooldowns, collateral slashes,
-  and ledger counters remain deterministic.
+  (ተመሳሳይ ፋይል). ፈተናው የመምታት ገደቦችን፣ ማቀዝቀዝን፣ የዋስትና ቅነሳዎችን ያረጋግጣል፣
+  እና የመመዝገቢያ ቆጣሪዎች ቆራጥነት ይቆያሉ.
 
-## Execution
+## ማስፈጸሚያ
 
-Run the soak validations locally with:
+የሶክ ማረጋገጫዎችን በአገር ውስጥ ያሂዱ፦
 
 ```bash
 cargo test -p iroha_core -- record_capacity_telemetry_penalises_persistent_under_delivery
 cargo test -p iroha_core -- capacity_fee_ledger_30_day_soak_deterministic
 ```
 
-The tests complete in under one second on a standard laptop and require no
-external fixtures.
+ፈተናዎቹ በመደበኛ ላፕቶፕ ከአንድ ሰከንድ በታች የሚጠናቀቁ እና ቁ
+ውጫዊ እቃዎች.
 
-## Observability
+# ታዛቢነት
 
-Torii now exposes provider credit snapshots alongside fee ledgers so dashboards
-can gate on low balances and penalty strikes:
+Torii አሁን የአቅራቢ ክሬዲት ቅጽበተ-ፎቶዎችን ከክፍያ ደብተሮች እና ዳሽቦርዶች ጋር አጋልጧል
+በዝቅተኛ ሒሳቦች እና የቅጣት ምልክቶች ላይ ሊገባ ይችላል-
 
-- REST: `GET /v1/sorafs/capacity/state` returns `credit_ledger[*]` entries that
-  mirror the ledger fields verified in the soak test. See
+- አርፈው፡ `GET /v1/sorafs/capacity/state` የ `credit_ledger[*]` ግቤቶችን ይመልሳል
+  በሶክ ሙከራ ውስጥ የተረጋገጡትን የሂሳብ መመዝገቢያ መስኮችን ያንጸባርቁ። ተመልከት
   `crates/iroha_torii/src/sorafs/registry.rs`.
-- Grafana import: `dashboards/grafana/sorafs_capacity_penalties.json` plots the
-  exported strike counters, penalty totals, and bonded collateral so on-call
-  staff can compare soak baselines with live environments.
+- Grafana ማስመጣት፡ `dashboards/grafana/sorafs_capacity_penalties.json` ያሴራል።
+  ወደ ውጭ የተላኩ የስራ ማቆም አድማዎች፣ የቅጣት ድምር እና በጥሪ ጊዜ የታሰሩ ዋስትናዎች
+  ሰራተኞቹ የሶክ መነሻ መስመሮችን ከቀጥታ አከባቢዎች ጋር ማወዳደር ይችላሉ።
 
-## Follow-up
+#ክትትል
 
-- Schedule weekly gate runs in CI to replay the soak test (smoke-tier).
-- Extend the Grafana board with Torii scrape targets once production telemetry
-  exports go live.
+- የሶክ ፈተናን (የጭስ ደረጃ) ለመድገም ሳምንታዊ በር በCI ውስጥ ይሰራል።
+- የ I18NT0000001X ሰሌዳን በTorii የመቧጨር ዒላማዎች አንዴ ምርት ቴሌሜትሪ ያራዝሙ
+  ኤክስፖርት በቀጥታ ይሄዳል።

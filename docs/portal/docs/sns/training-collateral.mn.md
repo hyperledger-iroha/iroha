@@ -10,30 +10,31 @@ translation_last_reviewed: 2026-02-07
 id: training-collateral
 title: SNS Training Collateral
 description: Curriculum, localization workflow, and annex evidence capture required by SN-8.
+translator: machine-google-reviewed
 ---
 
-> Mirrors `docs/source/sns/training_collateral.md`. Use this page when briefing
-> registrar, DNS, guardian, and finance teams ahead of each suffix launch.
+> `docs/source/sns/training_collateral.md` толь. Мэдээлэл өгөхдөө энэ хуудсыг ашиглана уу
+> бүртгэгч, DNS, асран хамгаалагч, санхүүгийн багууд дагавар бүрийн өмнө.
 
-## 1. Curriculum snapshot
+## 1. Сургалтын хөтөлбөрийн агшин зураг
 
-| Track | Objectives | Pre-reads |
+| Зам | Зорилго | Урьдчилан унших |
 |-------|------------|-----------|
-| Registrar ops | Submit manifests, monitor KPI dashboards, escalate errors. | `sns/onboarding-kit`, `sns/kpi-dashboard`. |
-| DNS & gateway | Apply resolver skeletons, rehearse freezes/rollback. | `sorafs/gateway-dns-runbook`, direct-mode policy samples. |
-| Guardians & council | Execute disputes, update governance addenda, log annexes. | `sns/governance-playbook`, steward scorecards. |
-| Finance & analytics | Capture ARPU/bulk metrics, publish annex bundles. | `finance/settlement-iso-mapping`, KPI dashboard JSON. |
+| Бүртгэлийн үйл ажиллагаа | Манифест илгээх, KPI хяналтын самбарыг хянах, алдааг нэмэгдүүлэх. | `sns/onboarding-kit`, `sns/kpi-dashboard`. |
+| DNS & гарц | Шийдвэрлэгч араг ясыг түрхэж, хөлдөлт/буцах дасгалыг давт. | `sorafs/gateway-dns-runbook`, шууд горимын бодлогын дээж. |
+| Асран хамгаалагч, зөвлөл | Маргааныг шийдвэрлэх, засаглалын нэмэлт, бүртгэлийн хавсралтыг шинэчлэх. | `sns/governance-playbook`, няравын онооны карт. |
+| Санхүү ба аналитик | ARPU/бөөнөөр хэмжигдэхүүнийг авах, хавсралтын багцуудыг нийтлэх. | `finance/settlement-iso-mapping`, KPI хяналтын самбар JSON. |
 
-### Module flow
+### Модулийн урсгал
 
-1. **M1 — KPI orientation (30 min):** Walk suffix filters, exports, and fugitive
-   freeze counters. Deliverable: PDF/CSV snapshots with SHA-256 digest.
-2. **M2 — Manifest lifecycle (45 min):** Build & validate registrar manifests,
-   generate resolver skeletons via `scripts/sns_zonefile_skeleton.py`. Deliverable:
-   git diff showing skeleton + GAR evidence.
-3. **M3 — Dispute drills (40 min):** Simulate guardian freeze + appeal, capture
-   guardian CLI logs beneath `artifacts/sns/training/<suffix>/<cycle>/logs/`.
-4. **M4 — Annex capture (25 min):** Export dashboard JSON and run:
+1. **M1 — KPI чиг баримжаа (30мин):** Алхах дагавар шүүлтүүр, экспорт болон оргон зайлсан
+   тоолуурыг хөлдөөх. Хүргэгдэх боломжтой: SHA-256 тоймтой PDF/CSV агшин.
+2. **M2 — Манифестын амьдралын мөчлөг (45мин):** Бүртгүүлэгчийн манифестуудыг бүтээх, баталгаажуулах,
+   `scripts/sns_zonefile_skeleton.py`-ээр дамжуулан шийдэгч араг яс үүсгэх. Хүргэлт:
+   араг яс + GAR нотлох баримтыг харуулсан git diff.
+3. **M3 — Маргаантай дасгалууд (40мин):** Асран хамгаалагчийг хөлдөөх + давж заалдах, барьж авах
+   `artifacts/sns/training/<suffix>/<cycle>/logs/` доор асран хамгаалагч CLI бүртгэлүүд.
+4. **M4 — Хавсралтын зураг авах (25мин):** JSON хяналтын самбарыг экспортод ажиллуулна:
 
    ```bash
    cargo xtask sns-annex \
@@ -46,43 +47,43 @@ description: Curriculum, localization workflow, and annex evidence capture requi
      --portal-entry docs/portal/docs/sns/regulatory/<memo-id>.md
    ```
 
-   Deliverable: updated annex Markdown + regulatory + portal memo blocks.
+   Хүргэгдэх боломжтой: шинэчилсэн хавсралт Markdown + зохицуулалтын + портал тэмдэглэлийн блокууд.
 
-## 2. Localization workflow
+## 2. Локалчлалын ажлын урсгал
 
-- Languages: `ar`, `es`, `fr`, `ja`, `pt`, `ru`, `ur`.
-- Each translation lives beside the source file
-  (`docs/source/sns/training_collateral.<lang>.md`). Update `status` +
-  `translation_last_reviewed` after refreshing.
-- Assets per language belong under
-  `artifacts/sns/training/<suffix>/<lang>/<cycle>/` (slides/, workbooks/,
-  recordings/, logs/).
-- Run `python3 scripts/sync_docs_i18n.py --lang <code>` after editing the English
-  source so translators see the new hash.
+- Хэл: `ar`, `es`, `fr`, `ja`, `pt`, `ru`, I18NI00000000.
+- Орчуулга бүр эх файлын хажууд байдаг
+  (`docs/source/sns/training_collateral.<lang>.md`). `status` + шинэчлэх
+  Сэргээх дараа `translation_last_reviewed`.
+- Хэл тус бүрд хамаарах хөрөнгө
+  `artifacts/sns/training/<suffix>/<lang>/<cycle>/` (слайд/, ажлын ном/,
+  бичлэг/, бүртгэл/).
+- Англи хэлийг засварласны дараа `python3 scripts/sync_docs_i18n.py --lang <code>` ажиллуулна уу
+  эх сурвалж, ингэснээр орчуулагчид шинэ хэшийг харна.
 
-### Delivery checklist
+### Хүргэлтийн хяналтын хуудас
 
-1. Update translation stub (`status: complete`) once localized.
-2. Export slides to PDF and upload to the per-language `slides/` directory.
-3. Record ≤10 min KPI walkthrough; link from the language stub.
-4. File governance ticket tagged `sns-training` containing slide/workbook
-   digests, recording links, and annex evidence.
+1. Орчуулгын stub-г (`status: complete`) нутагшуулсаны дараа шинэчилнэ үү.
+2. Слайдуудыг PDF формат руу экспортлох ба хэл бүрийн `slides/` лавлах руу байршуулах.
+3. ≤10мин KPI-ийн мэдээллийг бүртгэх; хэлний бүдүүвчээс холбоос.
+4. Slide/workbook агуулсан `sns-training` шошготой файлын удирдлагын тасалбар
+   тойм, бичлэгийн холбоос, хавсралт нотлох баримт.
 
-## 3. Training assets
+## 3. Сургалтын хөрөнгө
 
-- Slide outline: `docs/examples/sns_training_template.md`.
-- Workbook template: `docs/examples/sns_training_workbook.md` (one per attendee).
-- Invite + reminders: `docs/examples/sns_training_invite_email.md`.
-- Evaluation form: `docs/examples/sns_training_eval_template.md` (responses
-  archived under `artifacts/sns/training/<suffix>/<cycle>/feedback/`).
+- Слайдын тойм: `docs/examples/sns_training_template.md`.
+- Ажлын дэвтрийн загвар: `docs/examples/sns_training_workbook.md` (оролцогч бүрт нэг).
+- Урилга + сануулагч: `docs/examples/sns_training_invite_email.md`.
+- Үнэлгээний маягт: `docs/examples/sns_training_eval_template.md` (хариулт
+  `artifacts/sns/training/<suffix>/<cycle>/feedback/` дор архивлагдсан).
 
-## 4. Scheduling & metrics
+## 4. Хуваарь, хэмжүүр
 
-| Cycle | Window | Metrics | Notes |
+| Цикл | Цонх | хэмжүүр | Тэмдэглэл |
 |-------|--------|---------|-------|
-| 2026‑03 | Post KPI review | Attendance %, annex digest logged | `.sora` + `.nexus` cohorts |
-| 2026‑06 | Pre `.dao` GA | Finance readiness ≥90 % | Include policy refresh |
-| 2026‑09 | Expansion | Dispute drill <20 min, annex SLA ≤2 days | Align with SN-7 incentives |
+| 2026-03 | KPI тоймыг нийтлэх | Ирц %, хавсралтын тоймыг бүртгэсэн | `.sora` + `.nexus` когорт |
+| 2026-06 | Өмнө нь `.dao` GA | Санхүүгийн бэлэн байдал ≥90% | Бодлогын шинэчлэлийг оруулах |
+| 2026-09 | Өргөтгөл | Маргааны өрөм <20мин, хавсралт SLA ≤2days | SN-7 урамшуулалд нийцүүлэх |
 
-Capture anonymous feedback in `docs/source/sns/reports/sns_training_feedback.md`
-so subsequent cohorts can improve localization and labs.
+Нэргүй санал хүсэлтийг `docs/source/sns/reports/sns_training_feedback.md` дээр бичээрэй
+Тиймээс дараагийн бүлэг нь нутагшуулах болон лабораторийг сайжруулах боломжтой.

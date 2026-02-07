@@ -4,9 +4,11 @@ direction: ltr
 source: docs/portal/docs/sdks/nexus-quickstarts.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-مکمل quickstart `docs/source/nexus_sdk_quickstarts.md` میں موجود ہے۔ یہ پورٹل خلاصہ مشترکہ پیشگی تقاضوں اور ہر SDK کے کمانڈز کو نمایاں کرتا ہے تاکہ ڈویلپرز اپنی سیٹ اپ جلدی جانچ سکیں۔
+Démarrage rapide `docs/source/nexus_sdk_quickstarts.md` Démarrage rapide Le SDK est actuellement en cours de développement et le SDK est en cours de réalisation. ڈویلپرز اپنی سیٹ اپ جلدی جانچ سکیں۔
 
 ## مشترکہ سیٹ اپ
 
@@ -17,9 +19,9 @@ export NEXUS_CHAIN_ID="iroha3"
 export NEXUS_TRUSTED_PUBKEY="<peer-public-key>"
 ```
 
-Nexus کنفیگریشن بنڈل ڈاؤن لوڈ کریں، ہر SDK کی ڈپینڈنسیاں انسٹال کریں، اور یقینی بنائیں کہ TLS سرٹیفکیٹس ریلیز پروفائل سے میل کھاتے ہیں (دیکھیے `docs/source/sora_nexus_operator_onboarding.md`).
+Nexus Le kit de développement logiciel SDK est également disponible pour le SDK. Le service TLS est en ligne avec le numéro de téléphone (`docs/source/sora_nexus_operator_onboarding.md`).
 
-## Rust
+## Rouille
 
 ```bash
 cargo run --bin nexus_quickstart \
@@ -28,9 +30,9 @@ cargo run --bin nexus_quickstart \
   --chain "${NEXUS_CHAIN_ID}"
 ```
 
-حوالہ: `docs/source/sdk/rust.md`
+Nom : `docs/source/sdk/rust.md`
 
-## JavaScript / TypeScript
+## JavaScript/TypeScript
 
 ```bash
 npm run demo:nexus
@@ -38,13 +40,13 @@ npm run demo:nexus
 
 اسکرپٹ اوپر والی ماحولیات متغیرات کے ساتھ `ToriiClient` بناتا ہے اور تازہ ترین بلاک پرنٹ کرتا ہے۔
 
-## Swift
+## Rapide
 
 ```bash
 make swift-nexus-demo
 ```
 
-`IrohaSwift` کے `Torii.Client` سے `FindNetworkStatus` حاصل کرتا ہے۔
+`IrohaSwift` et `Torii.Client` et `FindNetworkStatus` sont en vente
 
 ## Android
 
@@ -54,9 +56,9 @@ make swift-nexus-demo
   -PNEXUS_PIPELINE_URL="${NEXUS_PIPELINE_URL}"
 ```
 
-منظم ڈیوائس ٹیسٹ چلاتا ہے جو Nexus کے staging endpoint کو ہٹ کرتا ہے۔
+Il s'agit d'un point de terminaison intermédiaire pour Nexus et d'un point de terminaison intermédiaire.
 
-## CLI
+## CLI
 
 ```bash
 iroha_cli app nexus quickstart \
@@ -68,7 +70,7 @@ iroha_cli app nexus quickstart \
 ## مسئلہ حل
 
 - TLS ناکامیاں -> Nexus ریلیز tarball سے CA بنڈل کی توثیق کریں۔
-- `ERR_UNKNOWN_LANE` -> جب multi-lane routing نافذ ہو تو `--lane-id`/`--dataspace-id` دیں۔
-- `ERR_SETTLEMENT_PAUSED` -> واقعہ عمل کے لیے [Nexus operations](../nexus/nexus-operations) دیکھیں؛ ممکن ہے گورننس نے lane روک دی ہو۔
+- `ERR_UNKNOWN_LANE` -> Pour le routage multivoie et `--lane-id`/`--dataspace-id`
+- `ERR_SETTLEMENT_PAUSED` -> واقعہ عمل کے لیے [Opérations Nexus](../nexus/nexus-operations) دیکھیں؛ ممکن ہے گورننس نے lane روک دی ہو۔
 
-مزید سیاق و سباق اور SDK مخصوص وضاحتوں کے لیے `docs/source/nexus_sdk_quickstarts.md` دیکھیں۔
+Vous avez besoin d'un SDK et vous l'avez utilisé pour le SDK `docs/source/nexus_sdk_quickstarts.md`.

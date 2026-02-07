@@ -4,62 +4,60 @@ direction: ltr
 source: docs/portal/docs/sorafs/developer-deployment.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: developer-deployment
-title: Notas de deployment da SoraFS
-sidebar_label: Notas de deployment
-description: Checklist para promover o pipeline da SoraFS de CI para producao.
+identifiant : déploiement par le développeur
+titre : Notes de déploiement par SoraFS
+sidebar_label : Notes de déploiement
+description : Liste de contrôle pour promouvoir le pipeline de SoraFS de CI pour la production.
 ---
 
 :::note Fonte canonica
-Esta pagina espelha `docs/source/sorafs/developer/deployment.md`. Mantenha ambas as copias sincronizadas.
+Cette page espelha `docs/source/sorafs/developer/deployment.md`. Mantenha ambas comme copies synchronisées.
 :::
 
-# Notas de deployment
+# Notes de déploiement
 
-O workflow de empacotamento da SoraFS fortalece o determinismo, entao a passagem de CI para producao requer principalmente guardrails operacionais. Use esta checklist ao levar as ferramentas para gateways e provedores de armazenamento reais.
+Le flux de travail de mise en œuvre du SoraFS renforce le déterminisme, entre autres pour le passage de CI pour la production, qui nécessite principalement des garde-corps opérationnels. Utilisez cette liste de contrôle pour trouver les ferraments pour les passerelles et les fournisseurs d'armement réel.
 
-## Pre-flight
+## Pré-vol
 
-- **Alinhamento do registro** - confirme que os perfis de chunker e manifests referenciam a mesma tupla `namespace.name@semver` (`docs/source/sorafs/chunker_registry.md`).
-- **Politica de admission** - revise os provider adverts assinados e alias proofs necessarios para `manifest submit` (`docs/source/sorafs/provider_admission_policy.md`).
-- **Runbook do pin registry** - mantenha `docs/source/sorafs/runbooks/pin_registry_ops.md` por perto para cenarios de recuperacao (rotacao de alias, falhas de replicacao).
+- **Alinhamento do registro** - confirmez que les performances du chunker et se manifestent en référence à mon tupla `namespace.name@semver` (`docs/source/sorafs/chunker_registry.md`).
+- **Politica d'admission** - réviser les annonces des fournisseurs d'os assassinés et les preuves d'alias nécessaires pour `manifest submit` (`docs/source/sorafs/provider_admission_policy.md`).
+- **Runbook do pin registre** - gère `docs/source/sorafs/runbooks/pin_registry_ops.md` pour les scénarios de récupération (rotation d'alias, fausses répliques).
 
-## Configuracao do ambiente
+## Configuration de l'ambiance- Les passerelles développent le streaming de preuve de point final (`POST /v1/sorafs/proof/stream`) pour que la CLI émette des résumés de télémétrie.
+- Configurez une politique `sorafs_alias_cache` en utilisant vos pilotes dans `iroha_config` ou l'assistant de la CLI (`sorafs_cli manifest submit --alias-*`).
+- Jetons de flux Forneca (ou identifiants Torii) via un gestionnaire de secrets sécurisé.
+- Habilite exportateurs de télémétrie (`torii_sorafs_proof_stream_*`, `torii_sorafs_chunk_range_*`) et envie de votre pile Prometheus/OTel.
 
-- Gateways devem habilitar o endpoint de proof streaming (`POST /v1/sorafs/proof/stream`) para que o CLI emita resumos de telemetria.
-- Configure a politica `sorafs_alias_cache` usando os padroes em `iroha_config` ou o helper do CLI (`sorafs_cli manifest submit --alias-*`).
-- Forneca stream tokens (ou credenciais Torii) via um secret manager seguro.
-- Habilite exporters de telemetria (`torii_sorafs_proof_stream_*`, `torii_sorafs_chunk_range_*`) e envie para seu stack Prometheus/OTel.
+## Stratégie de déploiement
 
-## Estrategia de rollout
-
-1. **Manifests blue/green**
-   - Use `manifest submit --summary-out` para arquivar respostas de cada rollout.
-   - Observe `torii_sorafs_gateway_refusals_total` para captar mismatches de capacidade cedo.
+1. **Manifeste bleu/vert**
+   - Utilisez `manifest submit --summary-out` pour le déploiement des réponses à chaque fois.
+   - Observer `torii_sorafs_gateway_refusals_total` para captar mismatches de capacidade cedo.
 2. **Validacao de proofs**
-   - Trate falhas em `sorafs_cli proof stream` como bloqueadores de deployment; picos de latencia costumam indicar throttling do provedor ou tiers mal configurados.
-   - `proof verify` deve fazer parte do smoke test pos-pin para garantir que o CAR hospedado pelos provedores ainda corresponde ao digest do manifest.
-3. **Dashboards de telemetria**
-   - Importe `docs/examples/sorafs_proof_streaming_dashboard.json` no Grafana.
-   - Adicione paineis para saude do pin registry (`docs/source/sorafs/runbooks/pin_registry_ops.md`) e estatisticas de chunk range.
+   - Traiter les erreurs dans `sorafs_cli proof stream` comme bloqueurs de déploiement ; des pics de latence personnalisés indiquent la limitation du fournisseur ou des niveaux mal configurés.
+   - `proof verify` deve fazer parte do smoke test pos-pin para garantir que o CAR hospedado pelos provenores ainda corresponde ao digest do manifest.
+3. **Tableaux de bord de télémétrie**
+   - Importé `docs/examples/sorafs_proof_streaming_dashboard.json` n° Grafana.
+   - Ajout de paineis pour la sauvegarde du registre des broches (`docs/source/sorafs/runbooks/pin_registry_ops.md`) et des statistiques de plage de morceaux.
 4. **Habilitacao multi-source**
-   - Siga os passos de rollout em etapas em `docs/source/sorafs/runbooks/multi_source_rollout.md` ao ativar o orquestrador e arquive artefatos de scoreboard/telemetria para auditorias.
+   - Suivez les étapes de déploiement dans les étapes `docs/source/sorafs/runbooks/multi_source_rollout.md` pour activer l'orquestrador et archiver les artéfacts de tableau de bord/télémétrie pour les auditoires.
 
-## Tratamento de incidentes
+## Traitement des incidents- Vérifiez les chemins d'escalade dans `docs/source/sorafs/runbooks/` :
+  - `sorafs_gateway_operator_playbook.md` pour les passerelles et l'échange de jetons de flux.
+  - `dispute_revocation_runbook.md` lorsque des litiges de réplication surviennent.
+  - `sorafs_node_ops.md` pour la maintenance au niveau du nœud.
+  - `multi_source_rollout.md` pour les remplacements de l'explorateur, la liste noire des pairs et les déploiements par étapes.
+- Enregistrez les erreurs de preuves et les anomalies de latence dans GovernanceLog via les API de PoR tracker existantes pour que la gouvernance avalie ou emploie les fournisseurs.
 
-- Siga os caminhos de escalonamento em `docs/source/sorafs/runbooks/`:
-  - `sorafs_gateway_operator_playbook.md` para quedas de gateway e esgotamento de stream-token.
-  - `dispute_revocation_runbook.md` quando ocorrerem disputas de replicacao.
-  - `sorafs_node_ops.md` para manutencao no nivel de nodo.
-  - `multi_source_rollout.md` para overrides do orquestrador, blacklisting de peers e rollouts em etapas.
-- Registre falhas de proofs e anomalias de latencia no GovernanceLog via as APIs de PoR tracker existentes para que a governanca avalie o desempenho dos provedores.
+## Passons à proximité
 
-## Proximos passos
+- Intégrer un explorateur automatique (`sorafs_car::multi_fetch`) lorsque l'explorateur de récupération multi-source (SF-6b) est sélectionné.
+- Accompagne les mises à niveau du PDP/PoTR sur SF-13/SF-14 ; o CLI et une documentation qui va évoluer pour exporter les prazos et sélectionner les niveaux lorsque ces preuves sont stabilisées.
 
-- Integre a automacao do orquestrador (`sorafs_car::multi_fetch`) quando o orquestrador de multi-source fetch (SF-6b) chegar.
-- Acompanhe upgrades de PDP/PoTR sob SF-13/SF-14; o CLI e a documentacao vao evoluir para expor prazos e selecao de tiers quando essas proofs estabilizarem.
-
-Ao combinar estas notas de deployment com o quickstart e as receitas de CI, as equipes podem passar de experimentos locais para pipelines SoraFS em producao com um processo repetivel e observavel.
+En combinant ces notes de déploiement avec le démarrage rapide et les recettes de CI, les équipes peuvent passer des expériences locales pour les pipelines SoraFS dans la production d'un processus répétitif et d'observation.

@@ -7,48 +7,49 @@ generator: scripts/sync_docs_i18n.py
 source_hash: c56bacde8ee42c2427d06038a3a6ca65035d4055c42f6e5ded7e54b33c1fe921
 source_last_modified: "2025-12-29T18:16:35.060432+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Documentation Automation Baselines
+# დოკუმენტაციის ავტომატიზაციის საფუძვლები
 
-This directory captures the automation surfaces that roadmap items such as
-AND5/AND6 (Android Developer Experience + Release Readiness) and DA-1
-(Data-Availability threat-model automation) refer to when they call for
-auditable documentation evidence. Staging the command references and expected
-artefacts in-tree keeps the prerequisites for compliance reviews available even
-when CI pipelines or dashboards are offline.
+ეს დირექტორია იჭერს ავტომატიზაციის ზედაპირებს, რომლებიც ასახავს საგზაო რუქებს, როგორიცაა
+AND5/AND6 (Android Developer Experience + Release Readiness) და DA-1
+(მონაცემთა ხელმისაწვდომობის საფრთხის მოდელის ავტომატიზაცია) მიუთითეთ, როდესაც ისინი ითხოვენ
+აუდიტორული დოკუმენტაციის მტკიცებულება. ბრძანების მითითებების დადგმა და მოსალოდნელია
+არტეფაქტები in-tree ინახავს წინაპირობებს შესაბამისობის მიმოხილვისთვისაც კი
+როდესაც CI მილსადენები ან დაფები ხაზგარეშეა.
 
-## Directory Layout
+## დირექტორია განლაგება
 
-| Path | Purpose |
+| ბილიკი | დანიშნულება |
 |------|---------|
-| `docs/automation/android/` | Android documentation and localization automation baselines (AND5), including i18n stub sync logs, parity summaries, and SDK publishing evidence required before AND6 sign-off. |
-| `docs/automation/da/` | Data-Availability threat-model automation outputs referenced by `cargo xtask da-threat-model-report` and the nightly docs refresh. |
+| `docs/automation/android/` | Android-ის დოკუმენტაციისა და ლოკალიზაციის ავტომატიზაციის საბაზისო ხაზები (AND5), მათ შორის i18n stub სინქრონიზაციის ჟურნალები, პარიტეტის შეჯამებები და SDK-ის გამოქვეყნების მტკიცებულება, რომელიც საჭიროა AND6-ის გაფორმებამდე. |
+| `docs/automation/da/` | მონაცემთა ხელმისაწვდომობის საფრთხის მოდელის ავტომატიზაციის შედეგები მითითებულ `cargo xtask da-threat-model-report`-ით და ღამის დოკუმენტების განახლება. |
 
-Each subdirectory documents the commands that produce the evidence along with
-the file layout we expect to check in (usually JSON summaries, run logs, or
-manifests). Teams drop new artefacts under the respective folder whenever an
-automation run materially changes the published docs, then link to the commit
-from the relevant status/roadmap entry.
+თითოეული ქვედირექტორია ადასტურებს ბრძანებებს, რომლებიც აწარმოებენ მტკიცებულებებს
+ფაილის განლაგება, რომლის შემოწმებასაც ველით (ჩვეულებრივ JSON შეჯამებები, გაშვებული ჟურნალები ან
+ვლინდება). გუნდები ათავსებენ ახალ არტეფაქტებს შესაბამის საქაღალდეში, როდესაც ეს ხდება
+ავტომატიზაციის გაშვება არსებითად ცვლის გამოქვეყნებულ დოკუმენტებს, შემდეგ აკავშირებს commit-ს
+შესაბამისი სტატუსის/საგზაო რუკის ჩანაწერიდან.
 
-## Usage
+## გამოყენება
 
-1. **Run the automation** using the commands described in the subdirectory
-   README (for example, `ci/check_android_fixtures.sh` or
+1. **გაუშვით ავტომატიზაცია** ქვედირექტორიაში აღწერილი ბრძანებების გამოყენებით
+   README (მაგალითად, `ci/check_android_fixtures.sh` ან
    `cargo xtask da-threat-model-report`).
-2. **Copy the resulting JSON/log artefacts** from `artifacts/…` into the
-   matching `docs/automation/<program>/…` folder with an ISO-8601 timestamp in
-   the filename so auditors can correlate the evidence with governance minutes.
-3. **Reference the commit** in `status.md`/`roadmap.md` when closing a roadmap
-   gate so reviewers can confirm the automation baseline used for that decision.
-4. **Keep the files lightweight**. The expectation is structured metadata,
-   manifests, or summaries—not bulk binary blobs. Larger dumps should stay in
-   object storage with the signed reference recorded here.
+2. ** დააკოპირეთ მიღებული JSON/log არტეფაქტები** `artifacts/…`-დან
+   შესაბამისი `docs/automation/<program>/…` საქაღალდე ISO-8601 დროის შტამპით
+   ფაილის სახელი, რათა აუდიტორებმა შეძლონ მტკიცებულებების კორელაცია მმართველობის ოქმებთან.
+3. ** მიმართეთ ვალდებულებას ** `status.md`/`roadmap.md`-ში საგზაო რუკის დახურვისას
+   კარიბჭე, რათა მიმომხილველებმა დაადასტურონ ამ გადაწყვეტილების მისაღებად გამოყენებული ავტომატიზაციის საბაზისო ხაზი.
+4. ** შეინახეთ ფაილები მსუბუქი **. მოლოდინი არის სტრუქტურირებული მეტამონაცემები,
+   მანიფესტები, ან შეჯამებები - არა ნაყარი ორობითი ბლოგები. უფრო დიდი ნაგავსაყრელები უნდა დარჩეს
+   ობიექტის შენახვა აქ ჩაწერილი ხელმოწერილი მითითებით.
 
-By centralising these automation notes we unblock the “docs/automation baselines
-available for audit” prerequisite that AND6 calls out and give the DA threat
-model flow a deterministic home for the nightly reports and manual spot checks.
+ამ ავტომატიზაციის შენიშვნების ცენტრალიზებით ჩვენ განვბლოკავთ „დოკუმენტების/ავტომატიზაციის საბაზისო ხაზებს
+ხელმისაწვდომია აუდიტისთვის“ წინაპირობა, რომ AND6 გამოძახებს და საფრთხეს უქმნის DA-ს
+მოდელის ნაკადი განმსაზღვრელი სახლია ღამის ანგარიშებისთვის და ხელით ადგილზე შემოწმებისთვის.

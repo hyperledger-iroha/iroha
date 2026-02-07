@@ -4,121 +4,119 @@ direction: ltr
 source: docs/portal/docs/devportal/preview-invite-tracker.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Трекер приглашений preview
+# プレビュー
 
-Этот трекер фиксирует каждую волну preview портала документации, чтобы владельцы DOCS-SORA и ревьюеры governance могли видеть активную когорту, кто утвердил приглашения и какие артефакты еще требуют внимания. Обновляйте его при отправке, отзыве или переносе приглашений, чтобы аудитный след оставался в репозитории.
+DOCS-SORA とガバナンスを確認するには、プレビューを確認してください。 могли видеть активную когорту, кто утвердил приглалаbolалазения и какие артефакты еще требуют внимания. Обновляйте его при отправке, отзыве или переносе приглабыений, чтобы аудитный след оставался в репозитории.
 
 ## Статус волн
 
-| Волна | Когорта | Issue трекера | Approver(s) | Статус | Целевое окно | Примечания |
+| Волна | Когорта |問題を解決する |承認者 | Статус | Целевое окно | Примечания |
 | --- | --- | --- | --- | --- | --- | --- |
-| **W0 - Core maintainers** | Maintainers Docs + SDK, валидирующие checksum flow | `DOCS-SORA-Preview-W0` (GitHub/ops tracker) | Lead Docs/DevRel + Portal TL | Завершено | Q2 2025 недели 1-2 | Приглашения отправлены 2025-03-25, телеметрия была зеленой, итоговый summary опубликован 2025-04-08. |
-| **W1 - Partners** | Операторы SoraFS, интеграторы Torii под NDA | `DOCS-SORA-Preview-W1` | Lead Docs/DevRel + Governance liaison | Завершено | Q2 2025 неделя 3 | Приглашения 2025-04-12 -> 2025-04-26, все восемь партнеров подтвердили; evidence в [`preview-feedback/w1/log.md`](./preview-feedback/w1/log.md) и digest выхода в [`preview-feedback/w1/summary.md`](./preview-feedback/w1/summary.md). |
-| **W2 - Community** | Кураторский community waitlist (<=25 за раз) | `DOCS-SORA-Preview-W2` | Lead Docs/DevRel + Community manager | Завершено | Q3 2025 неделя 1 (tentative) | Приглашения 2025-06-15 -> 2025-06-29, телеметрия зеленая весь период; evidence + findings в [`preview-feedback/w2/summary.md`](./preview-feedback/w2/summary.md). |
-| **W3 - Beta cohorts** | Finance/observability beta + SDK partner + ecosystem advocate | `DOCS-SORA-Preview-W3` | Lead Docs/DevRel + Governance liaison | Завершено | Q1 2026 неделя 8 | Приглашения 2026-02-18 -> 2026-02-28; digest + portal data через волну `preview-20260218` (см. [`preview-feedback/w3/summary.md`](./preview-feedback/w3/summary.md)). |
+| **W0 - コアメンテナー** |メンテナ ドキュメント + SDK、チェックサム フロー | `DOCS-SORA-Preview-W0` (GitHub/ops トラッカー) |リード ドキュメント/DevRel + ポータル TL | Завервено | 2025 年第 2 四半期 1-2 | Приглазения отправлены 2025-03-25、телеметрия была зеленой、итоговый 概要 опубликован 2025-04-08。 |
+| **W1 - パートナー** | Операторы SoraFS、интеграторы Torii под NDA | `DOCS-SORA-Preview-W1` |リード ドキュメント/DevRel + ガバナンス リエゾン | Завервено | 2025 年第 2 四半期 3 | Приглазения 2025-04-12 -> 2025-04-26, все восемь партнеров подтвердили;証拠 [`preview-feedback/w1/log.md`](./preview-feedback/w1/log.md) およびダイジェスト [`preview-feedback/w1/summary.md`](./preview-feedback/w1/summary.md)。 |
+| **W2 - コミュニティ** | Кураторский コミュニティの待機リスト (<=25 за раз) | `DOCS-SORA-Preview-W2` |リード ドキュメント/DevRel + コミュニティ マネージャー | Завервено | 2025 年第 3 四半期 1 (暫定) | 2025-06-15 -> 2025-06-29、телеметрия зеленая весь период;証拠 + 所見 × [`preview-feedback/w2/summary.md`](./preview-feedback/w2/summary.md)。 |
+| **W3 - ベータ コホート** |財務/可観測性ベータ版 + SDK パートナー + エコシステム アドボケート | `DOCS-SORA-Preview-W3` |リード ドキュメント/DevRel + ガバナンス リエゾン | Завервено | 2026 年第 1 四半期 8 日 | Приглазения 2026-02-18 -> 2026-02-28;ダイジェスト + ポータル データ `preview-20260218` (最小 [`preview-feedback/w3/summary.md`](./preview-feedback/w3/summary.md))。 |
 
-> Примечание: связывайте каждую issue трекера с соответствующими preview request tickets и архивируйте их в проекте `docs-portal-preview`, чтобы approvals оставались доступными.
+> 説明: 問題のプレビュー リクエスト チケットと архивируйте их в проекте `docs-portal-preview`,承認が必要です。
 
 ## Активные задачи (W0)
 
-- Обновлены preflight артефакты (запуск GitHub Actions `docs-portal-preview` 2025-03-24, descriptor проверен через `scripts/preview_verify.sh` с тегом `preview-2025-03-24`).
-- Зафиксированы baseline телеметрии (`docs.preview.integrity`, snapshot `TryItProxyErrors` сохранен в issue W0).
-- Outreach текст зафиксирован через [`docs/examples/docs_preview_invite_template.md`](../../../examples/docs_preview_invite_template.md) с preview tag `preview-2025-03-24`.
-- Записаны intake запросы для первых пяти maintainers (tickets `DOCS-SORA-Preview-REQ-01` ... `-05`).
-- Первые пять приглашений отправлены 2025-03-25 10:00-10:20 UTC после семи дней зеленой телеметрии; acknowledgements сохранены в `DOCS-SORA-Preview-W0`.
-- Мониторинг телеметрии + office hours для хоста (ежедневные check-ins до 2025-03-31; checkpoint log ниже).
-- Собраны midpoint feedback / issues и отмечены `docs-preview/w0` (см. [W0 digest](./preview-feedback/w0/summary.md)).
-- Опубликован summary волны + подтверждения выхода (exit bundle 2025-04-08; см. [W0 digest](./preview-feedback/w0/summary.md)).
-- W3 beta wave отслежена; будущие волны планируются после governance review.
+- プリフライト артефакты (GitHub Actions `docs-portal-preview` 2025-03-24、記述子 проверен через `scripts/preview_verify.sh` с тегом) `preview-2025-03-24`)。
+- ベースライン (`docs.preview.integrity`、スナップショット `TryItProxyErrors` の問題 W0)。
+- アウトリーチ [`docs/examples/docs_preview_invite_template.md`](../../../examples/docs_preview_invite_template.md) のプレビュー タグ `preview-2025-03-24`。
+- メンテナーの摂取量 (チケット `DOCS-SORA-Preview-REQ-01` ... `-05`)。
+- 2025 年 3 月 25 日 10:00 ～ 10:20 UTC で、今日の日付が表示されます。謝辞 `DOCS-SORA-Preview-W0`。
+- Мониторинг телеметрии + 営業時間 для хоста (チェックイン日 2025 年 3 月 31 日、チェックポイント ログ ниже)。
+- 中間点のフィードバック/問題、または `docs-preview/w0` (см. [W0 ダイジェスト](./preview-feedback/w0/summary.md))。
+- 概要 волны + подтверждения выхода (バンドル 2025-04-08 を終了; см. [W0 ダイジェスト](./preview-feedback/w0/summary.md))。
+- W3 ベータ ウェーブ отслежена;ガバナンスの見直し。
 
-## Резюме волны W1 partners
+## Резюме волны W1 パートナー
 
-- Legal & governance approvals. Addendum partners подписан 2025-04-05; approvals загружены в `DOCS-SORA-Preview-W1`.
-- Telemetry + Try it staging. Change ticket `OPS-TRYIT-147` выполнен 2025-04-06 с Grafana snapshots `docs.preview.integrity`, `TryItProxyErrors`, и `DocsPortal/GatewayRefusals`.
-- Artefact + checksum prep. Bundle `preview-2025-04-12` проверен; logs descriptor/checksum/probe сохранены в `artifacts/docs_preview/W1/preview-2025-04-12/`.
-- Invite roster + dispatch. Все восемь partner requests (`DOCS-SORA-Preview-REQ-P01...P08`) одобрены; приглашения отправлены 2025-04-12 15:00-15:21 UTC, acknowledgements зафиксированы по ревьюеру.
-- Feedback instrumentation. Ежедневные office hours + checkpoints телеметрии; см. [`preview-feedback/w1/summary.md`](./preview-feedback/w1/summary.md).
-- Final roster/exit log. [`preview-feedback/w1/log.md`](./preview-feedback/w1/log.md) теперь фиксирует timestamps invite/ack, telemetry evidence, quiz exports и pointers артефактов на 2025-04-26, чтобы governance могла воспроизвести волну.
+- 法的およびガバナンスの承認。付録パートナー 2025-04-05;承認は `DOCS-SORA-Preview-W1` です。
+- テレメトリー + ステージングを試してください。チケット `OPS-TRYIT-147` を 2025 年 4 月 6 日、Grafana スナップショット `docs.preview.integrity`、`TryItProxyErrors`、および `DocsPortal/GatewayRefusals` に変更します。
+- アーティファクト + チェックサムの準備。バンドル `preview-2025-04-12`ログ記述子/チェックサム/プローブは `artifacts/docs_preview/W1/preview-2025-04-12/` に対応します。
+- 名簿の招待 + 派遣。パートナー要求 (`DOCS-SORA-Preview-REQ-P01...P08`) を要求します。 2025-04-12 15:00-15:21 UTC、謝辞 зафиксированы по ревьюеру 。
+- フィードバック計測。営業時間 + チェックポイント телеметрии;最低。 [`preview-feedback/w1/summary.md`](./preview-feedback/w1/summary.md)。
+- 最終的な名簿/退出ログ。 [`preview-feedback/w1/log.md`](./preview-feedback/w1/log.md) タイムスタンプの招待/確認応答、テレメトリの証拠、クイズのエクスポート、およびポインタ 2025 年 4 月 26 日、ガバナンス メッセージСоспроизвести волну.
 
-## Invite log - W0 core maintainers
-
-| Reviewer ID | Role | Request ticket | Invite sent (UTC) | Expected exit (UTC) | Status | Notes |
+## 招待ログ - W0 コア メンテナー|査読者ID |役割 |チケットのリクエスト |招待を送信しました (UTC) |予想される出口 (UTC) |ステータス |メモ |
 | --- | --- | --- | --- | --- | --- | --- |
-| docs-core-01 | Portal maintainer | `DOCS-SORA-Preview-REQ-01` | 2025-03-25 10:05 | 2025-04-08 10:00 | Active | Подтвердил verification checksum; фокус на nav/sidebar review. |
-| sdk-rust-01 | Rust SDK lead | `DOCS-SORA-Preview-REQ-02` | 2025-03-25 10:08 | 2025-04-08 10:00 | Active | Тестирует SDK recipes + Norito quickstarts. |
-| sdk-js-01 | JS SDK maintainer | `DOCS-SORA-Preview-REQ-03` | 2025-03-25 10:12 | 2025-04-08 10:00 | Active | Валидирует Try it console + ISO flows. |
-| sorafs-ops-01 | SoraFS operator liaison | `DOCS-SORA-Preview-REQ-04` | 2025-03-25 10:15 | 2025-04-08 10:00 | Active | Аудитит SoraFS runbooks + orchestration docs. |
-| observability-01 | Observability TL | `DOCS-SORA-Preview-REQ-05` | 2025-03-25 10:18 | 2025-04-08 10:00 | Active | Ревьюит telemetry/incident appendices; отвечает за Alertmanager coverage. |
+|ドキュメントコア-01 |ポータル管理者 | `DOCS-SORA-Preview-REQ-01` | 2025-03-25 10:05 | 2025-04-08 10:00 |アクティブ |検証チェックサム;ナビゲーション/サイドバーのレビュー。 |
+| sdk-錆-01 | Rust SDK リード | `DOCS-SORA-Preview-REQ-02` | 2025-03-25 10:08 | 2025-04-08 10:00 |アクティブ | SDK レシピ + Norito クイックスタートを参照してください。 |
+| sdk-js-01 | JS SDK メンテナー | `DOCS-SORA-Preview-REQ-03` | 2025-03-25 10:12 | 2025-04-08 10:00 |アクティブ |コンソール + ISO フローをお試しください。 |
+| sorafs-ops-01 | SoraFS オペレーター連絡 | `DOCS-SORA-Preview-REQ-04` | 2025-03-25 10:15 | 2025-04-08 10:00 |アクティブ | SoraFS Runbook + オーケストレーション ドキュメント。 |
+|可観測性-01 |可観測性TL | `DOCS-SORA-Preview-REQ-05` | 2025-03-25 10:18 | 2025-04-08 10:00 |アクティブ |テレメトリ/インシデントの付録。 Alertmanager の対象範囲。 |
 
-Все приглашения ссылаются на один и тот же `docs-portal-preview` artefact (run 2025-03-24, tag `preview-2025-03-24`) и transcript проверки в `DOCS-SORA-Preview-W0`. Любые добавления/паузы нужно фиксировать и в таблице выше, и в issue трекера перед переходом к следующей волне.
+`docs-portal-preview` アーティファクト (2025 年 3 月 24 日実行、タグ `preview-2025-03-24`) のトランスクリプト проверки をご覧ください。 `DOCS-SORA-Preview-W0`。問題は、問題を解決するために必要な問題です。
 
-## Checkpoint log - W0
+## チェックポイント ログ - W0
 
-| Date (UTC) | Activity | Notes |
+|日付 (UTC) |アクティビティ |メモ |
 | --- | --- | --- |
-| 2025-03-26 | Baseline telemetry review + office hours | `docs.preview.integrity` + `TryItProxyErrors` оставались зелеными; office hours подтвердили завершение checksum verification. |
-| 2025-03-27 | Midpoint feedback digest posted | Summary сохранен в [`preview-feedback/w0/summary.md`](./preview-feedback/w0/summary.md); две minor nav issues отмечены `docs-preview/w0`, инцидентов нет. |
-| 2025-03-31 | Final week telemetry spot check | Последние office hours перед выходом; ревьюеры подтвердили оставшиеся задачи, алертов не было. |
-| 2025-04-08 | Exit summary + invite closures | Подтверждены завершенные обзоры, временный доступ отозван, findings архивированы в [`preview-feedback/w0/summary.md`](./preview-feedback/w0/summary.md#exit-summary-2025-04-08); tracker обновлен перед W1. |
+| 2025-03-26 |ベースライン テレメトリーのレビュー + 営業時間 | `docs.preview.integrity` + `TryItProxyErrors` を確認します。営業時間中はチェックサム検証を行っております。 |
+| 2025-03-27 |中間点フィードバックのダイジェストを掲載 |概要 [`preview-feedback/w0/summary.md`](./preview-feedback/w0/summary.md);ナビゲーションのマイナーな問題 `docs-preview/w0`、つまり。 |
+| 2025-03-31 |最終週のテレメトリースポットチェック |営業時間は次のとおりです。 ревьюеры подтвердили оставлиеся задачи, алертов не было. |
+| 2025-04-08 |終了の概要 + クロージャの招待 |結果、[`preview-feedback/w0/summary.md`](./preview-feedback/w0/summary.md#exit-summary-2025-04-08);トラッカー обновлен перед W1。 |
 
-## Invite log - W1 partners
+## 招待ログ - W1 パートナー
 
-| Reviewer ID | Role | Request ticket | Invite sent (UTC) | Expected exit (UTC) | Status | Notes |
+|査読者ID |役割 |チケットのリクエスト |招待を送信しました (UTC) |予想される出口 (UTC) |ステータス |メモ |
 | --- | --- | --- | --- | --- | --- | --- |
-| sorafs-op-01 | SoraFS operator (EU) | `DOCS-SORA-Preview-REQ-P01` | 2025-04-12 15:00 | 2025-04-26 15:00 | Completed | Orchestrator ops feedback delivered 2025-04-20; exit ack 15:05 UTC. |
-| sorafs-op-02 | SoraFS operator (JP) | `DOCS-SORA-Preview-REQ-P02` | 2025-04-12 15:03 | 2025-04-26 15:00 | Completed | Rollout comments logged in `docs-preview/w1`; exit ack 15:10 UTC. |
-| sorafs-op-03 | SoraFS operator (US) | `DOCS-SORA-Preview-REQ-P03` | 2025-04-12 15:06 | 2025-04-26 15:00 | Completed | Dispute/blacklist edits filed; exit ack 15:12 UTC. |
-| torii-int-01 | Torii integrator | `DOCS-SORA-Preview-REQ-P04` | 2025-04-12 15:09 | 2025-04-26 15:00 | Completed | Try it auth walkthrough accepted; exit ack 15:14 UTC. |
-| torii-int-02 | Torii integrator | `DOCS-SORA-Preview-REQ-P05` | 2025-04-12 15:12 | 2025-04-26 15:00 | Completed | RPC/OAuth doc comments logged; exit ack 15:16 UTC. |
-| sdk-partner-01 | SDK partner (Swift) | `DOCS-SORA-Preview-REQ-P06` | 2025-04-12 15:15 | 2025-04-26 15:00 | Completed | Preview integrity feedback merged; exit ack 15:18 UTC. |
-| sdk-partner-02 | SDK partner (Android) | `DOCS-SORA-Preview-REQ-P07` | 2025-04-12 15:18 | 2025-04-26 15:00 | Completed | Telemetry/redaction review done; exit ack 15:22 UTC. |
-| gateway-ops-01 | Gateway operator | `DOCS-SORA-Preview-REQ-P08` | 2025-04-12 15:21 | 2025-04-26 15:00 | Completed | Gateway DNS runbook comments filed; exit ack 15:24 UTC. |
+|ソラフス-op-01 | SoraFS オペレーター (EU) | `DOCS-SORA-Preview-REQ-P01` | 2025-04-12 15:00 | 2025-04-26 15:00 |完了 |オーケストレーター運用フィードバックは 2025 年 4 月 20 日に配信されました。終了確認は 15:05 UTC です。 |
+|ソラフス-op-02 | SoraFS オペレーター (JP) | `DOCS-SORA-Preview-REQ-P02` | 2025-04-12 15:03 | 2025-04-26 15:00 |完了 |ロールアウト コメントが `docs-preview/w1` に記録されました。終了確認応答 15:10 UTC。 |
+|ソラフス-op-03 | SoraFS オペレーター (米国) | `DOCS-SORA-Preview-REQ-P03` | 2025-04-12 15:06 | 2025-04-26 15:00 |完了 |紛争/ブラックリストの編集が提出されました。終了確認応答 15:12 UTC。 |
+|鳥居-int-01 | Torii インテグレータ | `DOCS-SORA-Preview-REQ-P04` | 2025-04-12 15:09 | 2025-04-26 15:00 |完了 | Try it認証ウォークスルーが受け入れられました。終了確認応答 15:14 UTC。 |
+|鳥居-int-02 | Torii インテグレータ | `DOCS-SORA-Preview-REQ-P05` | 2025-04-12 15:12 | 2025-04-26 15:00 |完了 | RPC/OAuth ドキュメントのコメントがログに記録されます。終了確認応答 15:16 UTC。 |
+| SDK-パートナー-01 | SDK パートナー (Swift) | `DOCS-SORA-Preview-REQ-P06` | 2025-04-12 15:15 | 2025-04-26 15:00 |完了 |プレビューの整合性フィードバックが統合されました。終了確認応答 15:18 UTC。 |
+| SDK-パートナー-02 | SDK パートナー (Android) | `DOCS-SORA-Preview-REQ-P07` | 2025-04-12 15:18 | 2025-04-26 15:00 |完了 |テレメトリ/秘匿化のレビューが完了しました。終了確認応答 15:22 UTC。 |
+|ゲートウェイ-ops-01 |ゲートウェイオペレーター | `DOCS-SORA-Preview-REQ-P08` | 2025-04-12 15:21 | 2025-04-26 15:00 |完了 |ゲートウェイ DNS ランブックのコメントがファイルされました。終了確認応答 15:24 UTC。 |
 
-## Checkpoint log - W1
+## チェックポイント ログ - W1
 
-| Date (UTC) | Activity | Notes |
+|日付 (UTC) |アクティビティ |メモ |
 | --- | --- | --- |
-| 2025-04-12 | Invite dispatch + artefact verification | All eight partners emailed with `preview-2025-04-12` descriptor/archive; acknowledgements stored in tracker. |
-| 2025-04-13 | Telemetry baseline review | `docs.preview.integrity`, `TryItProxyErrors`, and `DocsPortal/GatewayRefusals` dashboards green; office hours confirmed checksum verification completed. |
-| 2025-04-18 | Mid-wave office hours | `docs.preview.integrity` remained green; two doc nits logged under `docs-preview/w1` (nav wording + Try it screenshot). |
-| 2025-04-22 | Final telemetry spot check | Proxy + dashboards healthy; no new issues raised, noted in tracker ahead of exit. |
-| 2025-04-26 | Exit summary + invite closures | All partners confirmed review completion, invites revoked, evidence archived in [`preview-feedback/w1/summary.md`](./preview-feedback/w1/summary.md#exit-summary-2025-04-26). |
+| 2025-04-12 |招待ディスパッチ + アーティファクト検証 | 8 つのパートナーすべてに、`preview-2025-04-12` 記述子/アーカイブを電子メールで送信しました。トラッカーに保存された確認応答。 |
+| 2025-04-13 |テレメトリーのベースラインのレビュー | `docs.preview.integrity`、`TryItProxyErrors`、および `DocsPortal/GatewayRefusals` ダッシュボードは緑色。営業時間確認済み、チェックサム検証完了。 |
+| 2025-04-18 |中波オフィスアワー | `docs.preview.integrity` は緑色のままでした。 `docs-preview/w1` の下に 2 つのドキュメントが記録されています (ナビゲーションの文言 + Try it のスクリーンショット)。 |
+| 2025-04-22 |最終テレメトリースポットチェック |プロキシ + ダッシュボードは健全です。新たな問題は発生していませんが、終了前にトラッカーに記録されています。 |
+| 2025-04-26 |終了の概要 + クロージャの招待 |すべてのパートナーがレビューの完了、招待の取り消し、証拠が [`preview-feedback/w1/summary.md`](./preview-feedback/w1/summary.md#exit-summary-2025-04-26) にアーカイブされたことを確認しました。 |
 
-## W3 beta cohort recap
+## W3 ベータ コホートの要約- 招待状は 2026 年 2 月 18 日に送信され、チェックサム検証と確認応答が同日に記録されました。
+- ガバナンス問題 `DOCS-SORA-Preview-20260218` を伴う `docs-preview/20260218` の下で収集されたフィードバック。 `npm run --prefix docs/portal preview:wave -- --wave preview-20260218` 経由で生成されたダイジェスト + サマリー。
+- 最終テレメトリチェックの後、2026 年 2 月 28 日にアクセスが取り消されました。トラッカー + ポータルのテーブルが更新され、W3 が完了したことが示されました。
 
-- Invites sent 2026-02-18 with checksum verification + acknowledgements logged the same day.
-- Feedback collected under `docs-preview/20260218` with governance issue `DOCS-SORA-Preview-20260218`; digest + summary generated via `npm run --prefix docs/portal preview:wave -- --wave preview-20260218`.
-- Access revoked 2026-02-28 after the final telemetry check; tracker + portal tables updated to show W3 as completed.
+## 招待ログ - W2 コミュニティ
 
-## Invite log - W2 community
-
-| Reviewer ID | Role | Request ticket | Invite sent (UTC) | Expected exit (UTC) | Status | Notes |
+|査読者ID |役割 |チケットのリクエスト |招待を送信しました (UTC) |予想される出口 (UTC) |ステータス |メモ |
 | --- | --- | --- | --- | --- | --- | --- |
-| comm-vol-01 | Community reviewer (SDK) | `DOCS-SORA-Preview-REQ-C01` | 2025-06-15 16:00 | 2025-06-29 16:00 | Completed | Ack 16:06 UTC; focusing on SDK quickstarts; exit confirmed 2025-06-29. |
-| comm-vol-02 | Community reviewer (Governance) | `REQ-C02` | 2025-06-15 16:03 | 2025-06-29 16:00 | Completed | Governance/SNS review done; exit confirmed 2025-06-29. |
-| comm-vol-03 | Community reviewer (Norito) | `REQ-C03` | 2025-06-15 16:06 | 2025-06-29 16:00 | Completed | Norito walkthrough feedback logged; exit ack 2025-06-29. |
-| comm-vol-04 | Community reviewer (SoraFS) | `REQ-C04` | 2025-06-15 16:09 | 2025-06-29 16:00 | Completed | SoraFS runbook review done; exit ack 2025-06-29. |
-| comm-vol-05 | Community reviewer (Accessibility) | `REQ-C05` | 2025-06-15 16:12 | 2025-06-29 16:00 | Completed | Accessibility/UX notes shared; exit ack 2025-06-29. |
-| comm-vol-06 | Community reviewer (Localization) | `REQ-C06` | 2025-06-15 16:15 | 2025-06-29 16:00 | Completed | Localization feedback logged; exit ack 2025-06-29. |
-| comm-vol-07 | Community reviewer (Mobile) | `REQ-C07` | 2025-06-15 16:18 | 2025-06-29 16:00 | Completed | Mobile SDK doc checks delivered; exit ack 2025-06-29. |
-| comm-vol-08 | Community reviewer (Observability) | `REQ-C08` | 2025-06-15 16:21 | 2025-06-29 16:00 | Completed | Observability appendix review done; exit ack 2025-06-29. |
+|コム-vol-01 |コミュニティレビュアー (SDK) | `DOCS-SORA-Preview-REQ-C01` | 2025-06-15 16:00 | 2025-06-29 16:00 |完了 | ACK 16:06 UTC; SDK クイックスタートに焦点を当てます。終了は2025年6月29日に確認されました。 |
+|コム-vol-02 |コミュニティレビュアー (ガバナンス) | `REQ-C02` | 2025-06-15 16:03 | 2025-06-29 16:00 |完了 |ガバナンス/SNS レビュー完了。終了は2025年6月29日に確認されました。 |
+|コム-vol-03 |コミュニティレビュアー (Norito) | `REQ-C03` | 2025-06-15 16:06 | 2025-06-29 16:00 |完了 | Norito ウォークスルー フィードバックが記録されました。終了確認 2025 年 6 月 29 日。 |
+|コム-vol-04 |コミュニティレビュアー (SoraFS) | `REQ-C04` | 2025-06-15 16:09 | 2025-06-29 16:00 |完了 | SoraFS ランブックのレビューが完了しました。終了確認 2025 年 6 月 29 日。 |
+|通信vol.05 |コミュニティレビュアー (アクセシビリティ) | `REQ-C05` | 2025-06-15 16:12 | 2025-06-29 16:00 |完了 |アクセシビリティ/UX に関するメモが共有されました。終了確認 2025 年 6 月 29 日。 |
+|通信vol.06 |コミュニティレビュアー (ローカリゼーション) | `REQ-C06` | 2025-06-15 16:15 | 2025-06-29 16:00 |完了 |ローカリゼーションのフィードバックがログに記録されます。終了確認 2025 年 6 月 29 日。 |
+|コム-vol-07 |コミュニティレビュアー (モバイル) | `REQ-C07` | 2025-06-15 16:18 | 2025-06-29 16:00 |完了 |モバイル SDK ドキュメント チェックが配信されました。終了確認 2025 年 6 月 29 日。 |
+|通信vol.08 |コミュニティレビュアー (可観測性) | `REQ-C08` | 2025-06-15 16:21 | 2025-06-29 16:00 |完了 |可観測性の付録のレビューが完了しました。終了確認 2025 年 6 月 29 日。 |
 
-## Checkpoint log - W2
+## チェックポイント ログ - W2
 
-| Date (UTC) | Activity | Notes |
+|日付 (UTC) |アクティビティ |メモ |
 | --- | --- | --- |
-| 2025-06-15 | Invite dispatch + artefact verification | `preview-2025-06-15` descriptor/archive shared with 8 community reviewers; acknowledgements stored in tracker. |
-| 2025-06-16 | Telemetry baseline review | `docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals` dashboards green; Try it proxy logs show community tokens active. |
-| 2025-06-18 | Office hours & issue triage | Collected two suggestions (`docs-preview/w2 #1` tooltip wording, `#2` localization sidebar) - both routed to Docs. |
-| 2025-06-21 | Telemetry check + doc fixes | Docs addressed `docs-preview/w2 #1/#2`; dashboards still green, no incidents. |
-| 2025-06-24 | Final week office hours | Reviewers confirmed remaining feedback submissions; no alert fire. |
-| 2025-06-29 | Exit summary + invite closures | Acks recorded, preview access revoked, telemetry snapshots + artefacts archived (see [`preview-feedback/w2/summary.md`](./preview-feedback/w2/summary.md#exit-summary-2025-06-29)). |
-| 2025-04-15 | Office hours & issue triage | Two documentation suggestions logged under `docs-preview/w1`; no incidents or alerts triggered. |
+| 2025-06-15 |招待ディスパッチ + アーティファクト検証 | `preview-2025-06-15` 記述子/アーカイブは 8 人のコミュニティ レビュアーと共有されました。トラッカーに保存された確認応答。 |
+| 2025-06-16 |テレメトリーのベースラインのレビュー | `docs.preview.integrity`、`TryItProxyErrors`、`DocsPortal/GatewayRefusals` ダッシュボードは緑色。 Try it プロキシ ログにコミュニティ トークンがアクティブであることが表示されます。 |
+| 2025-06-18 |オフィスアワーと問題のトリアージ | 2 つの提案 (`docs-preview/w2 #1` ツールチップの文言、`#2` ローカリゼーション サイドバー) を収集し、両方ともドキュメントに転送しました。 |
+| 2025-06-21 |テレメトリ チェック + ドキュメントの修正 |ドキュメントは `docs-preview/w2 #1/#2` に対処しました。ダッシュボードはまだ緑色で、インシデントは発生していません。 |
+| 2025-06-24 |最終週のオフィスアワー |査読者は残りのフィードバック提出を確認しました。警戒射撃はありません。 |
+| 2025-06-29 |終了の概要 + クロージャの招待 | ACK が記録され、プレビュー アクセスが取り消され、テレメトリ スナップショットとアーティファクトがアーカイブされました ([`preview-feedback/w2/summary.md`](./preview-feedback/w2/summary.md#exit-summary-2025-06-29) を参照)。 |
+| 2025-04-15 |オフィスアワーと問題のトリアージ | 2 つのドキュメントの提案が `docs-preview/w1` で記録されました。インシデントやアラートはトリガーされませんでした。 |
 
-## Reporting hooks
+## レポートフック
 
-- Each Wednesday, update the tracker table above plus the active invite issue with a short status note (invites sent, active reviewers, incidents).
-- When a wave closes, append the feedback summary path (for example, `docs/portal/docs/devportal/preview-feedback/w0/summary.md`) and link it from `status.md`.
-- If any pause criteria from the [preview invite flow](./preview-invite-flow.md) trigger, add the remediation steps here before resuming invites.
+- 毎週水曜日に、上記のトラッカー テーブルと、短いステータス メモ (送信された招待、アクティブなレビュー担当者、インシデント) を含むアクティブな招待の問題を更新します。
+- Wave が終了したら、フィードバック サマリー パス (`docs/portal/docs/devportal/preview-feedback/w0/summary.md` など) を追加し、`status.md` からリンクします。
+- [プレビュー招待フロー](./preview-invite-flow.md) トリガーによる一時停止条件がある場合は、招待を再開する前にここに修復手順を追加します。

@@ -4,101 +4,103 @@ direction: rtl
 source: docs/portal/docs/nexus/nexus-bootstrap-plan.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: nexus-bootstrap-plan
-title: Bootstrap e observabilidade do Sora Nexus
-description: Plano operacional para colocar o cluster central de validadores Nexus online antes de adicionar servicos SoraFS e SoraNet.
+المعرف: خطة nexus-bootstrap
+العنوان: Bootstrap e observabilidade do Sora Nexus
+الوصف: خطة تشغيلية لتجميع أو مجموعة أدوات التحقق المركزية Nexus عبر الإنترنت قبل إضافة الخدمات SoraFS و SoraNet.
 ---
 
-:::note Fonte canonica
-Esta pagina reflete `docs/source/soranexus_bootstrap_plan.md`. Mantenha as duas copias alinhadas ate que as versoes localizadas cheguem ao portal.
+:::ملاحظة فونتي كانونيكا
+هذه الصفحة تعكس `docs/source/soranexus_bootstrap_plan.md`. احتفظ بنسختين متصلتين من خلال النسخ المحلية من البوابة.
 :::
 
-# Plano de bootstrap e observabilidade do Sora Nexus
+# خطة التمهيد والملاحظة من Sora Nexus
 
-## Objetivos
-- Levantar a rede base de validadores/observadores Sora Nexus com chaves de governanca, APIs Torii e monitoramento de consenso.
-- Validar servicos centrais (Torii, consenso, persistencia) antes de habilitar deploys piggyback SoraFS/SoraNet.
-- Estabelecer workflows de CI/CD e dashboards/alertas de observabilidade para garantir a saude da rede.
+##الأهداف
+- Levantar a rede base de validadores/observadores Sora Nexus com chaves de الحاكم، APIs Torii ومراقبة التوافق.
+- التحقق من صحة الخدمات المركزية (Torii، الإجماع، المثابرة) قبل التمكن من نشر SoraFS/SoraNet.
+- ضبط سير عمل CI/CD ولوحات المعلومات/تنبيهات المراقبة لضمان السلامة.
 
-## Prerequisitos
-- Material de chaves de governanca (multisig do conselho, chaves de comite) disponivel em HSM ou Vault.
-- Infraestrutura base (clusters Kubernetes ou nos bare-metal) em regioes primaria/secundaria.
-- Configuracao de bootstrap atualizada (`configs/nexus/bootstrap/*.toml`) refletindo os parametros de consenso mais recentes.
+## المتطلبات الأساسية
+- تتوفر مواد الإدارة (متعددة النصائح، ورؤوس الالتزامات) في HSM أو Vault.
+- قاعدة البنية التحتية (مجموعات Kubernetes أو المعادن العارية) في المناطق الأولية/الثانوية.
+- تم تحديث إعدادات التمهيد (`configs/nexus/bootstrap/*.toml`) لتعكس المعلمات المتفق عليها مؤخرًا.
 
-## Ambientes de rede
-- Operar dois ambientes Nexus com prefixos de rede distintos:
-- **Sora Nexus (mainnet)** - prefixo de rede de producao `nexus`, hospedando governanca canonica e servicos piggyback SoraFS/SoraNet (chain ID `0x02F1` / UUID `00000000-0000-0000-0000-000000000753`).
-- **Sora Testus (testnet)** - prefixo de rede de staging `testus`, espelhando a configuracao da mainnet para testes de integracao e validacao pre-release (chain UUID `809574f5-fee7-5e69-bfcf-52451e42d50f`).
-- Manter arquivos genesis separados, chaves de governanca e footprints de infraestrutura para cada ambiente. Testus atua como campo de provas para rollouts SoraFS/SoraNet antes de promover para Nexus.
-- Pipelines de CI/CD devem fazer deploy primeiro em Testus, executar smoke tests automatizados e exigir promocao manual para Nexus quando os checks passarem.
-- Bundles de configuracao de referencia vivem em `configs/soranexus/nexus/` (mainnet) e `configs/soranexus/testus/` (testnet), cada um contendo `config.toml`, `genesis.json` e diretorios de admissao Torii de exemplo.
+## بيئة ريدي
+- قم بتشغيل البيئات Nexus مع بادئات الشبكة المميزة:
+- ** Sora Nexus (mainnet)** - prefixo de rede de producao `nexus`, hospedando Governorca canonica e servicos piggyback SoraFS/SoraNet (معرف السلسلة `0x02F1` / UUID `00000000-0000-0000-0000-000000000753`).
+- **Sora Testus (testnet)** - بادئة إعادة التدريج `testus`، تم إعدادها لتكوين الشبكة الرئيسية لاختبارات التكامل والتحقق من الإصدار المسبق (سلسلة UUID `809574f5-fee7-5e69-bfcf-52451e42d50f`).
+- إدارة أرشيفات التكوين المنفصلة، ​​وأعمدة الإدارة، وآثار البنية التحتية لكل محيط. اختبرنا كمجال تجريبي للطرح SoraFS/SoraNet قبل الترويج لـ Nexus.
+- يتم نشر خطوط أنابيب CI/CD لأول مرة في الاختبار وتنفيذ اختبارات الدخان تلقائيًا وإصدار دليل ترويجي لـ Nexus عند مرور عمليات التحقق.
+- حزم التكوين المرجعي المباشر على `configs/soranexus/nexus/` (mainnet) و`configs/soranexus/testus/` (testnet)، كل منافس `config.toml`، `genesis.json` وأدلة القبول Torii على سبيل المثال.
 
-## Etapa 1 - Revisao de configuracao
-1. Auditar documentacao existente:
-   - `docs/source/nexus/architecture.md` (consenso, layout de Torii).
-   - `docs/source/nexus/deployment_checklist.md` (requisitos de infraestrutura).
-   - `docs/source/nexus/governance_keys.md` (procedimentos de custodia de chaves).
-2. Validar que arquivos genesis (`configs/nexus/genesis/*.json`) alinham com o roster atual de validadores e pesos de staking.
-3. Confirmar parametros de rede:
-   - Tamanho do comite de consenso e quorum.
-   - Intervalo de blocos / limites de finalidade.
-   - Portas do servico Torii e certificados TLS.
+## الخطوة 1 - مراجعة التكوين
+1. توثيق المستندات الموجودة:
+   - `docs/source/nexus/architecture.md` (بالتوافق، تخطيط Torii).
+   - `docs/source/nexus/deployment_checklist.md` (متطلبات البنية التحتية).
+   - `docs/source/nexus/governance_keys.md` (إجراءات الحراسة).
+2. التحقق من أن ملف التكوين (`configs/nexus/genesis/*.json`) يتم تضمينه في القائمة الحالية للمصدقين وأموال التوقيع المساحي.
+3. تأكيد معلمات الشبكة:
+   - ضمان التوافق والنصاب القانوني.
+   - الفاصل الزمني للكتل / الحدود النهائية.
+   - منافذ الخدمة Torii وشهادات TLS.
 
-## Etapa 2 - Deploy do cluster bootstrap
-1. Provisionar nos validadores:
-   - Deploy de instancias `irohad` (validadores) com volumes persistentes.
-   - Garantir que regras de firewall permitam trafego de consenso e Torii entre nos.
-2. Iniciar servicos Torii (REST/WebSocket) em cada validador com TLS.
-3. Deploy de nos observadores (somente leitura) para resiliencia adicional.
-4. Executar scripts de bootstrap (`scripts/nexus_bootstrap.sh`) para distribuir genesis, iniciar consenso e registrar nos.
-5. Executar smoke tests:
-   - Enviar transacoes de teste via Torii (`iroha_cli tx submit`).
-   - Verificar producao/finalidade de blocos via telemetria.
-   - Checar replicacao do ledger entre validadores/observadores.
+## Etapa 2 - نشر نظام التشغيل العنقودي
+1. توفير المصادقات:
+   - نشر المثيلات `irohad` (المصادقات) مع وحدات التخزين المستمرة.
+   - ضمان أن تسمح أنظمة جدار الحماية بحركة الموافقة وTorii بيننا.
+2. ابدأ الخدمات Torii (REST/WebSocket) على كل مدقق عبر TLS.
+3. نشر مراقبينا (في بعض الأحيان) لتعزيز المرونة.
+4. تنفيذ البرامج النصية للتمهيد (`scripts/nexus_bootstrap.sh`) لتوزيع التكوين وبدء الموافقة والمسجل.
+5. اختبارات الدخان التنفيذية:
+   - أرسل تحويلات الاختبار عبر Torii (`iroha_cli tx submit`).
+   - التحقق من إنتاج/إنهاء الكتل عبر القياس عن بعد.
+   - قم بفحص النسخة المتماثلة من دفتر الأستاذ بين المصدقين / المراقبين.
 
 ## Etapa 3 - Governanca e gestao de chaves
-1. Carregar configuracao multisig do conselho; confirmar que propostas de governanca podem ser submetidas e ratificadas.
-2. Armazenar com seguranca chaves de consenso/comite; configurar backups automaticos com logging de acesso.
-3. Configurar procedimentos de rotacao de chaves de emergencia (`docs/source/nexus/key_rotation.md`) e verificar o runbook.
+1. Carregar configuracao multisig do conselho؛ نؤكد أن مقترحات الحوكمة يمكن أن تخضع للضوابط والتصديق عليها.
+2. التخزين مع ضمان توافق الآراء/اللجنة؛ تكوين النسخ الاحتياطية التلقائية مع تسجيل الوصول.
+3. تكوين إجراءات تدوير رؤوس الطوارئ (`docs/source/nexus/key_rotation.md`) والتحقق من دليل التشغيل.
 
-## Etapa 4 - Integracao CI/CD
-1. Configurar pipelines:
-   - Build e publicacao de imagens validator/Torii (GitHub Actions ou GitLab CI).
+## ايتابا 4 - Integracao CI/CD
+1. تكوين خطوط الأنابيب:
+   - إنشاء مدقق الصور المنشور/Torii (GitHub Actions أو GitLab CI).
    - Validacao automatizada de configuracao (lint de genesis, verificacao de assinaturas).
-   - Pipelines de deploy (Helm/Kustomize) para clusters de staging e producao.
-2. Implementar smoke tests no CI (subir cluster efemero, rodar suite canonica de transacoes).
-3. Adicionar scripts de rollback para deploys com falha e documentar runbooks.
+   - خطوط أنابيب النشر (Helm/Customize) لمجموعات التدريج والإنتاج.
+2. تنفيذ اختبارات الدخان بدون CI (المجموعة الفرعية efemero، مجموعة قضيب canonica de transacoes).
+3. إضافة نصوص برمجية للتراجع للنشر باستخدام دفاتر التشغيل الصحيحة وتوثيقها.
 
-## Etapa 5 - Observabilidade e alertas
-1. Deploy do stack de monitoramento (Prometheus + Grafana + Alertmanager) por regiao.
-2. Coletar metricas centrais:
-  - `nexus_consensus_height`, `nexus_finality_lag`, `torii_request_duration_seconds`, `validator_peer_count`.
-   - Logs via Loki/ELK para servicos Torii e consenso.
-3. Dashboards:
-   - Saude do consenso (altura de bloco, finalidade, status de peers).
-   - Latencia e taxa de erro da API Torii.
-   - Transacoes de governanca e status de propostas.
-4. Alertas:
-   - Parada de producao de blocos (>2 intervalos de bloco).
-   - Queda no numero de peers abaixo do quorum.
-   - Picos na taxa de erro de Torii.
-   - Backlog da fila de propostas de governanca.
+## الخطوة 5 - إمكانية المراقبة والتنبيهات
+1. قم بنشر مكدس المراقبة (Prometheus + Grafana + Alertmanager) من أجل الموقع.
+2. قياسات كوليتار المركزية:
+  - `nexus_consensus_height`، `nexus_finality_lag`، `torii_request_duration_seconds`، `validator_peer_count`.
+   - السجلات عبر Loki/ELK للخدمة Torii وبالتوافق.
+3. لوحات المعلومات:
+   - "سعود بالموافقة" (ارتفاع الكتلة، النهاية، حالة الأقران).
+   - وقت الاستجابة وتصنيف الأخطاء في API Torii.
+   - المعاملات الحكومية وحالة العروض.
+4. التنبيهات:
+   - إنتاج الكتل (> فاصلين زمنيين للكتلة).
+   - لا يوجد أي عدد من أقرانهم بعد النصاب القانوني.
+   - الصور الموجودة في فئة الخطأ Torii.
+   - تراكم ملف مقترحات الإدارة.
 
-## Etapa 6 - Validacao e handoff
-1. Rodar validacao end-to-end:
-   - Submeter proposta de governanca (ex. mudanca de parametro).
-   - Processar a aprovacao do conselho para garantir que o pipeline de governanca funciona.
-   - Rodar diff de estado do ledger para garantir consistencia.
-2. Documentar o runbook para on-call (resposta a incidentes, failover, scaling).
-3. Comunicar prontidao para equipes SoraFS/SoraNet; confirmar que deploys piggyback podem apontar para nos Nexus.
+## إيتابا 6 - التحقق من الصحة والتسليم
+1. رودار فاليداكاو من البداية إلى النهاية:
+   - Submeter proposta de Governoranca (على سبيل المثال mudanca de parametro).
+   - معالجة المشورة لضمان عمل خط أنابيب الإدارة.
+   - اختلاف حالة دفتر الأستاذ لضمان الاتساق.
+2. توثيق أو دليل التشغيل عند الطلب (الاستجابة للحوادث وتجاوز الفشل والقياس).
+3. Comunicar prontidao para المعدات SoraFS/SoraNet؛ تأكيد نشر podem على الظهر لـ nos Nexus.
 
-## Checklist de implementacao
-- [ ] Auditoria de genesis/configuracao concluida.
-- [ ] Nos validadores e observadores deployados com consenso saudavel.
-- [ ] Chaves de governanca carregadas, proposta testada.
-- [ ] Pipelines CI/CD rodando (build + deploy + smoke tests).
-- [ ] Dashboards de observabilidade ativos com alertas.
-- [ ] Documentacao de handoff entregue aos times downstream.
+## قائمة التحقق من التنفيذ
+- [ ] مراجعة التكوين/التكوين الختامي.
+- [ ] تم نشر المصدقين والمراقبين بتوافق الآراء.
+- [ ] Chaves de goveranca carregadas، proposta testada.
+- [ ] خطوط الأنابيب CI/CD Rodando (البناء + النشر + اختبارات الدخان).
+- [ ] لوحات التحكم في إمكانية المراقبة مع التنبيهات.
+- [ ] توثيق عملية التسليم يستغرق عدة مرات في اتجاه مجرى النهر.

@@ -4,90 +4,80 @@ direction: ltr
 source: docs/portal/docs/soranet/testnet-rollout.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: testnet-rollout
-title: Роллаут testnet SoraNet (SNNet-10)
-sidebar_label: Роллаут testnet (SNNet-10)
-description: Поэтапный план активации, onboarding kit и telemetry gates для повышений SoraNet testnet.
+id: lanzamiento de testnet
+título: Роллаут testnet SoraNet (SNNet-10)
+sidebar_label: Prueba de red (SNNet-10)
+descripción: Activaciones de planes portátiles, kit de incorporación y puertas de telemetría para la red de prueba SoraNet.
 ---
 
-:::note Канонический источник
-Эта страница зеркалирует план rollout SNNet-10 в `docs/source/soranet/testnet_rollout_plan.md`. Держите обе копии синхронизированными, пока наследуемые docs не будут выведены из эксплуатации.
+:::nota Канонический источник
+Esta página está diseñada para implementar el plan SNNet-10 en `docs/source/soranet/testnet_rollout_plan.md`. Asegúrese de copiar las copias sincronizadas, ya que los documentos disponibles no contienen información exclusiva.
 :::
 
-SNNet-10 координирует поэтапную активацию anonymity overlay SoraNet по всей сети. Используйте этот план, чтобы перевести roadmap bullet в конкретные deliverables, runbooks и telemetry gates, чтобы каждый operator понимал ожидания до того, как SoraNet станет транспортом по умолчанию.
+SNNet-10 координирует поэтапную активацию superposición de anonimato SoraNet по всей сети. Implemente este plan, qué viñetas de la hoja de ruta se encuentran en los entregables concretos, runbooks y puertas de telemetría, qué operadores de cada operador están asociados con esto, como SoraNet. станет транспортом по умолчанию.
 
-## Фазы запуска
-
-| Фаза | Таймлайн (цель) | Объем | Обязательные artefacts |
+## Фазы запуска| Faza | Tamil (цель) | Объем | Objetos obsoletos |
 |-------|-------------------|-------|--------------------|
-| **T0 - Closed Testnet** | Q4 2026 | 20-50 relays на >=3 ASNs, управляемых core contributors. | Testnet onboarding kit, guard pinning smoke suite, baseline latency + PoW metrics, brownout drill log. |
-| **T1 - Public Beta** | Q1 2027 | >=100 relays, guard rotation включен, exit bonding обязателен, SDK betas по умолчанию используют SoraNet с `anon-guard-pq`. | Обновленный onboarding kit, operator verification checklist, directory publishing SOP, telemetry dashboard pack, incident rehearsal reports. |
-| **T2 - Mainnet Default** | Q2 2027 (с гейтом на завершение SNNet-6/7/9) | Production сеть по умолчанию SoraNet; включены obfs/MASQUE transports и enforcement PQ ratchet. | Протоколы approval governance, direct-only rollback procedure, downgrade alarms, подписанный success metrics report. |
+| **T0 - Red de prueba cerrada** | Cuarto trimestre de 2026 | 20-50 relés en >=3 ASN, contribuyentes principales. | Kit de incorporación de Testnet, conjunto de humo de fijación de protección, latencia de referencia + métricas de PoW, registro de perforación de apagones. |
+| **T1 - Beta pública** | Primer trimestre de 2027 | >=100 relés, rotación de protección activada, vinculación de salida instalada, SDK betas по умолчанию используют SoraNet с `anon-guard-pq`. | Kit de incorporación completo, lista de verificación de operador, SOP de publicación de directorio, paquete de panel de telemetría, informes de ensayo de incidentes. |
+| **T2 - Valor predeterminado de la red principal** | Q2 2027 (с гейтом на завершение SNNet-6/7/9) | Producción сеть по умолчанию SoraNet; включены obfs/MASQUE transportes y aplicación de trinquete PQ. | Gobernanza de aprobación de protocolos, procedimiento de reversión solo directo, alarmas de degradación, informe de métricas de éxito completas. |
 
-**Пути пропуска нет** - каждая фаза обязана доставить telemetry и governance artefacts предыдущей стадии до повышения.
+**Пути пропуска нет** - каждая фаза обязана доставить telemetría y artefactos de gobernanza antes de los estadios.
 
-## Testnet onboarding kit
+## Kit de incorporación de Testnet
 
-Каждый relay operator получает детерминированный пакет со следующими файлами:
-
-| Artefact | Описание |
+El operador de retransmisión de CAждый debe utilizar paquetes determinados con las siguientes archivos:| Artefacto | Descripción |
 |----------|-------------|
 | `01-readme.md` | Обзор, контакты и таймлайн. |
-| `02-checklist.md` | Pre-flight checklist (hardware, network reachability, guard policy verification). |
-| `03-config-example.toml` | Минимальная конфигурация relay + orchestrator SoraNet, согласованная с compliance blocks SNNet-9, включая блок `guard_directory`, который pin-ит hash последнего guard snapshot. |
-| `04-telemetry.md` | Инструкции по подключению SoraNet privacy metrics dashboards и alert thresholds. |
+| `02-checklist.md` | Lista de verificación previa al vuelo (hardware, accesibilidad de la red, verificación de la política de guardia). |
+| `03-config-example.toml` | Configuración mínima de relé + orquestador SoraNet, compatible con bloques de cumplimiento SNNet-9, bloque integrado `guard_directory`, pin-it hash basado en instantánea de protección. |
+| `04-telemetry.md` | Instrucciones para los paneles de métricas de privacidad y umbrales de alerta de SoraNet. |
 | `05-incident-playbook.md` | Процедура реакции на brownout/downgrade с матрицей эскалации. |
-| `06-verification-report.md` | Шаблон, который оператор заполняет и возвращает после прохождения smoke tests. |
+| `06-verification-report.md` | Shablon, который оператор заполняет и возвращает после прохождения pruebas de humo. |
 
-Отрендеренная копия лежит в `docs/examples/soranet_testnet_operator_kit/`. Каждое повышение обновляет kit; номера версий следуют фазе (например, `testnet-kit-vT0.1`).
+La copia adicional se envía en `docs/examples/soranet_testnet_operator_kit/`. Каждое повышение обновляет kit; номера версий следуют фазе (por ejemplo, `testnet-kit-vT0.1`).
 
-Для операторов public-beta (T1) краткий onboarding brief в `docs/source/soranet/snnet10_beta_onboarding.md` суммирует prerequisites, telemetry deliverables и workflow подачи, указывая на детерминированный kit и validator helpers.
+El resumen de incorporación de los operadores de la beta pública (T1) en `docs/source/soranet/snnet10_beta_onboarding.md` resume los requisitos previos, los entregables de telemetría y los flujos de trabajo, el kit de determinación y los asistentes de validación.
 
-`cargo xtask soranet-testnet-feed` генерирует JSON feed, который агрегирует promotion window, relay roster, metrics report, drill evidence и attachment hashes, на которые ссылается stage-gate template. Сначала подпишите drill logs и attachments через `cargo xtask soranet-testnet-drill-bundle`, чтобы feed зафиксировал `drill_log.signed = true`.
+`cargo xtask soranet-testnet-feed` genera feed JSON, ventana de promoción agregada, lista de retransmisiones, informe de métricas, evidencia de perforación y hashes adjuntos, plantilla de puerta de escenario asociada. Puede colocar registros de perforación y accesorios en el `cargo xtask soranet-testnet-drill-bundle` y en el dispositivo de alimentación `drill_log.signed = true`.
 
-## Метрики успеха
+## Uso métricoUna vez que se utilizan datos de telemetría, se deben realizar dos operaciones:
 
-Переход между фазами гейтится по следующей telemetry, собранной минимум две недели:
+- `soranet_privacy_circuit_events_total`: 95% de los circuitos se salvan de una caída de tensión o de una degradación; оставшиеся 5% ограничены suministro PQ.
+- `sorafs_orchestrator_policy_events_total{outcome="brownout"}`: =99% durante 3 s; informes de `soranet_privacy_throttles_total{scope="congestion"}`.
+- Latencia (percentil 95) por región: <200 ms después de los circuitos posteriores, ficticios según `soranet_privacy_rtt_millis{percentile="p95"}`.
 
-- `soranet_privacy_circuit_events_total`: 95% circuits завершаются без brownout или downgrade; оставшиеся 5% ограничены supply PQ.
-- `sorafs_orchestrator_policy_events_total{outcome="brownout"}`: <1% fetch sessions в день триггерят brownout вне запланированных drills.
-- `soranet_privacy_gar_reports_total`: вариативность в пределах +/-10% от ожидаемого микса GAR категорий; всплески должны быть объяснены утвержденными policy updates.
-- Успешность PoW tickets: >=99% в целевом окне 3 s; репортится через `soranet_privacy_throttles_total{scope="congestion"}`.
-- Latency (95th percentile) по регионам: <200 ms после полного построения circuits, фиксируется через `soranet_privacy_rtt_millis{percentile="p95"}`.
+Panel de control y plantillas de alerta disponibles en `dashboard_templates/` y `alert_templates/`; отзеркальте их вашем repositorio de telemetría y добавьте в CI lint checks. Utilice `cargo xtask soranet-testnet-metrics` para generar una orientación de gobernanza que se realiza antes de que se produzca un error.
 
-Dashboard и alert templates находятся в `dashboard_templates/` и `alert_templates/`; отзеркальте их в вашем telemetry repository и добавьте в CI lint checks. Используйте `cargo xtask soranet-testnet-metrics` для генерации governance-ориентированного отчета перед запросом повышения.
+Los envíos de etapa de entrada deben enviarse a `docs/source/soranet/snnet10_stage_gate_template.md`, que se encuentra en el formulario de Markdown en `docs/examples/soranet_testnet_stage_gate/stage_gate_report_template.md`.
 
-Stage-gate submissions должны следовать `docs/source/soranet/snnet10_stage_gate_template.md`, который ссылается на готовую Markdown форму в `docs/examples/soranet_testnet_stage_gate/stage_gate_report_template.md`.
+## Lista de verificación de verificación
 
-## Verification checklist
+Los operadores que pueden realizar la operación según la situación en la que se encuentren:- ✅ Anuncio de retransmisión подписан текущим sobre de admisión.
+- ✅ Prueba de humo de rotación de guardia (`tools/soranet-relay --check-rotation`) проходит.
+- ✅ `guard_directory` utiliza el artefacto `GuardDirectorySnapshotV2` y `expected_directory_hash_hex` combinado con el resumen del comité (antes de iniciar el registro de retransmisión con hash).
+- ✅ Las métricas de trinquete PQ (`sorafs_orchestrator_pq_ratio`) están diseñadas para adaptarse a estaciones de trabajo.
+- ✅ La configuración de cumplimiento de GAR se realiza mediante etiqueta posterior (см. каталог SNNet-9).
+- ✅ Alarma de degradación de simulación (recolectores de alerta, alerta de 5 minutos).
+- ✅ Mitigación de perforación PoW/DoS mejorada con documentos.
 
-Операторы должны подписаться под следующим перед входом в каждую фазу:
+Предзаполненный шаблон включен в onboarding kit. Los operadores realizan tareas de mantenimiento en el servicio de asistencia técnica de gobernanza antes de las credenciales de producción.
 
-- ✅ Relay advert подписан текущим admission envelope.
-- ✅ Guard rotation smoke test (`tools/soranet-relay --check-rotation`) проходит.
-- ✅ `guard_directory` указывает на последний artefact `GuardDirectorySnapshotV2` и `expected_directory_hash_hex` совпадает с committee digest (при старте relay логирует проверенный hash).
-- ✅ Метрики PQ ratchet (`sorafs_orchestrator_pq_ratio`) держатся выше целевых порогов для запрошенной стадии.
-- ✅ GAR compliance config совпадает с последним tag (см. каталог SNNet-9).
-- ✅ Симуляция downgrade alarm (отключить collectors, ожидать alert в течение 5 мин).
-- ✅ PoW/DoS drill выполнен с документированными шагами mitigation.
+## Gobernanza y отчетность
 
-Предзаполненный шаблон включен в onboarding kit. Операторы отправляют завершенный отчет в governance helpdesk перед получением production credentials.
+- **Control de cambios:** promociones mediante la aprobación del Consejo de Gobierno, la actualización de las actas del consejo y la página de estado de la página de estado.
+- **Resumen de estado:** publique todas las novedades sobre relés de colisión, relación PQ, apagones individuales y elementos de acción adicionales (escrito en `docs/source/status/soranet_testnet_digest.md` después inicio de sesión).
+- **Reversiones:** puede implementar un plan de reversión, configurarlo antes de 30 minutos, invalidar DNS/guard cache y plantillas de comunicación con el cliente.
 
-## Governance и отчетность
+## Activos de apoyo- `cargo xtask soranet-testnet-kit [--out <dir>]` kit de incorporación de materiales de `xtask/templates/soranet_testnet/` en el catálogo de teléfonos (con el mismo `docs/examples/soranet_testnet_operator_kit/`).
+- `cargo xtask soranet-testnet-metrics --input <metrics.json> [--out <path|->]` ofrece métricas de éxito de SNNet-10 y evalúa la estructura de aprobación/rechazo de las revisiones de gobernanza. La instantánea principal se encuentra en `docs/examples/soranet_testnet_metrics_sample.json`.
+- Plantillas Grafana y Alertmanager integradas en `dashboard_templates/soranet_testnet_overview.json` y `alert_templates/soranet_testnet_rules.yml`; Explore el repositorio de telemetría o realice comprobaciones de pelusa de CI.
+- La comunicación de degradación del SDK/mensajería del portal se realizó en `docs/source/soranet/templates/downgrade_communication_template.md`.
+- Nuevos resúmenes de estado utilizan el formulario `docs/source/status/soranet_testnet_weekly_digest.md` para el formulario canónico.
 
-- **Change control:** promotions требуют approval Governance Council, зафиксированный в council minutes и приложенный к status page.
-- **Status digest:** публиковать еженедельные обновления с количеством relays, PQ ratio, инцидентами brownout и открытыми action items (хранится в `docs/source/status/soranet_testnet_digest.md` после старта каденции).
-- **Rollbacks:** поддерживать подписанный rollback plan, возвращающий сеть на предыдущую фазу за 30 минут, включая DNS/guard cache invalidation и client communication templates.
-
-## Supporting assets
-
-- `cargo xtask soranet-testnet-kit [--out <dir>]` материализует onboarding kit из `xtask/templates/soranet_testnet/` в целевой каталог (по умолчанию `docs/examples/soranet_testnet_operator_kit/`).
-- `cargo xtask soranet-testnet-metrics --input <metrics.json> [--out <path|->]` оценивает SNNet-10 success metrics и выдает структурированный pass/fail отчет для governance reviews. Примерный snapshot лежит в `docs/examples/soranet_testnet_metrics_sample.json`.
-- Grafana и Alertmanager templates находятся в `dashboard_templates/soranet_testnet_overview.json` и `alert_templates/soranet_testnet_rules.yml`; скопируйте их в telemetry repository или подключите к CI lint checks.
-- Шаблон downgrade communication для SDK/portal messaging находится в `docs/source/soranet/templates/downgrade_communication_template.md`.
-- Еженедельные status digests должны использовать `docs/source/status/soranet_testnet_weekly_digest.md` как каноническую форму.
-
-Pull requests должны обновлять эту страницу вместе с любыми изменениями artefacts или telemetry, чтобы rollout plan оставался каноническим.
+Las solicitudes de extracción permiten modificar esta página con múltiples artefactos y telemetría y un plan de implementación estándar.

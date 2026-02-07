@@ -4,92 +4,83 @@ direction: ltr
 source: docs/portal/docs/devportal/preview-invite-flow.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Поток приглашений preview
+# Aperçu de l'installation du pot
 
 ## Назначение
 
-Пункт дорожной карты **DOCS-SORA** указывает onboarding ревьюеров и программу приглашений public preview как последние блокеры перед выходом портала из beta. Эта страница описывает, как открывать каждую волну приглашений, какие артефакты должны быть отправлены перед рассылкой и как доказать, что поток аудируем. Используйте вместе с:
+Les cartes **DOCS-SORA** permettent d'obtenir des rapports d'intégration et un programme de prévisualisation publique en cas de blocage avant votre port. c'est la version bêta. Cet article explique que pour ouvrir la page de votre installation, les objets d'art doivent être ouverts avant de commencer à fonctionner. доказать, что поток аудируем. Utilisez-le avec :
 
-- [`devportal/reviewer-onboarding`](./reviewer-onboarding.md) для работы с каждым ревьюером.
-- [`devportal/preview-integrity-plan`](./preview-integrity-plan.md) для гарантий checksum.
-- [`devportal/observability`](./observability.md) для экспорта телеметрии и hooks оповещений.
+- [`devportal/reviewer-onboarding`](./reviewer-onboarding.md) pour les robots avec chaque révision.
+- [`devportal/preview-integrity-plan`](./preview-integrity-plan.md) pour la somme de contrôle de garantie.
+- [`devportal/observability`](./observability.md) pour l'exportation de téléphones et de crochets.
 
-## План волн
-
-| Волна | Аудитория | Критерии входа | Критерии выхода | Примечания |
+## Plan vol| Volna | Auditoire | Critères de sélection | Critères à considérer | Première |
 | --- | --- | --- | --- | --- |
-| **W0 - Core maintainers** | Maintainers Docs/SDK, валидирующие контент дня один. | Команда GitHub `docs-portal-preview` заполнена, gate checksum в `npm run serve` зеленый, Alertmanager тихий 7 дней. | Все P0 доки просмотрены, backlog промаркирован, блокирующих инцидентов нет. | Используется для проверки потока; email-инвайтов нет, только обмен preview артефактами. |
-| **W1 - Partners** | Операторы SoraFS, интеграторы Torii, ревьюеры governance под NDA. | W0 завершена, юридические условия утверждены, Try-it proxy в staging. | Собран sign-off партнеров (issue или подписанная форма), телеметрия показывает <=10 одновременных ревьюеров, нет регрессий безопасности 14 дней. | Обязать шаблон приглашения + request tickets. |
-| **W2 - Community** | Избранные участники из community waitlist. | W1 завершена, инцидентные учения проведены, публичный FAQ обновлен. | Фидбек обработан, >=2 документационных релиза прошли через preview pipeline без rollback. | Ограничить одновременные приглашения (<=25) и батчить еженедельно. |
+| **W0 - Mainteneurs principaux** | Mainteneurs Docs/SDK, validant le contenu pour vous. | La commande GitHub `docs-portal-preview` a été installée, la somme de contrôle de la porte dans `npm run serve` a été lancée, Alertmanager a eu lieu le 7 juin. | Все P0 доки просмотрены, backlog промаркирован, bloкирующих инцидентов нет. | Используется для проверки потока; email-инвайтов нет, только обмен aperçu des articles. |
+| **W1 - Partenaires** | Les opérateurs SoraFS, les intégrateurs Torii, examinent la gouvernance selon NDA. | W0 s'occupe de l'utilisation de votre proxy, Try-it proxy dans la mise en scène. | Les partenaires de signature (problème ou formulaire de demande), le télémètre envoie =2 les documents ont été publiés pour voir le pipeline d'aperçu sans restauration. | Organisez les programmations régulières (<=25) et battez-les chaque fois. |
 
-Документируйте активную волну в `status.md` и в preview request tracker, чтобы governance видел статус с первого взгляда.
+Documentez le volume d'activité dans `status.md` et dans le suivi des demandes d'aperçu, ce qui indique l'état de la gouvernance selon le niveau d'accès.
 
-## Preflight чеклист
+## Contrôle de contrôle en amont
 
-Выполните эти действия **перед** планированием приглашений для волны:
-
-1. **Артефакты CI доступны**
-   - Последний `docs-portal-preview` + descriptor загружен `.github/workflows/docs-portal-preview.yml`.
-   - SoraFS pin отмечен в `docs/portal/docs/devportal/deploy-guide.md` (descriptor cutover присутствует).
-2. **Принудительный checksum**
-   - `docs/portal/scripts/serve-verified-preview.mjs` вызывается через `npm run serve`.
-   - Инструкции `scripts/preview_verify.sh` протестированы на macOS + Linux.
+Veuillez planifier ce projet **avant** la planification des vols :1. **Артефакты CI доступны**
+   - Suivant `docs-portal-preview` + descripteur ajouté `.github/workflows/docs-portal-preview.yml`.
+   - La broche SoraFS est ouverte sur `docs/portal/docs/devportal/deploy-guide.md` (le basculement du descripteur est pris en compte).
+2. **Somme de contrôle totale**
+   - `docs/portal/scripts/serve-verified-preview.mjs` s'applique à `npm run serve`.
+   - Instructions `scripts/preview_verify.sh` pour macOS + Linux.
 3. **Базовая телеметрия**
-   - `dashboards/grafana/docs_portal.json` показывает здоровый трафик Try it, и алерт `docs.preview.integrity` зеленый.
-   - Последнее приложение в `docs/portal/docs/devportal/observability.md` обновлено ссылками Grafana.
-4. **Артефакты governance**
-   - Issue invite tracker готов (одна issue на волну).
+   - `dashboards/grafana/docs_portal.json` vous indique le trafic Essayez-le et alertez `docs.preview.integrity`.
+   - L'application ultérieure du `docs/portal/docs/devportal/observability.md` s'applique désormais aux Grafana.
+4. **Gouvernance des articles**
+   - Émettez le suivi des invitations готов (одна issue на волну).
    - Шаблон реестра ревьюеров скопирован (см. [`docs/examples/docs_preview_request_template.md`](../../../examples/docs_preview_request_template.md)).
-   - Юридические и SRE approvals приложены к issue.
+   - Юридические и SRE approbations приложены к issue.
 
-Зафиксируйте завершение preflight в invite tracker перед отправкой писем.
+Assurez-vous de vérifier en amont dans le système de suivi des invitations avant l'ouverture du processus.
 
-## Шаги потока
-
-1. **Выбор кандидатов**
-   - Взять из waitlist spreadsheet или partner queue.
-   - Убедиться, что у каждого кандидата заполнен request template.
-2. **Одобрение доступа**
-   - Назначить approver на issue invite tracker.
-   - Проверить требования (CLA/контракт, acceptable use, security brief).
+## Shagi потока1. **Выбор кандидатов**
+   - Consultez la feuille de calcul de liste d'attente ou la file d'attente des partenaires.
+   - Indiquez quel modèle de demande votre candidat a proposé.
+2. **Prise en charge**
+   - Назначить approbateur на issue invitation tracker.
+   - Проверить требования (CLA/contract, utilisation acceptable, briefing de sécurité).
 3. **Отправка приглашений**
-   - Заполнить плейсхолдеры в [`docs/examples/docs_preview_invite_template.md`](../../../examples/docs_preview_invite_template.md) (`<preview_tag>`, `<request_ticket>`, контакты).
-   - Приложить descriptor + hash архива, Try it staging URL и каналы поддержки.
-   - Сохранить финальное письмо (или Matrix/Slack transcript) в issue.
-4. **Отслеживание onboarding**
-   - Обновить invite tracker полями `invite_sent_at`, `expected_exit_at`, и статусом (`pending`, `active`, `complete`, `revoked`).
-   - Привязать intake request ревьюера для аудитабельности.
-5. **Мониторинг телеметрии**
-   - Следить за `docs.preview.session_active` и алертами `TryItProxyErrors`.
-   - Завести инцидент при отклонении телеметрии от baseline и записать результат рядом с записью приглашения.
+   - Installez les téléphones dans [`docs/examples/docs_preview_invite_template.md`](../../../examples/docs_preview_invite_template.md) (`<preview_tag>`, `<request_ticket>`, contacts).
+   - Ajoutez le descripteur + l'archive de hachage, essayez l'URL de mise en scène et les canaux disponibles.
+   - Сохранить финальное письмо (ou la transcription Matrix/Slack) dans le numéro.
+4. **Démarrage de l'intégration**
+   - Activez le suivi des invitations pour `invite_sent_at`, `expected_exit_at` et le statut (`pending`, `active`, `complete`, `revoked`).
+   - Привязать demande d'admission ревьюера для аудитабельности.
+5. **Surveillance télémétrique**
+   - Sélectionnez `docs.preview.session_active` et les alertes `TryItProxyErrors`.
+   - Prévenez l'incident lors de l'ouverture du téléphone par rapport à la ligne de base et affichez le résultat lors de la configuration.
 6. **Сбор фидбека и выход**
-   - Закрыть приглашения после получения фидбека или наступления `expected_exit_at`.
+   - Fermez l'installation après la mise en service ou la mise en service `expected_exit_at`.
    - Обновить issue волны кратким резюме (находки, инциденты, следующие шаги) перед переходом к следующей когорте.
 
-## Evidence и отчетность
-
-| Артефакт | Где хранить | Частота обновления |
+## Preuves et отчетность| Artefact | Где хранить | Частота обновления |
 | --- | --- | --- |
-| Issue invite tracker | GitHub проект `docs-portal-preview` | Обновлять после каждого приглашения. |
-| Экспорт roster ревьюеров | Реестр, связанный в `docs/portal/docs/devportal/reviewer-onboarding.md` | Еженедельно. |
-| Снимки телеметрии | `docs/source/sdk/android/readiness/dashboards/<date>/` (переиспользовать telemetry bundle) | На каждую волну + после инцидентов. |
-| Feedback digest | `docs/portal/docs/devportal/preview-feedback/<wave>/summary.md` (создать папку на волну) | В течение 5 дней после выхода из волны. |
-| Governance meeting note | `docs/portal/docs/devportal/preview-invite-notes/<date>.md` | Заполнять до каждого DOCS-SORA governance sync. |
+| Suivi des invitations à émettre | Projet GitHub `docs-portal-preview` | Обновлять после каждого приглашения. |
+| Liste des exportations | Registre suisse pour `docs/portal/docs/devportal/reviewer-onboarding.md` | Еженедельно. |
+| Films télémétriques | `docs/source/sdk/android/readiness/dashboards/<date>/` (ensemble de télémétrie) | Dans chaque cas, + après les incidents. |
+| Résumé des commentaires | `docs/portal/docs/devportal/preview-feedback/<wave>/summary.md` (paquet de papier pour ordinateur portable) | Après 5 jours de technologie, vous serez en mesure de le faire. |
+| Note de réunion sur la gouvernance | `docs/portal/docs/devportal/preview-invite-notes/<date>.md` | Заполнять до каждого DOCS-SORA synchronisation de gouvernance. |
 
 Запускайте `cargo xtask docs-preview summary --wave <wave_label> --json artifacts/docs_portal_preview/<wave_label>_summary.json`
-после каждого батча, чтобы получить машинно-читабельный digest. Прикрепите рендеренный JSON к issue волны, чтобы ревьюеры governance могли подтвердить количество приглашений без воспроизведения всего лога.
+Après chaque lot, vous devez préparer un résumé machinique. En utilisant le rendu JSON pour les problèmes, les rapports sur la gouvernance peuvent améliorer la configuration de votre logo.
 
-Прикрепляйте список evidence к `status.md` при завершении каждой волны, чтобы дорожную карту можно было быстро обновить.
+Veuillez utiliser les preuves secrètes `status.md` pour obtenir des informations sur la carte que vous pouvez utiliser.
 
-## Критерии rollback и паузы
+## Critères de restauration et pauses
 
-Приостановите поток приглашений (и уведомите governance), если происходит что-либо из следующего:
+Il y a un projet de loi (et une gouvernance avancée), si vous envisagez ce sujet comme suit :
 
-- Инцидент Try it proxy, потребовавший rollback (`npm run manage:tryit-proxy`).
-- Усталость от алертов: >3 alert pages для preview-only endpoints в течение 7 дней.
-- Пробел комплаенса: приглашение отправлено без подписанных условий или без записи request template.
-- Риск целостности: checksum mismatch, обнаруженный `scripts/preview_verify.sh`.
-
-Возобновляйте только после документирования remediation в invite tracker и подтверждения стабильности телеметрии минимум 48 часов.
+- Инцидент Essayez-le proxy, потребовавший rollback (`npm run manage:tryit-proxy`).
+- Installation des alertes : >3 pages d'alerte pour les points de terminaison en aperçu uniquement dans les 7 jours.
+- Le complexe de recherche : la possibilité d'utiliser un modèle de demande sans utiliser l'utilisateur concerné ou sans télécharger un modèle de demande.
+- Risque de sécurité : inadéquation de la somme de contrôle, обнаруженный `scripts/preview_verify.sh`.Vous devez ensuite documenter la correction dans le système de suivi des invitations et assurer la stabilité des télémètres pendant un minimum de 48 heures.

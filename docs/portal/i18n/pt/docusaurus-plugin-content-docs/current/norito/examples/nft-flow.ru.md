@@ -4,30 +4,32 @@ direction: ltr
 source: docs/portal/docs/norito/examples/nft-flow.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
 slug: /norito/examples/nft-flow
-title: Выпустить, перевести и сжечь NFT
+título: Выпустить, перевести e сжечь NFT
 description: Проводит по жизненному циклу NFT от начала до конца: выпуск владельцу, перевод, добавление метаданных и сжигание.
-source: crates/ivm/docs/examples/12_nft_flow.ko
+fonte: crates/ivm/docs/examples/12_nft_flow.ko
 ---
 
 Проводит по жизненному циклу NFT от начала до конца: выпуск владельцу, перевод, добавление метаданных и сжигание.
 
 ## Пошаговый обход реестра
 
-- Убедитесь, что определение NFT (например `n0#wonderland`) существует вместе с аккаунтами владельца/получателя, используемыми в сниппете (`ih58...`, `ih58...`).
-- Вызовите точку входа `nft_issue_and_transfer`, чтобы выпустить NFT, перевести его от Alice к Bob и прикрепить флаг метаданных, описывающий выпуск.
-- Проверьте состояние NFT-реестра через `iroha_cli ledger nfts list --account <id>` или эквиваленты SDK, чтобы подтвердить перевод, затем убедитесь, что актив удаляется после выполнения инструкции burn.
+- Убедитесь, что определение NFT (por exemplo `n0#wonderland`) существует вместе аккаунтами владельца/получателя, usado no trecho (`ih58...`, `ih58...`).
+- Вызовите точку входа `nft_issue_and_transfer`, чтобы выпустить NFT, перевести его от Alice к Bob e прикрепить флаг метаданных, описывающий выпуск.
+- Verifique a configuração NFT do `iroha_cli ledger nfts list --account <id>` ou SDK brilhante, isso pode ser feito por meio de download убедитесь, что актив удаляется после выполнения инструкции queimar.
 
-## Связанные руководства SDK
+## Como usar o SDK
 
-- [Quickstart Rust SDK](/sdks/rust)
-- [Quickstart Python SDK](/sdks/python)
-- [Quickstart JavaScript SDK](/sdks/javascript)
+- [Início rápido Rust SDK](/sdks/rust)
+- [Início rápido do SDK do Python](/sdks/python)
+- [SDK JavaScript de início rápido](/sdks/javascript)
 
-[Скачать исходник Kotodama](/norito-snippets/nft-flow.ko)
+[Kotodama](/norito-snippets/nft-flow.ko)
 
 ```text
 // Mint an NFT, transfer it, update metadata, and burn it using typed IDs.

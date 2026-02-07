@@ -9,96 +9,97 @@ source_last_modified: "2025-12-29T18:16:35.205443+00:00"
 translation_last_reviewed: 2026-02-07
 title: Taikai Monitoring Dashboards
 description: Portal summary of the viewer/cache Grafana boards that back SN13-C evidence
+translator: machine-google-reviewed
 ---
 
-Taikai routing-manifest (TRM) readiness hinges on two Grafana boards and their
-companion alerts. This page mirrors the highlights from
-`dashboards/grafana/taikai_viewer.json`, `dashboards/grafana/taikai_cache.json`,
-and `dashboards/alerts/taikai_viewer_rules.yml` so reviewers can follow along
-without cloning the repository.
+Тайкай маршрутлаштырыу-манифест (ТРМ) әҙерлек шарнирҙары ике I18NT000000001X таҡталары һәм уларҙы
+иптәш иҫкәртмәләр. Был биттә 2000 йылдан алып өҫтөнлөктәр көҙгөләй.
+`dashboards/grafana/taikai_viewer.json`, I18NI000000006X,
+һәм I18NI000000007X шулай рецензенттар эйәреп була.
+һаҡлағысты клонлауһыҙ.
 
-## Viewer dashboard (`taikai_viewer.json`)
+## Тамашасы приборҙар таҡтаһы (`taikai_viewer.json`)
 
-- **Live edge & latency:** Panels visualise the p95/p99 latency histograms
-  (`taikai_ingest_segment_latency_ms`, `taikai_ingest_live_edge_drift_ms`) per
-  cluster/stream. Watch for p99 > 900 ms or drift > 1.5 s (triggers the
-  `TaikaiLiveEdgeDrift` alert).
-- **Segment errors:** Breaks out `taikai_ingest_segment_errors_total{reason}` to
-  expose decode failures, lineage replay attempts, or manifest mismatches.
-  Attach screenshots to SN13-C incidents whenever this panel rises above the
-  “warning” band.
-- **Viewer & CEK health:** Panels sourced from `taikai_viewer_*` metrics track
-  CEK rotation age, PQ guard mix, rebuffer counts, and alert roll-ups. The CEK
-  panel enforces the rotation SLA that governance reviews before approving new
-  aliases.
-- **Alias telemetry snapshot:** The `/status → telemetry.taikai_alias_rotations`
-  table sits directly on the board so operators can confirm manifest digests
-  before attaching governance evidence.
+- **Тере сит & латентлыҡ:** Панель р95/p99 латентлыҡ гистограммаларын визуализациялай
+  (`taikai_ingest_segment_latency_ms` X, I18NI000000010X)
+  кластер/ағым. p99 >900мс йәки дрейф >1.5с өсөн ҡарағыҙ (триггер the
+  `TaikaiLiveEdgeDrift` иҫкәртмәһе).
+- **Сегмент хаталары:** I18NI000000012X өҙөлә.
+  фашлау расшифровка етешһеҙлектәр, нәҫел реплей тырышлыҡтары, йәки тап килмәүен күрһәтә.
+  SN13-C инциденттарына скриншоттар беркетергә, был панель өҫтөндә ҡасан ғына күтәрелә
+  “иҫкәртмә” төркөмө.
+- **Тағы ла & CEK һаулыҡ:** панелдәр I18NI000000013X метрикаһы тректан алынған панелдәр
+  CEK әйләнеш йәше, PQ һаҡсыһы ҡатнашмаһы, ребуфер иҫәптәре, һәм иҫкәртмә ролл-ап. CEK .
+  панель ротация SLA үтәй, тип идара итеү тикшерелгән яңы раҫлау алдынан
+  псевдоним.
+- **Мәәлисә телеметрия снимок:** `/status → telemetry.taikai_alias_rotations`
+  Таблица туранан-тура таҡтала ултыра, шуға күрә операторҙар асыҡ һеңдереүҙе раҫлай ала
+  идара итеү дәлилдәрен беркеткәнсе.
 
-## Cache dashboard (`taikai_cache.json`)
+## Кэш приборҙар таҡтаһы (`taikai_cache.json`)
 
-- **Tier pressure:** Panels chart `sorafs_taikai_cache_{hot,warm,cold}_occupancy`
-  and `sorafs_taikai_cache_promotions_total`. Use these to see whether a TRM
-  rotation is overloading specific tiers.
-- **QoS denials:** `sorafs_taikai_qos_denied_total` surfaces when cache pressure
-  forces throttling; annotate the drill log whenever the rate departs from zero.
-- **Egress utilisation:** Helps confirm that SoraFS exits keep up with Taikai
-  viewers when CMAF windows rotate.
+- **Күберәк баҫым:** панелдәр диаграммаһы `sorafs_taikai_cache_{hot,warm,cold}_occupancy`
+  һәм `sorafs_taikai_cache_promotions_total`. Был ҡулланыу өсөн, тип ҡарарға TRM .
+  әйләнеш аныҡ ярустарҙы артыҡ йөкләү.
+- **QoS инҡар итеү:** I18NI00000000018X кэш баҫымы ҡасан өҫтө
+  көстәр дроссель; аннотация бурау журналы ҡасан ставка нульдән китә.
+- **Исем утилизацияһы:** Ярҙамдар раҫларға, тип I18NT0000000003X сығыуҙар менән бергә Тайкай менән бергә атларға ярҙам итә.
+  тамашасылар ҡасан CMAF тәҙрәләр әйләнә.
 
-## Alerts & evidence capture
+## Иҫкәртмәләр & дәлилдәр тотоу
 
-- Paging rules live in `dashboards/alerts/taikai_viewer_rules.yml` and map one
-  to one with the panels above (`TaikaiLiveEdgeDrift`, `TaikaiIngestFailure`,
-  `TaikaiCekRotationLag`, proof-health warnings). Ensure every production
-  cluster wires these into Alertmanager.
-- Snapshots/screenshots captured during drills must be stored in
-  `artifacts/sorafs_taikai/drills/<YYYYMMDD>/` alongside the spool files and
-  `/status` JSON. Use `scripts/telemetry/log_sorafs_drill.sh --scenario taikai-anchor`
-  to append the execution to the shared drill log.
-- When dashboards change, include the SHA-256 digest of the JSON file inside the
-  portal PR description so auditors can match the managed Grafana folder to the
-  repo version.
+- Пейдж ҡағиҙәләре I18NI000000019X X һәм бер картала йәшәй
+  бер панелдәр менән өҫтә (`TaikaiLiveEdgeDrift`, `TaikaiIngestFailure`,
+  I18NI00000022Х, һаулыҡ тураһында хәбәр итеү тураһында иҫкәртмәләр). Һәр производство тәьмин итеү
+  кластер сымдар был был иҫкәртмәнсе.
+- Дренаждар ваҡытында тотолған «Снимос/скриншоттар» 2018 йылда һаҡланырға тейеш.
+  I18NI000000023X катушка файлдары менән бер рәттән һәм
+  `/status` ЙСОН. Ҡулланыу I18NI000000025X
+  атҡарыуҙы уртаҡ бура журналына ҡушыу.
+- Ҡасан приборҙар таҡталары үҙгәрә, SHA-256 JSON файлы эсендәге дигест индереү эсендә
+  порталы PR тасуирламаһы шулай аудиторҙар менән тап килә ала идара итеү I18NT00000000002X папкаһына
+  репо версияһы.
 
-## Evidence bundle checklist
+## Дәлилдәр өйөмө тикшерелгән исемлек
 
-SN13-C reviews expect every drill or incident to ship the same artefacts listed
-in the Taikai anchor runbook. Capture them in the order below so the bundle is
-ready for governance review:
+SN13-C отзывтар көтә, һәр күнекмәләр йәки ваҡиға бер үк артефакттар исемлегенә индерелгән
+Тайкай якорь нобляжында. Уларҙы аҫтағы тәртиптә тотоп, шулай итеп, өйөм булып тора.
+идара итеүҙе тикшерергә әҙер:
 
-1. Copy the most recent `taikai-anchor-request-*.json`,
-   `taikai-trm-state-*.json`, and `taikai-lineage-*.json` files from
-   `config.da_ingest.manifest_store_dir/taikai/`. These spool artefacts prove
-   which routing manifest (TRM) and lineage window were active. The helper
-   `cargo xtask taikai-anchor-bundle --spool <dir> --copy-dir <out> --out <out>/anchor_bundle.json [--signing-key <ed25519>]`
-   will copy the spool files, emit hashes, and optionally sign the summary.
-2. Record `/v1/status` output filtered to
-   `.telemetry.taikai_alias_rotations[]` and store it next to the spool files.
-   Reviewers compare the reported `manifest_digest_hex` and window bounds with
-   the copied spool state.
-3. Export Prometheus snapshots for the metrics listed above and take screenshots
-   of the viewer/cache dashboards with the relevant cluster/stream filters in
-   view. Drop the raw JSON/CSV and the screenshots into the artefact folder.
-4. Include Alertmanager incident IDs (if any) that reference the rules from
-   `dashboards/alerts/taikai_viewer_rules.yml` and note whether they auto-closed
-   once the condition cleared.
+1. Иң һуңғы I18NI000000026X күсермәһе,
+   I18NI000000027X, һәм I18NI0000000028X файлдары .
+   `config.da_ingest.manifest_store_dir/taikai/`. Был катушка артефакттары иҫбатлай
+   ниндәй маршрутлаштырыу манифест (ТРМ) һәм нәҫел тәҙрәһе әүҙем булды. Ярҙамсы
+   I18NI000000030X
+   катушка файлдарын күсерәсәк, хештар сығарасаҡ, һәм теләк буйынса резюмеға ҡул ҡуйырға.
+2. Яҙма I18NI0000000031Х сығышы фильтрланған
+   I18NI00000032Х һәм уны катушка файлдары эргәһендә һаҡлағыҙ.
+   Рецензенттар сағыштырыу тураһында хәбәр I18NI0000000033X һәм тәҙрә сиктәре менән .
+   күсерелгән катушка хәле.
+3. Экспорт I18NT000000000000Х снимоктар өсөн метрика өҫтә күрһәтелгән һәм скриншоттар ҡабул итеү
+   тамашасы/кэш приборҙар таҡталары менән тейешле кластер/ағым фильтрҙары 2019 йылда .
+   күренеш. Сеймал JSON/CSV һәм скриншоттарҙы артефакт папкаһына төшөрөгөҙ.
+4. Иҫкәртмән инцидент идентификаторҙары индереү (әгәр бар икән) ҡағиҙәләргә һылтанма яһай.
+   I18NI000000034X һәм улар автоматик ябылғанмы
+   бер шарт таҙартылған.
 
-Store everything under `artifacts/sorafs_taikai/drills/<YYYYMMDD>/` so drill
-audits and SN13-C governance reviews can fetch a single archive.
+Һаҡлау өсөн бөтә нәмә аҫтында I18NI00000000035X шулай бура
+аудит һәм SN13-C идара итеү тикшерелгән бер архив ала ала.
 
-## Drill cadence & logging
+## быраулау каденцияһы & логин
 
-- Run the Taikai anchor drill on the first Tuesday of every month at 15:00 UTC.
-  The schedule keeps evidence fresh ahead of the SN13 governance sync.
-- After capturing the artefacts above, append the execution to the shared ledger
-  with `scripts/telemetry/log_sorafs_drill.sh --scenario taikai-anchor`. The
-  helper emits the JSON entry required by `docs/source/sorafs/runbooks-index.md`.
-- Link the archived artefacts in the runbook index entry and escalate any failed
-  alerts or dashboard regressions within 48 hours via the Media Platform WG/SRE
-  channel.
-- Keep the drill summary screenshot set (latency, drift, errors, CEK rotation,
-  cache pressure) alongside the spool bundle so operators can show exactly how
-  the dashboards behaved during the rehearsal.
+- 15:00UTC-ла һәр айҙағы тәүге шишәмбе көнө Тайкай якорь ванкоры йүгерергә.
+  График SN13 идара итеү синхронизацияһынан алда яңы ғына яңы тота.
+- Һуң, өҫтәге артефакттарҙы тотоп, атҡарыуҙы уртаҡ китапҡа ҡушығыҙ
+  `scripts/telemetry/log_sorafs_drill.sh --scenario taikai-anchor` менән. 1990 й.
+  ярҙамсыһы I18NI000000037X талап иткән JSON яҙмаһын сығара.
+- Архивланған артефакттарҙы runbook индексы яҙмаһында һылтанма һәм ниндәй ҙә булһа уңышһыҙ киҫкенләшеү
+  иҫкәртмәләр йәки приборҙар таҡтаһы регрессиялары эсендә 48hours аша медиа-платформа WG/SRE
+  канал.
+- Бурау резюме скриншот комплектын һаҡлау (латентлыҡ, дрейф, хаталар, CEK әйләнеше,
+  кэш баҫымы) катушка өйөмө менән бер рәттән, шулай итеп, операторҙар аныҡ ҡына күрһәтә ала, нисек
+  репетиция ваҡытында приборҙар таҡталары үҙҙәрен тота.
 
-Refer back to the [Taikai Anchor Runbook](./taikai-anchor-runbook.md) for the
-full Sev 1 procedure and evidence checklist. This page only captures the
-dashboard-specific guidance that SN13-C requires before leaving 🈺.
+Ҡайтып [Тайкай якорь рунбук] (./taikai-anchor-runbook.md) өсөн
+тулы Sev1 процедураһы һәм дәлилдәр тикшерелгән исемлек. Был биттә генә һүрәтләнә
+приборҙар таҡтаһы-конкрет йүнәлештәр, тип SN13-C ҡалдырғансы талап итә 🈺.

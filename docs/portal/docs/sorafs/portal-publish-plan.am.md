@@ -11,21 +11,22 @@ id: portal-publish-plan
 title: Docs Portal → SoraFS Publish Plan
 sidebar_label: Portal Publish Plan
 description: Step-by-step checklist for shipping the docs portal, OpenAPI, and SBOM bundles via SoraFS.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
-Mirrors `docs/source/sorafs/portal_publish_plan.md`. Update both copies when the workflow changes.
-:::
+::: ማስታወሻ ቀኖናዊ ምንጭ
+መስተዋቶች `docs/source/sorafs/portal_publish_plan.md`. የስራ ፍሰቱ ሲቀየር ሁለቱንም ቅጂዎች ያዘምኑ።
+::
 
-Roadmap item DOCS-7 requires every docs artefact (portal build, OpenAPI spec,
-SBOMs) to flow through the SoraFS manifest pipeline and serve via `docs.sora`
-with `Sora-Proof` headers. This checklist stitches the existing helpers together
-so Docs/DevRel, Storage, and Ops can run the release without hunting through
-multiple runbooks.
+የመንገድ ካርታ ንጥል DOCS-7 እያንዳንዱን የሰነዶች ጥበብ ይፈልጋል (ፖርታል ግንባታ ፣ OpenAPI ዝርዝር ፣
+SBOMs) በSoraFS አንጸባራቂ ቧንቧ በኩል እንዲፈስ እና በ`docs.sora` በኩል ለማገልገል
+ከ `Sora-Proof` ራስጌዎች ጋር። ይህ የማረጋገጫ ዝርዝር ያሉትን ረዳቶች አንድ ላይ ይሰፋል
+ስለዚህ ሰነዶች/ዴቭሬል፣ ማከማቻ እና ኦፕስ ልቀቱን ሳያድኑ ማስኬድ ይችላሉ።
+በርካታ runbooks.
 
-## 1. Build & Package Payloads
+## 1. ይገንቡ እና ጥቅል ክፍያ
 
-Run the packaging helper (skip options are available for dry-runs):
+የማሸጊያ ረዳትን ያሂዱ (ለደረቅ ሩጫዎች መዝለል አማራጮች ይገኛሉ)
 
 ```bash
 ./ci/package_docs_portal_sorafs.sh \
@@ -36,12 +37,12 @@ Run the packaging helper (skip options are available for dry-runs):
   --proof
 ```
 
-- `--skip-build` reuses `docs/portal/build` if CI already produced it.
-- Add `--skip-sbom` when `syft` is unavailable (e.g., air-gapped rehearsal).
-- The script runs the portal tests, emits CAR + manifest pairs for `portal`,
-  `openapi`, `portal-sbom`, and `openapi-sbom`, verifies each CAR when
-  `--proof` is set, and drops Sigstore bundles when `--sign` is set.
-- Output structure:
+- CI አስቀድሞ ካመረተው `--skip-build` `docs/portal/build` እንደገና ይጠቀማል።
+- `syft` በማይገኝበት ጊዜ `--skip-sbom` ይጨምሩ (ለምሳሌ የአየር ክፍተት ያለው ልምምድ)።
+- ስክሪፕቱ የፖርታል ሙከራዎችን ያካሂዳል፣ CAR + ጥንዶችን ለ`portal` ያወጣል።
+  `openapi`፣ `portal-sbom`፣ እና `openapi-sbom`፣ እያንዳንዱን መኪና ሲያረጋግጡ
+  `--proof` ተቀናብሯል፣ እና `--sign` ሲዘጋጅ Sigstore ጥቅሎችን ይጥላል።
+- የውጤት መዋቅር;
 
 ```json
 {
@@ -63,14 +64,14 @@ Run the packaging helper (skip options are available for dry-runs):
 }
 ```
 
-Keep the entire folder (or symlink via `artifacts/devportal/sorafs/latest`) so
-governance reviewers can trace build artifacts.
+መላውን አቃፊ (ወይም ሲምሊንክ በ `artifacts/devportal/sorafs/latest`) ያስቀምጡ
+የአስተዳደር ገምጋሚዎች የግንባታ ቅርሶችን መከታተል ይችላሉ።
 
-## 2. Pin Manifests + Aliases
+## 2. የፒን መግለጫዎች + ተለዋጭ ስሞች
 
-Use `sorafs_cli manifest submit` to push manifests into Torii and bind aliases.
-Set `${SUBMITTED_EPOCH}` to the latest consensus epoch (from
-`curl -s "${TORII_URL}/v1/status" | jq '.sumeragi.epoch'` or your dashboard).
+መግለጫዎችን ወደ I18NT0000005X ለመግፋት እና ተለዋጭ ስሞችን ለማሰር `sorafs_cli manifest submit` ይጠቀሙ።
+`${SUBMITTED_EPOCH}`ን ወደ የቅርብ ጊዜው የጋራ ስምምነት ዘመን (ከ
+`curl -s "${TORII_URL}/v1/status" | jq '.sumeragi.epoch'` ወይም የእርስዎ ዳሽቦርድ)።
 
 ```bash
 OUT="artifacts/devportal/sorafs/20260219T130012Z"
@@ -95,18 +96,18 @@ cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
   --response-out "${OUT}/portal.manifest.response.json"
 ```
 
-- Repeat for `openapi.manifest.to` and the SBOM manifests (omit alias flags for
-  SBOM bundles unless governance assigns a namespace).
-- Alternative: `iroha app sorafs pin register` works with the digest from the submit
-  summary if the binary is already installed.
-- Verify registry state with
+- ለI18NI0000029X ይድገሙ እና SBOM መገለጫዎች (የቅጽል ባንዲራዎችን ለ
+  አስተዳደር የስም ቦታ ካልሰጠ በስተቀር SBOM ጥቅሎች)።
+- አማራጭ፡ I18NI0000030X ከማስረከቢያው ጋር አብሮ ይሰራል
+  ሁለትዮሽ አስቀድሞ ከተጫነ ማጠቃለያ።
+- የመመዝገቢያ ሁኔታን በ ጋር ያረጋግጡ
   `iroha app sorafs pin list --alias docs:portal --format json | jq`.
-- Dashboards to watch: `sorafs_pin_registry.json` (`torii_sorafs_replication_*`
-  metrics).
+- ለማየት ዳሽቦርዶች፡ `sorafs_pin_registry.json` (`torii_sorafs_replication_*`
+  መለኪያዎች)።
 
-## 3. Gateway Headers & Proofs
+## 3. የጌትዌይ ራስጌዎች እና ማረጋገጫዎች
 
-Generate the HTTP header block + binding metadata:
+የኤችቲቲፒ አርዕስት አግድ + አስገዳጅ ዲበ ዳታ ይፍጠሩ፡
 
 ```bash
 iroha app sorafs gateway route-plan \
@@ -119,11 +120,11 @@ iroha app sorafs gateway route-plan \
   --out "${OUT}/portal.gateway.plan.json"
 ```
 
-- The template includes `Sora-Name`, `Sora-CID`, `Sora-Proof`, and
-  `Sora-Proof-Status` headers plus the default CSP/HSTS/Permissions-Policy.
-- Use `--rollback-manifest-json` to render a paired rollback header set.
+- አብነቱ `Sora-Name`፣ `Sora-CID`፣ `Sora-Proof` እና
+  `Sora-Proof-Status` ራስጌዎች እና ነባሪ CSP/HSTS/ፍቃዶች-መመሪያ።
+- የተጣመረ ጥቅልል ​​የራስጌ ስብስብ ለመስራት `--rollback-manifest-json` ይጠቀሙ።
 
-Before exposing traffic, run:
+ትራፊክን ከማጋለጥዎ በፊት፣ ያሂዱ፡-
 
 ```bash
 ./ci/check_sorafs_gateway_probe.sh -- \
@@ -136,14 +137,14 @@ scripts/sorafs_gateway_self_cert.sh \
   --output artifacts/sorafs_gateway_self_cert/docs
 ```
 
-- The probe enforces GAR signature freshness, alias policy, and TLS cert
-  fingerprints.
-- The self-cert harness downloads the manifest with `sorafs_fetch` and stores
-  CAR replay logs; keep the outputs for audit evidence.
+- ፍተሻው የGAR ፊርማ ትኩስነትን፣ ተለዋጭ ፖሊሲን እና የTLS የምስክር ወረቀትን ያስፈጽማል
+  የጣት አሻራዎች.
+- የእራስ ሰርተፍኬት ማሰሪያው አንጸባራቂውን በ`sorafs_fetch` እና በሱቆች ያወርዳል።
+  የ CAR መልሶ ማጫወት ምዝግብ ማስታወሻዎች; ለኦዲት ማስረጃዎች ውጤቱን ያስቀምጡ.
 
-## 4. DNS & Telemetry Guardrails
+## 4. ዲ ኤን ኤስ እና ቴሌሜትሪ የጥበቃ መንገዶች
 
-1. Refresh the DNS skeleton so governance can prove the binding:
+1. አስተዳደር አስገዳጅነቱን ማረጋገጥ እንዲችል የዲ ኤን ኤስ አጽሙን ያድሱ፡-
 
    ```bash
    scripts/sns_zonefile_skeleton.py \
@@ -151,32 +152,32 @@ scripts/sorafs_gateway_self_cert.sh \
      --out artifacts/sorafs/portal.dns-cutover.json
    ```
 
-2. Monitor during rollout:
+2. በታቀደ ጊዜ ተቆጣጠር፡-
 
    - `torii_sorafs_alias_cache_refresh_total`
    - `torii_sorafs_gateway_refusals_total{profile="docs"}`
    - `torii_sorafs_fetch_duration_ms` / `_failures_total`
 
-   Dashboards: `sorafs_gateway_observability.json`,
-   `sorafs_fetch_observability.json`, and the pin registry board.
+   ዳሽቦርዶች፡ I18NI0000044X፣
+   `sorafs_fetch_observability.json`፣ እና የፒን መመዝገቢያ ሰሌዳ።
 
-3. Smoke the alert rules (`scripts/telemetry/test_sorafs_fetch_alerts.sh`) and
-   capture logs/screenshots for the release archive.
+3. የማንቂያ ደንቦችን ያጨሱ (`scripts/telemetry/test_sorafs_fetch_alerts.sh`) እና
+   ለመልቀቂያ ማህደር ምዝግብ ማስታወሻዎችን/ቅጽበታዊ ገጽ እይታዎችን ያንሱ።
 
-## 5. Evidence Bundle
+## 5. የማስረጃ ጥቅል
 
-Include the following in the release ticket or governance package:
+በሚለቀቁበት ትኬት ወይም የአስተዳደር ፓኬጅ ውስጥ የሚከተሉትን ያካትቱ፡
 
-- `artifacts/devportal/sorafs/<stamp>/` (CARs, manifests, SBOMs, proofs,
-  Sigstore bundles, submit summaries).
-- Gateway probe + self-cert outputs
-  (`artifacts/sorafs_gateway_probe/<stamp>/`,
-  `artifacts/sorafs_gateway_self_cert/<stamp>/`).
-- DNS skeleton + header templates (`portal.gateway.headers.txt`,
-  `portal.gateway.plan.json`, `portal.dns-cutover.json`).
-- Dashboard screenshots + alert acknowledgements.
-- `status.md` update referencing the manifest digest and alias binding time.
+- `artifacts/devportal/sorafs/<stamp>/` (መኪናዎች፣ መግለጫዎች፣ SBoms፣ ማረጋገጫዎች፣
+  Sigstore ጥቅሎች፣ ማጠቃለያዎችን ያስገቡ)።
+- የጌትዌይ ፍተሻ + የራስ ሰር ማረጋገጫ ውጤቶች
+  (`artifacts/sorafs_gateway_probe/<stamp>/`፣
+  `artifacts/sorafs_gateway_self_cert/<stamp>/`)።
+- የዲ ኤን ኤስ አጽም + ራስጌ አብነቶች (`portal.gateway.headers.txt`፣
+  `portal.gateway.plan.json`፣ `portal.dns-cutover.json`)።
+- ዳሽቦርድ ቅጽበታዊ ገጽ እይታዎች + ማንቂያ እውቅናዎች።
+- `status.md` ማሻሻያ አንጸባራቂ መፍጨት እና ቅጽል አስገዳጅ ጊዜን በመጥቀስ።
 
-Following this checklist delivers DOCS-7: the portal/OpenAPI/SBOM payloads are
-packaged deterministically, pinned with aliases, guarded by `Sora-Proof`
-headers, and monitored end-to-end through the existing observability stack.
+ይህንን የማረጋገጫ ዝርዝር በመከተል DOCS-7 ያቀርባል፡ የፖርታል/OpenAPI/SBOM ጭነት
+በቆራጥነት የታሸገ፣ በቅጥያ ስሞች የተሰካ፣ በ`Sora-Proof` የተጠበቀ
+ራስጌዎች፣ እና ከጫፍ እስከ ጫፍ ባለው ተመልካች ቁልል በኩል ክትትል የሚደረግበት።

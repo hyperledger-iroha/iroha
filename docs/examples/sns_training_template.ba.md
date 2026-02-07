@@ -7,40 +7,41 @@ generator: scripts/sync_docs_i18n.py
 source_hash: dd9da5045f5f40dbc31837145ad13bf79b4d751b0803c0b6d69bab49885ed1b4
 source_last_modified: "2025-12-29T18:16:35.079313+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# SNS Training Slide Template
+# SNS уҡытыу слайд ҡалыптары
 
-This Markdown outline mirrors the slides that facilitators should adapt for
-their language cohorts. Copy these sections into Keynote/PowerPoint/Google
-Slides and localise the bullet points, screenshots, and diagrams as needed.
+Был Markdown контуры көҙгө слайдтар, фасилитаторҙар өсөн яраҡлашыу тейеш
+уларҙы тел когорталары. Был бүлектәрҙе күсерергә Keynote/PowerPoint/Google
+Слайдтар һәм пуля нөктәләрен, скриншоты һәм кәрәк булғанда схемаларҙы локалләштерә.
 
-## Title slide
-- Program: “Sora Name Service onboarding”
-- Subtitle: specify suffix + cycle (e.g., `.sora — 2026‑03`)
-- Presenters + affiliations
+## Титул слайд
+- Программа: “Сора исеме хеҙмәте onboarding”
+- Субтитр: + цикл (мәҫәлән, `.sora — 2026‑03`) ялғауын күрһәтегеҙ.
+- Алтыныусылар + аффилиация .
 
-## KPI orientation
-- Screenshot or embed of `docs/portal/docs/sns/kpi-dashboard.md`
-- Bullet list explaining suffix filters, ARPU table, freeze tracker
-- Callouts for exporting PDF/CSV
+## КПИ йүнәлеше
+- Скриншот йәки I18NI000000003X-тан һеңдерелгән
+- Пуля исемлеген аңлатыу өсөн суффикс фильтрҙар, ARPU таблицаһы, туңдырыу трекер
+- PDF/CSV экспортлау өсөн кабинет
 
-## Manifest lifecycle
-- Diagram: registrar → Torii → governance → DNS/gateway
-- Steps referencing `docs/source/sns/registry_schema.md`
-- Example manifest excerpt with annotations
+## Манифест тормош циклы
+- Схема: регистратор → I18NT000000001X → идара итеү → DNS/ҡапҡа
+- I18NI000000004X һылтанма буйынса аҙымдар
+- Аннотациялар менән миҫал өҙөк
 
-## Dispute and freeze drills
-- Flow diagram for guardian intervention
-- Checklist referencing `docs/source/sns/governance_playbook.md`
-- Example freeze ticket timeline
+## бәхәс һәм туңдырыу күнекмәләре
+- Опекун интервенцияһы өсөн ағым схемаһы
+- Тикшереү исемлегенә һылтанмалар I18NI000000005X
+- Миҫал өсөн билет ваҡыт һыҙығын туңдырыу
 
-## Annex capture
-- Command snippet showing `cargo xtask sns-annex ... --portal-entry ...`
-- Reminder to archive Grafana JSON under `artifacts/sns/regulatory/<suffix>/<cycle>/`
-- Link to `docs/source/sns/reports/.<suffix>/<cycle>.md`
+## Ҡушымта тотоу
+- I18NI000000006X рәтен күрһәткән команда өҙөк
+- I18NI00000000000 архивы `artifacts/sns/regulatory/<suffix>/<cycle>/` буйынса JSON-ға иҫкә төшөрөп тора.
+- Һылтанма I18NI000000008X
 
-## Next steps
-- Training feedback link (see `docs/examples/sns_training_eval_template.md`)
-- Slack/Matrix channel handles
-- Upcoming milestone dates
+## Киләһе аҙымдар
+- Уҡытыу кире бәйләнеш һылтанмаһы (ҡара: `docs/examples/sns_training_eval_template.md`)
+- Слэк/Матрица каналы тотҡаһы
+- Алдан килгән осор даталары

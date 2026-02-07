@@ -8,33 +8,35 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraFS Publishing & Monitoring
 sidebar_label: Publishing & Monitoring
 description: Capture the end-to-end monitoring flow for SoraFS portal releases so DOCS-3c has deterministic probes, telemetry, and evidence bundles.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-Roadmap item **DOCS-3c** requires more than a packaging checklist: after every
-SoraFS publish we must continuously prove that the developer portal, Try it
-proxy, and gateway bindings remain healthy. This page documents the monitoring
-surface that accompanies the [deployment guide](./deploy-guide.md) so CI and on
-call engineers can exercise the same checks that Ops uses to enforce the SLO.
+ལམ་སྟོན་རྣམ་གྲངས་ **DOCS-3c** ལུ་ ཐུམ་སྒྲིལ་ཞིབ་དཔྱད་ཐོ་ཡིག་ལས་ མངམ་དགོཔ་ཨིན།
+I18NT0000008X པར་སྐྲུན་འབད། ང་བཅས་ཀྱིས་ འཕྲོ་མཐུད་དེ་རང་ བདེན་ཁུངས་བཀལ་དགོཔ་ཨིན།
+proxy, དང་ འཛུལ་སྒོ་གི་བསྡམ་བཞག་ཚུ་ གསོ་བའི་དོན་ལུ་ བདེ་ཏོག་ཏོ་སྦེ་ཡོདཔ་ཨིན། ཤོག་ལེབ་འདི་གིས་ ལྟ་རྟོག་འདི་ཡིག་ཆ་བཟོཝ་ཨིན།
+ཁ་ཐོག་ [Iployment ལམ་སྟོན་](./deploy-guide.md) དེ་འབདཝ་ལས་ CI དང་
+ཁ་པར་བཏང་མི་ཚུ་གིས་ ཨེསི་ཨེལ་ཨོ་ བསྟར་སྤྱོད་འབད་ནི་ལུ་ ཨོ་པི་གིས་ ལག་ལེན་འཐབ་མི་ ཞིབ་དཔྱད་ཚུ་ ལག་ལེན་འཐབ་བཏུབ།
 
-## Pipeline recap
+## པའིཔ་ལའིན་རི་ཀེབ།
 
-1. **Build and sign** – follow the [deployment guide](./deploy-guide.md) to run
-   `npm run build`, `scripts/preview_wave_preflight.sh`, and the Sigstore +
-   manifest submission steps. The preflight script emits `preflight-summary.json`
-   so every preview carries build/link/probe metadata.
-2. **Pin and verify** – `sorafs_cli manifest submit`, `cargo xtask soradns-verify-binding`,
-   and the DNS cutover plan provide deterministic artefacts for governance.
-3. **Archive evidence** – store the CAR summary, Sigstore bundle, alias proof,
-   probe output, and `docs_portal.json` dashboard snapshots under
-   `artifacts/sorafs/<tag>/`.
+1. **བཟོ་བསྐྲུན་དང་རྟགས་** – [Iploment ལམ་སྟོན་](I18NU0000015X) གཡོག་བཀོལ་ནི་ལུ་རྗེས་སུ་འབྲང་།
+   `npm run build`, `scripts/preview_wave_preflight.sh`, དང་ Sigstore +
+   ཕུལ་བའི་རིམ་པ་ཚུ་གསལ་སྟོན་འབད། སྔོན་འགྲོའི་འཕུར་འགྲུལ་ཡིག་གཟུགས་འདི་གིས་ I18NI0000018X བཏོནམ་ཨིན།
+   དེ་འབདཝ་ལས་ སྔོན་ལྟ་ག་ར་གིས་ བཟོ་བསྐྲུན་/འབྲེལ་ལམ་/འཚོལ་ཞིབ་ མེ་ཊ་ཌེ་ཊ་ འབག་འོང་།
+2. **པིན་དང་བདེན་དཔྱད་** – I18NI000000019X, `cargo xtask soradns-verify-binding`,
+   དང་ ཌི་ཨེན་ཨེསི་ བཏོག་བཏོགཔ་འཆར་གཞི་གིས་ གཞུང་སྐྱོང་གྱི་དོན་ལུ་ གཏན་འབེབས་བཟོ་ནིའི་ ཅ་ཆས་ཚུ་ བྱིནམ་ཨིན།
+3. **archive སྒྲུབ་བྱེད་** – CAR བཅུད་བསྡུས་ I18NT0000003X བུནཌལ་, མིང་གཞན་བདེན་པ།,
+   འཚོལ་ཞིབ་ཨའུཊི་པུཊི་དང་ `docs_portal.json` འོག་གི་ བརྡ་བཀོད་པར་ཆས་ཚུ།
+   I18NI0000002X.
 
-## Monitoring channels
+## རྒྱུན་ལམ་བལྟ་རྟོག་པ།
 
-### 1. Publishing monitors (`scripts/monitor-publishing.mjs`)
+### 1. དཔེ་སྐྲུན་ལྟ་རྟོག་པ་ (I18NI0000023X)
 
-The new `npm run monitor:publishing` command wraps the portal probe, Try it
-proxy probe, and binding verifier into a single CI-friendly check. Provide a
-JSON config (checked into CI secrets or `configs/docs_monitor.json`) and run:
+I18NI000000024X བརྡ་བཀོད་གསརཔ་འདི་གིས་ དྲྭ་ཚིགས་འཚོལ་ཞིབ་འདི་ འབད་རྩོལ་བསྐྱེད།
+proxy འཚོལ་ཞིབ་དང་ CI མཐུན་སྒྲིག་བརྟག་དཔྱད་གཅིག་ནང་ མཐུད་པའི་བདེན་པ། ་ ་ ་ ་ ིར།
+JSON རིམ་སྒྲིག་ (CI གསང་བ་ ཡང་ན་ I18NI0000025X ནང་ལུ་ཞིབ་དཔྱད་འབད་ཡོདཔ་) དང་ གཡོག་བཀོལ།
 
 ```bash
 cd docs/portal
@@ -44,13 +46,13 @@ npm run monitor:publishing -- \
   --evidence-dir ../../artifacts/sorafs/preview-2026-02-14/monitoring
 ```
 
-Add `--prom-out ../../artifacts/docs_monitor/monitor.prom` (and optionally
-`--prom-job docs-preview`) to emit Prometheus text-format metrics suitable for
-Pushgateway uploads or direct Prometheus scrapes in staging/production. The
-metrics mirror the JSON summary so SLO dashboards and alert rules can track
-portal, Try it, binding, and DNS health without parsing the evidence bundle.
+I18NI0000000026X ཁ་སྐོང་རྐྱབས་ (དང་གདམ་ཁ་ཅན་སྦེ་)།
+`--prom-job docs-preview`) Prometheus ཚིག་ཡིག་རྩ་སྒྲིག་མེ་ཊིགསི་ལུ་འོས་འབབ་ཡོདཔ་ཨིན།
+པུ་ཤི་གེ་ཊི་ཝེ་ སྐྱེལ་བཙུགས་ཡང་ན་ ཐད་ཀར་ Prometheus གིས་ གནས་རིམ་/ཐོན་སྐྱེད་ནང་ བརྡ་རྟགས་ཚུ། ཚིག༌ཕྲད
+མེ་ཊིགསི་མེ་ལོང་ ཇེ་ཨེསི་ཨོ་ཨེན་ བཅུད་བསྡུས་ཡོདཔ་ལས་ ཨེསི་ཨེལ་ཨོ་ ཌེཤ་བོརཌི་དང་ ཉེན་བརྡ་ལམ་ལུགས་ཚུ་ བརྟག་ཞིབ་འབད་ཚུགས།
+portal, འདི་ཚོད་ལྟ་དང་ བསྡམས་པའི་ དེ་ལས་ DNS གསོ་བ་འདི་ སྒྲུབ་བྱེད་བསྡོམས་མ་བྱིན་པར་ འབད་རྩོལ་བསྐྱེད།
 
-Example config with required knobs and multiple bindings:
+དཔེར་ན་ དགོས་མཁོའི་མཛུབ་མོ་དང་ སྣ་མང་བཱའིན་ཌིང་ཚུ་དང་གཅིག་ཁར་ རིམ་སྒྲིག་འབད་ནི།
 
 ```json
 {
@@ -117,101 +119,101 @@ Example config with required knobs and multiple bindings:
 }
 ```
 
-The monitor writes a JSON summary (S3/SoraFS friendly) and exits non‑zero when
-any probe fails, making it suitable for Cron jobs, Buildkite steps, or
-Alertmanager webhooks. Passing `--evidence-dir` persists `summary.json`,
-`portal.json`, `tryit.json`, and `binding.json` alongside a `checksums.sha256`
-manifest so governance reviewers can diff the monitor results without having to
-re-run the probes.
+བལྟ་རྟོག་པ་གིས་ JSON བཅུད་བསྡུས་ (S3/I18NT0000009X མཐུན་སྒྲིག་) ཅིག་བྲིས་ཡོདཔ་དང་ ག་དེམ་ཅིག་སྦེ་ མིན་པའི་ non‐zero ཐོན་འགྱོཝ་ཨིན།
+འཚོལ་ཞིབ་གང་རུང་ཅིག་གིས་ འཐུས་ཤོར་བྱུང་ཡོདཔ་ལས་ ཀྲོ་རོན་ལཱ་གཡོག་དང་ བཱའིལ་ཀའིཊ་གི་གོམ་པ་ ཡང་ན་ ཡང་ཅིན་ ཡང་ཅིན་ ཡང་ཅིན།
+དྲན་ཤེས་བཟོ་མི་ ཝེབ་ཧུག། I18NI00000000028X འདི་ I18NI000000029X, གིས་ གནས་ཏེ་ཡོདཔ་ཨིན།
+I18NI000000030000300000000031X, དང་ I18NI0000000032X `checksums.sha256` དང་ཅིག་ཁར་ `binding.json`, དང་མཉམ་གཅིག་དང་གཅིག་ཁར་།
+འདི་ཡང་ གཞུང་སྐྱོང་བསྐྱར་ཞིབ་འབད་མི་ཚུ་གིས་ བལྟ་རྟོག་འབད་མི་གྲུབ་འབྲས་ཚུ་ མ་ཐོབ་པར་ དབྱེ་བ་ཕྱེ་ཚུགས།
+འཚོལ་ཞིབ་ཚུ་ལོག་སྟེ་གཡོག་བཀོལ།
 
-> **TLS guardrail:** `monitorPortal` rejects `http://` base URLs unless you set
-> `allowInsecureHttp: true` in the config. Keep production/staging probes on
-> HTTPS; the opt-in exists solely for local previews.
+> **ཊི་ཨེལ་ཨེསི་སྲུང་སྐྱོབ:** ཁྱོད་ཀྱིས་གཞི་སྒྲིག་མ་འབད་ཚུན་ཚོད་ `http://` གཞི་རྟེན་ཡུ་ཨར་ཨེལ་ཚུ་བཀག་ཆ་འབདཝ་ཨིན།
+> རིམ་སྒྲིག་ནང་ `allowInsecureHttp: true`. བཟོ་བསྐྲུན་/གནས་རིམ་གྱི་འཚོལ་ཞིབ་ཚུ་བཞག་དགོ།
+> HTTPS; ཡར་གྱི་སྔོན་ལྟ་ཚུ་གི་དོན་ལུ་ ཡར་འཕེལ་འདི་ རྐྱངམ་ཅིག་ཡོདཔ་ཨིན།
 
-Each binding entry runs `cargo xtask soradns-verify-binding` against the captured
-`portal.gateway.binding.json` bundle (and optional `manifestJson`) so alias,
-proof status, and content CID stay aligned with the published evidence. The
-optional `hostname` guard confirms the alias-derived canonical host matches the
-gateway host you intend to promote, preventing DNS cutovers that drift from the
-recorded binding.
+བསྡམས་པའི་ཐོ་བཀོད་རེ་རེ་བཞིན་ I18NI000000037X གིས་བཟུང་ཡོད་པའི་རྒྱབ་འགལ་འབདཝ་ཨིན།
+`portal.gateway.binding.json` བཱན་ཌལ་ (དང་གདམ་ཁ་ཅན་གྱི་ `manifestJson`) དེ་ལས་ མིང་གཞན་ཚུ།
+བདེན་ཁུངས་གནས་རིམ་དང་ ནང་དོན་སི་ཨའི་ཌི་སྡོད་ནི་འདི་ དཔར་བསྐྲུན་འབད་ཡོད་པའི་སྒྲུབ་བྱེད་ཚུ་དང་ མཐུན་སྒྲིག་འབདཝ་ཨིན། ཚིག༌ཕྲད
+གདམ་ཁ་ཅན་ `hostname` ཉེན་སྐྱོབ་ཀྱིས་ མིང་གཞན་ལས་ཐོན་ཡོད་པའི་ ཀེ་ནོ་ནིག་ཧོསཊི་ མཐུན་སྒྲིག་ཚུ་ ངེས་གཏན་བཟོཝ་ཨིན།
+འཛུལ་སྒོ་འདི་ ཁྱོད་ཀྱིས་ ཁྱབ་སྤེལ་འབད་ནི་ལུ་ དམིགས་གཏད་བསྐྱེད་དོ་ཡོདཔ་ཨིན།
+ཐོ་བཀོད་འབད་ཡོད་པའི་འབྲེལ་བསྡམས།
 
-The optional `dns` block wires DOCS-7’s SoraDNS rollout into the same monitor.
-Each entry resolves a hostname/record-type pair (for example the
-`docs-preview.sora.link` → `docs-preview.sora.link.gw.sora.name` CNAME) and
-confirms the answers match `expectedRecords` or `expectedIncludes`. The second
-entry in the snippet above hard-codes the canonical hashed hostname produced by
-`cargo xtask soradns-hosts --name docs-preview.sora.link`; the monitor now proves
-both the human-friendly alias and the canonical hash (`igjssx53…gw.sora.id`)
-resolve to the pinned pretty host. This makes DNS promotion evidence automatic:
-the monitor will fail if either host drifts, even when the HTTP bindings still
-staple the right manifest.
+གདམ་ཁ་ཅན་གྱི་ `dns` གིས་ DOCS-7 གི་ SorADNS བསྐོར་ར་ཚུ་ བལྟ་རྟོག་པ་གཅིག་ནང་ བསྐོར་རྒྱབ་འབདཝ་ཨིན།
+ཐོ་བཀོད་རེ་རེ་གིས་ ཧོསིཊི་མིང་/དྲན་ཐོ་དབྱེ་བ་ཆ་གཅིག་སེལ་འཐུ་འབད་ (དཔེར་ན་ .
+`docs-preview.sora.link` → I18NI0000043X སི་ཨེན་ཨེ་) དང་།
+ལན་ཚུ་ ངེས་གཏན་བཟོཝ་ཨིན། `expectedRecords` ཡང་ན་ `expectedIncludes`. །གཉིས་པ་ནི།
+འདོན་སྤེལ།: ༢༠༡༠/༠༤/༠༣ རིག་པ།(༠) འདི་ཡང་ གྱིས་ བཤད།
+`cargo xtask soradns-hosts --name docs-preview.sora.link`; ད་ལྟོ་ལྟ་རྟོག་པ་གིས་ བདེན་ཁུངས་བཀལཝ་ཨིན།
+མིའི་མཐུན་པའི་མིང་གཞན་དང་ ཁྲིམས་ལུགས་ཀྱི་ ཧ་ཤི་ (`igjssx53…gw.sora.id`) གཉིས་ཀ།
+པིན་འབད་ཡོད་པའི་ མཛེས་སྡུག་ཅན་གྱི་ ཧོསཊི་ལུ་ ཐག་བཅད། འདི་གིས་ ཌི་ཨེན་ཨེསི་ ཁྱབ་སྤེལ་གྱི་ སྒྲུབ་བྱེད་ཚུ་ རང་བཞིན་སྦེ་བཟོཝ་ཨིན།
+ཨེཆ་ཊི་ཊི་པི་ བཱའིན་ཌིང་ཚུ་ ད་ལྟོ་ཡང་ཡོད་རུང་ ཧོསིཊི་ཌིརཕཊི་ཚུ་ཨིན་པ་ཅིན་ ལྟ་རྟོག་པ་འདི་འཐུས་ཤོར་འབྱུང་འོང་།
+བདེན་པའི་མངོན་སུམ་འཐབ།
 
-### 2. OpenAPI version manifest guard
+### 2. OpenAPI ཐོན་རིམ་གསལ་སྟོན་སྲུང་སྐྱོབ།
 
-DOCS-2b’s “signed OpenAPI manifest” requirement now ships an automated guard:
-`ci/check_openapi_spec.sh` calls `npm run check:openapi-versions`, which invokes
-`scripts/verify-openapi-versions.mjs` to cross-check
-`docs/portal/static/openapi/versions.json` with the actual Torii specs and
-manifests. The guard verifies that:
+DOCS-2b’s “Igged ed OpenAPI གསལ་སྟོན་” ད་ལྟ་ རང་བཞིན་སྲུང་སྐྱོབ་པ་ བཏངམ་ཨིན།
+`ci/check_openapi_spec.sh` གིས་ `npm run check:openapi-versions` ལུ་འབོད་བརྡ་འབདཝ་ཨིན།
+I18NI000000050X བརྒལ་རྒྱུ།
+I18NI000000051X I18NT0000010X དང་བཅས་ཡོད།
+མངོན་སུམ་ [214b.2]དང་། བདག་པོ་གིས་བདེན་དཔང་འབད་དོཝ་བཟུམ་སྦེ་ཨིན།
 
-- Every version listed in `versions.json` has a matching directory under
-  `static/openapi/versions/`.
-- Each entry’s `bytes` and `sha256` fields match the on-disk spec file.
-- The `latest` alias mirrors the `current` entry (digest/size/signature metadata)
-  so the default download cannot drift.
-- Signed entries reference a manifest whose `artifact.path` points back to the
-  same spec and whose signature/public key hex values match the manifest.
+- Sigstore ནང་ཐོ་བཀོད་འབད་ཡོད་པའི་ཐོན་རིམ་ག་ར་ལུ་ འོག་ལུ་མཐུན་སྒྲིག་སྣོད་ཐོ་ཅིག་ཡོདཔ་ཨིན།
+  I18NI0000003X.
+- ཐོ་བཀོད་རེ་རེ་གི་ `bytes` དང་ OpenAPI ས་སྒོ་ཚུ་ ཌིཀསི་ཁྱད་ཚད་ཡིག་སྣོད་དང་མཐུན་སྒྲིག་འབདཝ་ཨིན།
+- I18NI000000056X མིང་གཞན་འདི་གིས་ I18NI000000057X ཐོ་བཀོད་ (digest/size/size/isignature མེ་ཊ་ཌེ་ཊ་)
+  དེ་འབདཝ་ལས་ སྔོན་སྒྲིག་ཕབ་ལེན་འདི་ བཤུད་མི་ཚུགས།
+- མཚན་རྟགས་བཀོད་ཡོད་པའི་ཐོ་བཀོད་ཚུ་གིས་ `artifact.path` ལུ་ ཕྱིར་ལོག་འབད་མི་ གསལ་སྟོན་ཅིག་ལུ་གཞི་བསྟུན་འབདཝ་ཨིན།
+  གཅིག་མཚུངས་དང་ དེ་གི་ཁྱད་ཚད་/མི་མང་ལྡེ་མིག་ ཧེགསི་གནས་གོང་ཚུ་གིས་ གསལ་སྟོན་འདི་མཐུན་སྒྲིག་འབདཝ་ཨིན།
 
-Run the guard locally whenever you mirror a new spec:
+ཁྱོད་ཀྱིས་ ཁྱད་ཚད་གསརཔ་ མེ་ལོང་ནང་ ག་དུས་འབད་རུང་ ས་གནས་ནང་ གཡོག་བཀོལ་དགོ།
 
 ```bash
 cd docs/portal
 npm run check:openapi-versions
 ```
 
-Failure messages include the stale-file hint (`npm run sync-openapi -- --latest`)
-so portal contributors know how to refresh the snapshots. Keeping the guard in
-CI prevents portal releases where the signed manifest and the published digest
-fall out of sync.
+འཐུས་ཤོར་འཕྲིན་དོན་ཚུ་ནང་ ཡིག་སྣོད་ཀྱི་བརྡ་སྟོན་ (`npm run sync-openapi -- --latest`) ཚུ་ཚུདཔ་ཨིན།
+དེ་འབདཝ་ལས་ དྲྭ་ཐོག་ཕན་འདེབས་འབད་མི་ཚུ་གིས་ པར་རིས་ཚུ་ གསར་བསྐྲུན་འབད་ཐངས་ཚུ་ཤེས། སྲུང་རྒྱབ་འདི་ སྤྱི་ལོ་ ༢༠༡༦ ལུ་བཞག་དོ་ཡོདཔ།
+CI གིས་ མིང་རྟགས་བཀོད་ཡོད་པའི་ གསལ་སྟོན་དང་ དཔར་བསྐྲུན་འབད་ཡོད་པའི་ བཞུ་བཅོས་འབད་སའི་ དྲྭ་ཚིགས་གསར་བཏོན་འབད་ནི་ལས་ བཀག་ཐབས་འབདཝ་ཨིན།
+མཉམ་མཐུན་ལས་ཕྱིར་ཐོན་ཡོདཔ།
 
-### 2. Dashboards & alerts
+### 2. དྲ་བ་དང་ཉེན་བརྡ།
 
-- **`dashboards/grafana/docs_portal.json`** – primary board for DOCS-3c. Panels
-  track `torii_sorafs_gateway_refusals_total`, replication SLA misses, Try it
-  proxy errors, and probe latency (`docs.preview.integrity` overlay). Export the
-  board after every release and attach it to the operations ticket.
-- **Try it proxy alerts** – Alertmanager rule `TryItProxyErrors` fires on
-  sustained `probe_success{job="tryit-proxy"}` drops or
-  `tryit_proxy_requests_total{status="error"}` spikes.
-- **Gateway SLO** – `DocsPortal/GatewayRefusals` ensures alias bindings continue
-  to advertise the pinned manifest digest; escalations link to the
-  `cargo xtask soradns-verify-binding` CLI transcript captured during publish.
+- **`dashboards/grafana/docs_portal.json`** – DOCS-3c གི་དོན་ལུ་ གཞི་བསྟུན་གཙོ་བོ་། པེ་ནཱལ་ཚུ།
+  track `torii_sorafs_gateway_refusals_total`, འདྲ་བཤུས་ SLA བརྗེད་སོང་།
+  proxy འཛོལ་བ་དང་ འཚོལ་ཞིབ་ཀྱི་ བར་ཆད་ (`docs.preview.integrity` བཀབ་བཙུགས་) དེ་ཕྱིར་འདྲེན་འབད།
+  བཏོན་བཏང་པའི་ཤུལ་ལས་ བཀོད་སྒྲིག་འབད་དེ་ ལག་ལེན་གྱི་ ཤོག་བྱང་ལུ་ མཐུད་དགོ།
+- **དེ་གི་དོན་ལུ་ ངོ་ཚབ་ཉེན་བརྡ་** – དྲན་ཤེས་ལམ་ལུགས་ `TryItProxyErrors` མེ་བཏེག་ནི།
+  རྒྱུན་བསྐྱངས་ཡོད། `probe_success{job="tryit-proxy"}` མར་ཕབ་སམ།
+  I18NI000000065X སྤྱང་ཀི།
+- **Gateway SLO** – Grafana མིང་གཞན་བཅིངས་པ་ཚུ་འཕྲོ་མཐུད་དེ་ངེས་གཏན་བཟོཝ་ཨིན།
+  བརྡ་ཁྱབ་ཅན་གྱི་གསལ་སྟོན་འཇུ་བྱེད་འདི་ཁྱབ་བསྒྲགས་འབད་ནིའི་དོན་ལུ་; ཡར་འཕར་ཚུ་ འབྲེལ་མཐུད་འབད་ནི།
+  I18NI000000067X པར་སྐྲུན་འབད་བའི་སྐབས་ CLI ཡིག་ཆ་བཟུང་ཡོདཔ།
 
-### 3. Evidence trail
+### 3. སྒྲུབ་བྱེད་ཀྱི་ལམ་ལུགས།
 
-Each monitoring run should append:
+ལྟ་རྟོག་རེ་རེ་གིས་ ཟུར་ཐོ་འབད་དགོ།
 
-- `monitor-publishing` evidence bundle (`summary.json`, per-section files, and
+- I18NI000000068X སྒྲུབ་བྱེད་ཀྱི་བང་རིམ་ (I18NI000000069X, དབྱེ་ཚན་རེ་ལུ་ཡིག་སྣོད་, དང་།
   `checksums.sha256`).
-- Grafana screenshots for the `docs_portal` board over the release window.
-- Try it proxy change/rollback transcripts (`npm run manage:tryit-proxy` logs).
-- Alias verification output from `cargo xtask soradns-verify-binding`.
+- གསར་བཏོན་སྒོ་སྒྲིག་གུ་ I18NI0000000071X བཀོད་སྒྲིག་དོན་ལུ་ I18NT000000006X གསལ་གཞི་ཚུ།
+- དེ་པོརོ་སི་བསྒྱུར་བཅོས་/རོལ་ལོག་ཡིག་བསྒྱུར་ཚུ་འབད་རྩོལ་བསྐྱེད། (`npm run manage:tryit-proxy` དྲན་ཐོ་ཚུ།)
+- `cargo xtask soradns-verify-binding` ལས་ ཨེ་ལི་ཡས་བདེན་དཔྱད་ཨའུཊི་པུཊི་།
 
-Store these under `artifacts/sorafs/<tag>/monitoring/` and link them in the
-release issue so the audit trail survives after CI logs expire.
+འདི་ཚུ་ I18NI000000074X གི་འོག་ལུ་ གསོག་འཇོག་འབད་ཞིནམ་ལས་ དེ་ཚུ་ནང་ འབྲེལ་མཐུད་འབད།
+གསར་བཏོན་འབད་བའི་གནད་དོན་ དེ་འབདཝ་ལས་ CI དྲན་ཐོ་ཚུ་མཇུག་བསྡུ་བའི་ཤུལ་ལས་ རྩིས་ཞིབ་ལམ་འདི་ གསོན་པོ་སྦེ་གནས་ཚུགས།
 
-## Operational checklist
+## བཀོལ་སྤྱོད་ཞིབ་དཔྱད་ཐོ་ཡིག་།
 
-1. Run the deployment guide through Step 7.
-2. Execute `npm run monitor:publishing` with production configuration; archive
-   the JSON output.
-3. Capture Grafana panels (`docs_portal`, `TryItProxyErrors`,
-   `DocsPortal/GatewayRefusals`) and attach them to the release ticket.
-4. Schedule recurring monitors (recommended: every 15 minutes) pointing at the
-   production URLs with the same config to satisfy the DOCS-3c SLO gate.
-5. During incidents, re-run the monitor command with `--json-out` to record
-   before/after evidence and attach it to the postmortem.
+༡ བཀྲམ་སྤེལ་གྱི་ལམ་སྟོན་འདི་ གོམ་པ་༧ པ་བརྒྱུད་དེ་ གཡོག་བཀོལ།
+༢ ཐོན་སྐྱེད་རིམ་སྒྲིག་དང་གཅིག་ཁར་ `npm run monitor:publishing` ལག་ལེན་འཐབ་ནི། གཏན་མཛོད་
+   the JSON ཐོན་འབྲས་ཚུ།
+3. I18NT000000007X པེ་ནཱལ་ (I18NI0000000076X, I18NI0000000077X,
+   `DocsPortal/GatewayRefusals`) དེ་ལས་ དེ་ཚུ་ གསར་བཏོན་འབད་ནིའི་ ཤོག་འཛིན་ལུ་ མཉམ་སྦྲགས་འབད།
+༤ དུས་ཚོད་བསྐྱར་ལོག་ལྟ་རྟོག་པ་ཚུ་ (བསྐྱར་ལོག་གྲོས་འཆར་: སྐར་མ་༡༥ རེ་ལུ་) ལུ་སྟོན་ནི།
+   བཟོ་བསྐྲུན་གྱི་ཡུ་ཨར་ཨེལ་ཚུ་ ཌི་ཨོ་སི་-༣སི་ཨེསི་ཨེལ་ཨོ་གཱེཊི་འདི་ བསྒྲུབ་ནིའི་དོན་ལུ་ རིམ་སྒྲིག་ཅོག་འཐདཔ་འབད་མི་ བཟོ་བསྐྲུན་ ཡུ་ཨར་ཨེལ་ཚུ།
+༥ བྱུང་རྐྱེན་ཚུ་གི་སྐབས་ལུ་ `--json-out` ཐོ་བཀོད་འབད་ནིའི་དོན་ལུ་ ལྟ་རྟོག་བརྡ་བཀོད་འདི་ ལོག་གཡོག་བཀོལ་དགོ།
+   སྒྲུབ་བྱེད་ཀྱི་ཧེ་མ་/ཤུལ་ལས་ ཤི་རྐྱེན་གྱི་ཤུལ་ལས་ མཉམ་སྦྲགས་འབད།
 
-Following this loop closes DOCS-3c: the portal build flow, publishing pipeline,
-and monitoring stack now live in a single playbook with reproducible commands,
-sample configs, and telemetry hooks.
+འདི་བསྐྱར་འཁོར་འདི་ DOCS-3c སྒོ་བསྡམས་ཡོདཔ་ཨིན།
+དང་ བལྟ་རྟོག་འབད་དེ་ ད་ལྟོ་ བསྐྱར་བཟོ་འབད་བཏུབ་པའི་བརྡ་བཀོད་ཚུ་ཡོད་པའི་ རྩེད་དེབ་གཅིག་ནང་ སྡོདཔ་ཨིན།
+དཔེ་ཚད་རིམ་སྒྲིག་ཚུ་དང་ ཊེ་ལི་མི་ཊི་ཧུཀ་ཚུ།

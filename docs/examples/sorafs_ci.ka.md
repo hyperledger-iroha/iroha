@@ -9,13 +9,14 @@ source_last_modified: "2026-01-03T19:37:11.140795+00:00"
 translation_last_reviewed: 2026-02-07
 title: SoraFS CI Cookbook
 summary: Reference GitHub Actions workflow bundling sign + verify steps with review notes.
+translator: machine-google-reviewed
 ---
 
-# SoraFS CI Cookbook
+# SoraFS CI კულინარიული წიგნი
 
-This snippet mirrors the guidance in `docs/source/sorafs_ci_templates.md` and
-demonstrates how to integrate signing, verification, and proof checks into a
-single GitHub Actions job.
+ეს ფრაგმენტი ასახავს მითითებებს `docs/source/sorafs_ci_templates.md`-ში და
+აჩვენებს, თუ როგორ უნდა მოხდეს ხელმოწერის, გადამოწმებისა და მტკიცებულების შემოწმების ინტეგრირება ა
+ერთი GitHub Actions სამუშაო.
 
 ```yaml
 name: sorafs-cli-release
@@ -78,18 +79,18 @@ jobs:
         run: cosign verify-blob --bundle artifacts/manifest.bundle.json artifacts/manifest.to
 ```
 
-## Notes
+## შენიშვნები
 
-- `sorafs_cli` must be available on the runner (e.g., `cargo install --path crates/sorafs_car --features cli` prior to these steps).
-- The workflow must supply an explicit OIDC audience (here `sorafs`); adjust `--identity-token-audience` to match your Fulcio policy.
-- The release pipeline should archive `artifacts/manifest.bundle.json`, `artifacts/manifest.sig`, and `artifacts/proof.json` for governance review.
-- Deterministic sample artefacts live in `fixtures/sorafs_manifest/ci_sample`; copy them into tests when you need golden manifests, chunk plans, or bundle JSON without recomputing the pipeline.
+- `sorafs_cli` ხელმისაწვდომი უნდა იყოს მორბენალზე (მაგ., `cargo install --path crates/sorafs_car --features cli` ამ ნაბიჯების წინ).
+- სამუშაო პროცესმა უნდა უზრუნველყოს აშკარა OIDC აუდიტორია (აქ `sorafs`); დაარეგულირეთ `--identity-token-audience`, რათა შეესაბამებოდეს თქვენს Fulcio პოლიტიკას.
+- გამოშვების მილსადენმა უნდა დაარქივოს `artifacts/manifest.bundle.json`, `artifacts/manifest.sig` და `artifacts/proof.json` მმართველობის განსახილველად.
+- დეტერმინისტული ნიმუშის არტეფაქტები ცხოვრობს `fixtures/sorafs_manifest/ci_sample`-ში; დააკოპირეთ ისინი ტესტებში, როდესაც გჭირდებათ ოქროს მანიფესტები, გეგმები ან JSON შეფუთვა მილსადენის ხელახალი გამოთვლის გარეშე.
 
-## Fixture Verification
+## მოწყობილობების შემოწმება
 
-Deterministic artefacts for this workflow live under
-`fixtures/sorafs_manifest/ci_sample`. Pipelines can replay the steps above and
-diff their outputs against the canonical files, for example:
+ამ სამუშაო პროცესისთვის დეტერმინისტული არტეფაქტები ცხოვრობს
+`fixtures/sorafs_manifest/ci_sample`. მილსადენებს შეუძლიათ გაიმეორონ ზემოთ მოცემული ნაბიჯები და
+განასხვავებენ მათ გამოსავალს კანონიკურ ფაილებთან, მაგალითად:
 
 ```bash
 diff -u fixtures/sorafs_manifest/ci_sample/car_summary.json artifacts/car_summary.json
@@ -100,7 +101,7 @@ diff -u fixtures/sorafs_manifest/ci_sample/manifest.verify.summary.json artifact
 diff -u fixtures/sorafs_manifest/ci_sample/proof.json artifacts/proof.json
 ```
 
-Empty diffs confirm the build produced byte-identical manifests, plans, and
-signature bundles. See `fixtures/sorafs_manifest/ci_sample/README.md` for a full
-directory listing and tips on templating release notes from the captured
-summaries.
+ცარიელი განსხვავებები ადასტურებს ბაიტის იდენტური მანიფესტების, გეგმების და
+ხელმოწერის პაკეტები. სრულად იხილეთ `fixtures/sorafs_manifest/ci_sample/README.md`
+დირექტორია სია და რჩევები შაბლონის გათავისუფლების შენიშვნები ტყვედ
+რეზიუმეები.

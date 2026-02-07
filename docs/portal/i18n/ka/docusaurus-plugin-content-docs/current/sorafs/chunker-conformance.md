@@ -8,53 +8,55 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraFS Chunker Conformance Guide
 sidebar_label: Chunker Conformance
 description: Requirements and workflows for preserving the deterministic SF1 chunker profile across fixtures and SDKs.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
+:::შენიშვნა კანონიკური წყარო
 :::
 
-This guide codifies the requirements every implementation must follow to stay
-aligned with the SoraFS deterministic chunker profile (SF1). It also
-documents the regeneration workflow, signing policy, and verification steps so
-fixture consumers across SDKs remain in sync.
+ეს სახელმძღვანელო ასახავს იმ მოთხოვნებს, რომლებიც ყველა იმპლემენტაციამ უნდა დაიცვას, რომ დარჩეს
+გასწორებულია SoraFS დეტერმინისტული ცუნკერის პროფილთან (SF1). ის ასევე
+ადასტურებს რეგენერაციის სამუშაო პროცესს, ხელმოწერის პოლიტიკას და გადამოწმების ნაბიჯებს
+მოწყობილობების მომხმარებლები SDK-ებში რჩება სინქრონში.
 
-## Canonical Profile
+## კანონიკური პროფილი
 
-- Profile handle: `sorafs.sf1@1.0.0`
-- Input seed (hex): `0000000000dec0ded`
-- Target size: 262 144 bytes (256 KiB)
-- Minimum size: 65 536 bytes (64 KiB)
-- Maximum size: 524 288 bytes (512 KiB)
-- Rolling polynomial: `0x3DA3358B4DC173`
-- Gear table seed: `sorafs-v1-gear`
-- Break mask: `0x0000FFFF`
+- პროფილის სახელური: `sorafs.sf1@1.0.0`
+- შეყვანის თესლი (თექვსმეტი): `0000000000dec0ded`
+- სამიზნე ზომა: 262144 ბაიტი (256 KiB)
+- მინიმალური ზომა: 65536 ბაიტი (64 KiB)
+- მაქსიმალური ზომა: 524288 ბაიტი (512 KiB)
+- მოძრავი პოლინომი: `0x3DA3358B4DC173`
+- გადაცემათა მაგიდის თესლი: `sorafs-v1-gear`
+- შესვენების ნიღაბი: `0x0000FFFF`
 
-Reference implementation: `sorafs_chunker::chunk_bytes_with_digests_profile`.
-Any SIMD acceleration must produce identical boundaries and digests.
+მითითების განხორციელება: `sorafs_chunker::chunk_bytes_with_digests_profile`.
+ნებისმიერი SIMD აჩქარება უნდა წარმოქმნას იდენტური საზღვრები და დაიჯესტები.
 
-## Fixture Bundle
+## მოწყობილობების ნაკრები
 
-`cargo run --locked -p sorafs_chunker --bin export_vectors` regenerates the
-fixtures and emits the following files under `fixtures/sorafs_chunker/`:
+`cargo run --locked -p sorafs_chunker --bin export_vectors` აღადგენს
+ასწორებს და გამოსცემს შემდეგ ფაილებს `fixtures/sorafs_chunker/`-ის ქვეშ:
 
-- `sf1_profile_v1.{json,rs,ts,go}` — canonical chunk boundaries for Rust,
-  TypeScript, and Go consumers. Each file advertises the canonical handle as the
-  first (and only) entry in `profile_aliases`. The ordering is enforced by
-  `ensure_charter_compliance` and MUST NOT be altered.
-- `manifest_blake3.json` — BLAKE3-verified manifest covering every fixture file.
-- `manifest_signatures.json` — Council signatures (Ed25519) over the manifest
-  digest.
-- `sf1_profile_v1_backpressure.json` and raw corpora inside `fuzz/` —
-  deterministic streaming scenarios used by chunker back-pressure tests.
+- `sf1_profile_v1.{json,rs,ts,go}` — ჟანგის კანონიკური ნაჭრის საზღვრები,
+  TypeScript და Go მომხმარებლები. თითოეული ფაილი რეკლამირებს კანონიკურ სახელურს, როგორც
+  პირველი (და ერთადერთი) ჩანაწერი `profile_aliases`-ში. შეკვეთა აღსრულებულია
+  `ensure_charter_compliance` და არ უნდა შეიცვალოს.
+- `manifest_blake3.json` — BLAKE3-ით დამოწმებული მანიფესტი, რომელიც მოიცავს ყველა მოწყობილობის ფაილს.
+- `manifest_signatures.json` — საბჭოს ხელმოწერები (Ed25519) მანიფესტზე
+  დაიჯესტი.
+- `sf1_profile_v1_backpressure.json` და ნედლი კორპუსები `fuzz/`-ში —
+  დეტერმინისტული ნაკადის სცენარები, რომლებიც გამოიყენება ცუნკერის უკანა წნევის ტესტებით.
 
-### Signing Policy
+### ხელმოწერის პოლიტიკა
 
-Fixture regeneration **must** include a valid council signature. The generator
-rejects unsigned output unless `--allow-unsigned` is passed explicitly (intended
-only for local experimentation). Signature envelopes are append-only and
-deduplicated per signer.
+მოწყობილობების რეგენერაცია **უნდა** შეიცავდეს საბჭოს მოქმედ ხელმოწერას. გენერატორი
+უარყოფს ხელმოუწერელ გამომავალს, თუ `--allow-unsigned` არ არის ცალსახად გადაცემული (განზრახული
+მხოლოდ ადგილობრივი ექსპერიმენტებისთვის). ხელმოწერის კონვერტები მხოლოდ დამატებულია და
+ამოღებულია თითო ხელმომწერზე.
 
-To add a council signature:
+საბჭოს ხელმოწერის დასამატებლად:
 
 ```bash
 cargo run --locked -p sorafs_chunker --bin export_vectors \
@@ -62,33 +64,33 @@ cargo run --locked -p sorafs_chunker --bin export_vectors \
   --signature-out=fixtures/sorafs_chunker/manifest_signatures.json
 ```
 
-## Verification
+## დადასტურება
 
-The CI helper `ci/check_sorafs_fixtures.sh` replays the generator with
-`--locked`. If fixtures drift or signatures are missing, the job fails. Use
-this script in nightly workflows and before submitting fixture changes.
+CI დამხმარე `ci/check_sorafs_fixtures.sh` იმეორებს გენერატორს
+`--locked`. თუ მოწყობილობები წაიშლება ან ხელმოწერები აკლია, სამუშაო ვერ ხერხდება. გამოყენება
+ეს სკრიპტი ღამის სამუშაო ნაკადებში და მოწყობილობების ცვლილებების გაგზავნამდე.
 
-Manual verification steps:
+ხელით გადამოწმების ნაბიჯები:
 
-1. Run `cargo test -p sorafs_chunker`.
-2. Invoke `ci/check_sorafs_fixtures.sh` locally.
-3. Confirm `git status -- fixtures/sorafs_chunker` is clean.
+1. გაუშვით `cargo test -p sorafs_chunker`.
+2. ადგილობრივად გამოძახება `ci/check_sorafs_fixtures.sh`.
+3. დაადასტურეთ, რომ `git status -- fixtures/sorafs_chunker` არის სუფთა.
 
-## Upgrade Playbook
+## განაახლეთ Playbook
 
-When proposing a new chunker profile or updating SF1:
+ახალი chunker პროფილის შეთავაზებისას ან SF1 განახლებისას:
 
-See also: [`docs/source/sorafs/chunker_profile_authoring.md`](./chunker-profile-authoring.md) for
-metadata requirements, proposal templates, and validation checklists.
+აგრეთვე იხილეთ: [`docs/source/sorafs/chunker_profile_authoring.md`](./chunker-profile-authoring.md) ამისთვის
+მეტამონაცემების მოთხოვნები, წინადადებების შაბლონები და ვალიდაციის საკონტროლო სიები.
 
-1. Draft a `ChunkProfileUpgradeProposalV1` (see RFC SF‑1) with new parameters.
-2. Regenerate fixtures via `export_vectors` and record the new manifest digest.
-3. Sign the manifest with the required council quorum. All signatures must be
-   appended to `manifest_signatures.json`.
-4. Update affected SDK fixtures (Rust/Go/TS) and ensure cross-runtime parity.
-5. Regenerate fuzz corpora if parameters change.
-6. Update this guide with the new profile handle, seeds, and digest.
-7. Submit the change alongside updated tests and roadmap updates.
+1. შეადგინეთ `ChunkProfileUpgradeProposalV1` (იხ. RFC SF‑1) ახალი პარამეტრებით.
+2. განაახლეთ მოწყობილობები `export_vectors`-ის საშუალებით და ჩაწერეთ ახალი მანიფესტის დაიჯესტი.
+3. ხელი მოაწერეთ მანიფესტს საკრებულოს საჭირო კვორუმით. ყველა ხელმოწერა უნდა იყოს
+   დართულია `manifest_signatures.json`.
+4. განაახლეთ დაზარალებული SDK მოწყობილობები (Rust/Go/TS) და უზრუნველყოთ თანაბარი გაშვების დროს.
+5. განაახლეთ fuzz corpora თუ პარამეტრები შეიცვლება.
+6. განაახლეთ ეს სახელმძღვანელო ახალი პროფილის სახელურით, თესლებით და დაიჯესტით.
+7. წარადგინეთ ცვლილება განახლებულ ტესტებთან და საგზაო რუქის განახლებებთან ერთად.
 
-Changes that affect chunk boundaries or digests without following this process
-are invalid and must not be merged.
+ცვლილებები, რომლებიც გავლენას ახდენენ ნაწილის საზღვრებზე ან მონელებაზე ამ პროცესის შესრულების გარეშე
+არასწორია და არ უნდა იყოს გაერთიანებული.

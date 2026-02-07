@@ -4,35 +4,33 @@ direction: ltr
 source: docs/portal/docs/nexus/settlement-faq.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: nexus-settlement-faq
-title: FAQ Settlement
-description: Reponses pour les operateurs couvrant le routage settlement, la conversion XOR, la telemetrie et les preuves d'audit.
+id: preguntas frecuentes sobre nexus-settlement
+título: Acuerdo de preguntas frecuentes
+Descripción: Respuestas para los operadores que cubren la liquidación de rutas, la conversión XOR, la telemetría y las precauciones de auditoría.
 ---
 
-Cette page reprend la FAQ interne de settlement (`docs/source/nexus_settlement_faq.md`) pour que les lecteurs du portail puissent consulter les memes indications sans fouiller le mono-repo. Elle explique comment le Settlement Router traite les paiements, quelles metriques surveiller et comment les SDK doivent integrer les payloads Norito.
+Esta página contiene las preguntas frecuentes internas de liquidación (`docs/source/nexus_settlement_faq.md`) para que los lectores del portal puedan consultar las memes indicaciones sin seguir el mono-repo. Elle comentario explícito sobre el Settlement Router analiza los pagos, las mediciones que vigilan y comenta el SDK que integra las cargas útiles Norito.
 
-## Points cles
+## Puntos claves1. **Mapa de carriles** - cada espacio de datos declara un `settlement_handle` (`xor_global`, `xor_lane_weighted`, `xor_hosted_custody` o `xor_dual_fund`). Consulte el último catálogo de carriles en `docs/source/project_tracker/nexus_config_deltas/`.
+2. **Conversión determinista**: el enrutador convierte todos los acuerdos en XOR a través de las fuentes de liquidez aprobadas por el gobierno. Les lanes privées prefinancent des buffers XOR; les haircuts ne s'appliquent que lorsque les buffers derivent hors de la politique.
+3. **Telemetría** - Vigile `nexus_settlement_latency_seconds`, los contadores de conversión y los indicadores de corte de pelo. Los paneles de control se encuentran en `dashboards/grafana/nexus_settlement.json` y las alertas en `dashboards/alerts/nexus_audit_rules.yml`.
+4. **Preuves**: archiva las configuraciones, los registros del enrutador, las exportaciones de telemetría y los informes de reconciliación para las auditorías.
+5. **Responsabilidades del SDK**: cada SDK expone los asistentes de liquidación, los ID de carril y los codificadores de cargas útiles Norito para restablecer la alineación con el enrutador.
 
-1. **Mappage des lanes** - chaque dataspace declare un `settlement_handle` (`xor_global`, `xor_lane_weighted`, `xor_hosted_custody` ou `xor_dual_fund`). Consultez le dernier catalogue des lanes dans `docs/source/project_tracker/nexus_config_deltas/`.
-2. **Conversion deterministe** - le router convertit toutes les settlements en XOR via les sources de liquidite approuvees par la gouvernance. Les lanes privees prefinancent des buffers XOR; les haircuts ne s'appliquent que lorsque les buffers derivent hors de la politique.
-3. **Telemetrie** - surveillez `nexus_settlement_latency_seconds`, les compteurs de conversion et les jauges de haircut. Les dashboards se trouvent dans `dashboards/grafana/nexus_settlement.json` et les alertes dans `dashboards/alerts/nexus_audit_rules.yml`.
-4. **Preuves** - archivez les configs, logs du router, exports de telemetrie et rapports de reconciliation pour les audits.
-5. **Responsabilites SDK** - chaque SDK doit exposer des helpers de settlement, des IDs de lane et des encodeurs de payloads Norito pour rester aligne avec le router.
-
-## Flux d'exemple
-
-| Type de lane | Preuves a collecter | Ce que cela prouve |
+## Flujo de ejemplo| Tipo de carril | Preuves un coleccionista | Ce que cela prouve |
 |-----------|--------------------|----------------|
-| Privee `xor_hosted_custody` | Log du router + `nexus_settlement_latency_seconds{lane}` + `settlement_router_haircut_total{lane}` | Les buffers CBDC debitent un XOR deterministe et les haircuts restent dans la politique. |
-| Publique `xor_global` | Log du router + reference DEX/TWAP + metriques de latence/conversion | Le chemin de liquidite partage a fixe le prix du transfert sur le TWAP publie avec zero haircut. |
-| Hybride `xor_dual_fund` | Log du router montrant la repartition public vs shielded + compteurs de telemetrie | Le mix shielded/public a respecte les ratios de gouvernance et enregistre le haircut applique a chaque jambe. |
+| Privée `xor_hosted_custody` | Registro del enrutador + `nexus_settlement_latency_seconds{lane}` + `settlement_router_haircut_total{lane}` | Los buffers CBDC deben a un XOR determinista y los recortes reposan en la política. |
+| Público `xor_global` | Registro del enrutador + referencia DEX/TWAP + medidas de latencia/conversión | El camino de liquidez parte a precio fijo de transferencia al TWAP público con corte cero. |
+| Híbrido `xor_dual_fund` | Registro del enrutador monta la partición pública vs blindada + ordenadores de telemetría | Le mix blinded/public a respecte les ratios de gouvernance et registre le haircut applique a chaque jambe. |
 
-## Besoin de plus de details ?
+## ¿Besoin de plus de detalles?
 
-- FAQ complete: `docs/source/nexus_settlement_faq.md`
-- Spec du settlement router: `docs/source/settlement_router.md`
-- Playbook de politique CBDC: `docs/source/cbdc_lane_playbook.md`
-- Runbook operations: [Operations Nexus](./nexus-operations)
+- Preguntas frecuentes completas: `docs/source/nexus_settlement_faq.md`
+- Especificaciones del enrutador de asentamiento: `docs/source/settlement_router.md`
+- Guía política de CBDC: `docs/source/cbdc_lane_playbook.md`
+- Operaciones de Runbook: [Operaciones Nexus](./nexus-operations)

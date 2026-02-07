@@ -7,26 +7,28 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: Rust ledger flow recipe
 description: Use the Rust SDK to register an asset, mint supply, transfer it, and query balances against the default single-peer network.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-import SampleDownload from '@site/src/components/SampleDownload';
+filight Sample load འདི་ '@site/src/ཆ་ཤས་/ཆ་ཤས་/དཔེ་ཚད་ཕབ་ལེན་';
 
-This recipe mirrors the [CLI ledger walkthrough](../../norito/ledger-walkthrough.md)
-but runs everything from a Rust binary. It reuses the default dev network
-(`docker compose -f defaults/docker-compose.single.yml up --build`) and the demo
-credentials in `defaults/client.toml`, so you can compare SDK and CLI hashes one
-for one.
+འདི་གི་ཐབས་ཤེས་འདི་གིས་ [CLI ledger walththrough ](I18NU000009X)
+དེ་འབདཝ་ད་ Rust གཉིས་ལྡན་ལས་ ག་ར་གཡོག་བཀོལཝ་ཨིན། དེ་གིས་ སྔོན་སྒྲིག་ཌི་ཝི་ཡོངས་འབྲེལ་འདི་ ལོག་ལག་ལེན་འཐབ་ཨིན།
+(`docker compose -f defaults/docker-compose.single.yml up --build`) དང་ བརྡ་སྟོན་ནི།
+I18NI000000012X ནང་ཡིད་ཆེས་ཡོད་ན་ ཁྱོད་ཀྱིས་ SDK དང་ CLI hashes གཅིག་ག་བསྡུར་རྐྱབ་ཚུགས།
+གཅིག་གི་དོན་ལུ་ཨིན།
 
-<SampleDownload
-  href="/sdk-recipes/rust/src/main.rs"
-  filename="src/main.rs"
-  description="Use this Rust source file as a baseline to follow along or to diff against your changes."
-/>
+<དཔེ་ཚད་ཕབ་ལེན་འབད།
+  href="/sdk-ལེན་/རཱསི་/ཨེསི་ཨར་སི/མེན་.རེསི།"
+  fiter na="src/main.srs."
+  design="ཁྱོད་ཀྱི་བསྒྱུར་བཅོས་ལུ་རྒྱབ་འགལ་འབད་ནི་དང་ ཡང་ན་ ཌིཕ་འབད་ནི་ལུ་ རཱསིཊི་འབྱུང་ཁུངས་ཡིག་སྣོད་འདི་གཞི་རྟེན་སྦེ་ལག་ལེན་འཐབ།"
+།/>།
 
-## Prerequisites
+## སྔོན་འགྲོའི་ཆ་རྐྱེན།
 
-1. Run the dev peer with Docker Compose (see the [Norito quickstart](../../norito/quickstart.md)).
-2. Export the default admin/receiver accounts and the admin private key from
+1. dev མཉམ་རོགས་ I18NT0000002X བརྩམས་སྒྲིག ( [Norito མགྱོགས་མྱུར་](I18NU000000010X))
+2. སྔོན་སྒྲིག་བདག་སྐྱོང་/ལེན་མི་རྩིས་ཐོ་ཚུ་དང་ བདག་སྐྱོང་སྒེར་གྱི་ལྡེ་མིག་འདི་ ཕྱིར་འདྲེན་འབད།
    `defaults/client.toml`:
 
    ```bash
@@ -35,16 +37,13 @@ for one.
    export ADMIN_PRIVATE_KEY="802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
    ```
 
-   The private key string is the multihash-encoded value stored under `[account].private_key`.
-3. Create a new workspace binary (or reuse an existing one):
+   སྒེར་གྱི་ལྡེ་མིག་ཡིག་རྒྱུན་འདི་ `[account].private_key` གི་འོག་ལུ་གསོག་འཇོག་འབད་ཡོད་པའི་ སྣ་མང་ཨིན་ཀོཌི་གནས་གོང་ཨིན།
+༣ ལཱ་གི་ས་སྒོ་གསརཔ་ཅིག་གསར་བསྐྲུན་འབད་ (ཡང་ན་ ད་ལྟོ་ཡོད་མི་ཅིག་ལོག་སྟེ་ལག་ལེན་འཐབ།)
 
-   ```bash
-   cargo new --bin rust-ledger-recipe
-   cd rust-ledger-recipe
-   ```
+   I18NF0000004X
 
-4. Add the dependencies (use a crates.io version if you are outside the
-   workspace):
+4. བརྟེན་པ་ (ཁྱོད་རང་ཕྱི་རོལ་དུ་ཡོད་ན་ crates.io ཐོན་རིམ་ལག་ལེན་འཐབ།
+   ལས་ཀའི་ས་སྟོང་):
 
    ```toml title="Cargo.toml"
    [dependencies]
@@ -54,7 +53,7 @@ for one.
    iroha_data_model = { path = "../../crates/iroha_data_model", features = ["transparent_api", "json"] }
    ```
 
-## Example program
+## དཔེར་བརྗོད།
 
 ```rust title="src/main.rs"
 use std::str::FromStr;
@@ -109,28 +108,25 @@ fn main() -> Result<()> {
 }
 ```
 
-## Run the recipe
+## བཟོ་ཐངས་བརྒྱུད།
 
 ```bash
 cargo run
 ```
 
-You should see log output similar to:
+ཁྱོད་ཀྱིས་ དྲན་དེབ་ཨའུཊི་པུཊི་འདི་ ཅོག་འཐདཔ་:
 
-```
-ih58... now holds:
-  50 units of coffee#wonderland
-```
+I18NF0000008X
 
-If the asset definition already exists, the register call returns a
-`ValidationError::Duplicate`. Either ignore it (the mint still succeeds) or pick
-a new name.
+རྒྱུ་དངོས་ངེས་ཚིག་འདི་ཧེ་མ་ལས་ཡོད་པ་ཅིན་ ཐོ་བཀོད་ཀྱི་འབོད་བརྡ་འདི་གིས་ ༡ སླར་ལོག་འབདཝ་ཨིན།
+`ValidationError::Duplicate`. ཡང་ན་ སྣང་མེད་བཞག་སྟེ་ (mint འདི་ད་དུང་ཡང་ མཐར་འཁྱོལ་བྱུང་ཡོདཔ་) ཡང་ན་ འདམ་ཁ་རྐྱབ།
+མིང་གསརཔ།
 
-## Verify hashes and parity
+## ཧེ་ཤེ་དང་ ཆ་སྙོམས་བདེན་དཔྱད་འབད།
 
-- Use `iroha --config defaults/client.toml transaction get --hash <hash>` to
-  inspect the transactions that the SDK submitted.
-- Cross-check balances with `iroha --config defaults/client.toml asset list all --table`
-  or `asset list filter '{"id":"coffee#wonderland##<account>"}'`.
-- Repeat the same flow from the CLI walkthrough to confirm both surfaces produce
-  the same Norito payloads and transaction statuses.
+- `iroha --config defaults/client.toml transaction get --hash <hash>` ལུ་ལག་ལེན་འཐབ།
+  ཨེསི་ཌི་ཀེ་གིས་ ཕུལ་མི་ ཚོང་འབྲེལ་ཚུ་ བརྟག་དཔྱད་འབད།
+- `iroha --config defaults/client.toml asset list all --table` དང་མཉམ་པའི་ བཤེར་ཡིག་འདྲ་མཉམ་ཚུ།
+  ཡང་ན་ `asset list filter '{"id":"coffee#wonderland##<account>"}'`.
+- ཁ་ཐོག་གཉིས་ཆ་རའི་ཐོན་སྐྱེད་ངེས་གཏན་བཟོ་ནིའི་དོན་ལུ་ སི་ཨེལ་ཨའི་ འགྲུལ་བསྐྱོད་ལས་ འདྲ་མཚུངས་ཀྱི་ རྒྱུན་འགྲུལ་འདི་ བསྐྱར་ལོག་འབད།
+  དེ་དང་འདྲ་བའི་I1NT0000001X དངུལ་སྤྲོད་འབབ་དང་ཚོང་འབྲེལ་གྱི་གནས་ཚད།

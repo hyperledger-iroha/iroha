@@ -4,30 +4,32 @@ direction: ltr
 source: docs/portal/docs/norito/examples/nft-flow.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-slug: /norito/examples/nft-flow
-title: Frapper, transférer et brûler un NFT
-description: Parcourt le cycle de vie d'un NFT de bout en bout : frappe au propriétaire, transfert, ajout de métadonnées et destruction.
-source: crates/ivm/docs/examples/12_nft_flow.ko
+пуля: /norito/examples/nft-flow
+Название: Frapper, Transferer et Brûler un NFT
+описание: Parcourt le Cycle de vie d'un NFT de bout en bout: frappe au proprietaire, Transfert, ajout de métadonnées et Destruction.
+источник: crates/ivm/docs/examples/12_nft_flow.ko
 ---
 
-Parcourt le cycle de vie d'un NFT de bout en bout : frappe au propriétaire, transfert, ajout de métadonnées et destruction.
+Парковый цикл жизни NFT в бою в бою: frappe au proprietaire, трансфер, метадоннеи и разрушение.
 
-## Parcours du registre
+## Парк регистрации
 
-- Assurez-vous que la définition du NFT (par exemple `n0#wonderland`) existe avec les comptes propriétaire/destinataire utilisés dans le snippet (`ih58...`, `ih58...`).
-- Invoquez le point d'entrée `nft_issue_and_transfer` pour frapper le NFT, le transférer d'Alice vers Bob et attacher un indicateur de métadonnées décrivant l'émission.
-- Inspectez l'état du registre NFT avec `iroha_cli ledger nfts list --account <id>` ou les équivalents SDK pour vérifier le transfert, puis confirmez que l'actif est supprimé une fois que l'instruction de burn s'exécute.
+- Убедитесь, что определение NFT (например, `n0#wonderland`) существует с использованием собственных/назначенных счетов в фрагменте (`ih58...`, `ih58...`).
+- Вызовите точку входа `nft_issue_and_transfer` для перехвата NFT, передачи Алисы против Боба и присоединения указателя метадонных декривантов эмиссии.
+- Проверьте состояние регистрации NFT с `iroha_cli ledger nfts list --account <id>` или эквивалентами SDK для проверки передачи, чтобы подтвердить, что действие подтверждено, что инструкция по записи выполняется.
 
-## Guides SDK associés
+## Руководства для партнеров SDK
 
-- [Quickstart SDK Rust](/sdks/rust)
-- [Quickstart SDK Python](/sdks/python)
-- [Quickstart SDK JavaScript](/sdks/javascript)
+- [Быстрый запуск SDK Rust](/sdks/rust)
+- [Быстрый запуск SDK Python] (/sdks/python)
+- [Быстрый запуск SDK JavaScript](/sdks/javascript)
 
-[Télécharger la source Kotodama](/norito-snippets/nft-flow.ko)
+[Зарядное устройство источника Kotodama](/norito-snippets/nft-flow.ko)
 
 ```text
 // Mint an NFT, transfer it, update metadata, and burn it using typed IDs.

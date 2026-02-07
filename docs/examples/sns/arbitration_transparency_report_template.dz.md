@@ -7,72 +7,71 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 305a3f3b253a013825d4dd798d2282e111913ec777fe0fbf5b02a92c7172b92a
 source_last_modified: "2025-12-29T18:16:35.076964+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-<!--
-  SPDX-License-Identifier: Apache-2.0
--->
-# SNS Arbitration Transparency Report — <Month YYYY>
+I18NH0000001X
+# SNS ནང་འགྲིག་དྭང་ངོས།
 
-- **Suffix:** `<.sora / .nexus / .dao>`
-- **Reporting window:** `<ISO start>` → `<ISO end>`
-- **Prepared by:** `<Council liaison>`
-- **Source artefacts:** `cases.ndjson` SHA256 `<hash>`, dashboard export `<filename>.json`
+- **རྗེས་འཇུག་:** I18NI0000002X
+- **སྙན་ཞུ་སྒོ་སྒྲིག་:** `<ISO start>` → I18NI0000004X
+- **གྲ་སྒྲིག་འབད་ཡོདཔ།:** I18NI0000005X
+- **འབྱུང་ཁུངས་ཅ་ལག་ཚུ་:** `cases.ndjson` SHA256 I18NI0000000007X, ཌེཤ་བོརཌ་ཕྱིར་ཚོང་ I18NI0000008X,
 
-## 1. Executive Summary
+## 1. བཀོལ་སྤྱོད་བཅུད་བསྡུས།
 
-- Total new cases: `<count>`
-- Cases closed this period: `<count>`
-- SLA compliance: `<ack %>` acknowledge / `<resolution %>` decision
-- Guardian overrides issued: `<count>`
-- Transfers/refunds executed: `<count>`
+- བསྡོམས་རྩིས་གསར་པ་: `<count>`
+- དུས་མཚམས་འདི་ཁ་བསྡམས།: `<count>`
+- ཨེསི་ཨེལ་ཨེ་མཐུན་སྒྲིག་: `<ack %>` ངོས་ལེན་ / `<resolution %>` ཐག་གཅོད།
+- གཱར་ཌི་ཡན་གྱིས་ བཀག་ཆ་འབད་ཡོདཔ། I18NI0000013X བཏོན་ཡོདཔ།
+- སྤོ་བཤུད་/ལོག་སྤྲོད་ནི་: `<count>`
 
-## 2. Case Mix
+## 2. རྩོད་པ་སླ་བ།
 
-| Dispute type | New cases | Closed cases | Median resolution (days) |
+| རྩོད་གཞི་གི་དབྱེ་བ། | གསརཔ་ | ཁ་བསྡམས་པའི་གནད་དོན། | བར་ཐག་ཐག་གཅོད་ (ཉིན) |
 |--------------|-----------|--------------|--------------------------|
-| Ownership | 0 | 0 | 0 |
-| Policy violation | 0 | 0 | 0 |
-| Abuse | 0 | 0 | 0 |
-| Billing | 0 | 0 | 0 |
-| Other | 0 | 0 | 0 |
+| བདག་དབང་ | 0 | 0 | 0 |
+| སྲིད་བྱུས་འགལ་འཛོལ་ | 0 | 0 | 0 |
+| ལོག་སྤྱོད་ | 0 | 0 | 0 |
+| བིལ་ལིང་ | 0 | 0 | 0 |
+| གཞན་ | 0 | 0 | 0 |
 
-## 3. SLA Performance
+## 3. ཨེས་ཨེལ་ཨེ་ལས་རིམ།
 
-| Priority | Acknowledge SLA | Achieved | Resolution SLA | Achieved | Breaches |
+| གཙོ་རིམ་ | ངོས་ལེན། SLA | གྲུབ་འབྲས་ཐོན་ཡོདཔ། | གྲོས་ཆོད་ SLA | གྲུབ་འབྲས་ཐོན་ཡོདཔ། | བརྡལ་བཤིག་ |
 |----------|-----------------|----------|----------------|----------|----------|
-| Urgent | ≤ 2 h | 0% | ≤ 72 h | 0% | 0 |
-| High | ≤ 8 h | 0% | ≤ 10 d | 0% | 0 |
-| Standard | ≤ 24 h | 0% | ≤ 21 d | 0% | 0 |
-| Info | ≤ 3 d | 0% | ≤ 30 d | 0% | 0 |
+| འཕྲལ་མཁོ། | ≤ 2h | 0% | ≤ 72h | 0% | 0 |
+| མཐོ་ཚད་ | ≤ 8h | 0% | ≤ 10d | 0% | 0 |
+| ཚད་ལྡན་ | ≤ 24h | 0% | ≤ ༢༡d | 0% | 0 |
+| བརྡ་དོན་ | ≤ 3d | 0% | ≤ 30d | 0% | 0 |
 
-Describe root causes for any breaches and link to remediation tickets.
+འགལ་འཛོལ་གང་རུང་ལུ་ རྩ་བའི་རྒྱུ་རྐྱེན་ཚུ་ འགྲེལ་བཤད་རྐྱབ་སྟེ་ བཅོ་ཁ་རྐྱབ་ནིའི་ ཤོག་འཛིན་ཚུ་ འབྲེལ་མཐུད་འབད།
 
-## 4. Case Register
+## 4. རྩོད་གཞི།
 
-| Case ID | Selector | Priority | Status | Outcome | Notes |
-|---------|----------|----------|--------|---------|-------|
-| SNS-YYYY-NNNNN | `label.suffix` | Standard | Closed | Upheld | `<summary>` |
+| གནད་དོན་ ID | འདམ་ཁ་རྐྱབ་མི་ | གཙོ་རིམ་ | གནས་ཚད་ | གྲུབ་འབྲས་ | དྲན་ཐོ། |
+|--------------------------------------------------------------- |
+| SNS-YYY-NNNNN | `label.suffix` | ཚད་ལྡན་ | ཁ་བསྡམས་ཡོདཔ། | གུ་ཕེལཌ་ | `<summary>` |
 
-Provide one-line notes referencing anonymised facts or public vote links. Seal
-where required and mention redactions applied.
+མིང་མ་བཀོད་པའི་བདེན་པ་ ཡང་ན་ མི་མང་ཚོགས་རྒྱན་འབྲེལ་མཐུད་ཚུ་ལུ་ གཞི་བསྟུན་འབད་མི་ གྲལ་ཐིག་གཅིག་གི་དྲན་ཐོ་ཚུ་བྱིན། ཕྱག་དམ
+དགོས་མཁོ་ཡོད་ས་དང་ བརྗོད་ཚིག་ཚུ་ འཇུག་སྤྱོད་འབད་ཡོདཔ་ཨིན།
 
-## 5. Actions & Remedies
+## 5. བྱ་བ་དང་ཐབས་ལམ།
 
-- **Freezes / releases:** `<counts + case ids>`
-- **Transfers:** `<counts + assets moved>`
-- **Billing adjustments:** `<credits/debits>`
-- **Policy follow-ups:** `<tickets or RFCs opened>`
+- **ཕི་རི་ཛེསི / གསར་བཏོན་ཚུ་:** `<counts + case ids>`
+- **ཊ་རན་སི་ཕར་:** I18NI0000018X
+- ** བི་ལིང་བདེ་སྒྲིག་:** I18NI0000019X
+- **སྲིད་དོན་གྱི་རྗེས་འཇུག་:** I18NI0000020X
 
-## 6. Appeals & Guardian Overrides
+## 6. མཐོ་གཏུགས་དང་བདག་འཛིན་གྱི་དབང་ཆ།
 
-Summarise any appeals escalated to the guardian board, including timestamps and
-decisions (approve/deny). Link to `sns governance appeal` records or council
-votes.
+དུས་ཚོད་ཀྱི་རྟགས་མཚན་དང་ བལྟ་རྟོག་པ་ཚུ་ལུ་ མཐོ་གཏུགས་གང་རུང་ཅིག་ བསྡུ་སྒྲིག་འབད་དགོ།
+ཐག་གཅོད་ (ཆ་འཇོག་/ངོས་ལེན་)། `sns governance appeal` དྲན་ཐོ་ ཡང་ན་ ཚོགས་སྡེ།
+ཚོགས་རྒྱན་།
 
-## 7. Outstanding Items
+## 7. ཁྱད་འཕགས་རྣམ་གྲངས།
 
-- `<Action item>` — Owner `<name>`, ETA `<date>`
-- `<Action item>` — Owner `<name>`, ETA `<date>`
+- `<Action item>` — ཇོ་བདག་ `<name>`, ETA I18NI0000024X
+- I18NI000000025X — ཇོ་བདག་ `<name>`, ETA I18NI0000027X
 
-Attach NDJSON, Grafana exports, and CLI logs referenced in this report.
+སྙན་ཞུ་འདི་ནང་ གཞི་བསྟུན་འབད་ཡོད་པའི་ NDJSON, Grafana ཕྱིར་འདྲེན་དང་ CLI དྲན་ཐོ་ཚུ་ མཉམ་སྦྲགས་འབད།

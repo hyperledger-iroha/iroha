@@ -4,152 +4,154 @@ direction: ltr
 source: docs/portal/docs/sorafs/node-client-protocol.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# SoraFS Node ↔ Client Protocol
+# SoraFS კვანძი ↔ კლიენტის პროტოკოლი
 
-This guide summarises the canonical protocol definition in
+ეს სახელმძღვანელო აჯამებს კანონიკური პროტოკოლის განმარტებას
 [`docs/source/sorafs_node_client_protocol.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs_node_client_protocol.md).
-Use the upstream spec for byte-level Norito layouts and changelogs; the portal
-copy keeps the operational highlights close to the rest of the SoraFS runbooks.
+გამოიყენეთ upstream სპეციფიკაცია ბაიტის დონის Norito განლაგებისა და ცვლილებების ჟურნალებისთვის; პორტალი
+ასლი ინახავს ოპერაციულ მაჩვენებლებს დანარჩენ SoraFS წიგნებთან ახლოს.
 
-## Provider Adverts & Validation
+## პროვაიდერის რეკლამები და დადასტურება
 
-SoraFS providers gossip `ProviderAdvertV1` payloads (see
-`crates/sorafs_manifest::provider_advert`) signed by the governed operator.
-The adverts pin discovery metadata and the guardrails the multi-source
-orchestrator enforces at runtime.
+SoraFS პროვაიდერები ჭორაობენ `ProviderAdvertV1` ტვირთამწეობით (იხ.
+`crates/sorafs_manifest::provider_advert`) ხელმოწერილი მართული ოპერატორის მიერ.
+რეკლამები ამაგრებენ აღმოჩენის მეტამონაცემებს და დამცავი ღობეები მრავალ წყაროს
+ორკესტრი ახორციელებს გაშვების დროს.
 
-- **Lifetime** — `issued_at < expires_at ≤ issued_at + 86 400 s`. Providers
-  should refresh every 12 hours.
-- **Capability TLVs** — the TLV list advertises transport features (Torii,
-  QUIC+Noise, SoraNet relays, vendor extensions). Unknown codes may be skipped
-  when `allow_unknown_capabilities = true`, following GREASE guidance.
-- **QoS hints** — `availability` tier (Hot/Warm/Cold), maximum retrieval
-  latency, concurrency limit, and optional stream budget. QoS must align with
-  observed telemetry and is audited by admission.
-- **Endpoints & rendezvous topics** — concrete service URLs with TLS/ALPN
-  metadata plus the discovery topics clients should subscribe to when building
-  guard sets.
-- **Path diversity policy** — `min_guard_weight`, AS/pool fan-out caps, and
-  `provider_failure_threshold` make deterministic multi-peer fetches possible.
-- **Profile identifiers** — providers must expose the canonical handle (e.g.
-  `sorafs.sf1@1.0.0`); optional `profile_aliases` help older clients migrate.
+- ** უვადოდ ** — `issued_at < expires_at ≤ issued_at + 86 400 s`. პროვაიდერები
+  უნდა განახლდეს ყოველ 12 საათში.
+- **TLV-ების შესაძლებლობები ** — TLV სიაში რეკლამირებულია ტრანსპორტის ფუნქციები (Torii,
+  QUIC+Noise, SoraNet რელეები, გამყიდველის გაფართოებები). უცნობი კოდები შეიძლება გამოტოვოთ
+  როდესაც `allow_unknown_capabilities = true`, GREASE მითითებების შემდეგ.
+- **QoS მინიშნებები** — `availability` იარუსი (ცხელი/თბილი/ცივი), მაქსიმალური მიღება
+  შეყოვნება, კონკურენტულობის ლიმიტი და არჩევითი ნაკადის ბიუჯეტი. QoS უნდა შეესაბამებოდეს
+  აკვირდება ტელემეტრიას და აუდიტი ხდება დაშვებით.
+- **ბოლო წერტილები და პაემანის თემები** — კონკრეტული სერვისის URL TLS/ALPN-ით
+  მეტამონაცემები პლუს აღმოჩენის თემები, რომლებიც კლიენტებმა უნდა გამოიწერონ მშენებლობისას
+  დაცვის კომპლექტები.
+- **ბილიკების მრავალფეროვნების პოლიტიკა** — `min_guard_weight`, AS/აუზის ქუდები და
+  `provider_failure_threshold` შესაძლებელს ხდის დეტერმინისტულ მრავალთანაბარ მოძიებას.
+- **პროფილის იდენტიფიკატორები** — პროვაიდერებმა უნდა გამოავლინონ კანონიკური სახელური (მაგ.
+  `sorafs.sf1@1.0.0`); სურვილისამებრ `profile_aliases` ეხმარება ხანდაზმულ კლიენტებს მიგრაციაში.
 
-Validation rules reject zero stake, empty capability/endpoints/topic lists,
-misordered lifetimes, or missing QoS targets. Admission envelopes compare the
-advert and proposal bodies (`compare_core_fields`) before gossiping updates.
+ვალიდაციის წესები უარყოფს ნულოვან ფსონს, ცარიელ შესაძლებლობებს/ბოლო წერტილებს/თემათა სიებს,
+არასწორად მოწესრიგებული სიცოცხლის ხანგრძლივობა, ან დაკარგული QoS მიზნები. მისაღები კონვერტები შეადარეთ
+რეკლამისა და წინადადებების ორგანოები (`compare_core_fields`) ჭორიკანა განახლებების წინ.
 
-### Range Fetch Extensions
+### დიაპაზონის მოპოვების გაფართოებები
 
-Range-capable providers include the following metadata:
+დიაპაზონის მქონე პროვაიდერები მოიცავს შემდეგ მეტამონაცემებს:
 
-| Field | Purpose |
+| ველი | დანიშნულება |
 |-------|---------|
-| `CapabilityType::ChunkRangeFetch` | Declares `max_chunk_span`, `min_granularity`, and alignment/proof flags. |
-| `StreamBudgetV1` | Optional concurrency/throughput envelope (`max_in_flight`, `max_bytes_per_sec`, optional `burst`). Requires a range capability. |
-| `TransportHintV1` | Ordered transport preferences (e.g., `torii_http_range`, `quic_stream`, `soranet_relay`). Priorities are `0–15` and duplicates are rejected. |
+| `CapabilityType::ChunkRangeFetch` | აცხადებს `max_chunk_span`, `min_granularity` და გასწორების/დამტკიცების დროშებს. |
+| `StreamBudgetV1` | სურვილისამებრ კონკურენტულობის/გამტარუნარიანობის კონვერტი (`max_in_flight`, `max_bytes_per_sec`, სურვილისამებრ `burst`). მოითხოვს დიაპაზონის შესაძლებლობას. |
+| `TransportHintV1` | შეკვეთილი ტრანსპორტის პარამეტრები (მაგ., `torii_http_range`, `quic_stream`, `soranet_relay`). პრიორიტეტებია `0–15` და დუბლიკატები უარყოფილია. |
 
-Tooling support:
+ხელსაწყოების მხარდაჭერა:
 
-- Provider advert pipelines must validate range capability, stream budget, and
-  transport hints before emitting deterministic payloads for audits.
-- `cargo xtask sorafs-admission-fixtures` bundles canonical multi-source
-  adverts alongside downgrade fixtures under
+- პროვაიდერის სარეკლამო მილსადენებმა უნდა დაადასტურონ დიაპაზონის შესაძლებლობები, ნაკადის ბიუჯეტი და
+  სატრანსპორტო მინიშნებები აუდიტის განმსაზღვრელი ტვირთის გამოშვებამდე.
+- `cargo xtask sorafs-admission-fixtures` აერთიანებს კანონიკურ მრავალ წყაროს
+  რეკლამას ქვეგრაიმის დაქვეითების მოწყობილობების გვერდით
   `fixtures/sorafs_manifest/provider_admission/`.
-- Range-capable adverts that omit `stream_budget` or `transport_hints` are
-  rejected by the CLI/SDK loaders before scheduling, keeping the multi-source
-  harness aligned with Torii admission expectations.
+- დიაპაზონის მქონე რეკლამები, რომლებიც გამოტოვებენ `stream_budget` ან `transport_hints`
+  უარყოფილია CLI/SDK ჩამტვირთველების მიერ დაგეგმვამდე, მრავალ წყაროს შენახვა
+  აღკაზმულობა შეესაბამება Torii დაშვების მოლოდინებს.
 
-## Gateway Range Endpoints
+## კარიბჭის დიაპაზონის საბოლოო წერტილები
 
-Gateways accept deterministic HTTP requests that mirror the advert metadata.
+კარიბჭეები იღებენ დეტერმინისტულ HTTP მოთხოვნებს, რომლებიც ასახავს რეკლამის მეტამონაცემებს.
 
 ### `GET /v1/sorafs/storage/car/{manifest_id}`
 
-| Requirement | Details |
+| მოთხოვნა | დეტალები |
 |-------------|---------|
-| **Headers** | `Range` (single window aligned to chunk offsets), `dag-scope: block`, `X-SoraFS-Chunker`, optional `X-SoraFS-Nonce`, and mandatory base64 `X-SoraFS-Stream-Token`. |
-| **Responses** | `206` with `Content-Type: application/vnd.ipld.car`, `Content-Range` describing the served window, `X-Sora-Chunk-Range` metadata, and echoed chunker/token headers. |
-| **Failure modes** | `416` for misaligned ranges, `401` for missing/invalid tokens, `429` when stream/byte budgets are exceeded. |
+| **სათაურები** | `Range` (ერთი ფანჯრის გასწორება ნაწილებად ოფსეტებთან), `dag-scope: block`, `X-SoraFS-Chunker`, სურვილისამებრ `X-SoraFS-Nonce` და სავალდებულო ბაზა64 `X-SoraFS-Stream-Token`. |
+| **პასუხები ** | `206` `Content-Type: application/vnd.ipld.car`-ით, `Content-Range`, რომელიც აღწერს მოწოდებულ ფანჯარას, `X-Sora-Chunk-Range` მეტამონაცემებს და ექო ქუნკერის/ტოკენის სათაურებს. |
+| ** მარცხის რეჟიმები ** | `416` არასწორად გასწორებული დიაპაზონებისთვის, `401` გამოტოვებული/არასწორი ჟეტონებისთვის, `429` ნაკადის/ბაიტის ბიუჯეტის გადაჭარბებისას. |
 
 ### `GET /v1/sorafs/storage/chunk/{manifest_id}/{digest}`
 
-Single-chunk fetch with the same headers plus the deterministic chunk digest.
-Useful for retries or forensic downloads when CAR slices are unnecessary.
+ერთი ცალი ამოღება იგივე სათაურებით პლუს დეტერმინისტული ნაწილის დაიჯესტი.
+სასარგებლოა ხელახალი ცდებისთვის ან სასამართლო ჩამოტვირთვისთვის, როდესაც CAR ნაჭრები არასაჭიროა.
 
-## Multi-Source Orchestrator Workflow
+## მრავალწყარო ორკესტრატორის სამუშაო პროცესი
 
-When SF-6 multi-source fetch is enabled (Rust CLI via `sorafs_fetch`,
-SDKs via `sorafs_orchestrator`):
+როდესაც ჩართულია SF-6 მრავალ წყაროს მიღება (Rust CLI `sorafs_fetch`-ით,
+SDK-ები `sorafs_orchestrator`-ით):
 
-1. **Collect inputs** — decode the manifest chunk plan, pull the latest adverts,
-   and optionally pass a telemetry snapshot (`--telemetry-json` or
+1. ** შეაგროვეთ მონაცემები ** - გაშიფრეთ მანიფესტის ნაწილის გეგმა, გაიტანეთ უახლესი რეკლამები,
+   და სურვილისამებრ გადასცეთ ტელემეტრიის სნეპშოტი (`--telemetry-json` ან
    `TelemetrySnapshot`).
-2. **Build a scoreboard** — `Orchestrator::build_scoreboard` evaluates
-   eligibility and records rejection reasons; `sorafs_fetch --scoreboard-out`
-   persists the JSON.
-3. **Schedule chunks** — `fetch_with_scoreboard` (or `--plan`) enforces range
-   constraints, stream budgets, retry/peer caps (`--retry-budget`,
-   `--max-peers`), and emits a manifest-scoped stream token for each request.
-4. **Verify receipts** — outputs include `chunk_receipts` and
-   `provider_reports`; CLI summaries persist `provider_reports`,
-   `chunk_receipts`, and `ineligible_providers` for evidence bundles.
+2. **შეადგინეთ ანგარიშის დაფა** — `Orchestrator::build_scoreboard` აფასებს
+   უფლებამოსილება და ჩანაწერების უარყოფის მიზეზები; `sorafs_fetch --scoreboard-out`
+   გრძელდება JSON.
+3. **ნაწილების განრიგი ** — `fetch_with_scoreboard` (ან `--plan`) აძლიერებს დიაპაზონს
+   შეზღუდვები, სტრიმინგის ბიუჯეტები, ხელახლა ცდა/თანხმობის ლიმიტები (`--retry-budget`,
+   `--max-peers`) და გამოსცემს მანიფესტის მასშტაბის ნაკადის ჟეტონს თითოეული მოთხოვნისთვის.
+4. **გადაამოწმეთ ქვითრები** — შედეგები მოიცავს `chunk_receipts` და
+   `provider_reports`; CLI შეჯამებები გრძელდება `provider_reports`,
+   `chunk_receipts` და `ineligible_providers` მტკიცებულების პაკეტებისთვის.
 
-Common errors raised to operators/SDKs:
+ოპერატორების/SDK-ების მიმართ გავრცელებული ხშირი შეცდომები:
 
-| Error | Description |
+| შეცდომა | აღწერა |
 |-------|-------------|
-| `no providers were supplied` | No eligible entries after filtering. |
-| `no compatible providers available for chunk {index}` | Range or budget mismatch for a specific chunk. |
-| `retry budget exhausted after {attempts}` | Increase `--retry-budget` or evict failing peers. |
-| `no healthy providers remaining` | All providers disabled after repeated failures. |
-| `streaming observer failed` | Downstream CAR writer aborted. |
-| `orchestrator invariant violated` | Capture manifest, scoreboard, telemetry snapshot, and CLI JSON for triage. |
+| `no providers were supplied` | გაფილტვრის შემდეგ შესაბამისი ჩანაწერები არ არის. |
+| `no compatible providers available for chunk {index}` | დიაპაზონი ან ბიუჯეტის შეუსაბამობა კონკრეტული ნაწილისთვის. |
+| `retry budget exhausted after {attempts}` | გაზარდეთ `--retry-budget` ან გამოასახლეთ წარუმატებელი თანატოლები. |
+| `no healthy providers remaining` | ყველა პროვაიდერი გამორთულია განმეორებითი წარუმატებლობის შემდეგ. |
+| `streaming observer failed` | Downstream CAR მწერალი შეწყვეტილია. |
+| `orchestrator invariant violated` | აღბეჭდეთ მანიფესტი, ანგარიშის დაფა, ტელემეტრიის სნეპშოტი და CLI JSON ტრიაჟისთვის. |
 
-## Telemetry & Evidence
+## ტელემეტრია და მტკიცებულება
 
-- Metrics emitted by the orchestrator:  
+- ორკესტრატორის მიერ გამოშვებული მეტრიკა:  
   `sorafs_orchestrator_active_fetches`, `sorafs_orchestrator_fetch_duration_ms`,
   `sorafs_orchestrator_retries_total`, `sorafs_orchestrator_provider_failures_total`
-  (tagged by manifest/region/provider). Set `telemetry_region` in config or via
-  CLI flags so dashboards partition by fleet.
-- CLI/SDK fetch summaries include persisted scoreboard JSON, chunk receipts,
-  and provider reports which must ship in rollout bundles for SF-6/SF-7 gates.
-- Gateway handlers expose `telemetry::sorafs.fetch.lifecycle|retry|provider_failure|error`
-  so SRE dashboards can correlate orchestrator decisions with server behaviour.
+  (ტეგირებულია manifest/რეგიონი/პროვაიდერის მიერ). დააყენეთ `telemetry_region` კონფიგურაციაში ან მეშვეობით
+  CLI მიუთითებს, რომ დაფები იყოფა ფლოტის მიხედვით.
+- CLI/SDK-ის მოპოვების შეჯამებები მოიცავს მუდმივ დაფას JSON-ს, ქვითრებს,
+  და პროვაიდერის ანგარიშები, რომლებიც უნდა გაიგზავნოს SF-6/SF-7 კარიბჭეებისთვის განლაგებული პაკეტებით.
+- კარიბჭის დამმუშავებლები ავლენენ `telemetry::sorafs.fetch.lifecycle|retry|provider_failure|error`-ს
+  ასე რომ, SRE დაფებს შეუძლიათ ორკესტრის გადაწყვეტილებების კორელაცია სერვერის ქცევასთან.
 
-## CLI & REST Helpers
+## CLI & REST დამხმარეები
 
-- `iroha app sorafs pin list|show`, `alias list`, and `replication list` wrap the
-  pin-registry REST endpoints and print raw Norito JSON with attestation blocks
-  for audit evidence.
-- `iroha app sorafs storage pin` and `torii /v1/sorafs/pin/register` accept Norito
-  or JSON manifests plus optional alias proofs and successors; malformed proofs
-  raise `400`, stale proofs surface `503` with `Warning: 110`, and
-  hard-expired proofs return `412`.
-- `iroha app sorafs repair list` mirrors repair queue filters, while
-  `repair claim|complete|fail|escalate` submit signed worker actions or slash
-  proposals to Torii. Slash proposals may include a governance approval summary
-  (approve/reject/abstain vote counts plus approved_at/finalized_at
-  timestamps); when present it must satisfy quorum and dispute/appeal windows,
-  otherwise the proposal stays in dispute until votes resolve at the deadline.
-- Repair listings and worker queue selection are ordered by SLA deadline, failure severity, and provider backlog with deterministic tie-breakers (queued time, manifest digest, ticket id).
-- Repair status responses include an `events` array containing base64 Norito
-  `RepairTaskEventV1` entries ordered by occurrence for audit trails; the list
-  is capped to the most recent transitions.
-- `iroha app sorafs gc inspect|dry-run --data-dir=/var/lib/sorafs` emits read-only
-  retention reports from the local manifest store for audit evidence.
-- REST endpoints (`/v1/sorafs/pin`, `/v1/sorafs/aliases`,
-  `/v1/sorafs/replication`) include attestation structures so clients can
-  verify data against the latest block headers before taking action.
+- `iroha app sorafs pin list|show`, `alias list` და `replication list` ახვევენ
+  დაარეგისტრირეთ REST ბოლო წერტილები და დაბეჭდეთ დაუმუშავებელი Norito JSON საატესტაციო ბლოკებით
+  აუდიტორული მტკიცებულებისთვის.
+- `iroha app sorafs storage pin` და `torii /v1/sorafs/pin/register` მიიღება Norito
+  ან JSON მანიფესტები პლუს არჩევითი მეტსახელის მტკიცებულებები და მემკვიდრეები; არასწორი მტკიცებულებები
+  აწიეთ `400`, შემოიფარგლება ზედაპირი `503` `Warning: 110`-ით და
+  ვადაგასული მტკიცებულებები ბრუნდება `412`.
+- `iroha app sorafs repair list` სარკეების სარემონტო რიგის ფილტრები, ხოლო
+  `repair claim|complete|fail|escalate` წარადგინეთ მუშაკის ხელმოწერილი ქმედებები ან სლეი
+  წინადადებები Torii-ზე. Slash წინადადებები შეიძლება შეიცავდეს მმართველობის დამტკიცების შეჯამებას
+  (დამტკიცება/უარი/შეკავება ხმების დათვლის პლუს დამტკიცებული_ზე/ფინალიზებული_ზე
+  დროის შტამპები); როდესაც არსებობს, ის უნდა აკმაყოფილებდეს კვორუმს და დავის/სააპელაციო ფანჯრებს,
+  წინააღმდეგ შემთხვევაში, წინადადება სადავო რჩება მანამ, სანამ ხმები არ გადაწყდება ბოლო ვადაში.
+- სარემონტო განცხადებები და მუშაკთა რიგის შერჩევა შეკვეთილია SLA-ს ბოლო ვადის, წარუმატებლობის სიმძიმისა და პროვაიდერის ნარჩენების მიხედვით, განმსაზღვრელი კავშირის დამრღვევებით (რიდის დრო, მანიფესტის დაიჯესტი, ბილეთის ID).
+- შეკეთების სტატუსის პასუხები მოიცავს `events` მასივს, რომელიც შეიცავს base64 Norito
+  `RepairTaskEventV1` ჩანაწერები დაკვეთილი შემთხვევის მიხედვით აუდიტის ბილიკებისთვის; სია
+  შეზღუდულია უახლეს გადასვლებზე.
+- `iroha app sorafs gc inspect|dry-run --data-dir=/var/lib/sorafs` ასხივებს მხოლოდ წაკითხვას
+  შენახული ანგარიშები ადგილობრივი მანიფესტების მაღაზიიდან აუდიტორული მტკიცებულებისთვის.
+- REST საბოლოო წერტილები (`/v1/sorafs/pin`, `/v1/sorafs/aliases`,
+  `/v1/sorafs/replication`) მოიცავს საატესტაციო სტრუქტურებს, რათა კლიენტებმა შეძლონ
+  გადაამოწმეთ მონაცემები უახლესი ბლოკის სათაურების მიხედვით მოქმედების დაწყებამდე.
 
-## References
+## ცნობები
 
-- Canonical spec:
+- კანონიკური სპეციფიკა:
   [`docs/source/sorafs_node_client_protocol.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs_node_client_protocol.md)
-- Norito types: `crates/sorafs_manifest/src/{provider_advert,provider_admission}.rs`
-- CLI helpers: `crates/iroha_cli/src/commands/sorafs.rs`,
+- Norito ტიპები: `crates/sorafs_manifest/src/{provider_advert,provider_admission}.rs`
+- CLI დამხმარეები: `crates/iroha_cli/src/commands/sorafs.rs`,
   `crates/sorafs_car/src/bin/sorafs_fetch.rs`
-- Orchestrator crate: `crates/sorafs_orchestrator`
-- Dashboard pack: `dashboards/grafana/sorafs_fetch_observability.json`
+- ორკესტრის ყუთი: `crates/sorafs_orchestrator`
+- დაფის პაკეტი: `dashboards/grafana/sorafs_fetch_observability.json`

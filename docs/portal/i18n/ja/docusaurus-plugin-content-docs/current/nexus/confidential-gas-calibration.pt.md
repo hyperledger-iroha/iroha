@@ -4,40 +4,42 @@ direction: ltr
 source: docs/portal/docs/nexus/confidential-gas-calibration.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: Livro de calibracao de gas confidencial
-description: Medicoes de qualidade de release que sustentam o cronograma de gas confidencial.
-slug: /nexus/confidential-gas-calibration
+タイトル: ガス機密情報の校正
+説明: 医療機関は、ガス機密情報の維持またはクロノグラムを解除します。
+スラグ: /nexus/confidential-gas-calibration
 ---
 
-# Baselines de calibracao de gas confidencial
+# ガス機密の基準値の校正
 
-Este registro acompanha os resultados validados dos benchmarks de calibracao de gas confidencial. Cada linha documenta um conjunto de medicoes de qualidade de release capturado com o procedimento descrito em [Confidential Assets & ZK Transfers](./confidential-assets#calibration-baselines--acceptance-gates).
+ガス機密情報のベンチマークの検証結果を登録します。 [機密資産と ZK の譲渡](./confidential-assets#calibration-baselines--acceptance-gates) の手順説​​明を取得するための、医療の適格性を確認するためのドキュメントを作成します。
 
-| Data (UTC) | Commit | Perfil | `ns/op` | `gas/op` | `ns/gas` | Notas |
+|データ (UTC) |コミット |パーフィル | `ns/op` | `gas/op` | `ns/gas` |メモ |
 | --- | --- | --- | --- | --- | --- | --- |
-| 2025-10-18 | 3c70a7d3 | baseline-neon | 2.93e5 | 1.57e2 | 1.87e3 | Darwin 25.0.0 arm64e (hostinfo); `cargo bench -p iroha_core --bench isi_gas_calibration -- --sample-size=200 --warm-up-time=5 --save-baseline neon-20251018`; `cargo test -p iroha_core bench_repro -- --ignored`; `cargo bench -p ivm --bench gas_calibration -- --sample-size=200 --warm-up-time=5`; `rustc 1.88.0 (6b00bc3)` |
-| 2026-04-12 | pending | baseline-simd-neutral | - | - | - | Execucao neutra x86_64 programada no host CI `bench-x86-neon0`; ver ticket GAS-214. Os resultados serao adicionados quando a janela de bench terminar (a checklist pre-merge mira o release 2.1). |
-| 2026-04-13 | pending | baseline-avx2 | - | - | - | Calibracao AVX2 de acompanhamento usando o mesmo commit/build da execucao neutra; requer o host `bench-x86-avx2a`. GAS-214 cobre as duas execucoes com comparacao de delta contra `baseline-neon`. |
+| 2025-10-18 | 3c70a7d3 |ベースライン-ネオン | 2.93e5 | 1.57e2 | 1.87e3 |ダーウィン 25.0.0 arm64e (ホスト情報); `cargo bench -p iroha_core --bench isi_gas_calibration -- --sample-size=200 --warm-up-time=5 --save-baseline neon-20251018`; `cargo test -p iroha_core bench_repro -- --ignored`; `cargo bench -p ivm --bench gas_calibration -- --sample-size=200 --warm-up-time=5`; `rustc 1.88.0 (6b00bc3)` |
+| 2026-04-12 |保留中 |ベースライン-simd-ニュートラル | - | - | - |ホスト CI `bench-x86-neon0` なしでニュートラ x86_64 プログラムを実行します。 verチケットGAS-214。 Os resultados serao adicionados quando a janela de bench terminar (ミラオリリース 2.1 のマージ前のチェックリスト)。 |
+| 2026-04-13 |保留中 |ベースライン-avx2 | - | - | - | Calibracao AVX2 は、コンパニオンを使用してコミット/ビルドを実行するニュートラルです。ホスト `bench-x86-avx2a` を要求します。 GAS-214 は、デルタ コントラ `baseline-neon` の比較を実行するためのコマンドです。 |
 
-`ns/op` agrega a mediana de wall-clock por instrucao medida pelo Criterion; `gas/op` e a media aritmetica dos custos de schedule correspondentes de `iroha_core::gas::meter_instruction`; `ns/gas` divide os nanosegundos somados pelo gas somado no conjunto de nove instrucoes.
+`ns/op` メディア ペロの基準を示す壁時計の集合体。 `gas/op` `iroha_core::gas::meter_instruction` のスケジュール担当者はメディア管理者です。 `ns/gas` 分割された OS ナノセグンドス ソマドス ペロ ガス ソマドは、新しい命令を結合しません。
 
-*Nota.* O host arm64 atual nao emite resumos `raw.csv` do Criterion por padrao; rode novamente com `CRITERION_OUTPUT_TO=csv` ou uma correcao upstream antes de etiquetar um release para que os artefatos exigidos pela checklist de aceitacao sejam anexados. Se `target/criterion/` ainda estiver ausente apos `--save-baseline`, colete a execucao em um host Linux ou serialize a saida do console no bundle de release como stopgap temporario. Para referencia, o log de console arm64 da ultima execucao fica em `docs/source/confidential_assets_calibration_neon_20251018.log`.
+*注記* O ホスト arm64 は実際に resumos `raw.csv` を発行し、Criterion por Padrao を実行します。 com `CRITERION_OUTPUT_TO=csv` を使用して、上流のセキュリティ チェックリストをリリースし、最新のセキュリティ情報を確認してください。 `target/criterion/` は、`--save-baseline` を使用してホスト Linux を実行し、一時的にリリースされるバンドルなしでコンソールをシリアル化します。参照、コンソール arm64 のログ、`docs/source/confidential_assets_calibration_neon_20251018.log` の究極の実行。
 
-Medianas por instrucao da mesma execucao (`cargo bench -p iroha_core --bench isi_gas_calibration`):
+管理者による実行指示 (`cargo bench -p iroha_core --bench isi_gas_calibration`):
 
-| Instrucao | mediana `ns/op` | schedule `gas` | `ns/gas` |
+|説明 |メディアナ `ns/op` |スケジュール `gas` | `ns/gas` |
 | --- | --- | --- | --- |
-| RegisterDomain | 3.46e5 | 200 | 1.73e3 |
-| RegisterAccount | 3.15e5 | 200 | 1.58e3 |
-| RegisterAssetDef | 3.41e5 | 200 | 1.71e3 |
+|ドメインの登録 | 3.46e5 | 200 | 1.73e3 |
+|アカウント登録 | 3.15e5 | 200 | 1.58e3 |
+|登録資産定義 | 3.41e5 | 200 | 1.71e3 |
 | SetAccountKV_small | 3.28e5 | 67 | 4.90e3 |
-| GrantAccountRole | 3.33e5 | 96 | 3.47e3 |
-| RevokeAccountRole | 3.12e5 | 96 | 3.25e3 |
-| ExecuteTrigger_empty_args | 1.42e5 | 224 | 6.33e2 |
-| MintAsset | 1.56e5 | 150 | 1.04e3 |
-| TransferAsset | 3.68e5 | 180 | 2.04e3 |
+|アカウントロールを付与 | 3.33e5 | 96 | 3.47e3 |
+|アカウントロールを取り消す | 3.12e5 | 96 | 3.25e3 |
+|トリガー_空の引数を実行する | 1.42e5 | 224 | 6.33e2 |
+|ミントアセット | 1.56e5 | 150 | 1.04e3 |
+|資産の譲渡 | 3.68e5 | 180 | 2.04e3 |
 
-A coluna schedule e imposta por `gas::tests::calibration_bench_gas_snapshot` (total de 1,413 gas no conjunto de nove instrucoes) e vai falhar se patches futuros mudarem o metering sem atualizar os fixtures de calibracao.
+`gas::tests::calibration_bench_gas_snapshot` のスケジュール (合計 1,413 個のガス、新規の指示がありません) は、校正用の機器の測定や調整に使用されるファルハー セ パッチを取得します。

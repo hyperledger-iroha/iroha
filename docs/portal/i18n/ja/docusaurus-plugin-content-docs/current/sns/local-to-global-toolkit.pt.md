@@ -4,50 +4,52 @@ direction: ltr
 source: docs/portal/docs/sns/local-to-global-toolkit.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Kit de enderecos Local -> Global
+# Kit de enderecos ローカル -> グローバル
 
-Esta pagina espelha `docs/source/sns/local_to_global_toolkit.md` do mono-repo. Ela agrupa os helpers de CLI e runbooks exigidos pelo item de roadmap **ADDR-5c**.
+Esta pagina espelha `docs/source/sns/local_to_global_toolkit.md` はモノレポを行います。 CLI および Runbook のロードマップ **ADDR-5c** の OS ヘルパーを拡張します。
 
-## Visao geral
+## ヴィサオ・ゲラル
 
-- `scripts/address_local_toolkit.sh` encapsula a CLI `iroha` para produzir:
-  - `audit.json` -- saida estruturada de `iroha tools address audit --format json`.
-  - `normalized.txt` -- literais IH58 (preferido) / compressed (`sora`) (segunda melhor opcao) convertidos para cada selector de dominio Local.
-- Combine o script com o dashboard de ingest de enderecos (`dashboards/grafana/address_ingest.json`)
-  e as regras do Alertmanager (`dashboards/alerts/address_ingest_rules.yml`) para provar que o cutover Local-8 /
-  Local-12 e seguro. Observe os paineis de colisao Local-8 e Local-12 e os alertas
-  `AddressLocal8Resurgence`, `AddressLocal12Collision`, e `AddressInvalidRatioSlo` antes de
-  promover mudancas de manifest.
-- Consulte as [Address Display Guidelines](address-display-guidelines.md) e o
-  [Address Manifest runbook](../../../source/runbooks/address_manifest_ops.md) para contexto de UX e resposta a incidentes.
+- `scripts/address_local_toolkit.sh` の CLI `iroha` 製品のカプセル化:
+  - `audit.json` -- `iroha tools address audit --format json` の説明。
+  - `normalized.txt` -- literais IH58 (preferido) / 圧縮 (`sora`) (segunda melhor opcao) ローカルの変換セレクター。
+- スクリプトとダッシュボードのエンジェストの結合 (`dashboards/grafana/address_ingest.json`)
+  Local-8 / カットオーバーのプロバー キューとして Alertmanager (`dashboards/alerts/address_ingest_rules.yml`) を実行します。
+  Local-12 e セグロ。 Local-8 および Local-12 の OS アラートを観察してください。
+  `AddressLocal8Resurgence`、`AddressLocal12Collision`、`AddressInvalidRatioSlo` 事前
+  推進者ムダンカス・デ・マニフェスト。
+- [アドレス表示ガイドライン](address-display-guidelines.md) e o として参照してください。
+  [アドレス マニフェスト ランブック](../../../source/runbooks/address_manifest_ops.md) インシデントの UX 応答に関するコンテキスト。
 
-## Uso
+## うそ
 
 ```bash
 scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_examples.txt       --output-dir artifacts/address_migration       --network-prefix 753       --format ih58
 ```
 
-Opcoes:
+オペコ:
 
-- `--format compressed (`sora`)` para saida `sora...` em vez de IH58.
-- `--no-append-domain` para emitir literais sem dominio.
-- `--audit-only` para pular a etapa de conversao.
-- `--allow-errors` para continuar a varredura quando linhas malformadas aparecerem (igual ao comportamento da CLI).
+- `--format compressed (`sora`)` は `sora...` と IH58 を比較しました。
+- `--no-append-domain` パラエミミール・リタライス・セム・ドミニオ。
+- `--audit-only` は、会話に関する質問です。
+- `--allow-errors` は、引き続き不正な不正行為を実行します (CLI のイグアル アオ コンポルタメント)。
 
-O script escreve os caminhos dos artefatos ao final da execucao. Anexe os dois arquivos ao
-seu ticket de gestao de mudancas junto com o screenshot do Grafana que comprove zero
-deteccoes Local-8 e zero colisoes Local-12 por >=30 dias.
+O スクリプトは、最終的な実行を実行するためのスクリプトを作成します。 Anexe os dois arquivos ao
+ムダンカス ジュント コムのチケットを取得し、Grafana を実行してゼロを改善します
+検出ローカル 8 e ゼロコリソローカル 12 por >=30 dias。
 
-## Integracao CI
+## インテグラカオ CI
 
-1. Rode o script em um job dedicado e envie as saidas.
-2. Bloqueie merges quando `audit.json` reportar selectores Local (`domain.kind = local12`).
-   no valor padrao `true` (so altere para `false` em clusters dev/test ao diagnosticar
-   regressoes) e adicione
-   `iroha tools address normalize --fail-on-warning --only-local` ao CI para que regressos
-   falhem antes de chegar a producao.
+1. スクリプトを実行して、その仕事に専念し、羨望の念を抱きます。
+2. Bloqueie は、quando `audit.json` レポーター セレクター ローカル (`domain.kind = local12`) をマージします。
+   勇気がありません `true` (つまり、`false` em クラスターの開発/テストの診断を変更します)
+   regressoes) e アディシオーネ
+   `iroha tools address normalize --fail-on-warning --only-local` CI パラケリグレッソ
+   ファルヘム・アンテ・デ・シュガールは生産者です。
 
-Veja o documento fonte para mais detalhes, checklists de evidencia e o snippet de
-release notes que voce pode reutilizar ao anunciar o cutover para clientes.
+詳細な文書、証拠およびスニペットのチェックリストを確認する
+リリース ノートは、クライアントの発表やカットオーバーの再利用に役立ちます。

@@ -10,24 +10,25 @@ translation_last_reviewed: 2026-02-07
 title: JavaScript Connect preview recipe
 description: Stage Connect preview sessions, emit queue telemetry, and dial the `/v1/connect/ws` socket with `@iroha/iroha-js`.
 slug: /sdks/recipes/javascript-connect-preview
+translator: machine-google-reviewed
 ---
 
-import SampleDownload from '@site/src/components/SampleDownload';
+импорт SapleDownload '@site/src/компоненттар/SampleDownload';
 
-This recipe shows how to combine `bootstrapConnectPreviewSession` with the
-WebSocket dialer exposed by `ToriiClient.openConnectWebSocket()`. The script
-mirrors the Connect section of the JS SDK roadmap: it mints deterministic
-preview URIs, records queue depth telemetry, and opens the canonical
-`/v1/connect/ws` endpoint using the `ws` package so Node.js apps can exercise the
-same flow as browsers.
+Был рецепт күрһәтә, нисек берләштереү I18NI000000002X менән
+WebSocket диалеры фашланған I18NI000000003X. Сценарий
+JS SDK юл картаһының тоташтырыу бүлеген көҙгөләй: ул детерминистик мәтрүшкә
+алдан ҡарау URI, яҙмалар сират тәрәнлеге телеметрия, һәм канон аса
+I18NI000000004X ос нөктәһе I18NI000000005X пакеты ҡулланып, шулай Node.js ҡушымталар эшләй ала.
+браузерҙар менән бер үк ағым.
 
-<SampleDownload
-  href="/sdk-recipes/javascript/connect-preview.mjs"
-  filename="connect-preview.mjs"
-  description="Download the runnable script referenced in this recipe."
+<СэмплДау-лог
+  href="/sdk-рецепттары/жаваскрипт/бәйләнеш-превизор.мжс".
+  файл исеме="тоташҡа-превизор.мжс".
+  тасуирлама="Был рецептта һылтанма яһалған йүгерә торған сценарийҙы скачать."
 />
 
-## Prerequisites
+## Алдан шарттар
 
 ```bash
 npm install @iroha/iroha-js ws
@@ -40,10 +41,10 @@ export IROHA_TORII_API_TOKEN="sandbox-token"
 export CONNECT_REGISTRATION_NODE="https://torii.backup.example"
 ```
 
-Set `CONNECT_ROLE` to `app` when you need to dial the application side of the
-handshake. The default role is `wallet`.
+I18NI0000000006X комплекты I18NI000000007X тиклем, ҡасан һеҙгә кәрәк, тип йыйырға ҡушымта яғы .
+ҡул ҡыҫыу. Дефолт роле — `wallet`.
 
-## Example script
+## Миҫал сценарийы
 
 ```ts title="connect-preview.mjs"
 #!/usr/bin/env node
@@ -138,21 +139,21 @@ main().catch((error) => {
 });
 ```
 
-## Run & monitor
+## Йүгерергә & монитор
 
-- Execute the script with `node --env-file=.env connect-preview.mjs` (or export
-  the variables manually). The script logs the preview wallet URI, deeplink, and
-  queue depth before opening the WebSocket.
-- Feed telemetry dashboards by scraping the queue metrics the script prints for
-  overflow/expiry cases (`connect.queue_depth`, `connect.queue_overflow_total`,
-  `connect.queue_expired_total`). The `ConnectQueueError` helpers emit the
-  roadmap taxonomy (`queueOverflow`, `timeout`) so OTEL exporters can stay
-  consistent with Android/Swift clients.
-- Swap the role to `app` to inspect the application leg of the handshake. The
-  dialer automatically chooses the correct token (`token_app` vs. `token_wallet`)
-  and upgrades `http→ws`/`https→wss` so both roles share the same snippet.
+- I18NI000000009X менән сценарийҙы башҡарыу (йәки экспорт
+  үҙгәртеүселәр ҡул менән). Сценарий логин алдан ҡарау янсыҡ URI, dowerlink, һәм
+  сират тәрәнлеге WebSocket асыу алдынан.
+- Телеметрия приборҙар таҡталары ашау скрипт баҫмаларын сират метрикаларын ҡырҡып, 2012 йыл.
+  өҙөү/ваҡыт осраҡтар (`connect.queue_depth`, `connect.queue_overflow_total`,
+  `connect.queue_expired_total`). `ConnectQueueError` ярҙамсылары сығарыла.
+  юл картаһы таксономияһы (`queueOverflow`, I18NI000000015X) шулай OTEL экспортерҙары ҡала ала
+  тура килә Android/Swift клиенттар.
+- Ҡул ҡыҫышыуының ҡулланыу аяҡын тикшерергә `app` тиклем ролде алмаштырығыҙ. 1990 й.
+  диалер автоматик рәүештә дөрөҫ жетон һайлай (`token_app` vs. `token_wallet`)
+  һәм яңыртыу `http→ws`/I18NI000000020X шулай ике ролде лә бер үк өҙөк бүлешә.
 
-This recipe closes the remaining JS5 documentation gap for the Connect preview
-story called out in `roadmap.md`: the portal now ships a turnkey sample plus
-queue telemetry guidance, matching the roadmap requirement to document the
-WebSocket walkthrough alongside the Connect session helpers.
+Был рецепт ҡалған JS5 документация айырмаһы өсөн ябыла Connect алдан ҡарау .
+18NI000000021X-та саҡырылған хикәйә: портал хәҙер ҡабаҡтың төп өлгөһөн плюс ташый
+сират телеметрия етәкселеге, тап килтереп юл картаһы талабы документлаштырыу өсөн
+WebSocket проходка менән бергә Коннект сессияһы ярҙамсылары.

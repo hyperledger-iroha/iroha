@@ -4,6 +4,8 @@ direction: rtl
 source: docs/portal/docs/sorafs/chunker-registry-rollout-checklist.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
@@ -38,7 +40,7 @@ description: خطة إطلاق خطوة بخطوة لتحديثات سجل chunk
    `docs/source/sorafs/reports/sf1_determinism.md` (أو تقرير الملف المعني)
    تتطابق مع الآثار المُعاد توليدها.
 3. تأكد من أن `sorafs_manifest::chunker_registry` يبنى مع
-   `ensure_charter_compliance()` عبر:
+   גודל `ensure_charter_compliance()`:
    ```bash
    cargo test -p sorafs_manifest --lib chunker_registry::tests::ensure_charter_compliance
    ```
@@ -83,7 +85,7 @@ description: خطة إطلاق خطوة بخطوة لتحديثات سجل chunk
 5. تأكد من أن لوحات التليمترية (`torii_sorafs_*`) وقواعد التنبيه تعرض الملف الجديد
    دون أخطاء.
 
-## 4. إطلاق الإنتاج
+## 4. שגיאה
 
 1. كرر خطوات staging على عقد Torii الإنتاجية.
 2. أعلن نافذة التفعيل (التاريخ/الوقت، فترة السماح، خطة التراجع) لقنوات المشغلين وSDK.
@@ -91,7 +93,7 @@ description: خطة إطلاق خطوة بخطوة لتحديثات سجل chunk
    - Fixtures وظرفًا محدثين
    - تغييرات الوثائق (مراجع الميثاق، تقرير الحتمية)
    - تحديث roadmap/status
-4. ضع وسم الإصدار وأرشف القطع الموقعة لأغراض provenance.
+4. מוצא ומקור.
 
 ## 5. تدقيق ما بعد الإطلاق
 

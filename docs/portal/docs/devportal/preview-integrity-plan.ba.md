@@ -11,36 +11,37 @@ id: preview-integrity-plan
 title: Checksum-Gated Preview Plan
 sidebar_label: Preview Integrity Plan
 description: Implementation roadmap for securing the docs portal preview pipeline with checksum validation and notarised artefacts.
+translator: machine-google-reviewed
 ---
 
-This plan outlines the remaining work required to make every portal preview artefact verifiable before publication. The goal is to guarantee that reviewers download the exact snapshot built in CI, that the checksum manifest is immutable, and that the preview is discoverable through SoraFS with Norito metadata.
+Был планда ҡалған эштәрҙе һүрәтләй, һәр порталы алдан ҡарау артефактын баҫтырыу алдынан тикшерергә кәрәк. Маҡсат - гарантия бирергә, тип рецензенттар скачать теүәл снимок төҙөлгән CI, тип, тикшерелгән суммаһы үҙгәрмәй, һәм был алдан ҡарау аша I18NT0000000007X менән I18NT000000001X метамағлүмәттәр.
 
-## Objectives
+## Маҡсаттар
 
-- **Deterministic builds:** Ensure `npm run build` produces reproducible output and always emits `build/checksums.sha256`.
-- **Verified previews:** Require every preview artefact to ship with a checksum manifest and refuse publication when verification fails.
-- **Norito-published metadata:** Persist preview descriptors (commit metadata, checksum digest, SoraFS CID) as Norito JSON so governance tooling can audit releases.
-- **Operator tooling:** Provide a one-step verification script that consumers can run locally (`./docs/portal/scripts/preview_verify.sh --build-dir build --descriptor <path> --archive <path>`); the script now wraps the checksum + descriptor validation flow end-to-end. The standard preview command (`npm run serve`) now invokes this helper automatically before `docusaurus serve` so local snapshots stay checksum-gated (with `npm run serve:verified` kept as an explicit alias).
+- **Детерминистик төҙөүҙәр:** I18NI000000018X X-ты тәьмин итеү ҡабатлана торған продукция етештерә һәм һәр ваҡыт `build/checksums.sha256` X сығара.
+- **Тикшерелгән алдан ҡарау:** тикшерелгән сумма менән чемпионлыҡ күрһәтеү һәм баш тартыу менән ташыу өсөн һәр алдан ҡарау артефактын талап ит.
+- **Norito-баҫылған метамағлүмәттәр:** Ваҡытлыса алдан ҡарау дескрипторҙары (метамәғлүмәттәр коммит, чемпионлыҡ суммаһы, I18NT000000008X CID) I18NT0000000003X JSON шулай идара итеү инструменттарын аудит релиздары.
+- **оператор инструменттары:** Ҡулланыусылар локаль рәүештә эшләй алған бер аҙымлы тикшерелеү сценарийын тәьмин итеү (`./docs/portal/scripts/preview_verify.sh --build-dir build --descriptor <path> --archive <path>`); сценарий хәҙер тикшерелгән сумманы урап + дескриптор раҫлау ағымы ос-осҡа. Стандарт алдан ҡарау командаһы (`npm run serve`) хәҙер был ярҙамсы автоматик рәүештә I18NI000000022X тиклем саҡыра, шуға күрә урындағы снимоктар чек-ҡапҡала ҡала (I18NI0000023X менән асыҡ псевдоним булараҡ һаҡлана).
 
-## Phase 1 — CI Enforcement
+## 1-се этап — CI үтәү
 
-1. Update `.github/workflows/docs-portal-preview.yml` to:
-   - Run `node docs/portal/scripts/write-checksums.mjs` after the Docusaurus build (already invoked locally).
-   - Execute `cd build && sha256sum -c checksums.sha256` and fail the job on mismatch.
-   - Package the build directory as `artifacts/preview-site.tar.gz`, copy the checksum manifest, call `scripts/generate-preview-descriptor.mjs`, and execute `scripts/sorafs-package-preview.sh` with a JSON config (see `docs/examples/sorafs_preview_publish.json`) so the workflow emits both metadata and a deterministic SoraFS bundle.
-   - Upload the static site, metadata artefacts (`docs-portal-preview`, `docs-portal-preview-metadata`), and the SoraFS bundle (`docs-portal-preview-sorafs`) so the manifest, CAR summary, and plan can be inspected without re-running the build.
-2. Add a CI badge comment summarising the checksum verification result in pull requests (✅ implemented via `docs-portal-preview.yml` GitHub Script comment step).
-3. Document the workflow in `docs/portal/README.md` (CI section) and link to the verification steps in the publishing checklist.
+1. Яңыртыу I18NI0000000024X тиклем:
+   - `node docs/portal/scripts/write-checksums.mjs` Run I18NT000000000000000-дән һуң (урындағы ҡосаҡлашҡан).
+   - `cd build && sha256sum -c checksums.sha256` башҡарма һәм тап килмәү буйынса эштән бушатыу.
+   - `artifacts/preview-site.tar.gz` тип төҙөү каталогын пакет, чемпионат суммаһын күсерергә, шылтыратыу I18NI000000028X, һәм `scripts/sorafs-package-preview.sh` JSON конфигы менән башҡарығыҙ (ҡара: I18NI000000030X) шулай эш ағымы метамағлүмәттәрҙе һәм детерминистик сыға. SoraFS өйөм.
+   - Статик сайтты, метамағлүмәттәр артефакттарын (I18NI000000031X, `docs-portal-preview-metadata`) тейәп, I18NT00000000010X bundle (I18NI0000000033X) шулай итеп, CAR резюмеһы һәм планды яңынан эшләтмәйенсә тикшерергә мөмкин.
+2. Өҫтәү CI значок комментарий дөйөмләштереү тикшерелгән сумма тикшерелгән һөҙөмтәлә тартыу запростар (✅ аша тормошҡа ашырыла I18NI000000034X GitHub Сценарий комментарий аҙым).
+3. Документ эш ағымы I18NI000000035X (CI бүлеге) һәм һылтанма тикшерелгән аҙымдар баҫтырыу тикшерелгән исемлеге.
 
-## Verification Script
+## Тикшереү сценарийы
 
-`docs/portal/scripts/preview_verify.sh` validates downloaded preview artefacts without requiring manual `sha256sum` invocations. Use `npm run serve` (or the explicit `npm run serve:verified` alias) to run the script and launch `docusaurus serve` in one step when sharing local snapshots. The verification logic:
+I18NI000000036X раҫлай скачать алдан ҡарау артефакттары ҡулланмаһы өсөн ҡулланма I18NI000000037X саҡырыуҙар. Ҡулланыу I18NI0000000038X (йәки асыҡ I18NI0000000039X псевдонимы) сценарийҙы эшләтеү һәм урындағы снимоктар менән бүлешкәндә I18NI0000000040X старт. Тикшерелеү логикаһы:
 
-1. Runs the appropriate SHA tool (`sha256sum` or `shasum -a 256`) against `build/checksums.sha256`.
-2. Optionally compares the preview descriptor’s `checksums_manifest` digest/filename and, when provided, the preview archive digest/filename.
-3. Exits non-zero when any mismatch is detected so reviewers can block tampered previews.
+1. тейешле SHA инструменты (`sha256sum` йәки I18NI000000042X) `build/checksums.sha256` ҡаршы йүгерә.
+.
+3. Сығыуҙар нуль булмағанда, ҡасан ниндәй ҙә булһа тап килмәү асыҡлана, шулай итеп, рецензенттар блокировать мөмкин үҙгәртеп ҡороу алдан ҡарау.
 
-Example usage (after extracting the CI artefacts):
+Миҫал ҡулланыу (CI артефакттарын сығарғандан һуң):
 
 ```bash
 ./docs/portal/scripts/preview_verify.sh \
@@ -49,37 +50,37 @@ Example usage (after extracting the CI artefacts):
   --archive artifacts/preview-site.tar.gz
 ```
 
-CI and release engineers should call the script whenever they download a preview bundle or attach artefacts to a release ticket.
+CI һәм релиз инженерҙары тейеш шылтыратырға сценарий ҡасан улар скачать алдан ҡарау өйөмө йәки беркетергә артефакттар өсөн билет.
 
-## Phase 2 — SoraFS Publishing
+## 2-се этап — I18NT0000000011X баҫтырыу
 
-1. Extend the preview workflow with a job that:
-   - Uploads the built site to the SoraFS staging gateway using `sorafs_cli car pack` and `manifest submit`.
-   - Captures the returned manifest digest and SoraFS CID.
-   - Serialises `{ commit, branch, checksum_manifest, cid }` into Norito JSON (`docs/portal/preview/preview_descriptor.json`).
-2. Store the descriptor alongside the build artefact and expose the CID in the pull-request comment.
-3. Add integration tests that exercise `sorafs_cli` in dry-run mode to ensure future changes keep the metadata schema stable.
+1. Алдан ҡарау эш ағымын эш менән оҙайтыу:
+   - төҙөлгән сайтты I18NI0000000045X һәм I18NI000000046XX ҡулланып, SoraFS стадияһына тейәп.
+   - Ҡайтып килгән асыҡ һеңдереүҙе һәм SoraFS CID-ты тота.
+   - `{ commit, branch, checksum_manifest, cid }` Сериализация I18NT000000004X JSON (I18NI000000048X).
+2. Дескрипторҙы төҙөү артефакт менән бер рәттән һаҡлау һәм CID-ты тартыу-запрос комментарийында фаш итегеҙ.
+3. Өҫтәү интеграция һынауҙары, тип күнекмә I18NI0000000049X ҡоро идара итеү режимында тәьмин итеү өсөн киләсәктә үҙгәрештәр метамағлүмәттәр схемаһы тотороҡло тотоу.
 
-## Phase 3 — Governance & Auditing
+## 3-сө этап — Идара итеү һәм аудит
 
-1. Publish a Norito schema (`PreviewDescriptorV1`) describing the descriptor structure under `docs/portal/schemas/`.
-2. Update the DOCS-SORA publishing checklist to require:
-   - Running `sorafs_cli manifest verify` against the uploaded CID.
-   - Recording the checksum manifest digest and CID in the release PR description.
-3. Wire the governance automation to cross-check the descriptor against the checksum manifest during release votes.
+1. I18NT0000005X схемаһы (I18NI000000050X) I18NI000000051X буйынса дескриптор структураһын тасуирлаған.
+2. DOCS-I18NT0000000016X нәшриәт тикшерелгән исемлеген яңыртыу өсөн талап итеү өсөн яңыртыу:
+   - Йүгереп I18NI000000052X ҡаршы тейәлгән CID.
+   - Яҙма суммаһы асыҡ һеңдерергә һәм CID PR тасуирламаһы сығарыу.
+3. Сым идара итеү автоматлаштырыу өсөн кросс-тикшерергә дескриптор ҡаршы тикшерелгән суммаһы асыҡланған ваҡытта сығарыу тауыштары.
 
-## Deliverables & Ownership
+## тапшырыусылар & Милекселек
 
-| Milestone | Owner(s) | Target | Notes |
-|-----------|----------|--------|-------|
-| CI checksum enforcement landed | Docs Infrastructure | Week 1 | Adds failure gate + artefact uploads. |
-| SoraFS preview publishing | Docs Infrastructure / Storage Team | Week 2 | Requires access to staging credentials and Norito schema updates. |
-| Governance integration | Docs/DevRel Lead / Governance WG | Week 3 | Publishes schema + updates checklists and roadmap entries. |
+| Мильстоун | Хужа(тар) | Маҡсат | Иҫкәрмәләр |
+|---------|-----------|---------|------|
+| CI чек-йомғаҡлау үтәлеше ерләнгән | Доктар Инфраструктура | 1-се аҙнала | Өҫтәү ҡапҡасы + артефакт тейәү. |
+| SoraFS алдан ҡарау баҫтырыу | Доктар Инфраструктура / Һаҡлау командаһы | 2-се аҙнала | Стажлау ышаныс ҡағыҙҙары һәм I18NT00000000006X схемаһы яңыртыуҙары кәрәк. |
+| Идара итеү интеграцияһы | Доктар/ДевРель ҡурғаш / идара итеү WG | 3-сө аҙна | Схема баҫа + яңыртыу тикшерелгән исемлектәр һәм юл картаһы яҙмалары. |
 
-## Open Questions
+## Асыҡ һорауҙар .
 
-- Which SoraFS environment should hold preview artefacts (staging vs. dedicated preview lane)?
-- Do we need dual signatures (Ed25519 + ML-DSA) on the preview descriptor before publication?
-- Should the CI workflow pin the orchestrator configuration (`orchestrator_tuning.json`) when running `sorafs_cli` to keep manifests reproducible?
+- Ниндәй I18NT000000015X мөхите алдан ҡарау артефакттарын тоторға тейеш (стуцовка ҡаршы бағышланған алдан ҡарау һыҙаты)?
+- Беҙгә баҫылып сыҡҡанға тиклем алдан ҡарау дескрипторында ике ҡултамға (Ed25519 + ML-DSA) кәрәкме?
+- CI эш ағымы оркестр конфигурацияһын (I18NI000000053X) I18NI000000054X эшләгәндә, манифестарҙы ҡабатлау өсөн эшләткәндә кәрәкме?
 
-Capture decisions in `docs/portal/docs/reference/publishing-checklist.md` and update this plan once the unknowns are resolved.
+Ҡабул итеү ҡарарҙары Norito һәм был планды яңыртыу бер тапҡыр билдәһеҙҙәр хәл ителә.

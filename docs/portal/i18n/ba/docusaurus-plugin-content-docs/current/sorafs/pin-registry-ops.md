@@ -8,38 +8,40 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: Pin Registry Operations
 sidebar_label: Pin Registry Operations
 description: Monitor and triage the SoraFS pin registry and replication SLA metrics.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
-:::
+:::иҫкәртергә канонлы сығанаҡ
+::: 1990 й.
 
-## Overview
+## Обзор
 
-This runbook documents how to monitor and triage the SoraFS pin registry and its replication service-level agreements (SLAs). The metrics originate from `iroha_torii` and are exported via Prometheus under the `torii_sorafs_*` namespace. Torii samples the registry state on a 30 second interval in the background, so dashboards remain current even when no operators are polling the `/v1/sorafs/pin/*` endpoints. Import the curated dashboard (`docs/source/grafana_sorafs_pin_registry.json`) for a ready-to-use Grafana layout that maps directly to the sections below.
+Был runbook документы нисек күҙәтеү һәм триаж I18NT000000000006X булавка реестры һәм уның репликация хеҙмәте кимәлендә килешеп (SLAs). метрикаһы I18NI000000018X-тан башлана һәм I18NI000000019X X исемдәр киңлеге буйынса I18NT000000000X аша экспортлана. Torii өлгөләре реестр хәле 30scond интервалында артҡы планда, шуға күрә приборҙар таҡталары ток ҡала, хатта бер ниндәй ҙә операторҙар һорау алыу `/v1/sorafs/pin/*` ос нөктәләре. Импорт курировать приборҙар таҡтаһы (`docs/source/grafana_sorafs_pin_registry.json`) әҙер-ҡулланыу өсөн I18NT0000000002X макеты, тип карталар туранан-тура түбәндәге бүлектәргә.
 
-## Metric Reference
+## метрик һылтанма
 
-| Metric | Labels | Description |
-| ------ | ------ | ----------- |
-| `torii_sorafs_registry_manifests_total` | `status` (`pending` \| `approved` \| `retired`) | On-chain manifest inventory by lifecycle state. |
-| `torii_sorafs_registry_aliases_total` | — | Count of active manifest aliases recorded in the registry. |
-| `torii_sorafs_registry_orders_total` | `status` (`pending` \| `completed` \| `expired`) | Replication order backlog segmented by status. |
-| `torii_sorafs_replication_backlog_total` | — | Convenience gauge mirroring `pending` orders. |
-| `torii_sorafs_replication_sla_total` | `outcome` (`met` \| `missed` \| `pending`) | SLA accounting: `met` counts completed orders within deadline, `missed` aggregates late completions + expirations, `pending` mirrors outstanding orders. |
-| `torii_sorafs_replication_completion_latency_epochs` | `stat` (`avg` \| `p95` \| `max` \| `count`) | Aggregated completion latency (epochs between issuance and completion). |
-| `torii_sorafs_replication_deadline_slack_epochs` | `stat` (`avg` \| `p95` \| `max` \| `count`) | Pending-order slack windows (deadline minus issued epoch). |
+| Метрика | Ярлыҡтар | Тасуирлама |
+| ----- | ----- | ---------- |
+| `torii_sorafs_registry_manifests_total` | `status` (I18NI000000024X \| I18NI000000025X \| I18NI000000026X X) | Сылбырҙа йәшәү циклы хәле буйынса инвентаризация асыҡ. |
+| `torii_sorafs_registry_aliases_total` | — | Реестрҙа теркәлгән әүҙем асыҡ псевдонимдар һаны. |
+| `torii_sorafs_registry_orders_total` | `status` (I18NI000000030X \| I18NI0000000031X \| Репликация тәртибе статус буйынса сегментлы сегмент. |
+| `torii_sorafs_replication_backlog_total` | — | Уңайлыҡтар датчигы көҙгө `pending` заказдар. |
+| I18NI000000035X | I18NI000000036X (I18NI000000037X \| I18NI0000000038X \| I18NI0000000039X X) | SLA буйынса бухгалтерия: I18NI000000040X һандары срок сиктәрендә заказдарҙы тамамланы, I18NI000000041X агрегаттары һуң тамамлау + срогы, I18NI000000042X көҙгө заказдар. |
+| `torii_sorafs_replication_completion_latency_epochs` | I18NI000000044X (`avg` \| I18NI000000046X \| `max` \| Агрегацияланған тамамланыу латентлығы (эмиссия һәм тамамланыу араһындағы эпохалар). |
+| `torii_sorafs_replication_deadline_slack_epochs` | I18NI000000050X (`avg` \| I18NI000000052X \| `max` \| Көтөү-заказ slack тәҙрәләр (решенсе минус сығарылған эпоха). |
 
-All gauges reset on every snapshot pull, so dashboards should sample at `1m` cadence or faster.
+Бөтә датчиктар һәр снимок тартыуҙа сброс, шуға күрә приборҙар таҡталары `1m` каденцияһы йәки тиҙерәк өлгө булырға тейеш.
 
-## Grafana Dashboard
+## I18NT000000003X Приборҙар таҡтаһы
 
-The dashboard JSON ships with seven panels that cover operator workflows. The queries are listed below for quick reference if you prefer to build bespoke charts.
+Приборҙар таҡтаһы JSON караптары менән ете панелдәр, улар оператор эш ағымын ҡаплай. Һорауҙар түбәндә тиҙ һылтанма өсөн исемлеккә индерелгән, әгәр һеҙ өҫтөнлөк бирәһегеҙ төҙөү өсөн махсус диаграммалар.
 
-1. **Manifest lifecycle** – `torii_sorafs_registry_manifests_total` (grouped by `status`).
-2. **Alias catalogue trend** – `torii_sorafs_registry_aliases_total`.
-3. **Order queue by status** – `torii_sorafs_registry_orders_total` (grouped by `status`).
-4. **Backlog vs expired orders** – combines `torii_sorafs_replication_backlog_total` and `torii_sorafs_registry_orders_total{status="expired"}` to surface saturation.
-5. **SLA success ratio** –
+1. **Манифест йәшәү циклы** – `torii_sorafs_registry_manifests_total` (I18NI000000057X менән төркөмләнгән).
+2. **Бәләкәй каталог тенденцияһы** – I18NI000000058X.
+3. **Статус буйынса тәртип сират** – `torii_sorafs_registry_orders_total` X (`status` менән төркөмләнгән).
+4. **Бэклог vs vs срогы ваҡыты үткән** – берләштерә I18NI0000000061X һәм I18NI000000062X ер өҫтө туйындырыу өсөн.
+5. **СЛА уңыш нисбәте** –
 
    ```promql
    sum(torii_sorafs_replication_sla_total{outcome="met"})
@@ -50,34 +52,34 @@ The dashboard JSON ships with seven panels that cover operator workflows. The qu
    )
    ```
 
-6. **Latency vs deadline slack** – overlay `torii_sorafs_replication_completion_latency_epochs{stat="p95"}` and `torii_sorafs_replication_deadline_slack_epochs{stat="avg"}`. Use Grafana transformations to add `min_over_time` views when you need the absolute slack floor, for example:
+6. **Латенция vs срогы слак** – өҫтөндә I18NI000000063X һәм I18NI000000064X. Ҡулланыу I18NT00000000004X трансформациялар өҫтәү өсөн I18NI00000000065X ҡараштар ҡасан һеҙгә кәрәк абсолют слэк иҙән, мәҫәлән:
 
    ```promql
    min_over_time(torii_sorafs_replication_deadline_slack_epochs{stat="avg"}[15m])
    ```
 
-7. **Missed orders (1h rate)** –
+7. **Һылтаны бойороҡтар (1h ставкаһы)** –
 
    ```promql
    sum(increase(torii_sorafs_replication_sla_total{outcome="missed"}[1h]))
    ```
 
-## Alert Thresholds
+## Уғлаһы сиктәре
 
-- **SLA success < 0.95 for 15 min**
-  - Threshold: `sum(torii_sorafs_replication_sla_total{outcome="met"}) / clamp_min(sum(torii_sorafs_replication_sla_total{outcome=~"met|missed"}), 1) < 0.95`
-  - Action: Page SRE; start replication backlog triage.
-- **Pending backlog above 10**
-  - Threshold: `torii_sorafs_replication_backlog_total > 10` sustained for 10 min
-  - Action: Check provider availability and the Torii capacity scheduler.
-- **Expired orders > 0**
-  - Threshold: `increase(torii_sorafs_registry_orders_total{status="expired"}[5m]) > 0`
-  - Action: Inspect governance manifests to confirm provider churn.
-- **Completion p95 > deadline slack avg**
-  - Threshold: `torii_sorafs_replication_completion_latency_epochs{stat="p95"} > torii_sorafs_replication_deadline_slack_epochs{stat="avg"}`
-  - Action: Verify providers are committing before deadlines; consider issuing reassignments.
+- **SLA уңыш < 0,95 өсөн 15мин**
+  - Порог: I18NI0000000666X
+  - Ғәмәл: С.Р. репликация артта ҡалған триаж башлай.
+- **10** өҫтөндә артта ҡалыуҙы көтөп.
+  - 10мин өсөн 18NI0000000067X .
+  - Ғәмәл: тикшерергә провайдер доступность һәм I18NT0000000012X ҡәҙерле планлаштырыусы.
+- **Аҙаҡҡы бойороҡтар > 0**
+  - Порог: I18NI000000068X
+  - Ғәмәл: тикшерергә идара итеү провайдер churn раҫлау өсөн күренә.
+- **Төшөрөү p95 > сроклы ялҡаулыҡ gag**
+  - Порог: I18NI000000069X XX
+  - Ғәмәл: тикшерергә провайдерҙар йөкләмәләр алдынан сроктар; ҡабаттан заданиеларҙы сығарыуҙы ҡарарға.
 
-### Example Prometheus Rules
+### Миҫал I18NT0000000001X ҡағиҙәләре
 
 ```yaml
 groups:
@@ -112,43 +114,43 @@ groups:
           description: "At least one replication order expired in the last five minutes."
 ```
 
-## Triage Workflow
+## Триаж эш ағымы
 
-1. **Identify cause**
-   - If SLA misses spike while backlog remains low, focus on provider performance (PoR failures, late completions).
-   - If backlog grows with stable misses, inspect admission (`/v1/sorafs/pin/*`) to confirm manifests awaiting council approval.
-2. **Validate provider status**
-   - Run `iroha app sorafs providers list` and verify the advertised capabilities match replication requirements.
-   - Check `torii_sorafs_capacity_*` gauges to confirm provisioned GiB and PoR success.
-3. **Reassign replication**
-   - Issue new orders via `sorafs_manifest_stub capacity replication-order` when backlog slack (`stat="avg"`) drops below 5 epochs (manifest/CAR packaging uses `iroha app sorafs toolkit pack`).
-   - Notify governance if aliases lack active manifest bindings (`torii_sorafs_registry_aliases_total` drops unexpectedly).
-4. **Document outcome**
-   - Record incident notes in the SoraFS operations log with timestamps and affected manifest digests.
-   - Update this runbook if new failure modes or dashboards are introduced.
+1. **Сәбәпте билдәләү**
+   - Әгәр SLA spike һағынып, ә артта ҡалыу түбән ҡала, провайдер эшмәкәрлегенә иғтибар йүнәлтергә (PoR етешһеҙлектәре, һуң тамамлауҙар).
+   - Әгәр ҙә артта ҡалыу тотороҡло мисс менән үҫә, тикшерергә ҡабул итеү (`/v1/sorafs/pin/*`) раҫлау өсөн манифесттар көтә советы раҫлау.
+2. **Провайдер статусын раҫлау**
+   - Run `iroha app sorafs providers list` һәм реклама мөмкинлектәрен раҫлау репликация талаптарына тап килә.
+   - Тикшерергә I18NI000000072X датчиктар раҫлау өсөн тәьмин ителгән GiB һәм PoR уңыш.
+3. **Респумент репликация**
+   - `sorafs_manifest_stub capacity replication-order` аша яңы заказдар сығарыу ҡасан артта ҡалған ялҡаулыҡ (I18NI000000074X) 5 эпоханан түбәнерәк төшә (махсус/CAR упаковкаһы `iroha app sorafs toolkit pack` ҡуллана).
+   - Әгәр псевдонимдар әүҙем асыҡтан-асыҡ бәйләүҙәр булмаһа, идара итеүгә хәбәр итегеҙ (`torii_sorafs_registry_aliases_total` көтөлмәгәнсә төшә).
+4. **Документ һөҙөмтәһе**
+   - I18NT000000010X операциялар журналында ваҡыт маркалары һәм зарарланған асыҡ һеңдереүҙең рекордтары яҙылған.
+   - Был runbook-ты яңыртығыҙ, әгәр яңы етешһеҙлектәр режимдары йәки приборҙар таҡталары индерелһә.
 
-## Rollout Plan
+## рулет планы
 
-Follow this staged procedure when enabling or tightening the alias cache policy in production:
+Был стадияланған процедураны үтәргә, ҡасан мөмкинлек бирә йәки тығыҙлау псевдоним кэш сәйәсәте етештереү:
 
-1. **Prepare configuration**
-   - Update `torii.sorafs_alias_cache` in `iroha_config` (user → actual) with the agreed TTLs and grace windows: `positive_ttl`, `refresh_window`, `hard_expiry`, `negative_ttl`, `revocation_ttl`, `rotation_max_age`, `successor_grace`, and `governance_grace`. The defaults match the policy in `docs/source/sorafs_alias_policy.md`.
-   - For SDKs, distribute the same values through their configuration layers (`AliasCachePolicy::new(positive, refresh, hard, negative, revocation, rotation, successor, governance)` in Rust / NAPI / Python bindings) so client enforcement matches the gateway.
-2. **Dry-run in staging**
-   - Deploy the config change to a staging cluster that mirrors production topology.
-   - Run `cargo xtask sorafs-pin-fixtures` to confirm the canonical alias fixtures still decode and round-trip; any mismatch implies upstream manifest drift that must be addressed first.
-   - Exercise the `/v1/sorafs/pin/{digest}` and `/v1/sorafs/aliases` endpoints with synthetic proofs covering fresh, refresh-window, expired, and hard-expired cases. Validate the HTTP status codes, headers (`Sora-Proof-Status`, `Retry-After`, `Warning`), and JSON body fields against this runbook.
-3. **Enable in production**
-   - Roll out the new configuration via the standard change window. Apply it to Torii first, then restart gateways/SDK services once the node confirms the new policy in logs.
-   - Import `docs/source/grafana_sorafs_pin_registry.json` into Grafana (or update existing dashboards) and pin the alias cache refresh panels to the NOC workspace.
-4. **Post-deployment verification**
-   - Monitor `torii_sorafs_alias_cache_refresh_total` and `torii_sorafs_alias_cache_age_seconds` for 30 minutes. Spikes in the `error`/`expired` curves should correlate with policy refresh windows; unexpected growth means operators must inspect alias proofs and provider health before continuing.
-   - Confirm client-side logs show the same policy decisions (SDKs will surface errors when the proof is stale or expired). Absence of client warnings indicates a misconfiguration.
-5. **Fallback**
-   - If alias issuance falls behind and the refresh window trips frequently, temporarily relax the policy by increasing `refresh_window` and `positive_ttl` in config, then redeploy. Keep `hard_expiry` intact so truly stale proofs are still rejected.
-   - Revert to the prior configuration by restoring the previous `iroha_config` snapshot if telemetry continues to show elevated `error` counts, then open an incident to trace alias generation delays.
+1. **Бер конфигурацияны әҙерләү**
+   - Яңыртыу I18NI000000077X I18NI000000078X (ҡулланыусы → фактик) менән килешелгән TTLs һәм грация тәҙрәләре: I18NI000000079X, `refresh_window`, `hard_expiry`, I18NI00000000082 X, `revocation_ttl`, `rotation_max_age`, `successor_grace`, һәм `governance_grace`. Ғәҙәттәгесә сәйәсәткә тап килә I18NI000000087X.
+   - SDKs өсөн, уларҙы конфигурация ҡатламдары аша бер үк ҡиммәттәрҙе бүлергә (I18NI000000088X Rust / NAPI / Python бәйләүҙәре) шулай клиент үтәү шлюзға тап килә.
+2. **Ҡоро-йүгереү сәхнәләштереү **
+   - Конфиг үҙгәртергә стажировка кластерына йүнәлтергә, был етештереү топологияһын көҙгөләй.
+   - Run `cargo xtask sorafs-pin-fixtures` канонлы псевдонимдар ҡорамалдарын раҫлау өсөн һаман да расшифровка һәм түңәрәк сәйәхәт; ниндәй ҙә булһа тап килмәү өҫкө ағымдағы манифест дрейфын күҙ уңында тота, уларҙы тәүҙә хәл итергә кәрәк.
+   - I18NI000000090X һәм I18NI000000091X ос нөктәләре менән синтетик дәлилдәр менән яңы, яңыртыу-тәҙрә ҡаплай, һәм ҡаты сирле осраҡтарҙа. HTTP статус кодтарын, башлыҡтарын (`Sora-Proof-Status`, I18NI000000093X, `Warning`) һәм JSON корпусы яландарын раҫлау.
+3. **Производствола **
+   - Яңы конфигурацияны стандарт үҙгәрештәр тәҙрәһе аша йәйергә. Ҡулланыу I18NT000000013X тәүҙә, һуңынан шлюздарҙы ҡабаттан эшләтеп ебәрергә/SDK хеҙмәттәре бер тапҡыр төйөн яңы сәйәсәтте раҫлай журналдарҙа.
+   - Import I18NI000000095X Grafana (йәки ғәмәлдәге приборҙар таҡталарын яңыртыу) һәм псевдоним кэш яңыртыу панелдәре NOC эш урыны.
+4. **Пост-йөкмәткеһе тикшерелгән**
+   - Монитор I18NI000000096X һәм I18NI000000097X 30 минут. `error`/I18NI0000000099X ҡойроҡтарында шпайкс сәйәсәтте яңыртыу тәҙрәләре менән корреляцияларға тейеш; көтөлмәгән үҫеш тигәнде аңлата операторҙар тикшерергә тейеш псевдоним һәм провайдер һаулыҡ дауам итеү алдынан.
+   - Клиент яғынан логтар раҫлау шул уҡ сәйәси ҡарарҙарҙы күрһәтә (SDKs хаталар өҫтөндә буласаҡ, ҡасан иҫбатлау иҫке йәки срогы үткән). Клиенттар тураһында иҫкәртмәләр булмауы дөрөҫ булмаған конфигурацияны күрһәтә.
+5. **Фаллбек**
+   - Әгәр псевдонимдар сығарыу артта ҡала һәм яңыртыу тәҙрә сәйәхәттәре йыш, ваҡытлыса ял итеү сәйәсәте I18NI000000100X һәм I18NI000000101X конфигында, һуңынан үҙгәртеп ҡороу. `hard_expiry` һаҡлау бөтөн, шуға күрә ысын мәғәнәһендә иҫке дәлилдәр һаман да кире ҡағыла.
+   - Ҡайтып, алдан конфигурацияны тергеҙеү аша үткән I18NI0000000103X снимок, әгәр телеметрия күрһәтеү дауам итә, юғары `error` һандарын күрһәтеү, һуңынан инцидент асыу өсөн эҙләү псевдонимы генерациялау тотҡарлыҡтар.
 
-## Related Materials
+## Бәйләнешле материалдар
 
-- `docs/source/sorafs/pin_registry_plan.md` — implementation roadmap and governance context.
-- `docs/source/sorafs/runbooks/sorafs_node_ops.md` — storage worker operations, complements this registry playbook.
+- `docs/source/sorafs/pin_registry_plan.md` — юл картаһын тормошҡа ашырыу һәм идара итеү контексы.
+- `docs/source/sorafs/runbooks/sorafs_node_ops.md` — һаҡлау эшселәре операциялары, был реестр пьеса китабын тулыландыра.

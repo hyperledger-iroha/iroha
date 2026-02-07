@@ -4,33 +4,35 @@ direction: ltr
 source: docs/portal/docs/sorafs/pin-registry-validation-plan.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: pin-registry-validation-plan
-title: خطة التحقق من manifests في Pin Registry
-sidebar_label: تحقق Pin Registry
-description: خطة تحقق لتقييد ManifestV1 قبل اطلاق Pin Registry ضمن SF-4.
+id: plano de validação de registro de pin
+título: خطة التحقق من manifesta no Pin Registry
+sidebar_label: Registrar Pin Registry
+description: Você pode usar o ManifestV1 no Pin Registry do SF-4.
 ---
 
 :::note المصدر المعتمد
-تعكس هذه الصفحة `docs/source/sorafs/pin_registry_validation_plan.md`. حافظ على المحاذاة بين الموقعين طالما الوثائق القديمة فعالة.
+Verifique o valor `docs/source/sorafs/pin_registry_validation_plan.md`. Não se preocupe, você pode fazer isso sem problemas.
 :::
 
-# خطة التحقق من manifests في Pin Registry (تحضير SF-4)
+# خطة التحقق من manifesta no Pin Registry (تحضير SF-4)
 
-توضح هذه الخطة الخطوات المطلوبة لتمرير تحقق `sorafs_manifest::ManifestV1` داخل
+A solução de problemas do `sorafs_manifest::ManifestV1` é a seguinte:
 عقد Pin Registry القادم حتى يبني عمل SF-4 على tooling القائم بدون تكرار منطق
-encode/decode.
+codificar/decodificar.
 
 ## الاهداف
 
-1. تتحقق مسارات الارسال في المضيف من بنية manifest وملف chunking وenvelopes
-   الخاصة بالحوكمة قبل قبول المقترحات.
-2. تعيد خدمات Torii والبوابات استخدام نفس روتينات التحقق لضمان سلوك حتمي عبر
+1. تتحقق مسارات الارسال في المضيف من بنية manifesto e chunking e envelopes
+   Você pode fazer isso com cuidado.
+2. Verifique se o Torii está instalado para que você possa usá-lo corretamente.
    المضيفين.
-3. تغطي اختبارات التكامل الحالات الايجابية والسلبية لقبول manifests وتطبيق
-   السياسات وتليمتري الاخطاء.
+3. تغطي اختبارات التكامل الحالات الايجابية والسلبية لقبول manifestos e وتطبيق
+   السياسات e تليمتري الاخطاء.
 
 ## المعمارية
 
@@ -46,43 +48,41 @@ flowchart LR
 
 ### المكونات
 
-- `ManifestValidator` (وحدة جديدة في crate `sorafs_manifest` او `sorafs_pin`)
-  تغلف الفحوصات الهيكلية وبوابات السياسة.
-- Torii تعرض endpoint gRPC باسم `SubmitManifest` يستدعي
-  `ManifestValidator` قبل الارسال للعقد.
-- مسار fetch في البوابة يمكنه استهلاك نفس المدقق اختياريا عند تخزين manifests
-  جديدة من registry.
+- `ManifestValidator` (é usado na caixa `sorafs_manifest` e `sorafs_pin`)
+  تغلف الفحوصات الهيكلية e بوابات السياسة.
+- Torii para endpoint gRPC ou `SubmitManifest`
+  `ManifestValidator` é um problema.
+- مسار fetch في البوابة يمكنه استهلاك نفس المدقق اختياريا عند تخزين manifestos
+  جديدة من registro.
 
 ## تقسيم المهام
 
 | المهمة | الوصف | المالك | الحالة |
 |------|-------|--------|--------|
-| هيكل API V1 | اضافة `validate_manifest(manifest: &ManifestV1, policy: &PinPolicyInputs) -> Result<(), ValidationError>` الى `sorafs_manifest`. تضمين تحقق BLAKE3 digest وlookup للـ chunker registry. | Core Infra | ✅ تم | المساعدات المشتركة (`validate_chunker_handle`, `validate_pin_policy`, `validate_manifest`) تعيش الان في `sorafs_manifest::validation`. |
-| توصيل السياسة | مواءمة اعدادات سياسة registry (`min_replicas`, نوافذ الانتهاء, handles المسموح بها) مع مدخلات التحقق. | Governance / Core Infra | قيد الانتظار — متابع في SORAFS-215 |
-| تكامل Torii | استدعاء المدقق في مسار ارسال Torii؛ اعادة اخطاء Norito منظمة عند الفشل. | Torii Team | مخطط — متابع في SORAFS-216 |
-| stub لعقد المضيف | ضمان رفض entrypoint للعقد للـ manifests التي تفشل في hash التحقق؛ وتعريض عدادات المقاييس. | Smart Contract Team | ✅ تم | `RegisterPinManifest` يستدعي الان المدقق المشترك (`ensure_chunker_handle`/`ensure_pin_policy`) قبل تغيير الحالة وتغطي اختبارات الوحدة حالات الفشل. |
-| الاختبارات | اضافة اختبارات وحدة للمدقق + حالات trybuild لـ manifests غير صالحة؛ اختبارات تكامل في `crates/iroha_core/tests/pin_registry.rs`. | QA Guild | 🟠 جاري العمل | اختبارات الوحدة للمدقق وصلت مع رفض on-chain؛ مجموعة التكامل الكاملة ما زالت قيد الانتظار. |
-| الوثائق | تحديث `docs/source/sorafs_architecture_rfc.md` و `migration_roadmap.md` بعد وصول المدقق؛ توثيق استخدام CLI في `docs/source/sorafs/manifest_pipeline.md`. | Docs Team | قيد الانتظار — متابع في DOCS-489 |
+| Para API V1 | Use `validate_manifest(manifest: &ManifestV1, policy: &PinPolicyInputs) -> Result<(), ValidationError>` em vez de `sorafs_manifest`. Você pode usar o BLAKE3 digest e a pesquisa no registro do chunker. | Infra principal | ✅ تم | O código de barras (`validate_chunker_handle`, `validate_pin_policy`, `validate_manifest`) está localizado em `sorafs_manifest::validation`. |
+| توصيل السياسة | O registro de registro de dados (`min_replicas`, نوافذ الانتهاء, lida com o problema) é importante. | Governança / Infraestrutura Central | قيد الانتظار — متابع في SORAFS-215 |
+| Modelo Torii | Definindo o valor do produto Torii; Verifique se Norito está funcionando. | Equipe Torii | مخطط — متابع في SORAFS-216 |
+| esboço para ler | Use o ponto de entrada para manifestar o hash do arquivo وتعريض عدادات المقاييس. | Equipe de contrato inteligente | ✅ تم | `RegisterPinManifest` يستدعي الان المدقق المشترك (`ensure_chunker_handle`/`ensure_pin_policy`) قبل تغيير الحالة وتغطي اختبارات الوحدة حالات الفشل. |
+| Produtos | Você pode usar o trybuild para manifestar o que deseja. A instalação é feita em `crates/iroha_core/tests/pin_registry.rs`. | Guilda de controle de qualidade | 🟠 جاري العمل | اختبارات الوحدة للمدقق وصلت مع رفض on-chain; مجموعة التكامل الكاملة ما زالت قيد الانتظار. |
+| الوثائق | `docs/source/sorafs_architecture_rfc.md` e `migration_roadmap.md` são usados ​​​​para obter mais informações Use CLI em `docs/source/sorafs/manifest_pipeline.md`. | Equipe de documentos | قيد الانتظار — متابع في DOCS-489 |
 
 ## الاعتماديات
 
-- انهاء مخطط Norito لـ Pin Registry (مرجع: بند SF-4 في roadmap).
+- Use Norito para Pin Registry (nome: SF-4 no roteiro).
 - envelopes سجل chunker موقعة من المجلس (تضمن ان التعيين في المدقق حتمي).
 - قرارات مصادقة Torii لارسال manifests.
 
-## المخاطر والتخفيف
-
-| الخطر | الاثر | التخفيف |
-|-------|-------|---------|
-| تفسير سياسة مختلف بين Torii والعقد | قبول غير حتمي. | مشاركة crate التحقق + اضافة اختبارات تكامل تقارن قرارات المضيف مقابل on-chain. |
-| تراجع الاداء للـ manifests الكبيرة | ارسال ابطأ | القياس عبر cargo criterion؛ النظر في تخزين نتائج digest للـ manifest. |
-| انحراف رسائل الخطأ | ارتباك المشغلين | تعريف رموز اخطاء Norito؛ توثيقها في `manifest_pipeline.md`. |
+## المخاطر والتخفيف| الخطر | الاثر | التخفيف |
+|-------|-------|--------|
+| Máquina de lavar roupa Torii e cabo | قبول غير حتمي. | مشاركة crate التحقق + اضافة اختبارات تكامل تقارن قرارات المضيف مقابل on-chain. |
+| تراجع الاداء للـ manifestos الكبيرة | ارسال ابطأ | Critério de carga do قياس عبر; Este é o resumo do manifesto. |
+| انحراف رسائل الخطأ | ارتباك المشغلين | تعريف رموز اخطاء Norito؛ Resolvido em `manifest_pipeline.md`. |
 
 ## اهداف الجدول الزمني
 
-- الاسبوع 1: انزال هيكل `ManifestValidator` + اختبارات وحدة.
-- الاسبوع 2: توصيل مسار ارسال Torii وتحديث CLI لاظهار اخطاء التحقق.
-- الاسبوع 3: تنفيذ hooks للعقد، اضافة اختبارات تكامل، تحديث الوثائق.
-- الاسبوع 4: تشغيل تمرين end-to-end مع ادخال في migration ledger والتقاط موافقة المجلس.
+- Passo 1: Selecione o `ManifestValidator` + Definições.
+- Passo 2: Execute o procedimento Torii e CLI para definir a configuração.
+- Passo 3: Ganchos تنفيذ للعقد, اضافة اختبارات تكامل, تحديث الوثائق.
+- Passo 4: تشغيل تمرين ponta a ponta مع ادخال في migração ledger والتقاط موافقة المجلس.
 
 سيتم الرجوع الى هذه الخطة في roadmap عند بدء عمل المدقق.

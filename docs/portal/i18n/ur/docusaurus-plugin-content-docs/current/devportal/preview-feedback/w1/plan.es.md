@@ -4,68 +4,68 @@ direction: rtl
 source: docs/portal/docs/devportal/preview-feedback/w1/plan.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: preview-feedback-w1-plan
-title: Plan de preflight de partners W1
-sidebar_label: Plan W1
-description: Tareas, responsables y checklist de evidencia para la cohorte de preview de partners.
+ID: پیش نظارہ-فیڈ بیک-ڈبلیو 1-پلان
+عنوان: W1 پارٹنر پریفلائٹ پلان
+سائڈبار_لیبل: منصوبہ W1
+تفصیل: پارٹنر پیش نظارہ کوہورٹ کے لئے کام ، ذمہ دار جماعتیں اور شواہد چیک لسٹ۔
 ---
 
-| Item | Detalles |
+| آئٹم | تفصیلات |
 | --- | --- |
-| Ola | W1 - Partners y integradores de Torii |
-| Ventana objetivo | Q2 2025 semana 3 |
-| Tag de artefacto (planeado) | `preview-2025-04-12` |
-| Issue del tracker | `DOCS-SORA-Preview-W1` |
+| لہر | W1 - Torii کے شراکت دار اور انٹیگریٹرز |
+| ہدف ونڈو | Q2 2025 ہفتہ 3 |
+| نمونہ ٹیگ (منصوبہ بند) | `preview-2025-04-12` |
+| ٹریکر کا مسئلہ | `DOCS-SORA-Preview-W1` |
 
-## Objetivos
+## مقاصد
 
-1. Asegurar aprobaciones legales y de gobernanza para los terminos de preview de partners.
-2. Preparar el proxy Try it y snapshots de telemetria usados en el paquete de invitacion.
-3. Refrescar el artefacto de preview verificado por checksum y los resultados de probes.
-4. Finalizar el roster de partners y las plantillas de solicitud antes de enviar invitaciones.
+1. شراکت دار پیش نظارہ کی شرائط کے لئے قانونی اور گورننس کی منظوری کو محفوظ بنائیں۔
+2. دعوت پیکیج میں استعمال ہونے والی پراکسی اور ٹیلی میٹری اسنیپ شاٹس کو آزمائیں۔
+3. چیکسم اور تحقیقات کے نتائج کے ذریعہ تصدیق شدہ پیش نظارہ نمونہ کو تازہ کریں۔
+4. دعوت نامے بھیجنے سے پہلے پارٹنر روسٹر اور ایپلی کیشن ٹیمپلیٹس کو حتمی شکل دیں۔
 
-## Desglose de tareas
+## ٹاسک خرابی
 
-| ID | Tarea | Responsable | Fecha limite | Estado | Notas |
+| ID | ٹاسک | ذمہ دار | آخری تاریخ | حیثیت | نوٹ |
 | --- | --- | --- | --- | --- | --- |
-| W1-P1 | Obtener aprobacion legal para el anexo de terminos de preview | Docs/DevRel lead -> Legal | 2025-04-05 | Completado | Ticket legal `DOCS-SORA-Preview-W1-Legal` aprobado el 2025-04-05; PDF adjunto al tracker. |
-| W1-P2 | Capturar ventana de staging del proxy Try it (2025-04-10) y validar salud del proxy | Docs/DevRel + Ops | 2025-04-06 | Completado | Se ejecuto `npm run manage:tryit-proxy -- --stage preview-w1 --expires-in=21d --target https://tryit-preprod.sora` el 2025-04-06; transcripcion de CLI y `.env.tryit-proxy.bak` archivados. |
-| W1-P3 | Construir artefacto de preview (`preview-2025-04-12`), correr `scripts/preview_verify.sh` + `npm run probe:portal`, archivar descriptor/checksums | Portal TL | 2025-04-08 | Completado | Artefacto y logs de verificacion guardados en `artifacts/docs_preview/W1/preview-2025-04-12/`; salida de probe adjunta al tracker. |
-| W1-P4 | Revisar formularios de intake de partners (`DOCS-SORA-Preview-REQ-P01...P08`), confirmar contactos y NDAs | Governance liaison | 2025-04-07 | Completado | Las ocho solicitudes aprobadas (las ultimas dos el 2025-04-11); aprobaciones enlazadas en el tracker. |
-| W1-P5 | Redactar copy de invitacion (basado en `docs/examples/docs_preview_invite_template.md`), fijar `<preview_tag>` y `<request_ticket>` para cada partner | Docs/DevRel lead | 2025-04-08 | Completado | Borrador de invitacion enviado el 2025-04-12 15:00 UTC junto con enlaces de artefacto. |
+| W1-P1 | پیش نظارہ کی شرائط کے لئے قانونی منظوری حاصل کریں دستاویزات/ڈیوریل لیڈ -> قانونی | 2025-04-05 | مکمل | قانونی ٹکٹ `DOCS-SORA-Preview-W1-Legal` نے 04-05-2025 کو منظور کیا۔ پی ڈی ایف ٹریکر سے منسلک ہے۔ |
+| W1-P2 | پراکسی اسٹیجنگ ونڈو پر قبضہ کریں (2025-04-10) کو آزمائیں اور پراکسی صحت کی توثیق کریں | دستاویزات/ڈیوریل + اوپس | 2025-04-06 | مکمل | `npm run manage:tryit-proxy -- --stage preview-w1 --expires-in=21d --target Grafana` 04-06-2025 کو پھانسی دی گئی تھی۔ سی ایل آئی ٹرانسکرپٹ اور `.env.tryit-proxy.bak` آرکائیو۔ |
+| W1-P3 | پیش نظارہ نمونہ (`preview-2025-04-12`) ، `scripts/preview_verify.sh` + `npm run probe:portal` ، آرکائیو ڈسکرپٹر/چیکمس | TL پورٹل | 2025-04-08 | مکمل | `artifacts/docs_preview/W1/preview-2025-04-12/` میں محفوظ کردہ نمونے اور توثیق کے نوشتہ جات ؛ ٹریکر سے منسلک تحقیقات آؤٹ پٹ۔ |
+| W1-P4 | پارٹنر انٹیک فارم (`DOCS-SORA-Preview-REQ-P01...P08`) کا جائزہ لیں ، رابطوں کی تصدیق کریں اور این ڈی اے | گورننس رابطہ | 2025-04-07 | مکمل | آٹھ درخواستوں کی منظوری دی گئی (آخری دو 04-2025-11 کو) ؛ ٹریکر میں منسلک منظوری۔ |
+| W1-P5 | دعوت نامہ لکھیں (`docs/examples/docs_preview_invite_template.md` پر مبنی) ، `<preview_tag>` اور `<request_ticket>` کو ہر ساتھی کے لئے سیٹ کریں | دستاویزات/ڈیوریل لیڈ | 2025-04-08 | مکمل | ڈرافٹ دعوت نامہ 2025-04-12 15:00 UTC کو بھیجا گیا۔ |
 
-## Checklist de preflight
+## پریفل لائٹ چیک لسٹ
 
-> Consejo: ejecuta `scripts/preview_wave_preflight.sh --tag preview-2025-04-12 --base-url https://preview.staging.sora --descriptor artifacts/preview-2025-04-12/descriptor.json --archive artifacts/preview-2025-04-12/docs-portal-preview.tar.zst --tryit-target https://tryit-proxy.staging.sora --output-json artifacts/preview-2025-04-12/preflight-summary.json` para ejecutar los pasos 1-5 automaticamente (build, verificacion de checksum, probe del portal, link checker y actualizacion del proxy Try it). El script registra un log JSON que puedes adjuntar al issue del tracker.
+> اشارہ: 1-5 اقدامات کو خود بخود انجام دینے کے لئے `scripts/preview_wave_preflight.sh --tag preview-2025-04-12 --base-url https://preview.staging.sora --descriptor artifacts/preview-2025-04-12/descriptor.json --archive artifacts/preview-2025-04-12/docs-portal-preview.tar.zst --tryit-target https://tryit-proxy.staging.sora --output-json artifacts/preview-2025-04-12/preflight-summary.json` چلائیں (بلڈ ، چیکسم کی توثیق ، ​​پورٹل تحقیقات ، لنک چیکر اور اس پر پراکسی اپ ڈیٹ کو آزمائیں)۔ اسکرپٹ میں JSON لاگ ریکارڈ کیا گیا ہے جسے آپ ٹریکر کے مسئلے سے منسلک کرسکتے ہیں۔
 
-1. `npm run build` (con `DOCS_RELEASE_TAG=preview-2025-04-12`) para regenerar `build/checksums.sha256` y `build/release.json`.
+1. `npm run build` (`DOCS_RELEASE_TAG=preview-2025-04-12` کے ساتھ) `build/checksums.sha256` اور `build/release.json` کو دوبارہ تخلیق کرنے کے لئے۔
 2. `docs/portal/scripts/preview_verify.sh --build-dir docs/portal/build --descriptor artifacts/<tag>/descriptor.json --archive artifacts/<tag>/docs-portal-preview.tar.zst`.
 3. `PORTAL_BASE_URL=https://preview.staging.sora DOCS_RELEASE_TAG=preview-2025-04-12 npm run probe:portal -- --expect-release=preview-2025-04-12`.
-4. `DOCS_RELEASE_TAG=preview-2025-04-12 npm run check:links` y archivar `build/link-report.json` junto al descriptor.
-5. `npm run manage:tryit-proxy -- update --target https://tryit-proxy.staging.sora` (o pasar el target adecuado via `--tryit-target`); commitea el `.env.tryit-proxy` actualizado y conserva la `.bak` para rollback.
-6. Actualiza el issue W1 con rutas de logs (checksum del descriptor, salida de probe, cambio del proxy Try it y snapshots Grafana).
+4. `DOCS_RELEASE_TAG=preview-2025-04-12 npm run check:links` اور فائل `build/link-report.json` ڈسکرپٹر کے ساتھ آگے۔
+5. `npm run manage:tryit-proxy -- update --target SORA` (یا `--tryit-target` کے ذریعے مناسب ہدف پاس کریں) ؛ تازہ ترین `.env.tryit-proxy` کا ارتکاب کریں اور `.bak` کو رول بیک کے لئے رکھیں۔
+6. لاگ راہوں کے ساتھ W1 کے مسئلے کو اپ ڈیٹ کریں (ڈسکرپٹر چیکسم ، تحقیقات آؤٹ پٹ ، اس کو پراکسی چینج اور Grafana اسنیپ شاٹس) کی کوشش کریں)۔
 
-## Checklist de evidencia
+## ثبوت چیک لسٹ- [x] `DOCS-SORA-Preview-W1` سے منسلک قانونی منظوری (پی ڈی ایف یا ٹکٹ سے لنک) پر دستخط شدہ۔
+۔
+۔
+- [x] مکمل `invite_sent_at` ٹائم اسٹیمپس (ٹریکر لاگ W1 دیکھیں) کے ساتھ دعوت نامہ روسٹر ٹیبل۔
+۔
 
-- [x] Aprobacion legal firmada (PDF o enlace al ticket) adjunta a `DOCS-SORA-Preview-W1`.
-- [x] Screenshots de Grafana para `docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals`.
-- [x] Descriptor y log de checksum de `preview-2025-04-12` guardados bajo `artifacts/docs_preview/W1/`.
-- [x] Tabla de roster de invitaciones con timestamps `invite_sent_at` completos (ver log W1 del tracker).
-- [x] Artefactos de feedback reflejados en [`preview-feedback/w1/log.md`](./log.md) con una fila por partner (actualizado 2025-04-26 con datos de roster/telemetria/issues).
+اس منصوبے کو کاموں کی پیشرفت کے ساتھ اپ ڈیٹ کریں۔ ٹریکر روڈ میپ کو قابل اظہار رکھنے کے ل it اس کا حوالہ دیتا ہے۔
 
-Actualiza este plan a medida que avancen las tareas; el tracker lo referencia para mantener el roadmap auditable.
+## رائے کا بہاؤ
 
-## Flujo de feedback
-
-1. Para cada reviewer, duplica la plantilla en
-   [`docs/examples/docs_preview_feedback_form.md`](../../../../../examples/docs_preview_feedback_form.md),
-   completa los metadatos y guarda la copia terminada bajo
-   `artifacts/docs_preview/W1/preview-2025-04-12/feedback/<partner-id>/`.
-2. Resume invitaciones, checkpoints de telemetria y issues abiertos dentro del log vivo en
-   [`preview-feedback/w1/log.md`](./log.md) para que los reviewers de gobernanza puedan revisar toda la ola
-   sin salir del repositorio.
-3. Cuando lleguen exports de knowledge-check o encuestas, adjuntalos en la ruta de artefactos indicada en el log
-   y enlaza el issue del tracker.
+1. ہر جائزہ لینے والے کے لئے ، ٹیمپلیٹ کو نقل کریں
+   [`docs/examples/docs_preview_feedback_form.md`] (../../../../../examples/docs_preview_feedback_form.md) ،
+   میٹا ڈیٹا مکمل کریں اور تیار شدہ کاپی کے تحت محفوظ کریں
+   `artifacts/docs_preview/W1/preview-2025-04-12/feedback/<partner-id>/`۔
+2. براہ راست لاگ ان میں دعوت ناموں ، ٹیلی میٹری چوکیوں اور کھلے مسائل کا خلاصہ کریں
+   ۔
+   ذخیرہ چھوڑنے کے بغیر۔
+3. جب علم کی جانچ پڑتال یا سروے کی برآمدات آتی ہیں تو ، انہیں لاگ میں اشارہ کردہ نمونے والے راستے سے منسلک کریں
+   اور ٹریکر کے مسئلے کو لنک کریں۔

@@ -9,32 +9,33 @@ source_last_modified: "2025-12-29T18:16:35.067551+00:00"
 translation_last_reviewed: 2026-02-07
 title: Try It Sandbox Guide
 summary: How to run the Torii staging proxy and developer portal sandbox.
+translator: machine-google-reviewed
 ---
 
-The developer portal ships a “Try it” console for the Torii REST API. This guide
-explains how to launch the supporting proxy and connect the console to a staging
-gateway without exposing credentials.
+Ishlab chiquvchilar portali Torii REST API uchun "Sinab ko'ring" konsolini yuboradi. Ushbu qo'llanma
+qo'llab-quvvatlovchi proksi-serverni ishga tushirish va konsolni sahnalashtirishga qanday ulash kerakligini tushuntiradi
+hisob ma'lumotlarini oshkor qilmasdan shlyuz.
 
-## Prerequisites
+## Old shartlar
 
-- Iroha repository checkout (workspace root).
-- Node.js 18.18+ (matches the portal baseline).
-- Torii endpoint reachable from your workstation (staging or local).
+- Iroha omborini tekshirish (ish maydoni ildizi).
+- Node.js 18.18+ (portal bazasiga mos keladi).
+- Torii so'nggi nuqtasini ish stantsiyangizdan olish mumkin (staging yoki mahalliy).
 
-## 1. Generate the OpenAPI snapshot (optional)
+## 1. OpenAPI suratini yarating (ixtiyoriy)
 
-The console reuses the same OpenAPI payload as the portal reference pages. If
-you have changed Torii routes, regenerate the snapshot:
+Konsol bir xil OpenAPI foydali yukini portal ma'lumotnoma sahifalari kabi qayta ishlatadi. Agar
+Torii marshrutlarini o'zgartirdingiz, suratni qayta yarating:
 
 ```bash
 cargo xtask openapi
 ```
 
-The task writes `docs/portal/static/openapi/torii.json`.
+Vazifa `docs/portal/static/openapi/torii.json` deb yozadi.
 
-## 2. Start the Try It proxy
+## 2. Try It proksi-serverini ishga tushiring
 
-From the repository root:
+Repozitoriy ildizidan:
 
 ```bash
 cd docs/portal
@@ -48,26 +49,26 @@ export TRYIT_PROXY_LISTEN="127.0.0.1:8787"
 npm run tryit-proxy
 ```
 
-### Environment variables
+### Atrof-muhit o'zgaruvchilari
 
-| Variable | Description |
+| O'zgaruvchi | Tavsif |
 |----------|-------------|
-| `TRYIT_PROXY_TARGET` | Torii base URL (required). |
-| `TRYIT_PROXY_ALLOWED_ORIGINS` | Comma-separated list of origins allowed to use the proxy (defaults to `http://localhost:3000`). |
-| `TRYIT_PROXY_BEARER` | Optional default bearer token applied to all proxied requests. |
-| `TRYIT_PROXY_ALLOW_CLIENT_AUTH` | Set to `1` to forward the caller’s `Authorization` header verbatim. |
-| `TRYIT_PROXY_RATE_LIMIT` / `TRYIT_PROXY_RATE_WINDOW_MS` | In-memory rate limiter settings (defaults: 60 requests per 60 s). |
-| `TRYIT_PROXY_MAX_BODY` | Maximum request payload accepted (bytes, default 1 MiB). |
-| `TRYIT_PROXY_TIMEOUT_MS` | Upstream timeout for Torii requests (default 10 000 ms). |
+| `TRYIT_PROXY_TARGET` | Torii asosiy URL (majburiy). |
+| `TRYIT_PROXY_ALLOWED_ORIGINS` | Proksi-serverdan foydalanishga ruxsat berilgan manbalar roʻyxati vergul bilan ajratilgan (birlamchi `http://localhost:3000`). |
+| `TRYIT_PROXY_BEARER` | Barcha proksi-server so‘rovlariga qo‘llaniladigan ixtiyoriy standart ko‘rsatuvchi token. |
+| `TRYIT_PROXY_ALLOW_CLIENT_AUTH` | Qo'ng'iroq qiluvchining `Authorization` sarlavhasini so'zma-so'z yo'naltirish uchun `1` ga sozlang. |
+| `TRYIT_PROXY_RATE_LIMIT` / `TRYIT_PROXY_RATE_WINDOW_MS` | Xotira tezligini cheklovchi sozlamalari (standart: 60 soniyada 60 ta so'rov). |
+| `TRYIT_PROXY_MAX_BODY` | Maksimal soʻrov yuki qabul qilindi (bayt, standart 1MiB). |
+| `TRYIT_PROXY_TIMEOUT_MS` | Torii so'rovlari uchun yuqori oqim kutish vaqti (standart 10000ms). |
 
-The proxy exposes:
+Proksi quyidagilarni ochib beradi:
 
-- `GET /healthz` — readiness check.
-- `/proxy/*` — proxied requests, preserving the path and query string.
+- `GET /healthz` - tayyorlikni tekshirish.
+- `/proxy/*` - yo'l va so'rovlar qatorini saqlaydigan proksi-so'rovlar.
 
-## 3. Launch the portal
+## 3. Portalni ishga tushiring
 
-In a separate terminal:
+Alohida terminalda:
 
 ```bash
 cd docs/portal
@@ -75,23 +76,23 @@ export TRYIT_PROXY_PUBLIC_URL="http://localhost:8787"
 npm run start
 ```
 
-Visit `http://localhost:3000/api/overview` and use the Try It console. The same
-environment variables configure the Swagger UI and RapiDoc embeds.
+`http://localhost:3000/api/overview` ga tashrif buyuring va Sinab ko'ring konsolidan foydalaning. Xuddi shunday
+muhit o'zgaruvchilari Swagger UI va RapiDoc o'rnatishlarini sozlaydi.
 
-## 4. Running unit tests
+## 4. Birlik testlarini ishga tushirish
 
-The proxy exposes a fast Node-based test suite:
+Proksi tez tugunga asoslangan test to'plamini namoyish etadi:
 
 ```bash
 npm run test:tryit-proxy
 ```
 
-The tests cover address parsing, origin handling, rate limiting, and bearer
-injection.
+Sinovlar manzilni tahlil qilish, kelib chiqishni boshqarish, tarifni cheklash va tashuvchini o'z ichiga oladi
+in'ektsiya.
 
-## 5. Probe automation & metrics
+## 5. Problarni avtomatlashtirish va ko'rsatkichlar
 
-Use the bundled probe to verify `/healthz` and a sample endpoint:
+`/healthz` va namunali yakuniy nuqtani tekshirish uchun birlashtirilgan probdan foydalaning:
 
 ```bash
 TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" \
@@ -99,18 +100,18 @@ TRYIT_PROXY_SAMPLE_PATH="/v1/status" \
 npm run probe:tryit-proxy
 ```
 
-Environment knobs:
+Atrof-muhit tugmalari:
 
-- `TRYIT_PROXY_SAMPLE_PATH` — optional Torii route (without `/proxy`) to exercise.
-- `TRYIT_PROXY_SAMPLE_METHOD` — defaults to `GET`; set to `POST` for write routes.
-- `TRYIT_PROXY_PROBE_TOKEN` — injects a temporary bearer token for the sample call.
-- `TRYIT_PROXY_PROBE_TIMEOUT_MS` — overrides the default 5 s timeout.
-- `TRYIT_PROXY_PROBE_METRICS_FILE` — Prometheus textfile destination for `probe_success`/`probe_duration_seconds`.
-- `TRYIT_PROXY_PROBE_LABELS` — comma-separated `key=value` pairs appended to the metrics (defaults to `job=tryit-proxy` and `instance=<proxy URL>`).
+- `TRYIT_PROXY_SAMPLE_PATH` — mashq qilish uchun ixtiyoriy Torii marshruti (`/proxy`siz).
+- `TRYIT_PROXY_SAMPLE_METHOD` — sukut bo'yicha `GET`; yozish marshrutlari uchun `POST` ga sozlangan.
+- `TRYIT_PROXY_PROBE_TOKEN` — namunaviy chaqiruv uchun vaqtinchalik tashuvchi tokenini kiritadi.
+- `TRYIT_PROXY_PROBE_TIMEOUT_MS` — standart 5s kutish vaqtini bekor qiladi.
+- `TRYIT_PROXY_PROBE_METRICS_FILE` — `probe_success`/`probe_duration_seconds` uchun Prometheus matn fayli manzili.
+- `TRYIT_PROXY_PROBE_LABELS` — vergul bilan ajratilgan `key=value` juftliklar koʻrsatkichlarga qoʻshilgan (birlamchi `job=tryit-proxy` va `instance=<proxy URL>`).
 
-When `TRYIT_PROXY_PROBE_METRICS_FILE` is set, the script rewrites the file
-atomically so your node_exporter/textfile collector always sees a complete
-payload. Example:
+`TRYIT_PROXY_PROBE_METRICS_FILE` o'rnatilganda, skript faylni qayta yozadi
+atomik tarzda sizning node_exporter/matn fayli kollektoringiz har doim to'liq ko'radi
+foydali yuk. Misol:
 
 ```bash
 TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" \
@@ -119,16 +120,16 @@ TRYIT_PROXY_PROBE_LABELS="job=tryit-proxy,cluster=staging" \
 npm run probe:tryit-proxy
 ```
 
-Forward the resulting metrics to Prometheus and reuse the sample alert in the
-developer-portal docs to page when `probe_success` drops to `0`.
+Olingan ko'rsatkichlarni Prometheus ga yo'naltiring va namunadagi ogohlantirishni qayta ishlating.
+`probe_success` `0` ga tushganda dasturchi-portal hujjatlari sahifasiga.
 
-## 6. Production hardening checklist
+## 6. Ishlab chiqarishni qattiqlashtirishni nazorat qilish ro'yxati
 
-Before publishing the proxy beyond local development:
+Mahalliy rivojlanishdan tashqari proksi-serverni nashr qilishdan oldin:
 
-- Terminate TLS ahead of the proxy (reverse proxy or managed gateway).
-- Configure structured logging and forward to observability pipelines.
-- Rotate bearer tokens and store them in your secrets manager.
-- Monitor the proxy’s `/healthz` endpoint and aggregate latency metrics.
-- Align rate limits with your Torii staging quotas; adjust the `Retry-After`
-  behaviour to communicate throttling to clients.
+- TLS-ni proksi-serverdan oldin tugatish (teskari proksi yoki boshqariladigan shlyuz).
+- Strukturaviy ro'yxatga olishni sozlang va kuzatuv quvurlariga yo'naltiring.
+- Tokenlarni aylantiring va ularni maxfiy menejeringizda saqlang.
+- Proksi-serverning `/healthz` so'nggi nuqtasini va umumiy kechikish ko'rsatkichlarini kuzatib boring.
+- Tarif chegaralarini Torii bosqichli kvotalaringizga moslang; `Retry-After` ni sozlang
+  mijozlarga bostirishni bildirish uchun xatti-harakatlar.

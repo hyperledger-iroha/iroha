@@ -4,68 +4,64 @@ direction: ltr
 source: docs/portal/docs/devportal/preview-feedback/w1/plan.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: preview-feedback-w1-plan
-title: Plano de preflight de parceiros W1
-sidebar_label: Plano W1
-description: Tarefas, responsaveis e checklist de evidencia para a coorte de preview de parceiros.
+id: vista previa-comentarios-w1-plan
+título: Plano de verificación previa de paquetes W1
+etiqueta_barra lateral: Plano W1
+descripción: Tarefas, responsaveis y checklist de evidencia para a coorte de preview de parceiros.
 ---
 
-| Item | Detalhes |
+| Artículo | Detalles |
 | --- | --- |
 | Onda | W1 - Parceiros e integradores Torii |
 | Janela alvo | Q2 2025 semana 3 |
-| Tag de artefato (planejado) | `preview-2025-04-12` |
-| Issue do tracker | `DOCS-SORA-Preview-W1` |
+| Etiqueta de artefato (planejado) | `preview-2025-04-12` |
+| Problema con el rastreador | `DOCS-SORA-Preview-W1` |
 
 ## Objetivos
 
-1. Garantir aprovacoes legais e de governanca para os termos de preview de parceiros.
-2. Preparar o proxy Try it e snapshots de telemetria usados no bundle de convite.
-3. Atualizar o artefato de preview verificado por checksum e os resultados de probes.
-4. Finalizar o roster de parceiros e os templates de solicitacao antes do envio dos convites.
+1. Garantía aprobada legalmente y de gobierno para los términos de vista previa de paquetes.
+2. Preparar el proxy Pruébalo e instantáneas de telemetría usadas sin paquete de convite.
+3. Actualizar el artefato de vista previa verificado por suma de comprobación y los resultados de las sondas.
+4. Finalizar la lista de participantes y las plantillas de solicitud antes de enviar dos invitaciones.
 
-## Desdobramento de tarefas
-
-| ID | Tarefa | Responsavel | Prazo | Status | Notas |
+##Desdobramento de tarefas| identificación | Tarefa | Responsavel | Prazo | Estado | Notas |
 | --- | --- | --- | --- | --- | --- |
-| W1-P1 | Obter aprovacao legal para o adendo dos termos de preview | Docs/DevRel lead -> Legal | 2025-04-05 | Concluido | Ticket legal `DOCS-SORA-Preview-W1-Legal` aprovado em 2025-04-05; PDF anexado ao tracker. |
-| W1-P2 | Capturar janela de staging do proxy Try it (2025-04-10) e validar a saude do proxy | Docs/DevRel + Ops | 2025-04-06 | Concluido | `npm run manage:tryit-proxy -- --stage preview-w1 --expires-in=21d --target https://tryit-preprod.sora` executado em 2025-04-06; transcricao de CLI e `.env.tryit-proxy.bak` arquivados. |
-| W1-P3 | Construir artefato de preview (`preview-2025-04-12`), rodar `scripts/preview_verify.sh` + `npm run probe:portal`, arquivar descriptor/checksums | Portal TL | 2025-04-08 | Concluido | Artefato e logs de verificacao armazenados em `artifacts/docs_preview/W1/preview-2025-04-12/`; saida de probe anexada ao tracker. |
-| W1-P4 | Revisar formularios de intake de parceiros (`DOCS-SORA-Preview-REQ-P01...P08`), confirmar contatos e NDAs | Governance liaison | 2025-04-07 | Concluido | As oito solicitacoes aprovadas (as duas ultimas em 2025-04-11); aprovacoes linkadas no tracker. |
-| W1-P5 | Redigir o convite (baseado em `docs/examples/docs_preview_invite_template.md`), definir `<preview_tag>` e `<request_ticket>` para cada parceiro | Docs/DevRel lead | 2025-04-08 | Concluido | Rascunho do convite enviado em 2025-04-12 15:00 UTC junto com links de artefato. |
+| W1-P1 | Obter aprobación legal para o adendo dos termos de vista previa | Líder de Docs/DevRel -> Legal | 2025-04-05 | Concluido | Boleto legal `DOCS-SORA-Preview-W1-Legal` aprobado en 2025-04-05; PDF anexo al rastreador. |
+| W1-P2 | Capturar janela de staging do proxy Pruébalo (2025-04-10) y validar a saude do proxy | Documentos/DevRel + Operaciones | 2025-04-06 | Concluido | `npm run manage:tryit-proxy -- --stage preview-w1 --expires-in=21d --target https://tryit-preprod.sora` ejecutado el 2025-04-06; transcripción de CLI y archivos `.env.tryit-proxy.bak`. |
+| W1-P3 | Construir artefato de vista previa (`preview-2025-04-12`), rodar `scripts/preview_verify.sh` + `npm run probe:portal`, archivo descriptor/checksums | Portal TL | 2025-04-08 | Concluido | Artefato e logs de verificación armados em `artifacts/docs_preview/W1/preview-2025-04-12/`; Saida de sonda anexada ao tracker. |
+| W1-P4 | Revisar formularios de ingesta de paquetes (`DOCS-SORA-Preview-REQ-P01...P08`), confirmar contactos y NDAs | Enlace de gobernanza | 2025-04-07 | Concluido | As oito solicitacoes aprovadas (as duas ultimas em 2025-04-11); aprovacoes linkadas no tracker. |
+| W1-P5 | Redigir o convite (basado en `docs/examples/docs_preview_invite_template.md`), definir `<preview_tag>` e `<request_ticket>` para cada paquete | Líder de Docs/DevRel | 2025-04-08 | Concluido | Rascunho do convite enviado el 2025-04-12 15:00 UTC junto con enlaces de artefato. |
 
-## Checklist de preflight
-
-> Dica: rode `scripts/preview_wave_preflight.sh --tag preview-2025-04-12 --base-url https://preview.staging.sora --descriptor artifacts/preview-2025-04-12/descriptor.json --archive artifacts/preview-2025-04-12/docs-portal-preview.tar.zst --tryit-target https://tryit-proxy.staging.sora --output-json artifacts/preview-2025-04-12/preflight-summary.json` para executar automaticamente os passos 1-5 (build, verificacao de checksum, probe do portal, link checker e atualizacao do proxy Try it). O script registra um log JSON que voce pode anexar ao issue do tracker.
+## Lista de verificación de verificación previa> Dice: montó `scripts/preview_wave_preflight.sh --tag preview-2025-04-12 --base-url https://preview.staging.sora --descriptor artifacts/preview-2025-04-12/descriptor.json --archive artifacts/preview-2025-04-12/docs-portal-preview.tar.zst --tryit-target https://tryit-proxy.staging.sora --output-json artifacts/preview-2025-04-12/preflight-summary.json` para ejecutar automáticamente los pasos 1-5 (compilación, verificación de suma de comprobación, sonda del portal, verificador de enlaces y actualización del proxy Pruébelo). El script registra un registro JSON que puede anexar al problema del rastreador.
 
 1. `npm run build` (com `DOCS_RELEASE_TAG=preview-2025-04-12`) para regenerar `build/checksums.sha256` e `build/release.json`.
 2. `docs/portal/scripts/preview_verify.sh --build-dir docs/portal/build --descriptor artifacts/<tag>/descriptor.json --archive artifacts/<tag>/docs-portal-preview.tar.zst`.
 3. `PORTAL_BASE_URL=https://preview.staging.sora DOCS_RELEASE_TAG=preview-2025-04-12 npm run probe:portal -- --expect-release=preview-2025-04-12`.
-4. `DOCS_RELEASE_TAG=preview-2025-04-12 npm run check:links` e arquivar `build/link-report.json` ao lado do descriptor.
-5. `npm run manage:tryit-proxy -- update --target https://tryit-proxy.staging.sora` (ou passar o target adequado via `--tryit-target`); commit do `.env.tryit-proxy` atualizado e guardar a `.bak` para rollback.
-6. Atualizar o issue W1 com caminhos de logs (checksum do descriptor, saida de probe, mudanca no proxy Try it e snapshots Grafana).
+4. `DOCS_RELEASE_TAG=preview-2025-04-12 npm run check:links` y archiva `build/link-report.json` al lado del descriptor.
+5. `npm run manage:tryit-proxy -- update --target https://tryit-proxy.staging.sora` (o pasa el objetivo adecuado a través de `--tryit-target`); confirme `.env.tryit-proxy` actualizado y guarde `.bak` para revertir.
+6. Actualizar el problema W1 con caminos de registros (suma de verificación del descriptor, dijo la sonda, mudanca sin proxy Pruébelo e instantáneas Grafana).
 
-## Checklist de evidencia
+## Lista de verificación de evidencia
 
-- [x] Aprovacao legal assinada (PDF ou link do ticket) anexada ao `DOCS-SORA-Preview-W1`.
-- [x] Screenshots de Grafana para `docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals`.
-- [x] Descriptor e log de checksum de `preview-2025-04-12` armazenados em `artifacts/docs_preview/W1/`.
-- [x] Tabela de roster de convites com `invite_sent_at` preenchido (ver log W1 no tracker).
-- [x] Artefatos de feedback refletidos em [`preview-feedback/w1/log.md`](./log.md) com uma linha por parceiro (atualizado em 2025-04-26 com dados de roster/telemetria/issues).
+- [x] Aprovacao legal assinada (PDF o enlace del ticket) anexada a `DOCS-SORA-Preview-W1`.
+- [x] Capturas de pantalla de Grafana para `docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals`.
+- [x] Descriptor y registro de suma de comprobación de `preview-2025-04-12` armados en `artifacts/docs_preview/W1/`.
+- [x] Tabela de roster de convites con `invite_sent_at` preenchido (ver log W1 sin tracker).
+- [x] Artefatos de feedback reflejados en [`preview-feedback/w1/log.md`](./log.md) con una línea por parceiro (actualizado en 2025-04-26 con datos de roster/telemetria/issues).
 
-Atualize este plano conforme as tarefas avancarem; o tracker o referencia para manter o roadmap auditavel.
+Actualizar este plano conforme como tarefas avancarem; o tracker o referencia para manter o roadmap auditavel.
 
-## Fluxo de feedback
-
-1. Para cada reviewer, duplicar o template em
+## Flujo de comentarios1. Para cada revisor, duplicar o plantilla em
    [`docs/examples/docs_preview_feedback_form.md`](../../../../../examples/docs_preview_feedback_form.md),
-   preencher os metadados e armazenar a copia completa em
+   Preencher os metadados y armazenar una copia completa em
    `artifacts/docs_preview/W1/preview-2025-04-12/feedback/<partner-id>/`.
 2. Resumir convites, checkpoints de telemetria e issues abertos dentro do log vivo em
-   [`preview-feedback/w1/log.md`](./log.md) para que reviewers de governanca possam rever toda a onda
-   sem sair do repositorio.
-3. Quando os exports de knowledge-check ou surveys chegarem, anexar no caminho de artefatos indicado no log
-   e linkar o issue do tracker.
+   [`preview-feedback/w1/log.md`](./log.md) para que los revisores de gobierno possam rever toda a onda
+   Sem sair do repositorio.
+3. Quando os exports de Knowledge-Check ou Surveys chegarem, anexar no caminho de artefatos indicado no log
+   e vincular o emitir el rastreador.

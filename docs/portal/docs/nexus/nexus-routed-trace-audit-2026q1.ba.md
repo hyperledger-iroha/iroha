@@ -10,84 +10,85 @@ translation_last_reviewed: 2026-02-07
 id: nexus-routed-trace-audit-2026q1
 title: 2026 Q1 routed-trace audit report (B1)
 description: Mirror of `docs/source/nexus_routed_trace_audit_report_2026q1.md`, covering the quarterly telemetry rehearsal outcomes.
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-:::note Canonical Source
-This page mirrors `docs/source/nexus_routed_trace_audit_report_2026q1.md`. Keep both copies aligned until remaining translations land.
-:::
+:::иҫкәртергә канонлы сығанаҡ
+Был биттә `docs/source/nexus_routed_trace_audit_report_2026q1.md` көҙгөһө. Ҡалған тәржемәләр еренә тиклем ике күсермәһен дә тура килтерегеҙ.
+::: 1990 й.
 
-# 2026 Q1 Routed-Trace Audit Report (B1)
+# 2026 Q1 Маршрут-эҙ-эҙ аудит отчеты (В1)
 
-Roadmap item **B1 — Routed-Trace Audits & Telemetry Baseline** requires a
-quarterly review of the Nexus routed-trace program. This report documents the
-Q1 2026 audit window (January–March) so the governance council can sign off the
-telemetry posture before the Q2 launch rehearsals.
+Юл картаһы әйбер **В1 — Маршрутлаштырылған-эҙ аудиттары & Телеметрия Басен** талап итә
+квартал һайын тикшерелгән I18NT000000001X маршрутлаштырылған-эҙ программаһы. Был отчет документтарында
+12026 аудит тәҙрәһе (ғинуар-март) шулай идара итеү советы ҡул ҡуя ала
+Q2 старт репетициялары алдынан телеметрия позаһы.
 
-## Scope & Timeline
+## Скап & Ваҡыт һыҙығы
 
-| Trace ID | Window (UTC) | Objective |
-|----------|--------------|-----------|
-| `TRACE-LANE-ROUTING` | 2026-02-17 09:00–09:45 | Verify lane-admission histograms, queue gossip, and alert flow before multi-lane enablement. |
-| `TRACE-TELEMETRY-BRIDGE` | 2026-02-24 10:00–10:45 | Validate OTLP replay, diff bot parity, and SDK telemetry ingestion ahead of AND4/AND7 milestones. |
-| `TRACE-CONFIG-DELTA` | 2026-03-01 12:00–12:30 | Confirm governance-approved `iroha_config` deltas and rollback readiness prior to the RC1 cut. |
+| Эҙ идентификаторы | Тәҙрә (UTC) | Маҡсат |
+|---------|--------------|-----------|
+| I18NI0000011X | 2026-02-17 09:00–09:45 | Ҡабул итеү гистограммаларын тикшерергә, сират ғәйбәт, һәм иҫкәртмә ағымы алдынан күп һыҙатлы мөмкинлек бирә. |
+| I18NI0000012X | 2026-02-24 10:00–10:45 | OTLP реплейын раҫлау, дифф бот паритеты, һәм SDK телеметрия ашау алдынан AND4/AND7 этаптары. |
+| I18NI0000013X | 2026-03-01 12:00–12:30 | Раҫлау идара итеү-раҫланған `iroha_config` дельта һәм әҙерлек әҙерлек алдынан RC1 ҡырҡып. |
 
-Each rehearsal ran on production-like topology with the routed-trace
-instrumentation enabled (`nexus.audit.outcome` telemetry + Prometheus counters),
-Alertmanager rules loaded, and evidence exported into `docs/examples/`.
+Һәр репетиция етештереү кеүек топология буйынса йүгерҙе, унда маршрутлаштырылған-эҙ менән
+приборлау мөмкинлеге (I18NI000000015X телеметрия + I18NT0000000000000000).
+Иҫкәртмән ҡағиҙәләре тейәлгән, һәм дәлилдәр экспортҡа I18NI000000016X.
 
-## Methodology
+## Методика
 
-1. **Telemetry collection.** All nodes emitted the structured
-   `nexus.audit.outcome` event and accompanying metrics
-   (`nexus_audit_outcome_total*`). The helper
-   `scripts/telemetry/check_nexus_audit_outcome.py` tailed the JSON log,
-   validated the event status, and archived the payload under
-   `docs/examples/nexus_audit_outcomes/`.【scripts/telemetry/check_nexus_audit_outcome.py:1】
-2. **Alert validation.** `dashboards/alerts/nexus_audit_rules.yml` and its test
-   harness ensured alert noise thresholds and payload templating stayed
-   consistent. CI runs `dashboards/alerts/tests/nexus_audit_rules.test.yml` on
-   every change; the same rules were exercised manually during each window.
-3. **Dashboard capture.** Operators exported the routed-trace panels from
-   `dashboards/grafana/soranet_sn16_handshake.json` (handshake health) and the
-   telemetry overview dashboards to correlate queue health with audit outcomes.
-4. **Reviewer notes.** The governance secretary logged reviewer initials,
-   decision, and any mitigation tickets in [Nexus transition notes](./nexus-transition-notes)
-   and the config delta tracker (`docs/source/project_tracker/nexus_config_deltas/2026Q1.md`).
+1. **Телеметрия йыйынтығы.** Бөтә төйөндәр ҙә структуралы сығарған
+   I18NI000000017X сараһы һәм оҙатыусы метрика
+   (`nexus_audit_outcome_total*`). Ярҙамсы
+   I18NI000000019X JSON журналын ҡойроҡландырған,
+   ваҡиға статусын раҫланы, һәм архивланған файҙалы йөкләмә буйынса
+   `docs/examples/nexus_audit_outcomes/`.【сприпттар/телеметрия/чек_нексус_аудит_outcome.p:1】
+2. **Иҫкәртмә раҫлау.** I18NI000000021X һәм уның һынау
+   жгут тәьмин итеү уяу шау-шыу сиктәре һәм файҙалы йөк ҡалып ҡалды
+   тотороҡло. CI эшләй I18NI000000022X .
+   һәр үҙгәреш; һәр тәҙрә ваҡытында бер үк ҡағиҙәләрҙе ҡул менән тормошҡа ашырҙылар.
+3. **Приборҙар таҡтаһы тотоу.** Операторҙар экспортҡа маршрутлаштырылған-эҙ панелдәре .
+   I18NI000000023X (ҡул тотҡаһы һаулыҡ) һәм
+   телеметрия дөйөм приборҙар таҡталары сират һаулығын аудит һөҙөмтәләре менән корреляциялау өсөн.
+4. **Рецензлаусы билдәләй.** Идара итеү секретары логировать рецензент инициалдары,
+   ҡарар, һәм теләһә ниндәй йомшартыу билеттары [I18NT000000002X күсеү иҫкәрмәләр] (./nexus-transition-notes)
+   һәм конфиг дельта трекер (`docs/source/project_tracker/nexus_config_deltas/2026Q1.md`).
 
-## Findings
+## Табыштар
 
-| Trace ID | Outcome | Evidence | Notes |
-|----------|---------|----------|-------|
-| `TRACE-LANE-ROUTING` | Pass | Alert fire/recover screenshots (internal link) + `dashboards/alerts/tests/soranet_lane_rules.test.yml` replay; telemetry diffs recorded in [Nexus transition notes](./nexus-transition-notes#quarterly-routed-trace-audit-schedule). | Queue-admission P95 remained 612 ms (target ≤750 ms). No follow-up required. |
-| `TRACE-TELEMETRY-BRIDGE` | Pass | Archived outcome payload `docs/examples/nexus_audit_outcomes/TRACE-TELEMETRY-BRIDGE-20260224T101732Z-pass.json` plus OTLP replay hash recorded in `status.md`. | SDK redaction salts matched the Rust baseline; diff bot reported zero deltas. |
-| `TRACE-CONFIG-DELTA` | Pass (mitigation closed) | Governance tracker entry (`docs/source/project_tracker/nexus_config_deltas/2026Q1.md`) + TLS profile manifest (`artifacts/nexus/tls_profile_rollout_2026q2/tls_profile_manifest.json`) + telemetry pack manifest (`artifacts/nexus/rehearsals/2026q1/telemetry_manifest.json`). | Q2 rerun hashed the approved TLS profile and confirmed zero stragglers; telemetry manifest records slot range 912–936 and workload seed `NEXUS-REH-2026Q2`. |
+| Эҙ идентификаторы | Һөҙөмтә | Дәлилдәр | Иҫкәрмәләр |
+|---------|----------|-----------|------ |
+| `TRACE-LANE-ROUTING` | Үткәреү | Иҫкәртергә янғын/тергеҙергә скриншоттар (эске һылтанма) + `dashboards/alerts/tests/soranet_lane_rules.test.yml` реплей; телеметрия диффтары теркәлгән [I18NT000000003Х күсеү иҫкәрмәләр] (I18NU0000008X). | Сират-ҡабул итеү Р95 ҡалды 612мс (маҡсат ≤750мс). Бер ниндәй ҙә эҙмә-эҙлекле кәрәкмәй. |
+| `TRACE-TELEMETRY-BRIDGE` | Үткәреү | Архивлы һөҙөмтә файҙалы йөк `docs/examples/nexus_audit_outcomes/TRACE-TELEMETRY-BRIDGE-20260224T101732Z-pass.json` плюс OTLP реплей хеш теркәлгән I18NI000000029X. | SDK редакция тоҙҙары тап килгән Rust база линияһы; дифф бот нуль дельта тураһында хәбәр итте. |
+| I18NI000000030X | Үткәреү (бумлау ябыҡ) | Идаралыҡ трекер инеү (`docs/source/project_tracker/nexus_config_deltas/2026Q1.md`) + TLS профиле манифест (I18NI000000032X) + телеметрия пакет манифест (`artifacts/nexus/rehearsals/2026q1/telemetry_manifest.json`). | Q2 перенаправление хешировать раҫланған TLS профиле һәм раҫланған нуль страгглерҙар; телеметрия күрһәтә яҙмалар слот диапазоны 912–936 һәм эш йөкләмәһе орлоҡтары I18NI000000034X. |
 
-All traces produced at least one `nexus.audit.outcome` event within their
-windows, satisfying the Alertmanager guardrails (`NexusAuditOutcomeFailure`
-remained green for the quarter).
+Бөтә эҙҙәр етештереү кәмендә бер I18NI0000000035X ваҡиға сиктәрендә уларҙы
+тәҙрәләр, уларҙы ҡәнәғәтләндерә, иҫкәртмәнәселәр ҡоршауҙары (I18NI000000036X XX
+квартал өсөн йәшел ҡала).
 
-## Follow-ups
+##
 
-- Routed-trace appendix updated with TLS hash `1fa0bd5974a78d680de68e744eab837e4328668d6aab8de1489c3fc3b5a0dbeb`;
-  mitigation `NEXUS-421` closed in the transition notes.
-- Continue attaching raw OTLP replays and Torii diff artifacts to the archive to
-  bolster parity evidence for Android AND4/AND7 reviews.
-- Confirm that upcoming `TRACE-MULTILANE-CANARY` rehearsals reuse the same
-  telemetry helper so Q2 sign-off benefits from the validated workflow.
+- маршрутлаштырылған-эҙ ҡушымтаһы менән яңыртылған TLS хеш I18NI000000037X;
+  йомшартыу I18NI000000038X күсеү ноталарында ябылған.
+- ОТЛП реплейҙары һәм I18NT00000000005X дифф артефакттарын архивҡа тиклем беркетергә дауам итегеҙ.
+  ҡаты паритет дәлилдәре өсөн Android AND4/AND7 тикшерелгән.
+- репетицияларҙы ҡабаттан ҡулланыу шул уҡ репетицияларҙы ҡабаттан ҡулланыуҙы раҫлағыҙ.
+  телеметрия ярҙамсыһы шулай Q2 cain-off өҫтөнлөктәре раҫланған эш ағымы.
 
-## Artefact Index
+## Артефакт индексы
 
-| Asset | Location |
+| Актив | Урыны |
 |-------|----------|
-| Telemetry validator | `scripts/telemetry/check_nexus_audit_outcome.py` |
-| Alert rules & tests | `dashboards/alerts/nexus_audit_rules.yml`, `dashboards/alerts/tests/nexus_audit_rules.test.yml` |
-| Sample outcome payload | `docs/examples/nexus_audit_outcomes/TRACE-TELEMETRY-BRIDGE-20260224T101732Z-pass.json` |
-| Config delta tracker | `docs/source/project_tracker/nexus_config_deltas/2026Q1.md` |
-| Routed-trace schedule & notes | [Nexus transition notes](./nexus-transition-notes) |
+| Телеметрия валидаторы | `scripts/telemetry/check_nexus_audit_outcome.py` |
+| Иҫкәртергә ҡағиҙәләр & һынауҙар | `dashboards/alerts/nexus_audit_rules.yml`, I18NI000000042X |
+| Өлгө һөҙөмтәһе файҙалы йөк | `docs/examples/nexus_audit_outcomes/TRACE-TELEMETRY-BRIDGE-20260224T101732Z-pass.json` |
+| Конфигурация дельта трекеры | `docs/source/project_tracker/nexus_config_deltas/2026Q1.md` |
+| Маршрут-эҙ графигы & иҫкәрмәләр | [I18NT000000004X күсеү иҫкәрмәләр] (./nexus-transition-notes) |
 
-This report, the artefacts above, and the alert/telemetry exports should be
-attached to the governance decision log to close B1 for the quarter.
+Был отчет, артефакттар өҫтә, һәм иҫкәртмә/телеметрия экспорты булырға тейеш
+идара итеү ҡарарҙары журналына беркетелгән ябыу өсөн В1 квартал өсөн.

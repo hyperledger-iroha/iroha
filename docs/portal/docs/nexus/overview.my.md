@@ -10,65 +10,66 @@ translation_last_reviewed: 2026-02-07
 id: nexus-overview
 title: Sora Nexus overview
 description: High-level summary of the Iroha 3 (Sora Nexus) architecture with pointers to the canonical mono-repo docs.
+translator: machine-google-reviewed
 ---
 
-Nexus (Iroha 3) extends Iroha 2 with multi-lane execution, governance-scoped
-data spaces, and shared tooling across every SDK. This page mirrors the new
-`docs/source/nexus_overview.md` brief in the mono-repo so portal readers can
-quickly understand how the architecture pieces fit together.
+Nexus (Iroha 3) သည် Iroha 2 ကို ဘက်စုံလမ်းသွားလုပ်ဆောင်မှု၊ အုပ်ချုပ်မှုအတိုင်းအတာဖြင့် တိုးချဲ့သည်
+ဒေတာနေရာလွတ်များနှင့် SDK တစ်ခုစီတိုင်းတွင် မျှဝေသုံးကိရိယာများ။ ဤစာမျက်နှာသည် အသစ်အဆန်းကို ထင်ဟပ်စေသည်။
+`docs/source/nexus_overview.md` သည် mono-repo တွင် အတိုချုံးပြီး portal readers လုပ်နိုင်စေရန်
+ဗိသုကာလက်ရာများသည် မည်ကဲ့သို့ လိုက်ဖက်သည်ကို လျင်မြန်စွာ နားလည်နိုင်သည်။
 
-## Release lines
+## လိုင်းများ ဖြန့်ချိခြင်း။
 
-- **Iroha 2** – self-hosted deployments for consortium or private networks.
-- **Iroha 3 / Sora Nexus** – the multi-lane public network where operators
-  register data spaces (DS) and inherit shared governance, settlement, and
-  observability tooling.
-- Both lines compile from the same workspace (IVM + Kotodama toolchain), so SDK
-  fixes, ABI updates, and Norito fixtures remain portable. Operators download
-  the `iroha3-<version>-<os>.tar.zst` bundle to join Nexus; refer to
-  `docs/source/sora_nexus_operator_onboarding.md` for the fullscreen checklist.
+- **Iroha 2** – လုပ်ငန်းစု သို့မဟုတ် ပုဂ္ဂလိကကွန်ရက်များအတွက် ကိုယ်တိုင်လက်ခံဆောင်ရွက်ပေးသည့် ဖြန့်ကျက်မှုများ။
+- **Iroha 3 / Sora Nexus** – အော်ပရေတာများရှိသည့် လမ်းသွားများစွာသော အများသူငှာကွန်ရက်
+  ဒေတာနေရာလွတ်များ (DS) ကို မှတ်ပုံတင်ပြီး မျှဝေထားသော အုပ်ချုပ်မှု၊ အခြေချမှုနှင့် အမွေဆက်ခံမှု
+  စောင့်ကြည့်နိုင်မှုကိရိယာ။
+- လိုင်းနှစ်ခုလုံးကို တူညီသော workspace (IVM + Kotodama toolchain) မှ compile လုပ်သောကြောင့် SDK
+  ပြုပြင်မှုများ၊ ABI အပ်ဒိတ်များနှင့် Norito ပစ္စည်းများသည် သယ်ဆောင်ရလွယ်ကူဆဲဖြစ်သည်။ အော်ပရေတာများဒေါင်းလုဒ်လုပ်ပါ။
+  Nexus တွင်ပါဝင်ရန် `iroha3-<version>-<os>.tar.zst` အတွဲ၊ ကိုးကား
+  မျက်နှာပြင်အပြည့်စစ်ဆေးစာရင်းအတွက် `docs/source/sora_nexus_operator_onboarding.md`။
 
-## Building blocks
+## အဆောက် အအုံများ
 
-| Component | Summary | Portal hooks |
-|-----------|---------|--------------|
-| Data Space (DS) | Governance-defined execution/storages domain that owns one or more lanes, declares validator sets, privacy class, fee + DA policy. | See [Nexus spec](./nexus-spec) for the manifest schema. |
-| Lane | Deterministic shard of execution; emits commitments that the global NPoS ring orders. Lane classes include `default_public`, `public_custom`, `private_permissioned`, and `hybrid_confidential`. | [Lane model](./nexus-lane-model) captures geometry, storage prefixes, and retention. |
-| Transition plan | Placeholder identifiers, routing phases, and dual-profile packaging track how single-lane deployments evolve into Nexus. | [Transition notes](./nexus-transition-notes) document each migration phase. |
-| Space Directory | Registry contract that stores DS manifests + versions. Operators reconcile catalog entries against this directory before joining. | Manifest diff tracker lives under `docs/source/project_tracker/nexus_config_deltas/`. |
-| Lane catalog | `[nexus]` config section that maps lane IDs to aliases, routing policies, and DA thresholds. `irohad --sora --config … --trace-config` prints the resolved catalog for audits. | Use `docs/source/sora_nexus_operator_onboarding.md` for the CLI walk-through. |
-| Settlement router | XOR transfer orchestrator that connects private CBDC lanes with public liquidity lanes. | `docs/source/cbdc_lane_playbook.md` spells out policy knobs and telemetry gates. |
-| Telemetry/SLOs | Dashboards + alerts under `dashboards/grafana/nexus_*.json` capture lane height, DA backlog, settlement latency, and governance queue depth. | [Telemetry remediation plan](./nexus-telemetry-remediation) spells out the dashboards, alerts, and audit evidence. |
+| အစိတ်အပိုင်း | အနှစ်ချုပ် | မုခ်ချိတ် |
+|-----------|---------|-----------------|
+| Data Space (DS) | တစ်ခု သို့မဟုတ် တစ်ခုထက်ပိုသော လမ်းသွားများကို ပိုင်ဆိုင်သည့် အုပ်ချုပ်မှုစနစ်ဖြင့် သတ်မှတ်ထားသော လည်ပတ်မှု/သိုလှောင်မှုဒိုမိန်း၊ တရားဝင်သတ်မှတ်သူအစုံများ၊ ကိုယ်ရေးကိုယ်တာအတန်းအစား၊ အခကြေးငွေ + DA မူဝါဒကို ကြေညာသည်။ | ထင်ရှားသော အစီအစဉ်အတွက် [Nexus](./nexus-spec) ကို ကြည့်ပါ။ |
+| လမ်းသွယ်| အဆုံးအဖြတ်ပေးသော ခွဲခြမ်းစိတ်ဖြာမှု၊ ကမ္ဘာလုံးဆိုင်ရာ NPoS လက်စွပ်က အမိန့်ပေးသည့် ကတိကဝတ်များကို ထုတ်လွှတ်သည်။ Lane အတန်းများတွင် `default_public`၊ `public_custom`၊ `private_permissioned` နှင့် `hybrid_confidential` တို့ ပါဝင်သည်။ | [လမ်းသွားပုံစံ](./nexus-lane-model) သည် ဂျီသြမေတြီ၊ သိုလှောင်မှုရှေ့ဆက်များနှင့် ထိန်းသိမ်းမှုတို့ကို ဖမ်းယူသည်။ |
+| အကူးအပြောင်းအစီအစဉ် | Placeholder identifiers၊ လမ်းကြောင်းအဆင့်များနှင့် dual-profile ထုပ်ပိုးမှုများသည် Nexus သို့ ပြောင်းလဲလာပုံကို ခြေရာခံပါသည်။ | [အကူးအပြောင်းမှတ်စုများ](./nexus-transition-notes) ရွှေ့ပြောင်းခြင်းအဆင့်တစ်ခုစီကို မှတ်တမ်းတင်ပါ။ |
+| အာကာသလမ်းညွှန် | DS manifests + ဗားရှင်းများကို သိမ်းဆည်းသည့် မှတ်ပုံတင်စာချုပ်။ အော်ပရေတာများသည် မပါဝင်မီ ဤလမ်းညွှန်ချက်နှင့် ကက်တလောက်ထည့်သွင်းမှုများကို ပြန်လည်ညှိနှိုင်းပေးသည်။ | Manifest diff tracker သည် `docs/source/project_tracker/nexus_config_deltas/` အောက်တွင်ရှိသည်။ |
+| လမ်းသွားကက် | `[nexus]` လမ်းကြောင်း ID များကို aliases၊ လမ်းကြောင်းပေါ်လစီများနှင့် DA အဆင့်များဆီသို့ မြေပုံညွှန်းပေးသည့် config အပိုင်း။ `irohad --sora --config … --trace-config` သည် စာရင်းစစ်များအတွက် ဖြေရှင်းထားသော ကတ်တလောက်ကို ပရင့်ထုတ်သည်။ | CLI လမ်းလျှောက်ခြင်းအတွက် `docs/source/sora_nexus_operator_onboarding.md` ကိုသုံးပါ။ |
+| အခြေချရောက်တာ | ပုဂ္ဂလိက CBDC လမ်းများကို အများသူငှာ ငွေဖြစ်လွယ်လမ်းများနှင့် ချိတ်ဆက်ပေးသော XOR လွှဲပြောင်းမှု တီးမှုတ်ခြင်း။ | `docs/source/cbdc_lane_playbook.md` သည် မူဝါဒခလုတ်များနှင့် တယ်လီမီတာတံခါးများကို စာလုံးပေါင်းပေးသည်။ |
+| Telemetry/SLOs | ဒိုင်ခွက်များ + `dashboards/grafana/nexus_*.json` တွင် ဖမ်းယူထားသော လမ်းသွားအမြင့်၊ DA မှတ်တမ်းများ၊ ဖြေရှင်းမှု တုံ့ပြန်ချိန်နှင့် အုပ်ချုပ်မှုတန်းစီ၏ အနက်အောက်ရှိ သတိပေးချက်များ။ | [တယ်လီမီတာပြုပြင်ခြင်းအစီအစဉ်](./nexus-telemetry-remediation) သည် ဒက်ရှ်ဘုတ်များ၊ သတိပေးချက်များနှင့် စာရင်းစစ်အထောက်အထားများကို စာလုံးပေါင်းပါသည်။ |
 
-## Rollout snapshot
+## စတင်ထုတ်လွှင့်မှု လျှပ်တစ်ပြက်
 
-| Phase | Focus | Exit criteria |
-|-------|-------|---------------|
-| N0 – Closed beta | Council-managed registrar (`.sora`), manual operator onboarding, static lane catalog. | Signed DS manifests + rehearsed governance hand-offs. |
-| N1 – Public launch | Adds `.nexus` suffixes, auctions, self-service registrar, XOR settlement wiring. | Resolver/gateway sync tests, billing reconciliation dashboards, dispute tabletop drills. |
-| N2 – Expansion | Introduces `.dao`, reseller APIs, analytics, dispute portal, steward scorecards. | Compliance artefacts versioned, policy-jury toolkit online, treasury transparency reports. |
-| NX-12/13/14 gate | Compliance engine, telemetry dashboards, and documentation must ship together before partner pilots. | [Nexus overview](./nexus-overview) + [Nexus operations](./nexus-operations) published, dashboards wired, policy engine merged. |
+| အဆင့် | အာရုံ | သတ်မှတ်ချက် | ထွက်ရန်
+|---------|------|----------------|
+| N0 – Closed beta | ကောင်စီမှ စီမံခန့်ခွဲသော မှတ်ပုံတင်အရာရှိ (`.sora`)၊ လက်စွဲအော်ပရေတာ စတင်အသုံးပြုခြင်း၊ တည်ငြိမ်လမ်းသွား ကတ်တလောက်။ | လက်မှတ်ရေးထိုးထားသော DS သည် သရုပ်ဖော်ခြင်း + အစမ်းလေ့ကျင့်ထားသော အုပ်ချုပ်မှု လက်လွှဲပေးမှုများ။ |
+| N1 – အများသူငှာ စတင်ရောင်းချခြင်း | `.nexus` ၏ နောက်ဆက်တွဲများ၊ လေလံပွဲများ၊ ကိုယ်တိုင်ဝန်ဆောင်မှု မှတ်ပုံတင်အရာရှိ၊ XOR အခြေချ ဝိုင်ယာကြိုးများကို ပေါင်းထည့်သည်။ | ဖြေရှင်းချက်/တံခါးပေါက် စင့်ခ်လုပ်ခြင်း စမ်းသပ်မှုများ၊ ငွေပေးချေမှု ပြန်လည်သင့်မြတ်ရေး ဒက်ရှ်ဘုတ်များ၊ |
+| N2 – တိုးချဲ့ခြင်း | `.dao`၊ ပြန်လည်ရောင်းချသူ APIs၊ ခွဲခြမ်းစိတ်ဖြာချက်၊ အငြင်းပွားမှုပေါ်တယ်၊ ဘဏ္ဍာစိုးရမှတ်များကို မိတ်ဆက်ပေးသည်။ | အွန်လိုင်းတွင် မူဝါဒ-ဂျူရီရေးကိရိယာအစုံအလင်ကို ဗားရှင်းထုတ်ထားသော လိုက်နာမှု၊ ဘဏ္ဍာငွေ ပွင့်လင်းမြင်သာမှု အစီရင်ခံစာများ။ |
+| NX-12/13/14 ဂိတ် | လိုက်နာရမည့်အင်ဂျင်၊ တယ်လီမီတာ ဒက်ရှ်ဘုတ်များနှင့် စာရွက်စာတမ်းများကို ပါတနာလေယာဉ်မှူးများရှေ့တွင် အတူတကွ ပို့ဆောင်ရမည်ဖြစ်သည်။ | [Nexus ခြုံငုံသုံးသပ်ချက်](./nexus-overview) + [Nexus လုပ်ဆောင်ချက်များ](./nexus-operations) ထုတ်ဝေပြီး၊ ဒက်ရှ်ဘုတ်များကို ကြိုးတပ်ထားသော၊ မူဝါဒအင်ဂျင်ကို ပေါင်းစပ်ထားသည်။ |
 
-## Operator responsibilities
+## အော်ပရေတာတာဝန်
 
-1. **Config hygiene** – keep `config/config.toml` synced with the published lane &
-   dataspace catalog; archive `--trace-config` output with every release ticket.
-2. **Manifest tracking** – reconcile catalog entries with the latest Space
-   Directory bundle before joining or upgrading nodes.
-3. **Telemetry coverage** – expose the `nexus_lanes.json`, `nexus_settlement.json`,
-   and related SDK dashboards; wire alerts to PagerDuty and run quarterly reviews per the telemetry remediation plan.
-4. **Incident reporting** – follow the severity matrix in
-   [Nexus operations](./nexus-operations) and file RCAs within five business days.
-5. **Governance readiness** – attend Nexus council votes impacting your lanes and
-   rehearse rollback instructions quarterly (tracked via
-   `docs/source/project_tracker/nexus_config_deltas/`).
+1. **Config တစ်ကိုယ်ရေသန့်ရှင်းမှု** – `config/config.toml` ကို ထုတ်ဝေထားသော လမ်းကြောနှင့် ထပ်တူပြုထားပါ
+   ဒေတာအာကာသကတ်တလောက်; ထုတ်ဝေခွင့်လက်မှတ်တိုင်းနှင့်အတူ `--trace-config` အထွက်ကို သိမ်းဆည်းပါ။
+2. **ဖော်ပြခြင်း ခြေရာခံခြင်း** – နောက်ဆုံးထွက် Space ဖြင့် ကက်တလောက်ထည့်သွင်းမှုများကို ညှိနှိုင်းပါ။
+   nodes မချိတ်ဆက်မီ သို့မဟုတ် အဆင့်မြှင့်တင်ခြင်းမပြုမီ လမ်းညွှန်အတွဲ။
+3. **တယ်လီမီတာ လွှမ်းခြုံမှု** – `nexus_lanes.json`၊ `nexus_settlement.json`၊
+   နှင့်ဆက်စပ် SDK ဒက်ရှ်ဘုတ်များ၊ PagerDuty သို့ ကြေးနန်းသတိပေးချက်များနှင့် တယ်လီမီတာပြုပြင်ခြင်းအစီအစဉ်အရ သုံးလတစ်ကြိမ် ပြန်လည်သုံးသပ်မှုများကို လုပ်ဆောင်ပါ။
+4. **ဖြစ်ရပ်အစီရင်ခံခြင်း** – ပြင်းထန်မှုမက်ထရစ်ကို လိုက်နာပါ။
+   [Nexus လည်ပတ်မှုများ](./nexus-operations) နှင့် လုပ်ငန်းငါးရက်အတွင်း RCA များကို ဖိုင်တင်ပါ။
+5. **အုပ်ချုပ်မှု အဆင်သင့်** – သင့်လမ်းသွယ်များကို သက်ရောက်မှုရှိသော Nexus ကောင်စီ၏ ဆန္ဒမဲများကို တက်ရောက်ရန်နှင့်၊
+   နောက်ကြောင်းပြန်ညွှန်ကြားချက်များကို သုံးလတစ်ကြိမ် အစမ်းလေ့ကျင့်ပါ (မှတစ်ဆင့် ခြေရာခံသည်။
+   `docs/source/project_tracker/nexus_config_deltas/`)။
 
-## See also
+## ကိုလည်းကြည့်ပါ။
 
-- Canonical overview: `docs/source/nexus_overview.md`
-- Detailed spec: [./nexus-spec](./nexus-spec)
-- Lane geometry: [./nexus-lane-model](./nexus-lane-model)
-- Transition plan: [./nexus-transition-notes](./nexus-transition-notes)
-- Telemetry remediation plan: [./nexus-telemetry-remediation](./nexus-telemetry-remediation)
-- Operations runbook: [./nexus-operations](./nexus-operations)
-- Operator onboarding guide: `docs/source/sora_nexus_operator_onboarding.md`
+- Canonical ခြုံငုံသုံးသပ်ချက်- `docs/source/nexus_overview.md`
+- အသေးစိတ် spec- [./nexus-spec](./nexus-spec)
+- လမ်းကြောဂျီသြမေတြီ- [./nexus-lane-model](./nexus-lane-model)
+- အကူးအပြောင်းအစီအစဉ်- [./nexus-transition-notes](./nexus-transition-notes)
+- တယ်လီမီတာ ပြုပြင်ခြင်း အစီအစဉ်- [./nexus-telemetry-remediation](./nexus-telemetry-remediation)
+- လည်ပတ်မှုစာရင်းစာအုပ်- [./nexus-operations](./nexus-operations)
+- အော်ပရေတာ စတင်အသုံးပြုခြင်းလမ်းညွှန်- `docs/source/sora_nexus_operator_onboarding.md`

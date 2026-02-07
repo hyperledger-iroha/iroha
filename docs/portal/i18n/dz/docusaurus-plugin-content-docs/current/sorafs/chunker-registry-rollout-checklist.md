@@ -8,95 +8,95 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraFS Chunker Registry Rollout Checklist
 sidebar_label: Chunker Rollout Checklist
 description: Step-by-step rollout plan for chunker registry updates.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
+:::དྲན་ཐོའི་འབྱུང་ཁུངས།
 :::
 
-# SoraFS Registry Rollout Checklist
+# I18NT0000000X ཐོ་འགོད་ཐོ་ཡིག དཔྱད་གཞི།
 
-This checklist captures the steps required to promote a new chunker profile or
-provider admission bundle from review to production after the governance
-charter has been ratified.
+ཞིབ་དཔྱད་ཐོ་ཡིག་འདི་གིས་ ཅཱན་ཀར་གསལ་སྡུད་གསརཔ་ ཁྱབ་སྤེལ་འབད་ནི་ལུ་ དགོ་པའི་ གོ་རིམ་ཚུ་ འཛིན་བཟུང་འབདཝ་ཨིན།
+གཞུང་སྐྱོང་གི་ཤུལ་ལས་ བསྐྱར་ཞིབ་ལས་ ཐོན་སྐྱེད་ཚུན་ཚོད་ བྱིན་མི་ འཛུལ་ཞུགས་ཀྱི་ བང་རིམ་ཚུ།
+ཆོག་ཐམ་ཆ་འཇོག་འབད་ཡོདཔ།
 
-> **Scope:** Applies to all releases that modify
-> `sorafs_manifest::chunker_registry`, provider admission envelopes, or the
-> canonical fixture bundles (`fixtures/sorafs_chunker/*`).
+> **Scope:** ལེགས་བཅོས་འབད་མི་གསར་བཏོན་ཆ་མཉམ་ལུ་འཇུག་སྤྱོད་འབདཝ་ཨིན།
+> `sorafs_manifest::chunker_registry`, བྱིན་མི་འཛུལ་ཞུགས་ཡིག་ཆ་ཚུ་, ཡང་ན་
+> ཀེ་ནོ་ནིག་སྒྲིག་ཆས་བཱན་ཌལ་ (`fixtures/sorafs_chunker/*`).
 
-## 1. Pre-flight Validation
+## 1. འཕུར་འགྲུལ་སྔོན་གྱི་བདེན་དཔང་།
 
-1. Regenerate fixtures and verify determinism:
+༡ བདེ་སྒྲིག་ཚུ་ ལོག་སྟེ་བཟོ་སྟེ་ གཏན་འབེབས་བཟོ་ནི།
    ```bash
    cargo run --locked -p sorafs_chunker --bin export_vectors
    cargo test -p sorafs_chunker --offline vectors
    ci/check_sorafs_fixtures.sh
    ```
-2. Confirm determinism hashes in
-   `docs/source/sorafs/reports/sf1_determinism.md` (or the relevant profile
-   report) match the regenerated artifacts.
-3. Ensure `sorafs_manifest::chunker_registry` compiles with
-   `ensure_charter_compliance()` by running:
-   ```bash
-   cargo test -p sorafs_manifest --lib chunker_registry::tests::ensure_charter_compliance
-   ```
-4. Update the proposal dossier:
+2. 2 2 2012
+   I18NI000000011X (ཡང་ན་འབྲེལ་ཡོད་གསལ་སྡུད།
+   སྙན་ཞུ།) བསྐྱར་བཟོ་བྱས་པའི་དངོས་པོ་དང་མཐུན་པ།
+3. དང་བཅས་ `sorafs_manifest::chunker_registry` བསྡུ་སྒྲིག།
+   I18NI000000013X གཡོག་བཀོལ་ཐོག་ལས་:
+   I18NF0000004X
+༤ གྲོས་འཆར་ཡིག་ཆ་འདི་དུས་མཐུན་བཟོ་ནི།
    - `docs/source/sorafs/proposals/<profile>.json`
-   - Council minutes entry under `docs/source/sorafs/council_minutes_*.md`
-   - Determinism report
+   - ལྷན་ཚོགས་ཀྱི་སྐར་མ་ཚུ་ I18NI0000015X གི་འོག་ལུ་ཨིན།
+   - གཏན་འཁེལ་གྱི་སྙན་ཐོ།
 
-## 2. Governance Sign-off
+## 2. གཞུང་སྐྱོང་མཚན་རྟགས།
 
-1. Present the Tooling Working Group report and proposal digest to the Sora
-   Parliament Infrastructure Panel.
-2. Record approval details in
+1. ལག་ཆས་ལས་བྱེད་ཚོགས་ཆུང་གི་སྙན་ཞུ་དང་ གྲོས་འཆར་སའྱི་ སོ་ར་ལུ་ འཇུ་ནི།
+   སྤྱི་ཚོགས་གཞི་རྟེན་གྱི་ ཚོགས་ཆུང་།
+2. ཆ་འཇོག་གནང་བའི་ཁ་གསལ་ ༢༠༠༨ ནང་།
    `docs/source/sorafs/council_minutes_YYYY-MM-DD.md`.
-3. Publish the Parliament-signed envelope alongside the fixtures:
+༣ སྤྱི་ཚོགས་ཀྱི་ ཡིག་ཤུབས་དེ་ སྒྲིག་ཆས་ཀྱི་ མཉམ་དུ་ དཔར་བསྐྲུན་འབད་ནི།
    `fixtures/sorafs_chunker/manifest_signatures.json`.
-4. Verify the envelope is accessible via the governance fetch helper:
+༤ གཞུང་སྐྱོང་ལས་ཁུངས་ཀྱི་གྲོགས་རམ་བརྒྱུད་དེ་ ཡིག་ཤུབས་འདི་ འཐོབ་ཚུགསཔ་སྦེ་ བདེན་དཔྱད་འབད།
    ```bash
    cargo xtask sorafs-fetch-fixture \
      --signatures <url-or-path-to-manifest_signatures.json> \
      --out fixtures/sorafs_chunker
    ```
 
-## 3. Staging Rollout
+## 3. གོ་རིམ་གྱི་ཐོ་གཞུང་།
 
-Refer to the [staging manifest playbook](./staging-manifest-playbook) for a
-detailed walkthrough of these steps.
+[འཁྲབ་སྟོན
+ཁ་གསལ་གྱི་གོམ་པ་འདི་དག་གི་སྐོར་རོགས།
 
-1. Deploy Torii with `torii.sorafs` discovery enabled and admission
-   enforcement turned on (`enforce_admission = true`).
-2. Push the approved provider admission envelopes to the staging registry
-   directory referenced by `torii.sorafs.discovery.admission.envelopes_dir`.
-3. Verify provider adverts propagate via the discovery API:
+1. `torii.sorafs` དང་མཉམ་དུ་ཉོ་ཚོང་ནུས་པ་དང་འཛུལ་ཞུགས་བྱེད་པ།
+   བསྟར་དཔྱད་འབད་ཡོདཔ་ཨིན་ (`enforce_admission = true`).
+༢ ཆ་འཇོག་གྲུབ་པའི་ མཁོ་སྤྲོད་འབད་མི་ འཛུལ་ཞུགས་ཡིག་ཆ་ཚུ་ གནས་རིམ་ཐོ་བཀོད་ལུ་ བཀལ་དགོ།
+   `torii.sorafs.discovery.admission.envelopes_dir` གིས་ གཞི་བསྟུན་འབད་ཡོདཔ།
+༣ འཚོལ་ཞིབ་ཨེ་པི་ཨའི་བརྒྱུད་དེ་ བྱིན་མི་ ཁྱབ་བསྒྲགས་ཚུ་ བདེན་དཔྱད་འབད།
    ```bash
    curl -sS http://<torii-host>/v1/sorafs/providers | jq .
    ```
-4. Exercise manifest/plan endpoints with governance headers:
+༤ ལུས་རྩལ་གྱི་མགོ་ཡིག་ཚུ་དང་གཅིག་ཁར་ གསལ་སྟོན་/འཆར་གཞི་གི་མཇུག་བསྡུ།
    ```bash
    sorafs-fetch --plan fixtures/chunk_fetch_specs.json \
      --gateway-provider "...staging config..." \
      --gateway-manifest-id <manifest-hex> \
      --gateway-chunker-handle sorafs.sf1@1.0.0
    ```
-5. Confirm telemetry dashboards (`torii_sorafs_*`) and alert rules report the
-   new profile without errors.
+༥ ཊེ་ལི་མི་ཊི་ ཌེཤ་བོརཌ་ (I18NI0000021X) དང་ ཉེན་བརྡ་ལམ་ལུགས་ཚུ་ སྙན་ཞུ་འབད།
+   འཛོལ་བ་མེད་པའི་གསལ་སྡུད་གསརཔ།
 
-## 4. Production Rollout
+## 4.ཐོན་ལས་ཀྱི་ཐོ་ཡིག།
 
-1. Repeat the staging steps against production Torii nodes.
-2. Announce the activation window (date/time, grace period, rollback plan) to
-   operator and SDK channels.
-3. Merge the release PR containing:
-   - Updated fixtures and envelope
-   - Documentation changes (charter references, determinism report)
-   - Roadmap/status refresh
-4. Tag the release and archive the signed artifacts for provenance.
+༡ ཐོན་སྐྱེད་ I18NT0000002X མཛུབ་གནོན་ལུ་ གོ་རིམ་གྱི་གོ་རིམ་ཚུ་ བསྐྱར་ལོག་འབད།
+2. ཤུགས་ལྡན་གྱི་སྒོ་སྒྲིག་ (ཚེས་གྲངས་/དུས་ཚོད་ བྱིན་རླབས་དུས་ཡུན་, བཤུད་འཆར་གཞི་) ལུ་གསལ་བསྒྲགས་འབད།
+   བཀོལ་སྤྱོད་པ་དང་ཨེསི་ཌི་ཀེ་རྒྱུ་ལམ་ཚུ།
+3. གསར་བཏོན་ PR མཉམ་བསྡོམས་འབད།
+   - དུས་མཐུན་བཟོས་པའི་སྒྲིག་ཆས་དང་ ཡིག་ཤུགས།
+   - ཡིག་ཆ་བསྒྱུར་བཅོས་ (ཡིག་ཆའི་གཞི་བསྟུན་ གཏན་འབེབས་སྙན་ཐོ།)
+   - ལམ།/གནས་ལུགས་གསར་བཞེངས།
+༤ ཁུངས་གཏུག་འབད་ནིའི་དོན་ལུ་ མཚན་རྟགས་བཀོད་ཡོད་པའི་ ཅ་རྙིང་ཚུ་ གསར་བཏོན་དང་ གཏན་མཛོད་ལུ་ རྟགས་བཀལ།
 
-## 5. Post-Rollout Audit
+## 5. འཁོར་ལོའི་རྗེས་སུ་རྩིས་ཞིབ་པ།
 
-1. Capture final metrics (discovery counts, fetch success rate, error
-   histograms) 24h after rollout.
-2. Update `status.md` with a short summary and link to the determinism report.
-3. File any follow-up tasks (e.g., additional profile authoring guidance) in
+1. མཐའ་མའི་མེ་ཊིག་ཚུ་ བསྡུ་ལེན་འབད་ (གསར་འཚོལ་གྲངས་འབོར, མཐར་འཁྱོལ་གྱི་ཚད་, འཛོལ་བ་འཛོལ་བ།
+   histograms) ༢༤h གི་ཤུལ་ལས་ ༢༤h.
+༢ བཅུད་བསྡུས་ཐུང་ཀུ་ཅིག་དང་གཅིག་ཁར་ I18NI0000002X དུས་མཐུན་དང་ གཏན་འབེབས་སྙན་ཞུ་ལུ་འབྲེལ་མཐུད་འབད།
+༣ རྗེས་འཇུག་ལས་ཀ་གང་རུང་བཙུགས་ (དཔེར་ན་ གསལ་སྡུད་རྩོམ་སྒྲིག་ལམ་སྟོན་) ནང་།
    `roadmap.md`.

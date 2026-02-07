@@ -4,233 +4,233 @@ direction: ltr
 source: docs/portal/docs/sns/governance-playbook.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 ---
-id: governance-playbook
-title: Sora Name Service Governance Playbook
-sidebar_label: Governance playbook
-description: Runbook for council, guardian, steward, and registrar workflows referenced by SN-1/SN-6.
+id: གཞུང་སྐྱོང་-དཔེ་དེབ།
+title: སོ་ར་མིང་ཞབས་ཏོག་གཞུང་སྐྱོང་སློབ་དེབ།
+sarebar_label: གཞུང་སྐྱོང་རྩེད་རིམ།
+འགྲེལ་བཤད་: SN-1/SN-6 གིས་ རྒྱབ་རྟེན་འབད་མི་ ཚོགས་སྡེ་དང་ ལྟ་རྟོག་པ་ བདག་འཛིན་ དེ་ལས་ ཐོ་བཀོད་ཀྱི་ ལཱ་གི་རྒྱུན་རིམ་ཚུ་གི་དོན་ལུ་ རན་ཁ།
 ---
 
-:::note Canonical Source
-This page mirrors `docs/source/sns/governance_playbook.md` and now serves as
-the canonical portal copy. The source file persists for translation PRs.
+:::དྲན་ཐོའི་འབྱུང་ཁུངས།
+ཤོག་ལེབ་འདི་གིས་ I18NI000000040X ལུ་ མེ་ལོང་དང་ ད་ལྟོ་ ༡༧ ལུ་ ཕྱག་ཞུ་དོ་ཡོདཔ་ཨིན།
+ཀེ་ནོ་ནིག་གི་དྲྭ་ཚིགས་འདྲ་བཤུས། འབྱུང་ཁུངས་ཡིག་སྣོད་འདི་ སྐད་སྒྱུར་པི་ཨར་ཚུ་གི་དོན་ལུ་ གནས་ཏེ་ཡོདཔ་ཨིན།
 :::
 
-# Sora Name Service Governance Playbook (SN-6)
+# སོ་ར་མིང་ཞབས་ཞུ་གཞུང་ རྩེད་དེབ་ (SN-6) .
 
-**Status:** Drafted 2026-03-24 — living reference for SN-1/SN-6 readiness  
-**Roadmap links:** SN-6 “Compliance & Dispute Resolution”, SN-7 “Resolver & Gateway Sync”, ADDR-1/ADDR-5 address policy  
-**Prerequisites:** Registry schema in [`registry-schema.md`](./registry-schema.md), registrar API contract in [`registrar-api.md`](./registrar-api.md), address UX guidance in [`address-display-guidelines.md`](./address-display-guidelines.md), and account structure rules in [`docs/account_structure.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/account_structure.md).
+**Status:** ཟིན་བྲིས་འབད་ཡོདཔ། ༢༠༢༦-༠༣-༢༤ — ཨེསི་ཨེན་-༡/ཨེསི་ཨེན་-༦ གྲ་སྒྲིག་གི་དོན་ལུ་ སྲོག་ལྡན་གཞི་བསྟུན།  
+**ལམ་ཐིག་འབྲེལ་ལམ་:** SN-6 “མཐུན་སྒྲིག་དང་རྩོད་འགྲན་གྲོས་ཆོད”, SN-7 “Resolker & Gateway Sync”, ADDR-1/ADDR-5 ཁ་བྱང་སྲིད་བྱུས།  
+**སྔོན་འགྲོའི་ཆ་རྐྱེན:** [I18NI000000041X](I18NU000000019X) ནང་ ཐོ་བཀོད་སྒྲིག་བཀོད་འདི་ [I18NI000000042X](./registrar-api.md), UX ལམ་སྟོན་འདི་ ཁ་བྱང་བཀོད་ཡོདཔ་ཨིན། [`address-display-guidelines.md`](./address-display-guidelines.md)དང་རྩིས་ཁྲའི་གཞི་བཀོད་ལམ་ལུགས་ [I18NI000000044X](I18NU000000022X) ནང་།
 
-This playbook describes how the Sora Name Service (SNS) governance bodies adopt
-charters, approve registrations, escalate disputes, and prove that resolver and
-gateway states remain in sync. It fulfils the roadmap requirement that the
-`sns governance ...` CLI, Norito manifests, and audit artefacts share a single
-operator-facing reference before N1 (public launch).
+འདི་རྩེད་དེབ་འདི་གིས་ སོ་ར་མིང་ཞབས་ཏོག་ (SNS) གི་གཞུང་གིས་ ག་དེ་སྦེ་ ངོས་ལེན་འབདཝ་ཨིན་ན་ འགྲེལ་བཤད་རྐྱབ་ཨིན།
+བཀའ་ཁྲིམས་དང་ ཐོ་བཀོད་ཚུ་ ཆ་འཇོག་འབད་ནི་ རྩོད་རྙོགས་ཡར་སེང་འགྱོ་ནི་ དེ་ལས་ དེ་ཐག་གཅོད་འབད་མི་དང་ བདེན་ཁུངས་བཀལ་ནི།
+འཛུལ་སྒོ་གི་གནས་སྟངས་ཚུ་ མཉམ་འབྱུང་སྦེ་ལུསཔ་ཨིན། འདི་གིས་ ལམ་སྟོན་དགོས་མཁོ་འདི་ གྲུབ་ཚུགསཔ་ཨིན།
+`sns governance ...` CLI, Norito གསལ་སྟོན་འབདཝ་ཨིནམ་དང་ རྩིས་ཞིབ་ཅ་མཛོད་ཚུ་གིས་ གཅིག་རྐྱངམ་ཅིག་ བརྗེ་སོར་འབདཝ་ཨིན།
+ཨེན་༡ གི་ཧེ་མ་ བཀོལ་སྤྱོད་པའི་གདོང་ཕྱོགས་གཞི་བསྟུན་འབད་ (མི་མང་འགོ་དཔོན།)།
 
-## 1. Scope & Audience
+## 1. ཁྱབ་ཁོངས་དང་ལྟར།
 
-The document targets:
+ཡིག་ཆའི་དམིགས་ཚད་ཚུ།
 
-- Governance Council members who vote on charters, suffix policies, and dispute
-  outcomes.
-- Guardian board members who issue emergency freezes and review reversals.
-- Suffix stewards who run the registrar queues, approve auctions, and manage
-  revenue splits.
-- Resolver/gateway operators responsible for SoraDNS propagation, GAR updates,
-  and telemetry guardrails.
-- Compliance, treasury, and support teams who must demonstrate that every
-  governance action left auditable Norito artefacts.
+- གཞུང་སྐྱོང་ཚོགས་སྡེའི་འཐུས་མི་ཚུ་ ཆོག་ཐམ་དང་ རྗེས་འཇུག་སྲིད་བྱུས་ དེ་ལས་ རྩོད་རྙོགས་ཚུ་ལུ་ ཚོགས་རྒྱན་བཙུགས་མི།
+  གྲུབ་འབྲས།
+- གློ་བུར་གྱི་ གྱང་ཤུགས་དང་ བསྐྱར་ཞིབ་ཚུ་ བསྐྱར་ཞིབ་འབད་མི་ གཱར་ཌི་ཡན་བཀོད་ཚོགས་འཐུས་མི་ཚུ།
+- ཐོ་བཀོད་བང་རིམ་དང་ རིན་བསྡུར་ཆ་འཇོག་འབད་ནི་ དེ་ལས་ འཛིན་སྐྱོང་འཐབ་མི་ རྗེས་འཇུག་བདག་འཛིན་པ།
+  ཡོང་འབབ་ཁ་ཕྱེ་བ།
+- སོ་ར་ཌི་ཨེན་ཨེསི་ ཁྱབ་སྤེལ་གྱི་འགན་ཁུར་འབག་མི་ རེམ་པ་/གཱེཊ་བཀོལ་སྤྱོད་པ་ ཇི་ཨར་ དུས་མཐུན་ཚུ།
+  དང་ telemetry ཉེན་སྲུང།
+- བསྟར་སྤྱོད་དང་ བང་མཛོད་ དེ་ལས་ རྒྱབ་སྐྱོར་སྡེ་ཚན་ཚུ་ ག་ར་སྟོན་དགོཔ་ཨིན།
+  གཞུང་སྐྱོང་བྱ་བ་འདི་ རྩིས་ཞིབ་འབད་ཚུགསཔ་ཨིན་ Norito ཅ་ཆས།
 
-It covers the closed-beta (N0), public launch (N1), and expansion (N2) phases
-enumerated in `roadmap.md` by linking each workflow to required evidence,
-dashboards, and escalation paths.
+འདི་གིས་ ཁ་བསྡམས་ཡོད་པའི་ བེ་ཊ་ (N0) དང་ མི་མང་འགོ་བཙུགས་ (N1) དེ་ལས་ རྒྱ་སྐྱེད་ (N2) ཚུ་ ཁྱབ་ཚུགསཔ་ཨིན།
+ལཱ་གི་རྒྱུན་རིམ་རེ་རེ་བཞིན་དུ་ དགོས་མཁོའི་སྒྲུབ་བྱེད་ལུ་འབྲེལ་མཐུད་འབད་དེ་ I18NI000000046X ནང་ལུ་ གྲངས་སུ་བཙུགས་ཡོདཔ་ཨིན།
+dashboods དང་ ཡར་འཕར་གྱི་ལམ་ཚུ།
 
-## 2. Roles & Contact Map
+## 2. འཁྲབ་འགན་དང་འབྲེལ་གཏུག་སབ་ཁྲ།
 
-| Role | Core responsibilities | Primary artefacts & telemetry | Escalation |
+| འགན་ཁུར་ | འགན་ཁུར། | གཞི་རིམ་གྱི་ ཅ་རྙིང་ & ཊེ་ལི་མི་ཊི། | ཡར་འཕར་ |
 |------|----------------------|-------------------------------|------------|
-| Governance Council | Draft and ratify charters, suffix policies, dispute verdicts, and steward rotations. | `docs/source/sns/governance_addenda/`, `artifacts/sns/governance/*`, council ballots stored via `sns governance charter submit`. | Council chair + governance docket tracker. |
-| Guardian Board | Issue soft/hard freezes, emergency canons, and 72 h reviews. | Guardian tickets emitted by `sns governance freeze`, override manifests logged under `artifacts/sns/guardian/*`. | Guardian on-call rotation (≤15 min ACK). |
-| Suffix Stewards | Run registrar queues, auctions, pricing tiers, and customer comms; acknowledge compliances. | Steward policies in `SuffixPolicyV1`, pricing reference sheets, steward acknowledgements stored beside regulatory memos. | Steward program lead + suffix-specific PagerDuty. |
-| Registrar & Billing Ops | Operate `/v1/sns/*` endpoints, reconcile payments, emit telemetry, and maintain CLI snapshots. | Registrar API ([`registrar-api.md`](./registrar-api.md)), `sns_registrar_status_total` metrics, payment proofs archived under `artifacts/sns/payments/*`. | Registrar duty manager and treasury liaison. |
-| Resolver & Gateway Operators | Keep SoraDNS, GAR, and gateway state aligned with registrar events; stream transparency metrics. | [`docs/source/soradns/deterministic_hosts.md`](../../../source/soradns/deterministic_hosts.md), [`docs/source/reports/soradns_transparency.md`](../../../source/reports/soradns_transparency.md), `dashboards/alerts/soradns_transparency_rules.yml`. | Resolver SRE on-call + gateway ops bridge. |
-| Treasury & Finance | Apply 70/30 revenue split, referral carve-outs, tax/treasury filings, and SLA attestations. | Revenue accrual manifests, Stripe/treasury exports, quarterly KPI appendices under `docs/source/sns/regulatory/`. | Finance controller + compliance officer. |
-| Compliance & Regulatory Liaison | Track global obligations (EU DSA, etc.), update KPI covenants, and file disclosures. | Regulatory memos in `docs/source/sns/regulatory/`, reference decks, `ops/drill-log.md` entries for tabletop rehearsals. | Compliance program lead. |
-| Support / SRE On-call | Handle incidents (collisions, billing drift, resolver outages), coordinate customer messaging, and own runbooks. | Incident templates, `ops/drill-log.md`, staged lab evidence, Slack/war-room transcripts archived under `incident/`. | SNS on-call rotation + SRE management. |
+| གཞུང་སྐྱོང་ལྷན་ཚོགས། | ཆིངས་ཡིག་དང་ རྗེས་འཇུག་སྲིད་བྱུས་ འཁྲུན་ཆོད་འཁྲུན་ཆོད་དང་ བདག་འཛིན་གྱི་ བསྒྱིར་བཅོས་ཚུ་ ཟིན་བྲིས་དང་ ཆ་འཇོག་འབད་ནི། | I18NI000000047X, `artifacts/sns/governance/*`, `sns governance charter submit` བརྒྱུད་དེ་ ཚོགས་སྡེའི་ཚོགས་རྒྱན་ཚུ་ གསོག་འཇོག་འབད་ཡོདཔ་ཨིན། | ཚོགས་སྡེའི་ཁྲི་འཛིན་ + གཞུང་སྐྱོང་དོ་དམ་རྗེས་འདེད་པ། |
+| གཱར་ཌི་ཡན་བཀོད་ཚོགས་ | གནད་དོན་འཇམ་པོ་/ཧརཌ་ གྱང་ཤུགས་དང་ གློ་བུར་གྱི་ཁྲིམས་ལུགས་ དེ་ལས་ བསྐྱར་ཞིབ་ ༧༢ ཆུ་ཚོད་ཚུ། | I18NI000000050X གིས་བཏོན་མི་ གཱར་ཌི་ཡན་གྱི་ཤོག་འཛིན་ཚུ་ `artifacts/sns/guardian/*` གི་འོག་ལུ་ ནང་བསྐྱོད་འབད་ཡོད་པའི་ མངོན་གསལ་ཚུ་ མངོན་གསལ་འབདཝ་ཨིན། | གཱར་ཌི་ཡན་ ཁ་པར་བསྒྱིར་ནི་ (≤15min ACK). |
+| སུ་ཕིགསི་སི་ཊི་ཝརཌསི་ | ཐོ་བཀོད་ཐོ་བཀོད་ཀྱི་གྱལ་དང་ རིན་བསྡུར་ གོང་ཚད་བཀོད་ནི་ རིམ་པ་ དེ་ལས་ ཚོང་མགྲོན་པའི་ཀོམ་ཚུ་ གཡོག་བཀོལ་ནི། བསྟར་སྤྱོད་ཚུ་ངོས་ལེན་འབད། | གོང་ཚད་བཀོད་ནིའི་ཤོག་ལེབ་དང་ བཀག་འཛིན་གྱི་ངོས་ལེན་ཚུ་ ཁྲིམས་ལུགས་ཀྱི་དྲན་ཐོ་གི་སྦོ་ལོགས་ཁར་ བསག་བཞག་མི་ བདག་འཛིན་གྱི་ངོས་ལེན་ཚུ། | སི་ཊི་ཝརཌི་ལས་རིམ་འགོ་འཁྲིདཔ་ + རྗེས་འཇུག་-དམིགས་བསལ་པེ་གར་ཌུཊི་. |
+| ཐོ་བཀོད་འགོ་དཔོན་དང་ བིལ་ལིང་ Ops | བཀོལ་སྤྱོད་ `/v1/sns/*` མཇུག་བསྡུ། དངུལ་སྤྲོད་ལོག་སྤྲོད་ནི། བརྒྱུད་འཕྲིན་བཏོན་ནི་ དེ་ལས་ CLI པར་ལེན་ཚུ་ རྒྱུན་སྐྱོང་འཐབ་ནི། | ཐོ་བཀོད་ཀྱི་ཨེ་པི་ཨའི་ ([I18NI0000054X](./registrar-api.md)) Norito མེ་ཊིགསི། | ཐོ་བཀོད་འགན་འཛིན་འཛིན་སྐྱོང་པ་དང་ དངུལ་ཁང་འབྲེལ་འཐུད། |
+| སེལ་མི་ & གཱེཊ་ཝེ་བཀོལ་སྤྱོད་པ་ | SoraDNS, GAR, དང་ འཛུལ་སྒོ་གི་གནས་སྟངས་ཚུ་ ཐོ་བཀོད་ཀྱི་བྱུང་རིམ་ཚུ་དང་ ཕྲང་སྒྲིག་འབད་བཞག་དགོ། ཆུ་རྒྱུན་དྭངས་གསལ་གྱི་མེ་ཊིགསི་ཚུ། | [I18NI0000000057X](../../../source/soradns/deterministic_hosts.md) [I18NI000000058X](`docs/source/reports/soradns_transparency.md`](`docs/source/reports/soradns_transparency.md`](I18NI00000000025X), I18NI000000059X. | སེལ་མི་ SRE on-call + གཱེཊ་ཨོཔ་ཟམ་། |
+| དངུལ་ཁང་དང་དངུལ་རྩིས་ | ༧༠/༣༠ འོང་འབབ་ཀྱི་བགོ་བཤའ་དང་ བརྡ་སྤྲོད་ཀྱི་ བརྐོས་བརྐོསཔ་ ཁྲལ་/དངུལ་ཁང་གི་ཡིག་ཆ་ དེ་ལས་ ཨེསི་ཨེལ་ཨེ་གི་ བདེན་ཁུངས་བཀལ་དགོ། | འོང་འབབ་བསྡུ་ལེན་གྱི་ གསལ་སྟོན་ཚུ་ ཐིག་/དངུལ་ཁང་ཕྱིར་ཚོང་ དེ་ལས་ ཟླཝ་གསུམ་གྱི་ ཀེ་པི་ཨའི་ ཟུར་དེབ་ I18NI000000060X གི་འོག་ལུ་ ཟུར་ཐོ་ཚུ་ གསལ་སྟོན་འབདཝ་ཨིན། | དངུལ་རྩིས་ཚད་འཛིན་ + བསྟར་སྤྱོད་འགོ་དཔོན། |
+| བསྟར་སྤྱོད་དང་ ཁྲིམས་ལུགས་མཐུན་འབྲེལ། | འཛམ་གླིང་འགན་ཁུར་ཚུ་ འཚོལ་ཞིབ་འབད། (EU DSA, ལ་སོགས་པ་ཚུ་) དུས་མཐུན་བཟོ་ནི་དང་ ཡིག་ཆ་གསལ་བསྒྲགས་ཚུ་ དུས་མཐུན་བཟོ་ནི། | I18NI000000061X ནང་ བཀག་འཛིན་གྱི་ དྲན་ཐོ་ I18NI000000062X ཤོག་ཁྲམ་ལུ་ བསྐྱར་སྦྱོང་འབད་ནིའི་དོན་ལུ་ ཐོ་བཀོད་འབདཝ་ཨིན། | བསྟར་སྤྱོད་ལས་རིམ་འགོ་འཁྲིད། |
+| རྒྱབ་སྐྱོར་ / ཨེསི་ཨར་ཨི་ཨོན་ཁ་པར་ | འཛིན་སྐྱོང་གི་བྱུང་རྐྱེན་ (ཁ་ཐུག་རྐྱབ་ནི་དང་ བྱུང་འཛིན་གྱི་ ཌིརཕཊ་ ཐག་གཅོད་འབད་མི་ མེདཔ་འགྱོ་མི་) དང་ ཚོང་མགྲོན་པ་བརྡ་འཕྲིན་མཉམ་འབྲེལ་ དེ་ལས་ རང་གི་ རན་དེབ་ཚུ་ མཉམ་འབྲེལ་འབད་བཅུག། | བྱུང་རྐྱེན་ཊེམ་པེལེཊ་ `ops/drill-log.md`, གནས་རིམ་ཅན་གྱི་བརྟག་དཔྱད་ཁང་གི་སྒྲུབ་བྱེད་ Slack/war-nomp transcrips I18NI000000064X གི་འོག་ལུ་ གཏན་མཛོད་འབད་ཡོདཔ་ཨིན། | SNS on-call འཁོར་སྐྱོད་ + SRE འཛིན་སྐྱོང་། |
 
-## 3. Canonical Artefacts & Data Sources
+## 3. ཏན་ཏན་རིག་གནས་དང་གནས་སྡུད་འབྱུང་ཁུངས།
 
-| Artefact | Location | Purpose |
-|----------|----------|---------|
-| Charter + KPI addenda | `docs/source/sns/governance_addenda/` | Version-controlled signed charters, KPI covenants, and governance decisions referenced by CLI votes. |
-| Registry schema | [`registry-schema.md`](./registry-schema.md) | Canonical Norito structures (`NameRecordV1`, `SuffixPolicyV1`, `RevenueAccrualEventV1`). |
-| Registrar contract | [`registrar-api.md`](./registrar-api.md) | REST/gRPC payloads, `sns_registrar_status_total` metrics, and governance hook expectations. |
-| Address UX guide | [`address-display-guidelines.md`](./address-display-guidelines.md) | Canonical IH58 (preferred) + compressed (`sora`, second-best) renderings mirrored by wallets/explorers. |
-| SoraDNS / GAR docs | [`docs/source/soradns/deterministic_hosts.md`](../../../source/soradns/deterministic_hosts.md), [`docs/source/reports/soradns_transparency.md`](../../../source/reports/soradns_transparency.md) | Deterministic host derivation, transparency tailer workflow, and alert rules. |
-| Regulatory memos | `docs/source/sns/regulatory/` | Jurisdictional intake notes (e.g., EU DSA), steward acknowledgements, template annexes. |
-| Drill log | `ops/drill-log.md` | Record of chaos and IR rehearsals required before phase exits. |
-| Artefact storage | `artifacts/sns/` | Payment proofs, guardian tickets, resolver diffs, KPI exports, and signed CLI output produced by `sns governance ...`. |
+| ཅ་ཆས། | ས་གནས་ | དམིགས་ཡུལ། |
+|---------------------------|-------------|
+| ཆིངས་ཡིག་ + ཀེ་པི་ཨའི་ addenda | `docs/source/sns/governance_addenda/` | ཐོན་རིམ་ཚད་འཛིན་འབད་བའི་ མཚན་རྟགས་བཀོད་ཡོད་པའི་ ཆོག་ཐམ་དང་ ཀེ་པི་ཨའི་ ཆིངས་ཡིག་ དེ་ལས་ གཞུང་སྐྱོང་གྲོས་ཐག་ཚུ་ སི་ཨེལ་ཨའི་ཚོགས་རྒྱན་གྱིས་ གཞི་བསྟུན་འབདཝ་ཨིན། |
+| ཐོ་བཀོད་ལས་རིམ། | [`registry-schema.md`](./registry-schema.md) | ཀེན་ནི་ཀལ་I༡༨NT000000006X བཀོད་རིས་ (I18NI000000067X, I18NI0000000068X, `RevenueAccrualEventV1`) |
+| ཐོ་བཀོད་ཀྱི་གན་རྒྱ་ | [`registrar-api.md`](./registrar-api.md) | REST/gRPC payloads, I18NI0000000071 གི་ཚད་གཞི་དང་ གཞུང་སྐྱོང་རེ་བ་ཚུ་ འབྲེལ་འཐབ་འབདཝ་ཨིན། |
+| ཁ་བྱང་ཡུ་ཨེགསི་ལམ་སྟོན་ | [`address-display-guidelines.md`](I18NU0000028X) | ཀེ་ནོ་ནིག་ཨའི་ཨེཆ་༥༨ (དགའ་གདམ་) + བསྡམ་བཞག་ཡོདཔ་ (`sora`, དྲག་ཤོས་གཉིས་པ་) བརྡ་རྟགས་ཚུ་ དངུལ་ཁང་/འཚོལ་ཞིབ་འབད་མི་ཚུ་གིས་ མེ་ལོང་ནང་བཏོནམ་ཨིན། |
+| SorADNS / གྷར་ཌོཀ་ | [I18NI000000007444](../../../source/soradns/deterministic_hosts.md) [I18NI000000075X](I18NU000000030X] | གཏན་འབེབས་ཧོསིཊི་འབྱུང་ཁུངས་དང་ དྭངས་གསལ་ཅན་གྱི་ལཱ་གི་རྒྱུན་རིམ་ དེ་ལས་ ཉེན་བརྡའི་ལམ་ལུགས་ཚུ། |
+| ཁྲིམས་ལུགས་དྲན་ཐོ། | `docs/source/sns/regulatory/` | ཁྲིམས་དོན་གྱི་ འཛུལ་སྤྱོད་ཀྱི་དྲན་ཐོ་ (དཔེར་ན་ EU DSA) དང་ བདག་འཛིན་འཐབ་མི་ ཊེམ་པེལེཊི་ མཐུད་སྒྲིག། |
+| དྲིལ་ལོག | I18NI0000007X | དུས་རིམ་ཕྱིར་ཐོན་མ་འགྱོ་བའི་ཧེ་མ་ ཟང་ཟིང་དང་ IR སྦྱོང་བརྡར་གྱི་ བསྐྱར་སྦྱོང་ཚུ་ ཐོ་བཀོད་འབད་དགོ། |
+| ཅ་རྙིང་གསོག་འཇོག་ | `artifacts/sns/` | གླ་ཆ་བདེན་ཁུངས་དང་ ལྟ་རྟོག་པའི་ཤོག་འཛིན་ ཐབས་ཤེས་བཏོན་མི་ ཀེ་པི་ཨའི་ ཕྱིར་ཚོང་ དེ་ལས་ `sns governance ...` གིས་ ཐོན་སྐྱེད་འབད་མི་ CLI ཐོན་འབྲས་ལུ་ མཚན་རྟགས་བཀོད་ཡོདཔ་ཨིན། |
 
-All governance actions must reference at least one artefact in the table above
-so auditors can reconstruct the decision trail within 24 hours.
+གཞུང་སྐྱོང་བྱ་བ་ཆ་མཉམ་གྱིས་ གོང་འཁོད་ཀྱི་ཐིག་ཁྲམ་ནང་ ཉུང་མཐའ་ལུ་ ཅ་ཆས་གཅིག་ གཞི་བསྟུན་འབད་དགོ།
+དེ་འབདཝ་ལས་ རྩིས་ཞིབ་པ་ཚུ་གིས་ ཐག་བཅད་ལམ་འདི་ ཆུ་ཚོད་༢༤ གི་ནང་འཁོད་ལུ་ བསྐྱར་བཟོ་འབད་ཚུགས།
 
-## 4. Lifecycle Playbooks
+## 4. མི་ཚེ་འཁོར་བའི་རྩེད་དེབ་ཚུ།
 
-### 4.1 Charter & Steward Motions
+### ༤་༡ བཅའ་ཁྲིམས་ དང་ བླམ་བནྡེ་ འགུལ་བསྐྱོད་།
 
-| Step | Owner | CLI / Evidence | Notes |
-|------|-------|----------------|-------|
-| Draft addendum & KPI deltas | Council rapporteur + steward lead | Markdown template stored under `docs/source/sns/governance_addenda/YY/` | Include KPI covenant IDs, telemetry hooks, and activation conditions. |
-| Submit proposal | Council chair | `sns governance charter submit --input SN-CH-YYYY-NN.md` (produces `CharterMotionV1`) | CLI emits Norito manifest stored under `artifacts/sns/governance/<id>/charter_motion.json`. |
-| Vote & guardian acknowledgement | Council + guardians | `sns governance ballot cast --proposal <id>` and `sns governance guardian-ack --proposal <id>` | Attach hashed minutes and quorum proofs. |
-| Steward acceptance | Steward program | `sns governance steward-ack --proposal <id> --signature <file>` | Required before suffix policies change; record envelope under `artifacts/sns/governance/<id>/steward_ack.json`. |
-| Activation | Registrar ops | Update `SuffixPolicyV1`, refresh registrar caches, publish note in `status.md`. | Activation timestamp logged to `sns_governance_activation_total`. |
-| Audit log | Compliance | Append entry to `docs/source/sns/regulatory/<jurisdiction>/<cycle>.md` and drill log if tabletop performed. | Include references to telemetry dashboards and policy diffs. |
+| གོམ་པ་ | ཇོ་བདག་ | CLI / སྒྲུབ་བྱེད་ | དྲན་ཐོ། |
+|------------------------------------------------- -|
+| ཟིན་བྲིས་ addendum & KPI ཌེལ་ཊས། | ལྷན་ཚོགས་ཀྱི་ མཐུན་སྒྲིག་ཅན་ + བདག་གཉེར་ཁང་། | I18NI0000080X གི་འོག་ལུ་ གསོག་འཇོག་འབད་ཡོད་མི་ ཊེམ་པེལེཊི་ | ཀེ་པི་ཨའི་ ཆིངས་ཡིག་ཨའི་ཌི་ཚུ་དང་ ཊེ་ལི་མི་ཊི་ཧུཀ་ དེ་ལས་ ཤུགས་ལྡན་བཟོ་ནིའི་གནས་སྟངས་ཚུ་ ཚུདཔ་ཨིན། |
+| གྲོས་འཆར་ཕུལ་ནི། | ཚོགས་སྡེའི་ཁྲི་འཛིན་ | I18NI0000081X (I18NI0000082X བཟོ) | CLI གིས་ `artifacts/sns/governance/<id>/charter_motion.json` གི་འོག་ལུ་ གསལ་སྟོན་ I18NT0000000007X འདི་ བཏོན་གཏང་ཡོདཔ་ཨིན། |
+| ཚོགས་རྒྱན་དང་ ལྟ་རྟོག་པ་ངོས་ལེན་ | ཚོགས་སྡེ་ + ལྟ་རྟོག་པ་ | `sns governance ballot cast --proposal <id>` དང་ I18NI0000085X | སྐར་མ་མ་བདེཝ་དང་ ཀོར་རམ་གྱི་བདེན་ཁུངས་ཚུ་ མཉམ་སྦྲགས་འབད། |
+| སི་ཊི་ཝརཌ་ངོས་ལེན་འབད་ནི། | སི་ཊི་ཝརཌི་ལས་རིམ་ | I18NI0000086X | རྗེས་འཇུག་སྲིད་བྱུས་བསྒྱུར་བཅོས་མ་འབད་བའི་ཧེ་མ་དགོཔ་ཨིན། `artifacts/sns/governance/<id>/steward_ack.json` གི་འོག་ལུ་ ཡིག་ཤུབས་ཐོ་བཀོད་འབད། |
+| ཤུགས་ལྡན་བཟོ་ནི། | ཐོ་བཀོད་འགོ་དཔོན་ | I18NI000000088X, གསར་བསྐྲུན་ཐོ་བཀོད་འདྲ་མཛོད་ཚུ་ དུས་མཐུན་བཟོ, I18NI000000089X ནང་ལུ་ དྲན་ཐོ་དཔར་བསྐྲུན་འབད། | ཤུགས་ལྡན་གྱི་དུས་ཚོད་མཚོན་རྟགས་འདི་ `sns_governance_activation_total` ལུ་ ནང་བསྐྱོད་འབད་ཡོདཔ་ཨིན། |
+| རྩིས་ཞིབ་དྲན་ཐོ་ | བསྟར་སྤྱོད་ | ཊེབ་ཊོཔ་འབད་ཡོད་པ་ཅིན་ `docs/source/sns/regulatory/<jurisdiction>/<cycle>.md` ལུ་ ཐོ་བཀོད་འབད། | ཊེ་ལི་མི་ཊི་ ཌེཤ་བོརཌ་དང་ སྲིད་བྱུས་ཁྱད་པར་ཚུ་ལུ་ གཞི་བསྟུན་ཚུ་ བཙུགས། |
 
-### 4.2 Registration, Auction & Pricing Approvals
+### ༤་༢ ཐོ་འགོད་དང་རིན་བསྡུར་དང་རིན་གོང་ཆ་འགྲིག་པ།
 
-1. **Preflight:** Registrar queries `SuffixPolicyV1` to confirm pricing tier,
-   available terms, and grace/redemption windows. Keep pricing sheets synced to
-   the 3/4/5/6–9/10+ tier table (base tier + suffix coefficients) documented in
-   the roadmap.
-2. **Sealed-bid auctions:** For premium pools, run the 72 h commit / 24 h reveal
-   cycle via `sns governance auction commit` / `... reveal`. Publish the commit
-   list (hashes only) under `artifacts/sns/auctions/<name>/commit.json` so
-   auditors can verify randomness.
-3. **Payment verification:** Registrars validate `PaymentProofV1` against
-   treasury splits (70% treasury / 30% steward with ≤10% referral carve-out).
-   Store the Norito JSON under `artifacts/sns/payments/<tx>.json` and link it in
-   the registrar response (`RevenueAccrualEventV1`).
-4. **Governance hook:** Attach `GovernanceHookV1` for premium/guarded names
-   referencing council proposal ids and steward signatures. Missing hooks result
+1. ** སྔོན་སྒྲིག་:** ཐོ་བཀོད་ཀྱི་འདྲི་དཔྱད་ `SuffixPolicyV1` གོང་ཚད་གཏན་འཁེལ་བཟོ་ནིའི་དོན་ལུ་,
+   ཐོབ་ཚུགས་པའི་ཐ་སྙད་ཚུ་, དང་ བྱིན་རླབས་/ སྐྱབས་བཅོལ་སྒོ་སྒྲིག་ཚུ། གོང་ཚད་ཤོག་ལེབ་ཚུ་ ལུ་མཉམ་འབྱུང་འབད་བཞག།
+   ༣/༤/༥/༦–༩/༡༠+ རིམ་པ་ (གཞི་རྟེན་རིམ་པ་ + རྗེས་འཇུག་འཇལ་ཚད་) ནང་ ཡིག་ཐོག་ལུ་བཀོད་ཡོད།
+   ལམ་གྱི་ས་ཁྲ།
+2. **བསྡམ་བཞག་-བིཌ་རིན་བསྡུར་:** མཐོ་རིམ་ཆུ་རྫིང་གི་དོན་ལུ་ 72h ཁས་བླངས་ / 24h གསལ་སྟོན་འདི་གཡོག་བཀོལ།
+   འཁོར་རིམ་བརྒྱུད་དེ་ `sns governance auction commit` / `... reveal`. ཁས་བླངས་པར་སྐྲུན།
+   ཐོ་ཡིག་ (hashes only) འོག་ལུ་ `artifacts/sns/auctions/<name>/commit.json` འདི་ དེ་འབདཝ་ལས་ཨིན།
+   རྩིས་ཞིབ་པ་ཚུ་གིས་ གང་བྱུང་བདེན་དཔྱད་འབད་ཚུགས།
+3. **དངུལ་ཕོགས་བདེན་དཔྱད་:** ཐོ་བཀོད་པ་ཚུ་གིས་ `PaymentProofV1` ལུ་འགོག་ཐབས་འབདཝ་ཨིན།
+   དངུལ་ཁང་བགོ་བཤའ་ (༧༠% གི་བང་མཛོད་ / ༣༠% གི་བདག་འཛིན་དང་ ≤༡༠% བསྐྱེལ་འདྲེན་-ཨའུཊ་)།
+   Norito འདི་ I18NI000000097X གི་འོག་ལུ་ གསོག་འཇོག་འབད་ཞིནམ་ལས་ ༢༠༡༢ ལུ་འབྲེལ་མཐུད་འབད།
+   ཐོ་བཀོད་ལན་འདེབས་ (I18NI0000098X).
+4. **གཞུང་སྐྱོང་ཧུཀ་:** མཐོ་རིམ་/བལྟ་རྟོག་པའི་མིང་ཚུ་གི་དོན་ལུ་ I18NI0000099X མཉམ་སྦྲགས་འབད།
+   ཚོགས་སྡེའི་གྲོས་འཆར་དང་ བདག་འཛིན་གྱི་མིང་རྟགས་ཚུ་ གཞི་བསྟུན་འབད་ནི། ཧུཀ་མེད་པའི་གྲུབ་འབྲས་
    in `sns_err_governance_missing`.
-5. **Activation + resolver sync:** Once Torii emits the registry event, trigger
-   the resolver transparency tailer to confirm the new GAR/zone state propagated
-   (see §4.5).
-6. **Customer disclosure:** Update the customer-facing ledger (wallet/explorer)
-   via the shared fixtures in [`address-display-guidelines.md`](./address-display-guidelines.md), ensuring IH58 and
-   compressed renderings match copy/QR guidance.
+5. ** Action + respecor sync:** ཚར་ཅིག་ I18NT000000013X གིས་ ཐོ་བཀོད་བྱུང་ལས་འདི་ བཏོནམ་ཨིན།
+   ཇི་ཨར་/ས་ཁོངས་གནས་སྟངས་གསརཔ་ ཁྱབ་སྤེལ་འབད་ནི་ལུ་ སེལ་མི་དྭངས་གསལ་ཅན་གྱི་ ལེན།
+   (§4.5 བལྟ།)
+༦. **ཉོ་སྤྱོད་པ་གསལ་བསྒྲགས།** ཚོང་མགྲོན་པ་ལུ་གདོང་ལེན་འབད་མི་ རྩིས་ཁྲ་ (ཝ་ལེཊ་/འཚོལ་ཞིབ་པ་) དུས་མཐུན་བཟོ་དགོ།
+   [I18NI00000010101X](I18NU000000031X) ནང་ཡོད་པའི་བརྗེ་སོར་གྱི་སྒྲིག་བཀོད་ཚུ་བརྒྱུད་དེ་ IH58 དང་I ངེས་གཏན་བཟོ་ནི།
+   བསྡམ་བཞག་ཡོད་པའི་ བརྡ་བཀོད་མཐུན་སྒྲིག་འདྲ་བཤུས་/QR ལམ་སྟོན་.
 
-### 4.3 Renewals, Billing & Treasury Reconciliation
+### ༤.༣ བསྐྱར་གསོ་དང་ བླུན་པོ་དང་དངུལ་འཛིན་མཐུན་སྒྲིལ།- **བསྐྱར་གསོའི་ལཱ་གི་རྒྱུན་རིམ་:** ཐོ་བཀོད་པ་ཚུ་གིས་ ཉིནམ་༣༠ གི་བྱིན་རླབས་ + ཉིན་གྲངས་༦༠ བསྐྱར་གསོ་འབདཝ་ཨིན།
+  `SuffixPolicyV1` ནང་གསལ་བཀོད་འབད་ཡོད་པའི་སྒོ་སྒྲིག་ཚུ། ཉིན་གྲངས་ ༦༠ གི་ཤུལ་ལས་ ཌཆ་འདི་ རིམ་པ་ལོག་སྒོ་ཕྱེ་ཡོདཔ་ཨིན།
+  (༧ days, 10× see/day 15%) གིས་ `sns གཞུང་སྐྱོང་བརྒྱུད་དེ་ རང་བཞིན་གྱིས་ འབྱུངམ་ཨིན།
+  བསྐྱར་ལོག་`.
+- **འོང་འབབ་ཁ་ཕྱེ་:** བསྐྱར་གསོ་ཡང་ན་ སྤོ་བཤུད་རེ་རེ་གིས་ a a བཟོཝ་ཨིན།
+  `RevenueAccrualEventV1`. དངུལ་ཁང་ཕྱིར་ཚོང་ (CSV/Parquet) གིས་ ལུ་ མཐུན་སྒྲིག་འབད་དགོ།
+  ཉིན་བསྟར་བཞིན་དུ་བྱུང་རིམ་འདི་དག་དང་། `artifacts/sns/treasury/<date>.json` ལུ་བདེན་ཁུངས་ཚུ་མཉམ་སྦྲགས་འབད་ནི།
+- ** གཞི་བསྟུན་བརྐོས་བརྐོས:** གདམ་ཁ་ཅན་གྱི་གཏང་ནིའི་བརྒྱ་ཆ་ཚུ་ རྗེས་འཇུག་རེ་ལུ་ བརྟག་ཞིབ་འབདཝ་ཨིན།
+  `referral_share` འདི་ བདག་འཛིན་གྱི་སྲིད་བྱུས་ལུ་ཁ་སྐོང་འབད་ཡོདཔ། ཐོ་བཀོད་པ་ཚུ་གིས་ མཐའ་དཔྱད་འབད་ཡོདཔ།
+  septy and sore ཕྱིར་གཏོང་གི་དངུལ་སྤྲོད་སྒྲུབ་བྱེད་ཀྱི་མངོན་རྟགས་གསལ་སྟོན་བྱེད།
+- **སྙན་ཞུ་འབད་ནི། གདམ་ཁའི་:* དངུལ་འབྲེལ་གྱི་བརྡ་འཕྲིན་ཟླ་རིམ་ཀེ་པི་ཨའི་ ཟུར་ཐོ་ (ཐོ་བཀོད་ཚུ།
+  བསྐྱར་གསོ་, ARPU, རྩོད་རྙོགས་/བོནཌ་ལག་ལེན) འོག་ལུ་བཀོད་དེ་ཡོད།
+  `docs/source/sns/regulatory/<suffix>/YYYY-MM.md`. ཌེཤ་བོརཌི་ཚུ་ ལས་འཐེན་དགོ།
+  ཕྱིར་འདྲེན་འབད་ཡོད་པའི་ཐིག་ཁྲམ་ཚུ་ དེ་འབདཝ་ལས་ I18NT000000002X ཨང་གྲངས་ཚུ་གིས་ ལེ་ཇར་སྒྲུབ་བྱེད་དང་མཐུན་སྒྲིག་འབདཝ་ཨིན།
+- **ཟླ་རིམ་ཀེ་པི་ཨའི་ བསྐྱར་ཞིབ་:** གཟའ་སྐར་དང་པ་ དངུལ་འབྲེལ་གྱི་ ལིཌ་ ཆ་སྒྲིག་འབདཝ་ཨིན།
+  ལས་འགན་ཐོག་ལུ་ stonty, དང་ ལས་རིམ་ PM. [SNS KPI དྲ་ཚིགས་](./kpi-dashboard.md) ཁ་ཕྱེ།
+  (`sns-kpis` གི་ངོས་འདྲ་བ་བཙུགས་ཡོད། / `dashboards/grafana/sns_suffix_analytics.json`).
+  ཐོ་འགོད་འབད་མི་བརྒྱུད་ལམ་ + འོང་འབབ་ཐིག་ཁྲམ་ཚུ་ཕྱིར་འདྲེན་འབད།
+  དང་ བརྗེད་ཐོ་ལུ་ ཅ་རྙིང་ཚུ་ མཉམ་སྦྲགས་འབད། བསྐྱར་ཞིབ་འདི་འཚོལ་བ་ཅིན་ བྱུང་རྐྱེན་ཅིག་ གཟབ་གཟབ་འབད།
+  ཨེསི་ཨེལ་ཨེ་གིས་ (འཁྱེག་སྒོ་སྒྲིག་ཚུ་>༧༢h, ཐོ་བཀོད་འཛོལ་བ་ཡར་སེང་།, ARPU drift).
 
-- **Renewal workflow:** Registrars enforce the 30 day grace + 60 day redemption
-  windows specified in `SuffixPolicyV1`. After 60 days the Dutch reopen sequence
-  (7 days, 10× fee decaying 15%/day) triggers automatically via `sns governance
-  reopen`.
-- **Revenue split:** Each renewal or transfer creates a
-  `RevenueAccrualEventV1`. Treasury exports (CSV/Parquet) must reconcile to
-  these events daily; attach proofs to `artifacts/sns/treasury/<date>.json`.
-- **Referral carve-outs:** Optional referral percentages are tracked per suffix
-  by adding `referral_share` to the steward policy. Registrars emit the final
-  split and store referral manifests beside the payment proof.
-- **Reporting cadence:** Finance posts monthly KPI annexes (registrations,
-  renewals, ARPU, dispute/bond utilisation) under
-  `docs/source/sns/regulatory/<suffix>/YYYY-MM.md`. Dashboards should pull from
-  the same exported tables so Grafana numbers match ledger evidence.
-- **Monthly KPI review:** The first-Tuesday checkpoint pairs the finance lead,
-  steward on duty, and program PM. Open the [SNS KPI dashboard](./kpi-dashboard.md)
-  (portal embed of `sns-kpis` / `dashboards/grafana/sns_suffix_analytics.json`),
-  export the registrar throughput + revenue tables, log deltas in the annex,
-  and attach the artefacts to the memo. Trigger an incident if the review finds
-  SLA breaches (freeze windows >72 h, registrar error spikes, ARPU drift).
+### ༤.༤ ཉམས་ཆག་དང་རྩོད་གཞི་དང་མཐོ་གཏུགས།
 
-### 4.4 Freezes, Disputes & Appeals
+| དུས་རིམ་ | ཇོ་བདག་ | བྱ་བ་དང་སྒྲུབ་བྱེད། | ཨེསི་ཨེལ་ཨེ་ |
+|------------------------------------------------ |
+| མཉེན་ཆས་ཀྱི་ཞུ་བ་ | སི་ཊི་ཝརཌི་ / རྒྱབ་སྐྱོར་ | ཡིག་སྣོད་ཀྱི་ཤོག་འཛིན་ `SNS-DF-<id>` དངུལ་སྤྲོད་སྒྲུབ་བྱེད་དང་ རྩོད་གཞི་བུན་གཡར་གཞི་བསྟུན་ དེ་ལས་ གནོད་སྐྱོན་བྱུང་མི་ འདེམས་ངོ་(ཚུ་)། | ≤4h ལས་འཛུལ། |
+| གཱར་ཌི་ཡན་གྱི་ཤོག་འཛིན་ | གཱར་ཌི་ཡན་བཀོད་ཚོགས་ | `sns governance freeze --selector <IH58> --reason <text> --until <ts>` གིས་ `GuardianFreezeTicketV1` མཚན་རྟགས་བཀོད་ཡོད། `artifacts/sns/guardian/<id>.json` གི་འོག་ལུ་ JSON གསོག་འཇོག་འབད། | ≤30min ACK, ≤2h ལག་ལེན་འཐབ་པ། |
+| ཚོགས་སྡེའི་ཆ་འཇོག་འབད་ནི། | གཞུང་སྐྱོང་ལྷན་ཚོགས། | གྱང་ཁོག་ཚུ་ ཆ་འཇོག་འབད་ནི་དང་ བཀག་ཆ་འབད་ནི་ ཡང་ན་ ངོས་ལེན་མ་འབད་ ཡིག་ཆའི་གྲོས་ཐག་འབྲེལ་མཐུད་དང་ བུན་གཡར་གྱི་ ཟས་བཅུད་ལུ་ རྩོད་བསྡུར་འབད་ནི། | ཤུལ་མའི་ཚོགས་སྡེའི་ཚོགས་ཐེངས་ཡང་ན་ དུས་མཉམ་མིན་པའི་ཚོགས་རྒྱན་། |
+| ནང་འགྲིགས་ པེ་ནཱལ་ | བསྟར་སྤྱོད་ + བདག་གཉེར་བ། | `sns governance dispute ballot` བརྒྱུད་དེ་ ཚོགས་རྒྱན་བཙུགས་ཡོད་པའི་ ཁྲིམས་དཔོན་ ༧ གྱི་ བསྡུ་སྒྲིག་ (ལམ་སྟོན་པ་རེ) མཉམ་བསྒྱུར་འབད། བྱུང་རྐྱེན་གྱི་ཐུམ་སྒྲིལ་ལུ་ མིང་མ་བཀོད་པའི་ཚོགས་རྒྱན་གྱི་འོང་འབབ་ཚུ་ མཉམ་སྦྲགས་འབད། | བུན་གཡར་གྱི་ཤུལ་ལས་ ≤7days. |
+| མཐོ་གཏུགས་ | གཱར་ཌི་ཡན་ + ཚོགས་སྡེ་ | མཐོ་གཏུགས་ཚུ་གིས་ བུན་གཡར་གཉིས་ལྡབ་འབད་དེ་ ཁྲིམས་དོན་བྱ་རིམ་འདི་ བསྐྱར་ལོག་འབདཝ་ཨིན། ཐོ་བཀོད་ I18NT0000009X གསལ་སྟོན་ `DisputeAppealV1` དང་ གཞི་བསྟུན་གཞི་རིམ་གྱི་ཤོག་བྱང་། | ≤༡༠ ཉིན། |
+| freeze & བཅོས་སྒྲུབ། | ཐོ་བཀོད་པ་ + ཐག་གཅོད་འབད་མི་ ops | `sns governance unfreeze --selector <IH58> --ticket <id>` ལག་ལེན་འཐབ། དུས་མཐུན་ཐོ་བཀོད་གནས་རིམ་ དེ་ལས་ GAR/realor diffs ཁྱབ་སྤེལ་འབད། | དེ་འཕྲོ་ལས་ འཁྲུན་ཆོད་བཏོན་པའི་ཤུལ་ལས་ཨིན། |
 
-| Phase | Owner | Action & Evidence | SLA |
-|-------|-------|-------------------|-----|
-| Soft freeze request | Steward / support | File ticket `SNS-DF-<id>` with payment proofs, dispute bond reference, and affected selector(s). | ≤4 h from intake. |
-| Guardian ticket | Guardian board | `sns governance freeze --selector <IH58> --reason <text> --until <ts>` produces signed `GuardianFreezeTicketV1`. Store ticket JSON under `artifacts/sns/guardian/<id>.json`. | ≤30 min ACK, ≤2 h execution. |
-| Council ratification | Governance council | Approve or reject freezes, document decision link to guardian ticket and dispute bond digest. | Next council session or asynchronous vote. |
-| Arbitration panel | Compliance + steward | Convene 7-juror panel (per roadmap) with hashed ballots submitted via `sns governance dispute ballot`. Attach anonymised vote receipts to incident packet. | Verdict ≤7 days after bond deposit. |
-| Appeal | Guardian + council | Appeals double the bond and repeat the juror process; record Norito manifest `DisputeAppealV1` and reference primary ticket. | ≤10 days. |
-| Unfreeze & remediation | Registrar + resolver ops | Execute `sns governance unfreeze --selector <IH58> --ticket <id>`, update registrar status, and propagate GAR/resolver diffs. | Immediately after verdict. |
-
-Emergency canons (guardian-triggered freezes ≤72 h) follow the same flow but
-require retroactive council review and a transparency note under
+ཛ་དྲག་གི་ཁྲིམས་ལུགས་ (gaurdian-triggered གྱང་ཁོག་ཚུ་ ≤72h) འདི་ གཅིག་མཚུངས་སྦེ་ཡོད་རུང་ དེ་འབདཝ་ད་
+གཤམ་གསལ་གྱི་ གྲོས་གཞི་བསྐྱར་ཞིབ་དང་ དྭངས་གསལ་གྱི་ དྲན་ཐོ་དགོཔ་ཨིན།
 `docs/source/sns/regulatory/`.
 
-### 4.5 Resolver & Gateway Propagation
+### ༤.༥ སྒྲ་དབྱངས་དང་སྒོ་ལམ།
 
-1. **Event hook:** Every registry event emits to the resolver event stream
-   (`tools/soradns-resolver` SSE). Resolver ops subscribe and record diffs via
-   the transparency tailer (`scripts/telemetry/run_soradns_transparency_tail.sh`).
-2. **GAR template update:** Gateways must update GAR templates referenced by
-   `canonical_gateway_suffix()` and re-sign the `host_pattern` list. Store diffs
+1. **Vevent hook:** ཐོ་བཀོད་ཀྱི་བྱུང་ལས་རེ་རེ་གིས་ ཐག་གཅོད་འབད་མི་བྱུང་ལས་རྒྱུན་ལམ་ལུ་ བཏོནམ་ཨིན།
+   (I 18NI00000117X ཨེས་ཨེསི་ཨེ)། སེལ་མི་ ཨོཔ་ཚུ་གིས་ བརྒྱུད་དེ་ ཐོ་བཀོད་དང་ ཐོ་བཀོད་ཚུ་ བརྒྱུད་དེ་ཨིན།
+   དྭངས་གསལ་གྱི་སྨན་བཅོས་ (`scripts/telemetry/run_soradns_transparency_tail.sh`).
+2. **GAR ཊེམ་པེལེཊི་དུས་མཐུན་:** གཱེཊི་ཝེ་ཚུ་གིས་ གཞི་བསྟུན་འབད་ཡོད་པའི་ ཇི་ཨར་ཊེམ་པེལེཊི་ཚུ་དུས་མཐུན་བཟོ་དགོ།
+   `canonical_gateway_suffix()` དང་ I18NI000000120X ཐོ་ཡིག་འདི་ལོག་མིང་རྟགས་བཀོད་དགོ། ཚོང་ཁང་གི་ཁྱད་པར་ཚུ།
    in `artifacts/sns/gar/<date>.patch`.
-3. **Zonefile publication:** Use the zonefile skeleton described in
-   `roadmap.md` (name, ttl, cid, proof) and push it to Torii/SoraFS. Archive the
-   Norito JSON under `artifacts/sns/zonefiles/<name>/<version>.json`.
-4. **Transparency check:** Run `promtool test rules dashboards/alerts/tests/soradns_transparency_rules.test.yml`
-   to ensure alerts remain green. Attach the Prometheus text output to the
-   weekly transparency report.
-5. **Gateway audit:** Record `Sora-*` header samples (cache policy, CSP, GAR
-   digest) and attach them to the governance log so operators can prove that the
-   gateway served the new name with the intended guardrails.
+3. **Zonefile དཔར་བསྐྲུན་:** ནང་གསལ་བཀོད་འབད་ཡོད་པའི་ས་ཁོངས་ཡིག་སྣོད་ཀྱི་ཀེང་རུས་ལག་ལེན་འཐབ།
+   I18NI0000012X (name, ttl, cid, བདེན་དཔང་) དང་ I18NT000000014X/SoraFS ལུ་བསྐུལ་མ་འབད། གཏན་མཛོད་འབད་ནི།
+   Norito `artifacts/sns/zonefiles/<name>/<version>.json` འོག་ལུ་ JSON.
+4. **ཕན་ཚུན་པར་བརྟག་དཔྱད།:** `promtool test rules dashboards/alerts/tests/soradns_transparency_rules.test.yml` གཡོག་བཀོལ།
+   ཉེན་བརྡ་ཚུ་ ལྗང་ཁུ་སྦེ་སྡོད་ཚུགསཔ་བཟོ་ནིའི་དོན་ལུ་ཨིན། Prometheus ཚིག་ཡིག་ཨའུཊི་པུཊི་འདི་ ལུ་མཉམ་སྦྲགས་འབད།
+   བདུན་ཕྲག་རེའི་དྭངས་གསལ་སྙན་ཞུ།
+5. **གེ་ཊི་ཝེ་རྩིས་ཞིབ་:** དྲན་ཐོ་ `Sora-*` མགོ་ཡིག་དཔེ་ཚད་ (འདྲ་མཛོད་སྲིད་བྱུས་, CSP, GAR
+   བཞུ་བཅོས་འབད་ཞིནམ་ལས་ གཞུང་སྐྱོང་དྲན་ཐོ་ནང་ མཐུད་དེ་ཡོདཔ་ལས་ བཀོལ་སྤྱོད་པ་ཚུ་གིས་ དེ་ཡོདཔ་སྦེ་ བདེན་ཁུངས་བསྐྱལ་ཚུགས།
+   འཛུལ་སྒོ་འདི་གིས་ མིང་གསརཔ་འདི་ དམིགས་གཏད་ཅན་གྱི་སྲུང་སྐྱོབ་པ་ཚུ་དང་གཅིག་ཁར་ ཕྱག་ཞུ་ཡོདཔ་ཨིན།
 
-## 5. Telemetry & Reporting
+## 5. བརྒྱུད་འཕྲིན་དང་སྙན་ཞུ།
 
-| Signal | Source | Description / Action |
-|--------|--------|----------------------|
-| `sns_registrar_status_total{result,suffix}` | Torii registrar handlers | Success/error counter for registrations, renewals, freezes, transfers; alerts when `result="error"` spikes per suffix. |
-| `torii_request_duration_seconds{route="/v1/sns/*"}` | Torii metrics | Latency SLOs for API handlers; feed dashboards built from `torii_norito_rpc_observability.json`. |
-| `soradns_bundle_proof_age_seconds` & `soradns_bundle_cid_drift_total` | Resolver transparency tailer | Detect stale proofs or GAR drift; guardrails defined in `dashboards/alerts/soradns_transparency_rules.yml`. |
-| `sns_governance_activation_total` | Governance CLI | Counter incremented whenever a charter/addendum activates; used to reconcile council decisions vs. published addenda. |
-| `guardian_freeze_active` gauge | Guardian CLI | Tracks soft/hard freeze windows per selector; page SRE if value stays `1` beyond declared SLA. |
-| KPI annex dashboards | Finance / Docs | Monthly rollups published alongside regulatory memos; the portal embeds them via [SNS KPI dashboard](./kpi-dashboard.md) so stewards and regulators can access the same Grafana view. |
+| བརྡ་རྟགས་ | ཡོང་ཁུངས། | འགྲེལ་བཤད་ / བྱ་བ་ |
+|--------------------------------------------------- |
+| `sns_registrar_status_total{result,suffix}` | I18NT0000015X ཐོ་བཀོད་འགོ་དཔོན་ | ཐོ་བཀོད་དང་ བསྐྱར་གསོ་ གྱང་ཤུགས་ སྤོ་བཤུད་ཚུ་གི་དོན་ལུ་ མཐར་འཁྱོལ་/འཛོལ་བ་ གྱངས་ཁ་རྐྱབ། `result="error"` རྗེས་འཇུག་རེ་རེའི་ནང་ ཉེན་བརྡ། |
+| `torii_request_duration_seconds{route="/v1/sns/*"}` | Torii མེ་ཊིགས། | ཨེ་པི་ཨའི་ འཛིན་སྐྱོང་པ་ཚུ་གི་དོན་ལུ་ འཕྲེད་ཐིག་ཨེསི་ཨེལ་ཨོ་ཚུ་; `torii_norito_rpc_observability.json` ལས་བཟོ་ཡོད་པའི་ ཌེཤ་བོརཌ་ཚུ་ ཕིཌ་ཕིཌ་འབད། |
+| `soradns_bundle_proof_age_seconds` & `soradns_bundle_cid_drift_total` | གཤེར་ཁུ་དྭངས་གསལ་སློབ་སྦྱོང་། | རླངསམ་གི་བདེན་ཁུངས་ཡང་ན་ ཇི་ཨར་ ཌིརཕཊ་ ཤེས་རྟོགས་འབད་ནི། `dashboards/alerts/soradns_transparency_rules.yml` ནང་ངེས་ཚིག་བཀོད་ཡོད། |
+| `sns_governance_activation_total` | གཞུང་སྐྱོང་ CLI | ཆོག་ཐམ་/ཁ་སྐོང་/ཁ་སྐོང་གིས་ ཤུགས་ལྡན་བཟོ་བའི་སྐབས་ ཡར་འཕར་འབད་ཡོདཔ། ཚོགས་སྡེའི་གྲོས་ཐག་ཚུ་ དང་ དཔར་བསྐྲུན་འབད་ཡོད་པའི་ ཁ་སྐོང་ཚུ་ མཐུན་སྒྲིག་འབད་ནི་ལུ་ ལག་ལེན་འཐབ་ཨིན། |
+| `guardian_freeze_active` ཚད་འཇལ་ | གཱར་ཌི་ཡན་ སི་ཨེལ་ཨའི་ | སེལ་འཐུ་འབད་མི་རེ་ལུ་ མཉེན་ཆས་/ཧརཌི་ གྱང་ཤུགས་སྒོ་སྒྲིག་ཚུ་ འཚོལ་ཞིབ་འབདཝ་ཨིན། ཤོག་ལེབ་ SRE གནས་གོང་འདི་ `1` ལས་གསལ་བསྒྲགས་འབད་ཡོད་པའི་ཨེསི་ཨེལ་ཨེ་ལས་ལྷག་སྟེ་སྡོད་པ་ཅིན། |
+| KPI ཟུར་དེབ་བཀོད་སྒྲིག | དངུལ་རྩིས་ / ཡིག་ཆ་ | ཟླ་རིམ་གྱི་བསྐོར་ར་ཚུ་ ཁྲིམས་ལུགས་ཀྱི་དྲན་ཐོ་དང་གཅིག་ཁར་ དཔར་བསྐྲུན་འབད་ཡོདཔ་ཨིན། དྲྭ་ཚིགས་འདི་གིས་ [SNS KPI dashboard ](I18NU000000033X) བརྒྱུད་དེ་ བཙུགསཔ་ཨིན་ དེ་འབདཝ་ལས་ steaptupers དང་ ལྟ་རྟོག་པ་ཚུ་གིས་ I18NT000000003X མཐོང་སྣང་འདི་ འཐོབ་ཚུགསཔ་ཨིན། |
 
-## 6. Evidence & Audit Requirements
+## 6. སྒྲུབ་བྱེད་དང་རྩིས་ཞིབ་དགོས་མཁོ།
 
-| Action | Evidence to archive | Storage |
-|--------|--------------------|---------|
-| Charter / policy change | Signed Norito manifest, CLI transcript, KPI diff, steward acknowledgement. | `artifacts/sns/governance/<proposal-id>/` + `docs/source/sns/governance_addenda/`. |
-| Registration / renewal | `RegisterNameRequestV1` payload, `RevenueAccrualEventV1`, payment proof. | `artifacts/sns/payments/<tx>.json`, registrar API logs. |
-| Auction | Commit/reveal manifests, randomness seed, winner calculation spreadsheet. | `artifacts/sns/auctions/<name>/`. |
-| Freeze / unfreeze | Guardian ticket, council vote hash, incident log URL, customer comms template. | `artifacts/sns/guardian/<ticket>/`, `incident/<date>-sns-*.md`. |
-| Resolver propagation | Zonefile/GAR diff, tailer JSONL excerpt, Prometheus snapshot. | `artifacts/sns/resolver/<date>/` + transparency reports. |
-| Regulatory intake | Intake memo, deadline tracker, steward acknowledgement, KPI change summary. | `docs/source/sns/regulatory/<jurisdiction>/<cycle>.md`. |
+| བྱ་བ་ | གཏན་མཛོད་ཀྱི་སྒྲུབ་བྱེད། | གསོག་འཇོག་ |
+|--------------------------------------------- |
+| བཅའ་ཁྲིམས་ / སྲིད་བྱུས་བསྒྱུར་བཅོས་ | མཚན་རྟགས་བཀོད་ཡོདཔ། Norito གསལ་སྟོན་འབདཝ་ཨིན། | `artifacts/sns/governance/<proposal-id>/` + `docs/source/sns/governance_addenda/`. |
+| ཐོ་འགོད་ / བསྐྱར་གསོ་ | `RegisterNameRequestV1` གླ་ཆ་, `RevenueAccrualEventV1`, དངུལ་སྤྲོད་སྒྲུབ་པ། | `artifacts/sns/payments/<tx>.json`, ཐོ་བཀོད་ཨེ་པི་ཨའི་ དྲན་ཐོ་ཚུ། |
+| རིན་བསྡུར་ | གསལ་སྟོན་/གསལ་སྟོན་ཚུ་ གང་བྱུང་ས་བོན་ རྒྱལ་ཁ་ཐོབ་པའི་རྩིས་ཤོག་རྒྱ་བཀོད། | `artifacts/sns/auctions/<name>/`. |
+| གྱང་ཁོག་ / གྱང་ཤུགས་ | གཱར་ཌི་ཡན་གྱི་ཤོག་འཛིན་ ཚོགས་སྡེ་གི་ཚོགས་རྒྱན་ ཧ་ཤི་ བྱུང་རྐྱེན་གྱི་ URL, ཚོང་མགྲོན་པའི་ ཊེམ་པེལེཊ་ . | `artifacts/sns/guardian/<ticket>/`, `incident/<date>-sns-*.md`. |
+| ཐག་གཅོད་འབད་མི་ ཁྱབ་སྤེལ་ | ས་ཁོངས་ཡིག་སྣོད་/GAR diff, lessefer JSONL exserp, Prometheus པར་ལེན་འབད། | `artifacts/sns/resolver/<date>/` + དྭངས་གསལ་སྙན་ཞུ། |
+| ལམ་ལུགས་ནང་བཙུགས་ནི། | ནང་འདྲེན་གྱི་དྲན་འཛིན་དང་ དུས་ཚོད་རྗེས་སོར་འབད་མི་ བདག་འཛིན་པ་ངོས་ལེན་ ཀེ་པི་ཨའི་ བསྒྱུར་བཅོས་བཅུད་དོན། | `docs/source/sns/regulatory/<jurisdiction>/<cycle>.md`. |
 
-## 7. Phase Gate Checklist
+## 7. དུས་རིམ་གྱི་སྒོ་ཞིབ་ཐོ་ཡིག།
 
-| Phase | Exit criteria | Evidence bundle |
-|-------|---------------|-----------------|
-| N0 — Closed beta | SN-1/SN-2 registry schema, manual registrar CLI, guardianship drill complete. | Charter motion + steward ACK, registrar dry-run logs, resolver transparency report, drill entry in `ops/drill-log.md`. |
-| N1 — Public launch | Auctions + fixed-price tiers live for `.sora`/`.nexus`, self-service registrar, resolver auto-sync, billing dashboards. | Pricing sheet diff, registrar CI results, payment/KPI annex, transparency tailer output, incident rehearsal notes. |
-| N2 — Expansion | `.dao`, reseller APIs, dispute portal, steward scorecards, analytics dashboards. | Portal screenshots, dispute SLA metrics, steward scorecard exports, updated governance charter referencing reseller policies. |
+| དུས་རིམ་ | ཁྱད་ཚད་ | སྒྲུབ་བྱེད་ཀྱི་བང་རིམ། |
+|---------------------------------------------------------- |
+| N0 — ཁ་བསྡམས་པའི་བེ་ཊ་ | SN-1/SN-2 ཐོ་བཀོད་ལས་འཆར་ ལག་ཐོག་ཐོ་བཀོད་འབད་མི་ CLI, བཀག་འཛིན་གྱི་ སྦྱོང་བརྡར་འདི་ མཇུག་བསྡུ། | བཅའ་ཁྲིམས་འགུལ་སྐྱོད་ + མཐུན་སྒྲིག་ཨེ་སི་ཀེ་ ཐོ་བཀོད་སྐམ་པའི་དྲན་ཐོ་ དྭངས་གསལ་སྙན་ཞུ་ དྭངས་གསལ་སྙན་ཞུ། |
+| N1 — མི་མང་འགོ་འཛུགས་ | རིན་བསྡུར་ + གོང་ཚད་གཏན་འཇགས་རིམ་པ་ཚུ་ I18NI000000147X/`.nexus`, རང་དོན་ཞབས་ཏོག་ཐོ་བཀོད་ སེལ་མི་རང་རྐྱང་མཉམ་འབྱུང་ བྱུང་འཛིན་ ཌེཤ་བོརཌ་ཚུ་གི་དོན་ལུ་ ཐད་རི་འབའ་རི་ ཐད་རི་འབའ་རི་སྦེ་སྡོདཔ་ཨིན། | གོང་ཚད་ཤོག་ལེབ་ཀྱི་ཁྱད་པར་ ཐོ་བཀོད་འགོ་དཔོན་ སི་ཨའི་གྲུབ་འབྲས་ དངུལ་སྤྲོད་/ཀེ་པི་ཨའི་ ཟུར་དེབ་ དྭངས་གསལ་གྱི་ ལེགས་སྨོན་གྱི་ ལེགས་སྨོན་ བྱུང་རྐྱེན་བསྐྱར་སྦྱོང་དྲན་ཐོ། |
+| N2 — རྒྱ་བསྐྱེད་ | `.dao`, ཚོང་པ་ཨེ་པི་ཨའེ་, རྩོད་རྙོགས་ཀྱི་དྲྭ་ཁྱིམ། བདག་འཛིན་གྱི་སྐུགས་ཤོག་བྱང་། དབྱེ་དཔྱད་ཀྱི་བརྡ་ཁྱབ་བཀོད་སྒྲིག། | དྲྭ་ཚིགས་ཀྱི་གསལ་གཞི་དང་ རྩོད་རྙོགས་ཨེསི་ཨེལ་ཨེ་མེ་ཊིགསི་ བདག་འཛིན་གྱི་སྐུགས་ཕྱིར་འདྲེན་ཚུ་ བསྐྱར་ཚོང་པ་ཚུ་ལུ་གཞི་བསྟུན་འབད་མི་ གཞུང་སྐྱོང་བཅའ་ཁྲིམས་ དུས་མཐུན་བཟོ་ཡོདཔ་ཨིན། |
 
-Phase exits require recorded tabletop drills (registration happy path, freeze,
-resolver outage) with artefacts attached to `ops/drill-log.md`.
+གོ་རིམ་ལས་ཐོན་མི་ཚུ་ལུ་ ཐོ་བཀོད་འབད་ཡོད་པའི་ ཐབ་ཤིང་སྦྱོང་བརྡར་ཚུ་ (ཐོ་བཀོད་དགའ་སྤྲོ་ཅན་གྱི་ལམ་ གྱང་ཤུགས་དང་ གྱང་ཁོག་ཚུ་ དགོཔ་ཨིན།
+desicer freas) `ops/drill-log.md` ལུ་མཉམ་སྦྲགས་འབད་དེ་ཡོད་པའི་ ཅ་ཆས་ཚུ་དང་གཅིག་ཁར་ཡོདཔ་ཨིན།
 
-## 8. Incident Response & Escalation
+## 8. བྱུང་རྐྱེན་ལན་འདེབས་དང་ཡར་འཛེལ།
 
-| Trigger | Severity | Immediate owner | Mandatory actions |
+| ཊི་རི་གར་ | ཚབས་ཆེན། | འཕྲལ་མགྱོགས་རང་བདག་ | མཁོ་བའི་བྱ་སྤྱོད་ |
 |---------|----------|-----------------|-------------------|
-| Resolver/GAR drift or stale proofs | Sev 1 | Resolver SRE + guardian board | Page resolver on-call, capture tailer output, decide whether to freeze affected names, post status update every 30 min. |
-| Registrar outage, billing failure, or widespread API errors | Sev 1 | Registrar duty manager | Halt new auctions, switch to manual CLI, notify stewards/treasury, attach Torii logs to incident doc. |
-| Single-name dispute, payment mismatch, or customer escalation | Sev 2 | Steward + support lead | Collect payment proofs, determine if soft freeze needed, respond to requester within SLA, log outcome in dispute tracker. |
-| Compliance audit finding | Sev 2 | Compliance liaison | Draft remediation plan, file memo under `docs/source/sns/regulatory/`, schedule follow-up council session. |
-| Drill or rehearsal | Sev 3 | Program PM | Execute scripted scenario from `ops/drill-log.md`, archive artefacts, label gaps as roadmap tasks. |
+| སེལ་ཆས་/GAR drift ཡང་ན་ རྙིང་པའི་བདེན་ཁུངས་ཚུ། | སེ་བ༡ | སེལ་བྱེད་ SRE + ལྟ་རྟོག་ཚོགས་ཆུང་ | ཤོག་ལེབ་སེལ་བྱེད་ཨོན་འབོད་བརྡ་ བཟུང་བའི་ཐོན་འབྲས་ གིས་ གནོད་སྐྱོན་ཅན་གྱི་མིང་ཚུ་ གྱང་ཤུགས་ཅན་བཟོ་ནི་ཨིན་ན་མེན་ན་ ཐག་བཅད། |
+| ཐོ་བཀོད་མེདཔ་དང་ དངུལ་འཛིན་འཐུས་ཤོར་ ཡང་ན་ ཁྱབ་ཆེཝ་སྦེ་ ཨེ་པི་ཨའི་ འཛོལ་བ་ཚུ་ | སེ་བ༡ | ཐོ་བཀོད་འགན་འཛིན་འགན་འཛིན་ | རིན་བསྡུར་གསརཔ་ ལག་ཐོག་སི་ཨེལ་ཨའི་ ལུ་སོར་བསྒྱུར་འབད། བཀག་འཛིན་དང་ དངུལ་ཁང་ལུ་ བརྡ་དོན་སྤྲོད་དགོ། |
+| མིང་རྐྱང་པའི་རྩོད་རྙོག་དང་ དངུལ་སྤྲོད་མ་འགྲིགས་པ་ ཡང་ན་ ཚོང་མགྲོན་པའི་ཡར་འཕར་ | སེབ་༢ | སི་ཊི་ཝརཌ་ + རྒྱབ་སྐྱོར་འགོ་ཁྲིད་ | དངུལ་སྤྲོད་ཀྱི་བདེན་ཁུངས་བསྡུ་སྒྲིག་འབད་ནི། འཇམ་པོ་སྦེ་དགོཔ་ཨིན་ན་མེན་ན་ གཏན་འབེབས་བཟོ་ནི། ཨེསི་ཨེལ་ཨེ་ནང་འཁོད་ལུ་ ཞུ་བ་འབད་མི་ལུ་ལན་གསལ་འབད་ནི། རྩོད་གཞི་བརྟག་ཞིབ་ཀྱི་གྲུབ་འབྲས་འདི་ ལོག་ཐོབ། |
+| བསྟར་སྤྱོད་རྩིས་ཞིབ་ཤེས་ཡོན། | སེབ་༢ | མཐུན་སྒྲིག་ཅན་གྱི་འབྲེལ་བ། | བཏོག་བཅོས་འཆར་གཞི་ ཟིན་བྲིས་ I18NI000000151X གི་འོག་ལུ་ཡོད་པའི་ཡིག་སྣོད་ཀྱི་བརྡ་དོན། |
+| དྲིལ་ཡང་ན་ བསྐྱར་སྦྱོང་། | སེ་བ༣ | ལས་རིམ་ PM | `ops/drill-log.md` ལས་ ཡིག་ཐོག་བཀོད་པའི་གནས་སྟངས་འདི་ གཏན་མཛོད་ཀྱི་ཅ་ཆས་ཚུ་ལས་ ལག་ལེན་འཐབ་དགོ། |
 
-All incidents must create `incident/YYYY-MM-DD-sns-<slug>.md` with ownership
-tables, command logs, and references to the evidence produced throughout this
-playbook.
+བྱུང་རྐྱེན་ཆ་མཉམ་གྱིས་ `incident/YYYY-MM-DD-sns-<slug>.md` བདག་དབང་དང་མཉམ་དུ་བཟོ་དགོ།
+ཐིག་ཁྲམ་དང་ བརྡ་བཀོད་དྲན་ཐོ་ དེ་ལས་ འདི་ནང་ལུ་ཐོན་པའི་སྒྲུབ་བྱེད་ཚུ་ལུ་ གཞི་བསྟུན་འབདཝ་ཨིན།
+རྩེད་དེབ།
 
-## 9. References
+## 9. དཔྱད་གཞི།
 
 - [`registry-schema.md`](./registry-schema.md)
-- [`registrar-api.md`](./registrar-api.md)
-- [`address-display-guidelines.md`](./address-display-guidelines.md)
+- [I18NI0000155X](./registrar-api.md)
+- [I18NI0000156X](./address-display-guidelines.md)
 - [`docs/account_structure.md`](../../../account_structure.md)
 - [`docs/source/soradns/deterministic_hosts.md`](../../../source/soradns/deterministic_hosts.md)
 - [`docs/source/reports/soradns_transparency.md`](../../../source/reports/soradns_transparency.md)
 - `ops/drill-log.md`
-- `roadmap.md` (SNS, DG, ADDR sections)
+- `roadmap.md` (SNS, DG, ADDR དབྱེ་ཚད།)
 
-Keep this playbook updated whenever charter wording, CLI surfaces, or telemetry
-contracts change; roadmap entries referencing `docs/source/sns/governance_playbook.md`
-should always match the latest revision.
+ཆོག་ཐམ་གྱི་ཚིག་དང་ སི་ཨེལ་ཨའི་ ཁ་ཐོག་ ཡང་ན་ ཊེ་ལི་མི་ཊི་ཚུ་ ག་དུས་འབད་རུང་ རྩེད་དེབ་འདི་ དུས་མཐུན་བཟོ་དགོ།
+གན་རྒྱ་ཚུ་བསྒྱུར་བཅོས་འབད། ལམ་གྱི་ས་ཁྲ་ཚུ་ I18NI0000162X ལུ་གཞི་བསྟུན་འབདཝ་ཨིན།
+རྟག་བུ་རང་ བསྐྱར་ཞིབ་གསརཔ་འདི་དང་མཐུན་དགོ།

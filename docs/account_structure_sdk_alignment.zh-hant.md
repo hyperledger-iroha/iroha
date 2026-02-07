@@ -7,39 +7,40 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 164bd373091ae3280f9f90fcfd915a90088b0c79b8f3759ffd2548edb64d0a90
 source_last_modified: "2026-01-28T17:11:30.632934+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# IH58 Rollout Note for SDK & Codec Owners
+# 針對 SDK 和編解碼器所有者的 IH58 推出說明
 
-Teams: Rust SDK, TypeScript/JavaScript SDK, Python SDK, Kotlin SDK, Codec tooling
+團隊：Rust SDK、TypeScript/JavaScript SDK、Python SDK、Kotlin SDK、編解碼器工具
 
-Context: `docs/account_structure.md` now reflects the shipping IH58 account ID
-implementation. Please align SDK behaviour and tests with the canonical spec.
+上下文：`docs/account_structure.md` 現在反映運輸 IH58 帳戶 ID
+實施。請將 SDK 行為和測試與規範規範保持一致。
 
-Key references:
-- Address codec + header layout — `docs/account_structure.md` §2
-- Curve registry — `docs/source/references/address_curve_registry.md`
-- Norm v1 domain handling — `docs/source/references/address_norm_v1.md`
-- Fixture vectors — `fixtures/account/address_vectors.json`
+主要參考資料：
+- 地址編解碼器 + 標頭佈局 — `docs/account_structure.md` §2
+- 曲線註冊表 — `docs/source/references/address_curve_registry.md`
+- 規範 v1 域處理 — `docs/source/references/address_norm_v1.md`
+- 夾具向量 — `fixtures/account/address_vectors.json`
 
-Action items:
-1. **Canonical output:** `AccountId::to_string()`/Display MUST emit IH58 only
-   (no `@domain` suffix). Canonical hex is for debugging (`0x...`).
-2. **Accepted inputs:** parsers MUST accept IH58 (preferred), `sora` compressed,
-   and canonical hex (`0x...` only; bare hex is rejected). Inputs MAY carry an
-   `@<domain>` suffix for routing hints; `<label>@<domain>` aliases require a
-   resolver. Raw `public_key@domain` (multihash hex) remains supported.
-3. **Resolvers:** domainless IH58/sora parsing requires a domain-selector
-   resolver unless the selector is implicit default (use the configured default
-   domain label). UAID (`uaid:...`) and opaque (`opaque:...`) literals require
-   resolvers.
-4. **IH58 checksum:** use Blake2b-512 over `IH58PRE || prefix || payload`, take
-   the first 2 bytes. Compressed alphabet base is **105**.
-5. **Curve gating:** SDKs default to Ed25519-only. Provide explicit opt-in for
-   ML‑DSA/GOST/SM (Swift build flags; JS/Android `configureCurveSupport`). Do
-   not assume secp256k1 is enabled by default outside Rust.
-6. **No CAIP-10:** there is no shipped CAIP‑10 mapping yet; do not expose or
-   depend on CAIP‑10 conversions.
+行動項目：
+1. **規範輸出：** `AccountId::to_string()`/顯示器必須僅發出 IH58
+   （無 `@domain` 後綴）。規範十六進制用於調試 (`0x...`)。
+2. **接受的輸入：**解析器必須接受 IH58（首選），`sora` 壓縮，
+   和規範十六進制（僅限 `0x...`；裸十六進制被拒絕）。輸入可以攜帶
+   `@<domain>` 路由提示後綴； `<label>@<domain>` 別名需要
+   解析器。原始 `public_key@domain`（多重哈希十六進制）仍然受支持。
+3. **解析器：**無域IH58/sora解析需要域選擇器
+   解析器，除非選擇器是隱式默認的（使用配置的默認值
+   域標籤）。 UAID (`uaid:...`) 和不透明 (`opaque:...`) 文字需要
+   解析器。
+4. **IH58校驗和：**使用Blake2b-512 over `IH58PRE || prefix || payload`，取
+   前 2 個字節。壓縮字母基數為 **105**。
+5. **曲線選通：** SDK 默認僅適用於 Ed25519。提供明確的選擇加入
+   ML‑DSA/GOST/SM（Swift 構建標誌；JS/Android `configureCurveSupport`）。做
+   不假設 secp256k1 在 Rust 之外默認啟用。
+6. **無 CAIP-10：** 尚未發布 CAIP-10 映射；不要暴露或
+   取決於 CAIP-10 轉換。
 
-Please confirm once the codecs/tests are updated; open questions can be tracked
-in the account-addressing RFC thread.
+編解碼器/測試更新後請確認；可以跟踪未解決的問題
+在帳戶尋址 RFC 線程中。

@@ -7,6 +7,7 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 6cd4da7e590d581719ed2607994d7d9eb16d153fbd06f85655d0da37c727853a
 source_last_modified: "2025-12-29T18:16:35.085419+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
@@ -15,38 +16,38 @@ translation_last_reviewed: 2026-02-07
 
 # SoraNet GAR Intake Template
 
-Use this intake form when requesting a GAR action (purge, ttl override, rate
-ceiling, moderation directive, geofence, or legal hold). The submitted form
-should be pinned alongside the `gar_controller` outputs so audit logs and
-receipts cite the same evidence URIs.
+GAR လုပ်ဆောင်ချက်ကို တောင်းဆိုသည့်အခါ ဤစားသုံးမှုပုံစံကို အသုံးပြုပါ (ရှင်းလင်းခြင်း၊ ttl ထပ်ရေးခြင်း၊ အဆင့်သတ်မှတ်ပါ။
+မျက်နှာကျက်၊ ထိန်းညှိမှု ညွှန်ကြားချက်၊ ဘူမိနယ်မြေ သို့မဟုတ် တရားဝင် ကိုင်ဆောင်ထားမှု)။ တင်သွင်းလွှာ
+`gar_controller` outputs များနှင့်အတူ တွဲထိုးထားသင့်သည်၊ ထို့ကြောင့် စာရင်းစစ်မှတ်တမ်းများနှင့်
+ပြေစာများသည် တူညီသောအထောက်အထား URI များကိုကိုးကားသည်။
 
-| Field | Value | Notes |
-|-------|-------|-------|
-| Request ID |  | Guardian/ops ticket id. |
-| Requested by |  | Account + contact. |
-| Date/time (UTC) |  | When the action should start. |
-| GAR name |  | e.g., `docs.sora`. |
-| Canonical host |  | e.g., `docs.gw.sora.net`. |
-| Action |  | `ttl_override` / `rate_limit_override` / `purge_static_zone` / `geo_fence` / `legal_hold` / `moderation`. |
-| TTL override (seconds) |  | Required only for `ttl_override`. |
-| Rate ceiling (RPS) |  | Required only for `rate_limit_override`. |
-| Allowed regions |  | ISO region list when requesting `geo_fence`. |
-| Denied regions |  | ISO region list when requesting `geo_fence`. |
-| Moderation slugs |  | Match the GAR moderation directives. |
-| Purge tags |  | Tags that must be purged before serving. |
-| Labels |  | Machine labels (incident id, drill name, pop scope). |
-| Evidence URIs |  | Logs/dashboards/specs backing the request. |
-| Audit URI |  | Per-pop audit URI if different from defaults. |
-| Requested expiry |  | Unix timestamp or RFC3339; leave blank for default. |
-| Reason |  | User-facing explanation; appears in receipts and dashboards. |
-| Approver |  | Guardian/committee approver for the request. |
+| လယ် | တန်ဖိုး | မှတ်စုများ |
+|---------|------|-------|
+| ID | တောင်းဆိုခြင်း။  | Guardian/ops လက်မှတ် ID။ |
+| တောင်းဆိုထားသည် |  | အကောင့် + ဆက်သွယ်ရန်။ |
+| ရက်စွဲ/အချိန် (UTC) |  | ဘယ်အချိန်မှာ စတင်လုပ်ဆောင်သင့်လဲ။ |
+| GAR အမည် |  | ဥပမာ၊ `docs.sora`။ |
+| Canonical အိမ်ရှင် |  | ဥပမာ၊ `docs.gw.sora.net`။ |
+| အက် |  | `ttl_override` / `rate_limit_override` / `purge_static_zone` / `geo_fence` / `legal_hold` / `moderation` ။ |
+| TTL override (စက္ကန့်များ) |  | `ttl_override` အတွက်သာ လိုအပ်ပါသည်။ |
+| မျက်နှာကျက် (RPS) | အဆင့်သတ်မှတ်  | `rate_limit_override` အတွက်သာ လိုအပ်ပါသည်။ |
+| ဒေသများ|ခွင့်ပြုသည်။  | `geo_fence` တောင်းဆိုသောအခါ ISO ဒေသစာရင်း။ |
+| ဒေသများ |  | `geo_fence` တောင်းဆိုသောအခါ ISO ဒေသစာရင်း။ |
+| မျှော့များ |  | GAR ထိန်းညှိမှုလမ်းညွှန်ချက်များကို ကိုက်ညီပါ။ |
+| တက်ဂ်များ သုတ်သင်ရှင်းလင်းခြင်း |  | မထမ်းဆောင်မီ ရှင်းပစ်ရမည့် တဂ်များ။ |
+| တံဆိပ်များ |  | စက်အညွှန်းများ (မတော်တဆမှု ID၊ တူးဖော်မှုအမည်၊ ပေါ့ပ်နယ်ပယ်)။ |
+| URIs | အထောက်အထားများ  | တောင်းဆိုချက်ကို ထောက်ခံသည့် မှတ်တမ်းများ/ဒိုင်ခွက်များ/သတ်မှတ်ချက်များ။ |
+| URI | စာရင်းစစ်  | ပုံသေများနှင့်မတူပါက Per-pop စစ်ဆေးမှု URI။ |
+| တောင်းဆိုထားသော သက်တမ်းကုန်ဆုံး |  | Unix အချိန်တံဆိပ် သို့မဟုတ် RFC3339; ပုံသေအတွက် ကွက်လပ်ထားပါ။ |
+| အကြောင်းပြချက် |  | အသုံးပြုသူမျက်နှာစာ ရှင်းလင်းချက် ပြေစာများနှင့် ဒက်ရှ်ဘုတ်များတွင် ပေါ်လာသည်။ |
+| ဖော်ကောင် |  | တောင်းဆိုချက်အတွက် အုပ်ထိန်းသူ/ကော်မတီ၏ ခွင့်ပြုချက်။ |
 
-### Submission steps
+### တင်ပြပုံအဆင့်ဆင့်
 
-1. Fill the table and attach it to the governance ticket.
-2. Update the GAR controller config (`policies`/`pops`) with matching
-   `labels`/`evidence_uris`/`expires_at_unix`.
-3. Run `cargo xtask soranet-gar-controller ...` to emit events/receipts.
-4. Drop `gar_controller_summary.json`, `gar_reconciliation_report.json`,
-   `gar_metrics.prom`, and `gar_audit_log.jsonl` into the same ticket. The
-   approver confirms the receipt count matches the PoP list before dispatch.
+1. ဇယားကိုဖြည့်ပြီး အုပ်ချုပ်မှုလက်မှတ်တွင် ပူးတွဲပါရှိသည်။
+2. ကိုက်ညီသော GAR controller config (`policies`/`pops`) ကို အပ်ဒိတ်လုပ်ပါ။
+   `labels`/`evidence_uris`/`expires_at_unix`။
+3. ပွဲများ/ပြေစာများ ထုတ်လွှတ်ရန် `cargo xtask soranet-gar-controller ...` ကို ဖွင့်ပါ။
+4. ချပေး `gar_controller_summary.json`, `gar_reconciliation_report.json`၊
+   `gar_metrics.prom` နှင့် `gar_audit_log.jsonl` တူညီသောလက်မှတ်။ ဟိ
+   အတည်ပြုသူသည် ပြေစာအရေအတွက်ကို ပေးပို့ခြင်းမပြုမီ PoP စာရင်းနှင့် ကိုက်ညီကြောင်း အတည်ပြုသည်။

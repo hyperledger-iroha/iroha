@@ -4,99 +4,97 @@ direction: ltr
 source: docs/portal/docs/sorafs/chunker-registry-rollout-checklist.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: chunker-registry-rollout-checklist
-title: SoraFS chunker registry rollout چیک لسٹ
-sidebar_label: Chunker rollout چیک لسٹ
-description: chunker registry updates کے لیے قدم بہ قدم rollout پلان۔
+identifiant : liste de contrôle du déploiement du registre chunker
+titre : Déploiement du registre du chunker SoraFS ici
+sidebar_label : Déploiement de chunker ici
+description : mises à jour du registre chunker en cours de déploiement
 ---
 
 :::note مستند ماخذ
 :::
 
-# SoraFS registry rollout چیک لسٹ
+# Déploiement du registre SoraFS ici
 
-یہ چیک لسٹ نئے chunker profile یا provider admission bundle کو review سے production
-تک promote کرنے کے لیے درکار مراحل کو capture کرتی ہے جب governance charter
-ratify ہو چکا ہو۔
+Nous avons un profil de chunker et un ensemble d'admissions de fournisseurs ainsi qu'un examen et une production.
+تک promouvoir کرنے کے لیے درکار مراحل کو capturer کرتی ہے جب charte de gouvernance
+ratifier ہو چکا ہو۔
 
-> **Scope:** تمام releases پر لاگو ہے جو
-> `sorafs_manifest::chunker_registry`، provider admission envelopes، یا canonical
-> fixture bundles (`fixtures/sorafs_chunker/*`) میں تبدیلی کریں۔
+> **Portée :** Les versions پر لاگو ہے جو
+> `sorafs_manifest::chunker_registry`, enveloppes d'admission des prestataires, canonique
+> faisceaux de luminaires (`fixtures/sorafs_chunker/*`)
 
-## 1. Pre-flight validation
+## 1. Validation avant vol
 
-1. fixtures دوبارہ generate کریں اور determinism verify کریں:
+1. Les appareils génèrent des éléments et vérifient le déterminisme :
    ```bash
    cargo run --locked -p sorafs_chunker --bin export_vectors
    cargo test -p sorafs_chunker --offline vectors
    ci/check_sorafs_fixtures.sh
    ```
-2. `docs/source/sorafs/reports/sf1_determinism.md` (یا متعلقہ profile report) میں
-   determinism hashes regenerated artifacts سے match کریں۔
-3. یقینی بنائیں کہ `sorafs_manifest::chunker_registry`،
-   `ensure_charter_compliance()` کے ساتھ compile ہوتا ہے، چلائیں:
+2. `docs/source/sorafs/reports/sf1_determinism.md` (rapport de profil یا متعلقہ) میں
+   le déterminisme hache les artefacts régénérés et correspond à
+3. یقینی بنائیں کہ `sorafs_manifest::chunker_registry`,
+   `ensure_charter_compliance()` consiste à compiler un fichier :
    ```bash
    cargo test -p sorafs_manifest --lib chunker_registry::tests::ensure_charter_compliance
    ```
-4. proposal dossier اپڈیٹ کریں:
-   - `docs/source/sorafs/proposals/<profile>.json`
-   - Council minutes entry `docs/source/sorafs/council_minutes_*.md`
-   - Determinism report
+4. dossier de proposition اپڈیٹ کریں :
+   -`docs/source/sorafs/proposals/<profile>.json`
+   - Inscription du procès-verbal du conseil `docs/source/sorafs/council_minutes_*.md`
+   - Rapport de déterminisme
 
-## 2. Governance sign-off
-
-1. Tooling Working Group report اور proposal digest کو
-   Sora Parliament Infrastructure Panel میں پیش کریں۔
-2. approval details کو
+## 2. Approbation de la gouvernance1. Rapport du groupe de travail sur l'outillage et résumé de la proposition ici
+   Panel sur les infrastructures du Parlement de Sora
+2. détails de l'approbation ici
    `docs/source/sorafs/council_minutes_YYYY-MM-DD.md` میں ریکارڈ کریں۔
-3. Parliament-signed envelope کو fixtures کے ساتھ publish کریں:
+3. Enveloppe signée par le Parlement et calendrier publié:
    `fixtures/sorafs_chunker/manifest_signatures.json`.
-4. governance fetch helper کے ذریعے envelope accessible ہونے کی تصدیق کریں:
+4. Aide à la récupération de la gouvernance pour enveloppe accessible en ligne :
    ```bash
    cargo xtask sorafs-fetch-fixture \
      --signatures <url-or-path-to-manifest_signatures.json> \
      --out fixtures/sorafs_chunker
    ```
 
-## 3. Staging rollout
+## 3. Déploiement de la mise en scène
 
-ان steps کی تفصیلی walkthrough کے لیے [staging manifest playbook](./staging-manifest-playbook) دیکھیں۔
+Voici les étapes de la procédure pas à pas pour [playbook du manifeste de mise en scène] (./staging-manifest-playbook) دیکھیں۔
 
-1. Torii کو `torii.sorafs` discovery enabled اور admission enforcement on
-   (`enforce_admission = true`) کے ساتھ deploy کریں۔
-2. approved provider admission envelopes کو staging registry directory میں push کریں
-   جسے `torii.sorafs.discovery.admission.envelopes_dir` refer کرتا ہے۔
-3. discovery API کے ذریعے provider adverts کی propagation verify کریں:
+1. La découverte Torii et `torii.sorafs` a activé l'application de l'admission sur
+   (`enforce_admission = true`) Pour déployer le système
+2. Enveloppes d'admission des prestataires approuvés et répertoire du registre intermédiaire en mode push
+   Voir `torii.sorafs.discovery.admission.envelopes_dir` se référer à کرتا ہے۔
+3. API de découverte pour les annonces des fournisseurs et la vérification de la propagation :
    ```bash
    curl -sS http://<torii-host>/v1/sorafs/providers | jq .
    ```
-4. governance headers کے ساتھ manifest/plan endpoints exercise کریں:
+4. En-têtes de gouvernance et exercice des points finaux du manifeste/plan :
    ```bash
    sorafs-fetch --plan fixtures/chunk_fetch_specs.json \
      --gateway-provider "...staging config..." \
      --gateway-manifest-id <manifest-hex> \
      --gateway-chunker-handle sorafs.sf1@1.0.0
    ```
-5. telemetry dashboards (`torii_sorafs_*`) اور alert rules سے نئے profile کی
-   رپورٹنگ بغیر errors کے confirm کریں۔
+5. tableaux de bord de télémétrie (`torii_sorafs_*`) et règles d'alerte et profil de profil
+   رپورٹنگ بغیر erreurs کے confirmer کریں۔
 
-## 4. Production rollout
+## 4. Déploiement de la production1. étapes de préparation pour la production des nœuds Torii et répétition
+2. fenêtre d'activation (date/heure, délai de grâce, plan de restauration) par l'opérateur et par le SDK
+   les chaînes پر annoncent کریں۔
+3. Release PR merge ici :
+   - luminaires mis à jour et enveloppe
+   - modifications de la documentation (références de charte, rapport de déterminisme)
+   - feuille de route/actualisation du statut
+4. étiquette de sortie pour les artefacts signés et la provenance et les archives
 
-1. staging steps کو production Torii nodes پر repeat کریں۔
-2. activation window (date/time, grace period, rollback plan) کو operator اور SDK
-   channels پر announce کریں۔
-3. release PR merge کریں جس میں شامل ہو:
-   - updated fixtures اور envelope
-   - documentation changes (charter references, determinism report)
-   - roadmap/status refresh
-4. release tag کریں اور signed artifacts کو provenance کے لیے archive کریں۔
+## 5. Audit post-déploiement
 
-## 5. Post-rollout audit
-
-1. rollout کے 24h بعد final metrics (discovery counts, fetch success rate, error
-   histograms) capture کریں۔
-2. `status.md` کو مختصر summary اور determinism report کے link کے ساتھ update کریں۔
-3. follow-up tasks (مثلاً اضافی profile authoring guidance) کو `roadmap.md` میں درج کریں۔
+1. déploiement en 24 heures sur les métriques finales (nombre de découvertes, taux de réussite de la récupération, taux d'erreur)
+   histogrammes) capturent کریں۔
+2. `status.md` pour le résumé et le rapport de déterminisme et le lien pour la mise à jour
+3. tâches de suivi (guides de création de profils pour la création de profils) et `roadmap.md` pour la création de profils

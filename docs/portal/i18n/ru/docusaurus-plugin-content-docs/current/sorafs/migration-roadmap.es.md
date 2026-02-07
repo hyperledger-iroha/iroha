@@ -4,14 +4,16 @@ direction: ltr
 source: docs/portal/docs/sorafs/migration-roadmap.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: "Hoja de ruta de migración de SoraFS"
+title: «Поворотный процесс миграции SoraFS»
 ---
 
-> Adaptado de [`docs/source/sorafs/migration_roadmap.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/migration_roadmap.md).
+> Адаптация [`docs/source/sorafs/migration_roadmap.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/migration_roadmap.md).
 
-# Hoja de ruta de migración de SoraFS (SF-1)
+# Изменение пути миграции SoraFS (SF-1)
 
-Este documento no aplica a la primera release. No hay migraciones pendientes; se mantiene reservado para futuras actualizaciones.
+Этот документ не применим к первому выпуску. Никаких hay migraciones pendientes; будет сохранено для будущих реализаций.

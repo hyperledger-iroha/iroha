@@ -11,51 +11,52 @@ id: chunker-registry-charter
 title: SoraFS Chunker Registry Charter
 sidebar_label: Chunker Registry Charter
 description: Governance charter for chunker profile submissions and approvals.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
-:::
+::: ማስታወሻ ቀኖናዊ ምንጭ
+::
 
 # SoraFS Chunker Registry Governance Charter
 
-> **Ratified:** 2025-10-29 by the Sora Parliament Infrastructure Panel (see
-> `docs/source/sorafs/council_minutes_2025-10-29.md`). Any amendments require a
-> formal governance vote; implementation teams must treat this document as
-> normative until a superseding charter is approved.
+> ** የጸደቀው: *** 2025-10-29 በሶራ ፓርላማ የመሠረተ ልማት ፓነል (ይመልከቱ)
+> `docs/source/sorafs/council_minutes_2025-10-29.md`)። ማንኛውም ማሻሻያ ሀ
+> መደበኛ አስተዳደር ድምጽ; የማስፈጸሚያ ቡድኖች ይህንን ሰነድ እንደ ማስተናገድ አለባቸው
+> የሚተካ ቻርተር እስኪጸድቅ ድረስ መደበኛ።
 
-This charter defines the process and roles for evolving the SoraFS chunker
-registry. It complements the [Chunker Profile Authoring Guide](./chunker-profile-authoring.md) by describing how new
+ይህ ቻርተር SoraFS chunkerን ለማሻሻል ሂደቱን እና ሚናዎችን ይገልጻል
+መዝገብ ቤት. ምን ያህል አዲስ እንደሆነ በመግለጽ የChunker መገለጫ ደራሲ መመሪያን (./chunker-profile-authoring.md) ያሟላል።
 
-## Scope
+## ወሰን
 
-The charter applies to every entry in `sorafs_manifest::chunker_registry` and
-to any tooling that consumes the registry (manifest CLI, provider-advert CLI,
-SDKs). It enforces the alias and handle invariants checked by
+ቻርተሩ በ`sorafs_manifest::chunker_registry` እና በእያንዳንዱ ግቤት ላይ ተፈጻሚ ይሆናል።
+መዝገቡን ለሚበላው ማንኛውም መሳሪያ (የግልጽ CLI፣ አቅራቢ-ማስታወቂያ CLI፣
+ኤስዲኬዎች)። ተለዋጭ ስም እና ተለዋጭ ስሞችን ያስፈጽማል
 `chunker_registry::ensure_charter_compliance()`:
 
-- Profile IDs are positive integers that increase monotonically.
-- The canonical handle `namespace.name@semver` **must** appear as the first
-- Alias strings are trimmed, unique, and do not collide with canonical handles
-  of other entries.
+- የመገለጫ መታወቂያዎች በነጠላነት የሚጨምሩ አዎንታዊ ኢንቲጀር ናቸው።
+- ቀኖናዊው እጀታ I18NI0000009X ** አለበት ** እንደ መጀመሪያው መታየት አለበት
+- የአሊያስ ሕብረቁምፊዎች የተስተካከሉ፣ ልዩ ናቸው እና ከቀኖናዊ እጀታዎች ጋር አይጋጩም።
+  የሌሎች ግቤቶች.
 
-## Roles
+## ሚናዎች
 
-- **Author(s)** – prepare the proposal, regenerate fixtures, and collect the
-  determinism evidence.
-- **Tooling Working Group (TWG)** – validates the proposal using the published
-  checklists and ensures the registry invariants hold.
-- **Governance Council (GC)** – reviews the TWG report, signs the proposal
-  envelope, and approves publication/deprecation timelines.
-- **Storage Team** – maintains the registry implementation and publishes
-  documentation updates.
+- **ደራሲ(ዎች)** - ፕሮፖዛሉን አዘጋጁ፣ መጫዎቻዎችን ማደስ እና መሰብሰብ
+  የመወሰን ማስረጃ.
+- **የመሳሪያ ስራ ቡድን (TWG)** - የታተመውን በመጠቀም ሃሳቡን ያረጋግጣል
+  የማረጋገጫ ዝርዝሮች እና የመመዝገቢያ ልዩነቶች መያዛቸውን ያረጋግጣል።
+- **የመንግስት ምክር ቤት (ጂሲ)** - የTWG ሪፖርትን ይገመግማል፣ ፕሮፖዛሉን ይፈርማል
+  ኤንቨሎፕ፣ እና የሕትመት/የማቋረጫ ጊዜን ያጸድቃል።
+- ** የማከማቻ ቡድን *** - የመመዝገቢያውን አተገባበር ይጠብቃል እና ያትማል
+  የሰነድ ዝማኔዎች.
 
-## Lifecycle Workflow
+## የህይወት ዑደት የስራ ፍሰት
 
-1. **Proposal Submission**
-   - Author runs the validation checklist from the authoring guide and creates
-     a `ChunkerProfileProposalV1` JSON under
+1. **የፕሮፖዛል ማስረከብ**
+   - ደራሲው የማረጋገጫ ዝርዝርን ከደራሲው መመሪያ ያካሂዳል እና ይፈጥራል
+     አንድ `ChunkerProfileProposalV1` JSON ስር
      `docs/source/sorafs/proposals/`.
-   - Include CLI output from:
+   - የ CLI ውፅዓትን ያካትቱ፡
      ```bash
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
@@ -63,61 +64,61 @@ SDKs). It enforces the alias and handle invariants checked by
      cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
        --chunker-profile=<handle> --json-out=-
      ```
-   - Submit a PR containing fixtures, proposal, determinism report, and registry
-     updates.
+   - መገልገያዎችን፣ ፕሮፖዛል፣ የውሳኔ አሰጣጥ ሪፖርት እና መዝገብ የያዘ PR አስገባ
+     ዝማኔዎች.
 
-2. **Tooling Review (TWG)**
-   - Replay the validation checklist (fixtures, fuzz, manifest/PoR pipeline).
-   - Run `cargo test -p sorafs_car --chunker-registry` and ensure
-     `ensure_charter_compliance()` passes with the new entry.
-   - Verify CLI behaviour (`--list-profiles`, `--promote-profile`, streaming
-     `--json-out=-`) reflects the updated aliases and handles.
-   - Produce a short report summarising findings and pass/fail status.
+2. **የመሳሪያ ግምገማ (TWG)**
+   - የማረጋገጫ ዝርዝሩን እንደገና ያጫውቱ (ቋሚዎች ፣ ፉዝ ፣ አንጸባራቂ/PoR ቧንቧ)።
+   - `cargo test -p sorafs_car --chunker-registry` ን ያሂዱ እና ያረጋግጡ
+     `ensure_charter_compliance()` ከአዲሱ ግቤት ጋር ያልፋል።
+   - የCLI ባህሪን ያረጋግጡ (`--list-profiles`፣ `--promote-profile`፣ ዥረት መልቀቅ
+     `--json-out=-`) የተዘመኑትን ተለዋጭ ስሞች እና መያዣዎች ያንፀባርቃል።
+   - ግኝቶችን እና የማለፊያ/ውድቀት ሁኔታን የሚያጠቃልል አጭር ዘገባ አዘጋጅ።
 
-3. **Council Approval (GC)**
-   - Review TWG report and proposal metadata.
-   - Sign the proposal digest (`blake3("sorafs-chunker-profile-v1" || bytes)`)
-     and append signatures to the council envelope maintained alongside the
-     fixtures.
-   - Record the vote outcome in the governance minutes.
+3. **የካውንስል ማጽደቅ (ጂሲ)**
+   - የTWG ሪፖርትን እና የፕሮፖዛል ሜታዳታን ይገምግሙ።
+   - የፕሮፖዛል መፍጫውን ይፈርሙ (`blake3("sorafs-chunker-profile-v1" || bytes)`)
+     እና የምክር ቤቱ ፖስታ ላይ ፊርማዎችን በማያያዝ ከ
+     የቤት እቃዎች.
+   - የምርጫውን ውጤት በአስተዳደር ቃለ ጉባኤ ውስጥ ይመዝግቡ።
 
-4. **Publication**
-   - Merge the PR, updating:
+4. ** ሕትመት ***
+   - PRን ያዋህዱ፣ በማዘመን፡-
      - `sorafs_manifest::chunker_registry_data`.
-     - Documentation (`chunker_registry.md`, authoring/conformance guides).
-     - Fixtures and determinism reports.
-   - Notify operators and SDK teams of the new profile and planned rollout.
+     - ሰነድ (I18NI0000019X፣ የደራሲ/የተግባር መመሪያዎች)።
+     - ቋሚዎች እና ቆራጥነት ሪፖርቶች.
+   - ስለ አዲሱ መገለጫ እና የታቀደ ልቀት ኦፕሬተሮችን እና የኤስዲኬ ቡድኖችን ያሳውቁ።
 
-5. **Deprecation / Sunset**
-   - Proposals that supersede an existing profile must include a dual-publish
-     window (grace periods) and upgrade plan.
-     in the registry and update the migration ledger.
+5. ** መገለጽ / ጀንበር ስትጠልቅ**
+   - ነባር መገለጫን የሚተካ ሀሳቦች ባለሁለት ህትመትን ማካተት አለባቸው
+     መስኮት (የጸጋ ጊዜ) እና የማሻሻያ እቅድ.
+     በመዝገቡ ውስጥ እና የፍልሰት ደብተርን ያዘምኑ።
 
-6. **Emergency Changes**
-   - Removal or hotfixes require a council vote with majority approval.
-   - TWG must document the risk mitigation steps and update the incident log.
+6. **የአደጋ ጊዜ ለውጦች**
+   - ማስወገድ ወይም ሙቅ መጠገኛዎች በአብላጫ ድምጽ የምክር ቤት ድምጽ ያስፈልጋቸዋል።
+   - TWG የአደጋ ቅነሳ እርምጃዎችን መመዝገብ እና የክስተቱን ምዝግብ ማዘመን አለበት።
 
-## Tooling Expectations
+## የመሳሪያዎች ተስፋዎች
 
-- `sorafs_manifest_chunk_store` and `sorafs_manifest_stub` expose:
-  - `--list-profiles` for registry inspection.
-  - `--promote-profile=<handle>` to generate the canonical metadata block used
-    when promoting a profile.
-  - `--json-out=-` to stream reports to stdout, enabling reproducible review
-    logs.
-- `ensure_charter_compliance()` is invoked at startup in relevant binaries
-  (`manifest_chunk_store`, `provider_advert_stub`). CI tests must fail if new
-  entries violate the charter.
+- `sorafs_manifest_chunk_store` እና `sorafs_manifest_stub` ያጋልጣሉ፡
+  - `--list-profiles` ለምዝገባ ፍተሻ።
+  - `--promote-profile=<handle>` ጥቅም ላይ የዋለው ቀኖናዊ ሜታዳታ ብሎክ ለማመንጨት
+    መገለጫ ሲያስተዋውቁ።
+  - `--json-out=-` ሪፖርቶችን ወደ stdout ለማሰራጨት ፣ ሊባዛ የሚችል ግምገማን ያስችላል
+    መዝገቦች.
+- `ensure_charter_compliance()` በተዛማጅ ሁለትዮሽ ውስጥ በሚነሳበት ጊዜ ተጠርቷል።
+  (`manifest_chunk_store`፣ `provider_advert_stub`)። አዲስ ከሆነ የCI ፈተናዎች መውደቅ አለባቸው
+  ግቤቶች ቻርተሩን ይጥሳሉ.
 
-## Record Keeping
+## መዝገብ መያዝ
 
-- Store all determinism reports in `docs/source/sorafs/reports/`.
-- Council minutes referencing chunker decisions live under
+- ሁሉንም የመወሰን ሪፖርቶችን በ `docs/source/sorafs/reports/` ውስጥ ያከማቹ።
+- የምክር ቤት ደቂቃዎች chunker ውሳኔዎችን በመጥቀስ በቀጥታ ስር
   `docs/source/sorafs/migration_ledger.md`.
-- Update `roadmap.md` and `status.md` after each major registry change.
+- ከእያንዳንዱ ዋና የመመዝገቢያ ለውጥ በኋላ `roadmap.md` እና `status.md` ያዘምኑ።
 
-## References
+## ዋቢዎች
 
-- Authoring guide: [Chunker Profile Authoring Guide](./chunker-profile-authoring.md)
-- Conformance checklist: `docs/source/sorafs/chunker_conformance.md`
-- Registry reference: [Chunker Profile Registry](./chunker-registry.md)
+- የደራሲ መመሪያ፡ [Chunker መገለጫ ደራሲ መመሪያ](./chunker-profile-authoring.md)
+- የተግባር ማረጋገጫ ዝርዝር: `docs/source/sorafs/chunker_conformance.md`
+- የመመዝገቢያ ማጣቀሻ፡ [Chunker መገለጫ መዝገብ](./chunker-registry.md)

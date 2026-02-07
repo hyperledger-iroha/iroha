@@ -11,95 +11,96 @@ id: chunker-registry-rollout-checklist
 title: SoraFS Chunker Registry Rollout Checklist
 sidebar_label: Chunker Rollout Checklist
 description: Step-by-step rollout plan for chunker registry updates.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
-:::
+::: ማስታወሻ ቀኖናዊ ምንጭ
+::
 
-# SoraFS Registry Rollout Checklist
+# SoraFS የመመዝገቢያ ልቀት ማረጋገጫ ዝርዝር
 
-This checklist captures the steps required to promote a new chunker profile or
-provider admission bundle from review to production after the governance
-charter has been ratified.
+ይህ የማረጋገጫ ዝርዝር አዲስ chunker መገለጫ ወይም ለማስተዋወቅ የሚያስፈልጉትን ደረጃዎች ይይዛል
+ከአስተዳደሩ በኋላ የአቅራቢ ቅበላ ጥቅል ከግምገማ ወደ ምርት
+ቻርተር ጸድቋል።
 
-> **Scope:** Applies to all releases that modify
-> `sorafs_manifest::chunker_registry`, provider admission envelopes, or the
-> canonical fixture bundles (`fixtures/sorafs_chunker/*`).
+> ** ወሰን፡** የሚቀየሩትን ልቀቶች ሁሉ ይመለከታል
+> `sorafs_manifest::chunker_registry`፣ የአቅራቢ ኤንቨሎፕ፣ ወይም የ
+> ቀኖናዊ ቋሚ ቅርቅቦች (`fixtures/sorafs_chunker/*`)።
 
-## 1. Pre-flight Validation
+## 1. የቅድመ በረራ ማረጋገጫ
 
-1. Regenerate fixtures and verify determinism:
+1. መገልገያዎችን እንደገና ማመንጨት እና ውሳኔን ማረጋገጥ፡-
    ```bash
    cargo run --locked -p sorafs_chunker --bin export_vectors
    cargo test -p sorafs_chunker --offline vectors
    ci/check_sorafs_fixtures.sh
    ```
-2. Confirm determinism hashes in
-   `docs/source/sorafs/reports/sf1_determinism.md` (or the relevant profile
-   report) match the regenerated artifacts.
-3. Ensure `sorafs_manifest::chunker_registry` compiles with
-   `ensure_charter_compliance()` by running:
+2. ቆራጥነት ሃሽ ውስጥ ያረጋግጡ
+   `docs/source/sorafs/reports/sf1_determinism.md` (ወይም የሚመለከተው መገለጫ
+   ሪፖርት) ከታደሱ ቅርሶች ጋር ይዛመዳል።
+3. `sorafs_manifest::chunker_registry` ማጠናቀሩን ያረጋግጡ
+   `ensure_charter_compliance()` በመሮጥ፡
    ```bash
    cargo test -p sorafs_manifest --lib chunker_registry::tests::ensure_charter_compliance
    ```
-4. Update the proposal dossier:
+4. የፕሮፖዛል ዶሴ ያዘምኑ፡-
    - `docs/source/sorafs/proposals/<profile>.json`
-   - Council minutes entry under `docs/source/sorafs/council_minutes_*.md`
-   - Determinism report
+   - የምክር ቤት ደቂቃዎች መግቢያ በ I18NI0000015X ስር
+   - ቆራጥነት ሪፖርት
 
-## 2. Governance Sign-off
+## 2. የአስተዳደር መፈረም
 
-1. Present the Tooling Working Group report and proposal digest to the Sora
-   Parliament Infrastructure Panel.
-2. Record approval details in
+1. የTooling Working Group ሪፖርት እና የውሳኔ ሃሳብ ለሶራ ያቅርቡ
+   የፓርላማ መሠረተ ልማት ፓነል.
+2. የማጽደቅ ዝርዝሮችን በ ውስጥ ይመዝግቡ
    `docs/source/sorafs/council_minutes_YYYY-MM-DD.md`.
-3. Publish the Parliament-signed envelope alongside the fixtures:
+3. በፓርላማ የተፈረመውን ፖስታ ከመሳሪያዎቹ ጋር ያትሙ፡-
    `fixtures/sorafs_chunker/manifest_signatures.json`.
-4. Verify the envelope is accessible via the governance fetch helper:
+4. ኤንቨሎፑ በአስተዳደር ፈላጊ ረዳት በኩል ተደራሽ መሆኑን ያረጋግጡ፡-
    ```bash
    cargo xtask sorafs-fetch-fixture \
      --signatures <url-or-path-to-manifest_signatures.json> \
      --out fixtures/sorafs_chunker
    ```
 
-## 3. Staging Rollout
+## 3. የታቀደ ልቀት
 
-Refer to the [staging manifest playbook](./staging-manifest-playbook) for a
-detailed walkthrough of these steps.
+ለ [መግለጫ ገላጭ ደብተር](./staging-manifest-playbook) ይመልከቱ
+የእነዚህ እርምጃዎች ዝርዝር ጉዞ።
 
-1. Deploy Torii with `torii.sorafs` discovery enabled and admission
-   enforcement turned on (`enforce_admission = true`).
-2. Push the approved provider admission envelopes to the staging registry
-   directory referenced by `torii.sorafs.discovery.admission.envelopes_dir`.
-3. Verify provider adverts propagate via the discovery API:
+1. I18NT0000001X በ`torii.sorafs` ግኝት የነቃ እና የመግባት ስራ ያሰማሩ
+   ማስፈጸሚያ በርቷል (`enforce_admission = true`)።
+2. የተፈቀደውን የአገልግሎት አቅራቢ ኤንቨሎፕ ወደ ዝግጅት መዝገብ ቤት ይግፉ
+   ማውጫ በ I18NI0000020X የተጠቀሰ።
+3. በግኝት ኤፒአይ በኩል የአቅራቢዎች ማስታወቂያ መስፋፋትን ያረጋግጡ፡-
    ```bash
    curl -sS http://<torii-host>/v1/sorafs/providers | jq .
    ```
-4. Exercise manifest/plan endpoints with governance headers:
+4. የአስተዳዳሪ አርዕስቶችን በማንፀባረቅ/እቅድ የመጨረሻ ነጥቦችን ይለማመዱ፡-
    ```bash
    sorafs-fetch --plan fixtures/chunk_fetch_specs.json \
      --gateway-provider "...staging config..." \
      --gateway-manifest-id <manifest-hex> \
      --gateway-chunker-handle sorafs.sf1@1.0.0
    ```
-5. Confirm telemetry dashboards (`torii_sorafs_*`) and alert rules report the
-   new profile without errors.
+5. የቴሌሜትሪ ዳሽቦርዶችን ያረጋግጡ (`torii_sorafs_*`) እና የማስጠንቀቂያ ደንቦች
+   አዲስ መገለጫ ያለ ስህተቶች።
 
-## 4. Production Rollout
+## 4. የምርት ልቀት
 
-1. Repeat the staging steps against production Torii nodes.
-2. Announce the activation window (date/time, grace period, rollback plan) to
-   operator and SDK channels.
-3. Merge the release PR containing:
-   - Updated fixtures and envelope
-   - Documentation changes (charter references, determinism report)
-   - Roadmap/status refresh
-4. Tag the release and archive the signed artifacts for provenance.
+1. የዝግጅት ደረጃዎችን ከምርት I18NT0000002X አንጓዎች ጋር ይድገሙ።
+2. የማግበሪያ መስኮቱን (ቀን/ሰዓት፣ የእፎይታ ጊዜ፣ የመመለሻ እቅድ) ያሳውቁ
+   ኦፕሬተር እና ኤስዲኬ ቻናሎች።
+3. የሚለቀቀውን PR ያዋህዱ፡-
+   - የተሻሻሉ ዕቃዎች እና ኤንቨሎፕ
+   - የሰነድ ለውጦች (ቻርተር ማጣቀሻዎች ፣ የመወሰን ሪፖርት)
+   - የመንገድ ካርታ/ሁኔታ አድስ
+4. የተለቀቁትን መለያ ስጥ እና የተፈረሙትን ቅርሶች ለፕሮቬንሽን አስቀምጥ።
 
-## 5. Post-Rollout Audit
+## 5. ከታቀደው ልጥፍ ኦዲት
 
-1. Capture final metrics (discovery counts, fetch success rate, error
-   histograms) 24h after rollout.
-2. Update `status.md` with a short summary and link to the determinism report.
-3. File any follow-up tasks (e.g., additional profile authoring guidance) in
+1. የመጨረሻ መለኪያዎችን ይያዙ (የግኝት ቆጠራዎች፣ የስኬት መጠን ማምጣት፣ ስህተት
+   ሂስቶግራም) ከተለቀቀ በኋላ 24 ሰአት.
+2. `status.md`ን ከአጭር ማጠቃለያ እና ከቆራጥነት ዘገባ ጋር ያዘምኑ።
+3. ማንኛውንም የመከታተያ ስራዎችን (ለምሳሌ፡ ተጨማሪ የመገለጫ ደራሲ መመሪያ) ያስገቡ
    `roadmap.md`.

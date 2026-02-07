@@ -4,50 +4,52 @@ direction: ltr
 source: docs/portal/docs/da/commitments-plan.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Fonte canonica
-Espelha `docs/source/da/commitments_plan.md`. Mantenha as duas versoes em
+:::note フォンテ カノニカ
+エスペラ `docs/source/da/commitments_plan.md`。デュアス・ヴェルソエス・エムとしてのマンテンハ
 :::
 
-# Plano de compromissos de Data Availability da Sora Nexus (DA-3)
+# Sora Nexus (DA-3) のデータ可用性の妥協計画
 
-_Redigido: 2026-03-25 -- Responsaveis: Core Protocol WG / Smart Contract Team / Storage Team_
+_レディ: 2026-03-25 -- 対応: コア プロトコル WG / スマート コントラクト チーム / ストレージ チーム_
 
-DA-3 estende o formato de bloco da Nexus para que cada lane incorpore registros
-deterministicos que descrevem os blobs aceitos pelo DA-2. Esta nota captura as
-estruturas de dados canonicas, os hooks do pipeline de blocos, as provas de
-cliente leve e as superficies Torii/RPC que precisam chegar antes que
-validadores possam confiar nos compromissos DA durante admissao ou checks de
-governanca. Todos os payloads sao codificados em Norito; sem SCALE ou JSON ad
-hoc.
+DA-3 ブロック ダ Nexus パラケ カダ レーンが登録されている形式を保持しています
+DA-2 のブロブを決定的に決定します。エスタノタキャプチャー
+正規のデータの作成、OS フックはブロックとしてパイプラインを実行します。
+クライアントは地上権 Torii/RPC の優先権を保持します
+validadores possam confiar nos compromisos DA durante admissao ou checks de
+ガバナンカ。 Todos os ペイロード sao codificados em Norito; JSON 広告をスケールする
+ほら。
 
-## Objetivos
+## オブジェクト
 
-- Carregar compromissos por blob (chunk root + manifest hash + commitment KZG
-  opcional) dentro de cada bloco Nexus para que peers possam reconstruir o estado
-  de availability sem consultar storage fora do ledger.
-- Fornecer provas de membership deterministicas para que clientes leves
-  verifiquem que um manifest hash foi finalizado em um bloco.
-- Expor consultas Torii (`/v1/da/commitments/*`) e provas que permitam a relays,
-  SDKs e automacao de governanca auditar availability sem reproduzir cada bloco.
-- Manter o envelope `SignedBlockWire` canonico ao enfiar as novas estruturas
-  pelo header de metadata Norito e a derivacao do hash de bloco.
+- BLOB による Carregar の妥協 (チャンク ルート + マニフェスト ハッシュ + コミットメント KZG)
+  オプション) デントロ デ カダ ブロコ Nexus パラ ケ ピア ポッサム レコンストライル オ スタド
+  可用性を検討したり、台帳のストレージを調べたりします。
+- 顧客レベルでのメンバーシップの決定を決定する
+  マニフェスト ハッシュを確認し、最終的なブロックを確認します。
+- リレーを許可する Torii (`/v1/da/commitments/*`) をエクスポートします。
+  SDK と自動管理監査の可用性は、完全に再現されます。
+- マンター・オ・エンベロープ `SignedBlockWire` canonico ao enfiar as novas estruturas
+  メタデータ Norito のヘッダーは、ハッシュ デ ブロックの派生です。
 
-## Panorama de escopo
+## パノラマ デ エスコポ
 
-1. **Adicoes ao data model** em `iroha_data_model::da::commitment` mais alteracoes
-   de header de bloco em `iroha_data_model::block`.
-2. **Hooks do executor** para que `iroha_core` ingeste receipts DA emitidos por
-   Torii (`crates/iroha_core/src/queue.rs` e `crates/iroha_core/src/block.rs`).
-3. **Persistencia/indexes** para que o WSV responda consultas de compromissos
-   rapidamente (`iroha_core/src/wsv/mod.rs`).
-4. **Adicoes RPC em Torii** para endpoints de lista/consulta/prova sob
-   `/v1/da/commitments`.
-5. **Tests de integracao + fixtures** validando o wire layout e o fluxo de proof
-   em `integration_tests/tests/da/commitments.rs`.
+1. **Adicoes ao データ モデル** em `iroha_data_model::da::commitment` mais alteracoes
+   ヘッダー デ ブロック em `iroha_data_model::block`。
+2. **フックはエグゼキュータ** パラメータ `iroha_core` でレシートを取り込み、DA の出力を実行します
+   Torii (`crates/iroha_core/src/queue.rs` e `crates/iroha_core/src/block.rs`)。
+3. **永続化/インデックス** パラケオ WSV は、妥協の相談に応じます
+   急速 (`iroha_core/src/wsv/mod.rs`)。
+4. **Adicoes RPC em Torii** エンドポイントのリスト/コンサルタ/プロバソブ
+   `/v1/da/commitments`。
+5. **統合テストと治具** 検証、ワイヤレイアウト、耐フラックス防止
+   em `integration_tests/tests/da/commitments.rs`。
 
-## 1. Adicoes ao data model
+## 1. Adicoes ao データモデル
 
 ### 1.1 `DaCommitmentRecord`
 
@@ -69,17 +71,17 @@ pub struct DaCommitmentRecord {
 }
 ```
 
-- `KzgCommitment` reutiliza o ponto de 48 bytes usado em `iroha_crypto::kzg`.
-  Quando ausente, cai para provas Merkle apenas.
-- `proof_scheme` deriva do catalogo de lanes; lanes Merkle rejeitam payloads KZG
-  enquanto lanes `kzg_bls12_381` exigem commitments KZG nao zero. Torii atualmente
-  so produz compromissos Merkle e rejeita lanes configuradas com KZG.
-- `KzgCommitment` reutiliza o ponto de 48 bytes usado em `iroha_crypto::kzg`.
-  Quando ausente em lanes Merkle, cai para provas Merkle apenas.
-- `proof_digest` antecipa a integracao DA-5 PDP/PoTR para que o mesmo record
-  enumere o schedule de sampling usado para manter blobs vivos.
+- `KzgCommitment` は 48 バイトを使用して `iroha_crypto::kzg` を再利用します。
+  Quando ausente、cai para provas Merkle apenas。
+- `proof_scheme` レーンのカタログを作成します。レーン マークル レジェイタム ペイロード KZG
+  enquanto レーン `kzg_bls12_381` exigem コミットメント KZG nao ゼロ。 Torii 実物
+  したがって、マークルとレーンの設定を KZG で行う必要があります。
+- `KzgCommitment` は 48 バイトを使用して `iroha_crypto::kzg` を再利用します。
+  マークルをすべて使用し、マークルを最大限に活用してください。
+- `proof_digest` 事前統合 DA-5 PDP/PoTR パラメータ メッセージ レコード
+  生体内での米国のパラマンターブロブのサンプリングスケジュールを列挙します。
 
-### 1.2 Extensao do header de bloco
+### 1.2 ヘッダーを拡張する
 
 ```
 pub struct BlockHeader {
@@ -93,118 +95,112 @@ pub struct DaCommitmentBundle {
 }
 ```
 
-O hash do bundle entra tanto no hash do bloco quanto na metadata de
-`SignedBlockWire`. Quando um bloco nao carrega dados DA, o campo fica `None` para
+O ハッシュ ド バンドル エントラ タント ハッシュ ド ブロック カント ナ メタデータ
+`SignedBlockWire`。 Quando um bloco nao carrega mados DA、o Campo fica `None` para実装ノート: `BlockPayload` または `BlockBuilder` 透過的なアゴラ
+expoem セッター/ゲッター `da_commitments` (ver `BlockBuilder::set_da_commitments`)
+e `SignedBlock::set_da_commitments`)、entao ホスト ポデム anexar um バンドル
+ブロックの前に準備を整えます。 Todos os ヘルパー デイザム オ カンポ エム `None`
+Ate que Torii encadeie は、レアをバンドルします。
 
-Nota de implementacao: `BlockPayload` e o `BlockBuilder` transparente agora
-expoem setters/getters `da_commitments` (ver `BlockBuilder::set_da_commitments`
-e `SignedBlock::set_da_commitments`), entao hosts podem anexar um bundle
-preconstruido antes de selar um bloco. Todos os helpers deixam o campo em `None`
-ate que Torii encadeie bundles reais.
+### 1.3 ワイヤのエンコーディング
 
-### 1.3 Encoding de wire
+- `SignedBlockWire::canonical_wire()` ヘッダー Norito パラメタ
+  `DaCommitmentBundle` 存在する取引リストをすぐに確認してください。 ○
+  バイト・デ・バーサオ・e `0x01`。
+- `SignedBlockWire::decode_wire()` rejeita バンドル cujo `version` seja
+  政治 Norito の説明、`norito.md`。
+- `block::Hasher` でハッシュが存在するかどうかを確認します。顧客
+  ガンハムやノボ カンポの存在するワイヤー フォーマットを復号化することもできます
+  自動ヘッダー Norito が表示されます。
 
-- `SignedBlockWire::canonical_wire()` adiciona o header Norito para
-  `DaCommitmentBundle` imediatamente apos a lista de transacoes existente. O
-  byte de versao e `0x01`.
-- `SignedBlockWire::decode_wire()` rejeita bundles cujo `version` seja
-  desconhecido, alinhado a politica Norito descrita em `norito.md`.
-- Atualizacoes de derivacao de hash existem apenas em `block::Hasher`; clientes
-  leves que decodificam o wire format existente ganham o novo campo
-  automaticamente porque o header Norito anuncia sua presenca.
+## 2. ブロコスの生産
 
-## 2. Fluxo de producao de blocos
+1. Torii 最終的な `DaIngestReceipt` を公開ファイルに取り込みます
+   インテル (`iroha_core::gossiper::QueueMessage::DaReceipt`)。
+2. `PendingBlocks` coleta todos os の領収書 cujo `lane_id` 対応する ao bloco
+   em construcao、deduplicando por `(lane_id, client_blob_id, manifest_hash)`。
+3. 安全性を確保し、ビルダーが妥協するかどうかを決定します (lane_id, epoch,
+   sequence)` パラメータ、ハッシュ決定性、コードフィカ、バンドル コム、コーデック
+   Norito、`da_commitments_hash` と一致します。
+4. バンドルを完全に装備し、WSV を送信して、ブロック デントロ デを送信する
+   `SignedBlockWire`。
 
-1. A ingestao DA de Torii finaliza um `DaIngestReceipt` e o publica na fila
-   interna (`iroha_core::gossiper::QueueMessage::DaReceipt`).
-2. `PendingBlocks` coleta todos os receipts cujo `lane_id` corresponde ao bloco
-   em construcao, deduplicando por `(lane_id, client_blob_id, manifest_hash)`.
-3. Pouco antes de selar, o builder ordena os compromissos por `(lane_id, epoch,
-   sequence)` para manter o hash deterministico, codifica o bundle com o codec
-   Norito, e atualiza `da_commitments_hash`.
-4. O bundle completo e armazenado no WSV e emitido junto com o bloco dentro de
-   `SignedBlockWire`.
+ファルハールを確認し、領収書を永久に発行し、近くで確認してください
 
-Se a criacao do bloco falhar, os receipts permanecem na fila para que a proxima
+テンタティバOS攻略; o ビルダー レジストラ o ultimo `sequence` はレーンを含む
+パラエビタールのリプレイ。
 
-tentativa os capture; o builder registra o ultimo `sequence` incluido por lane
-para evitar ataques de replay.
+## 3. 上位 RPC とコンサルテーション
 
-## 3. Superficie RPC e consultas
+Torii トレス エンドポイントを公開します:
 
-Torii expoe tres endpoints:
+|ロタ |メトド |ペイロード |メモ |
+|------|--------|-----------|----------|
+| `/v1/da/commitments` | `POST` | `DaCommitmentQuery` (レーン/エポック/シーケンスの範囲フィルター、ページ) | Retorna `DaCommitmentPage` 合計、ハッシュ デ ブロコの妥協。 |
+| `/v1/da/commitments/prove` | `POST` | `DaCommitmentProofRequest` (レーン + マニフェスト ハッシュ トゥプラ `(epoch, sequence)`)。 | com `DaCommitmentProof` (レコード + カミーニョ マークル + ハッシュ デ ブロコ) に返信してください。 |
+| `/v1/da/commitments/verify` | `POST` | `DaCommitmentProof` |ヘルパーはステートレスなクエリを実行し、ハッシュ デ ブロコと検証を含む計算を実行します。 SDK は `iroha_crypto` のポデム リンカー ディレクトリにあります。 |
 
-| Rota | Metodo | Payload | Notas |
-|------|--------|---------|-------|
-| `/v1/da/commitments` | `POST` | `DaCommitmentQuery` (filtro de range por lane/epoch/sequence, paginacao) | Retorna `DaCommitmentPage` com total, compromissos e hash de bloco. |
-| `/v1/da/commitments/prove` | `POST` | `DaCommitmentProofRequest` (lane + manifest hash ou tupla `(epoch, sequence)`). | Responde com `DaCommitmentProof` (record + caminho Merkle + hash de bloco). |
-| `/v1/da/commitments/verify` | `POST` | `DaCommitmentProof` | Helper stateless que refaz o calculo do hash de bloco e valida a inclusao; usado por SDKs que nao podem linkar direto em `iroha_crypto`. |
+Todos OS ペイロードがすすり泣き `iroha_data_model::da::commitment` で表示されます。 OSルーター
+Torii モンタム OS ハンドラー、ラド、ドス、エンドポイントの取り込み DA 存在パラ
+トークン/mTLS の政治を再利用します。
 
-Todos os payloads vivem sob `iroha_data_model::da::commitment`. Os routers de
-Torii montam os handlers ao lado dos endpoints de ingestao DA existentes para
-reutilizar politicas de token/mTLS.
-
-## 4. Provas de inclusao e clientes leves
-
-- O produtor de blocos constroi uma arvore Merkle binaria sobre a lista
-  serializada de `DaCommitmentRecord`. A raiz alimenta `da_commitments_hash`.
-- `DaCommitmentProof` empacota o record alvo mais um vetor de
-  `(sibling_hash, position)` para que verificadores reconstruam a raiz. As
+## 4. 顧客の権利を含むプロバス- O produtor de blocos constroi uma arvore Merkle binaria sobre a lista
+  `DaCommitmentRecord` のシリアル番号。ライズアリメンタ`da_commitments_hash`。
+- `DaCommitmentProof` エンパコタまたは記録をすべて記録します
+  `(sibling_hash, position)` para que verificadores がライズを再解釈します。として
   provas tambem incluem o hash do bloco e o header assinado para que clientes
-  leves validem a finality.
-- Helpers de CLI (`iroha_cli app da prove-commitment`) envolvem o ciclo de
-  request/verify e expoem saidas Norito/hex para operadores.
+  ファイナリティを有効にします。
+- CLI ヘルパー (`iroha_cli app da prove-commitment`) は、CICL に関与します。
+  Norito/hex パラオペラドールの説明を要求/検証します。
 
-## 5. Storage e indexacao
+## 5. ストレージとインデックスの作成
 
-O WSV armazena compromissos em uma column family dedicada com chave
-`manifest_hash`. Indexes secundarios cobrem `(lane_id, epoch)` e
-`(lane_id, sequence)` para que consultas evitem varrer bundles completos. Cada
-record rastreia a altura do bloco que o selou, permitindo que nos em catch-up
-reconstruam o indice rapidamente a partir do block log.
+O WSV armazena compromisos em uma コラム ファミリー dedicada com Chave
+`manifest_hash`。インデックス secundarios cobrem `(lane_id, epoch)` e
+`(lane_id, sequence)` は、完全なEV項目バリアント バンドルを参照します。カダ
+ラストレイア・アルトゥラ・ド・ブロコ・ケ・オ・セロウを記録し、追いつくことを許可してください
+ブロックログのインデックスを迅速に再構築します。
 
-## 6. Telemetria e observabilidade
+## 6. テレメトリアと観察
 
-- `torii_da_commitments_total` incrementa quando um bloco sela ao menos um
-  record.
-- `torii_da_commitment_queue_depth` rastreia receipts aguardando bundle (por
-  lane).
-- O dashboard Grafana `dashboards/grafana/da_commitments.json` visualiza a
-  inclusao em blocos, profundidade da fila e throughput de provas para que os
-  gates de release da DA-3 possam auditar o comportamento.
+- `torii_da_commitments_total` インクリメント Quando um bloco sela ao menos um
+  記録する。
+- `torii_da_commitment_queue_depth` rastreia 領収書アガードバンドル (por
+  レーン）。
+- O ダッシュボード Grafana `dashboards/grafana/da_commitments.json` 視覚化
+  ブロック、フィラデルフィアの広範囲にわたるスループットを含む
+  DA-3 のゲートをリリースすると、オーディオコンポルタメントが完成します。
 
-## 7. Estrategia de testes
+## 7. 精巣戦略
 
-1. **Tests unitarios** para encoding/decoding de `DaCommitmentBundle` e
-   atualizacoes de derivacao do hash de bloco.
-2. **Fixtures golden** sob `fixtures/da/commitments/` capturando bytes canonicos
-   do bundle e provas Merkle.
-3. **Tests de integracao** com dois validadores, ingerindo blobs de exemplo e
-   verificando que ambos os nos concordam no conteudo do bundle e nas respostas
-   de query/proof.
-4. **Tests de cliente leve** em `integration_tests/tests/da/commitments.rs`
-   (Rust) que chamam `/prove` e verificam a prova sem falar com Torii.
-5. **Smoke CLI** com `scripts/da/check_commitments.sh` para manter tooling de
-   operadores reproduzivel.
+1. **`DaCommitmentBundle` e のエンコード/デコードに関する **テスト ユニタリオ**
+   アチュアリザコエス デ デリバカオ ドゥ ハッシュ デ ブロコ。
+2. **フィクスチャ ゴールデン** 泣き叫ぶ `fixtures/da/commitments/` キャプチャランド バイト カノニコス
+   Provas Merkle をバンドルしてください。
+3. **検証テスト** com dois validadores, ingerindo blob de exemplo e
+   Verificando que ambos os nos concordam no conteudo dobundle e nas respostas
+   クエリ/証明。
+4. **顧客レベルのテスト** em `integration_tests/tests/da/commitments.rs`
+   (Rust) que Chamam `/prove` e verificam a prova sem falar com Torii。
+5. **Smoke CLI** com `scripts/da/check_commitments.sh` パラメータ ツール
+   オペラドールの再現。
 
-## 8. Plano de rollout
+## 8. 計画的なロールアウト
 
-| Fase | Descricao | Criterio de saida |
-|------|-----------|-------------------|
-| P0 - Merge do data model | Integrar `DaCommitmentRecord`, atualizacoes de header de bloco e codecs Norito. | `cargo test -p iroha_data_model` verde com novas fixtures. |
-| P1 - Wiring Core/WSV | Encadear logica de fila + block builder, persistir indexes e expor handlers RPC. | `cargo test -p iroha_core`, `integration_tests/tests/da/commitments.rs` passam com assertions de bundle proof. |
-| P2 - Tooling de operadores | Entregar helpers CLI, dashboard Grafana e updates de docs de verificacao de proof. | `iroha_cli app da prove-commitment` funciona contra devnet; o dashboard mostra dados ao vivo. |
-| P3 - Gate de governanca | Habilitar o validador de blocos que requer compromissos DA nas lanes marcadas em `iroha_config::nexus`. | Entrada de status + update de roadmap marcam DA-3 como COMPLETADO. |
+|ファセ |説明 |基準 |
+|------|-----------|--------|
+| P0 - データ モデルをマージ |統合型 `DaCommitmentRecord`、ヘッダーとブロックのコーデック Norito の設定。 | `cargo test -p iroha_data_model` verde com novas 備品。 |
+| P1 - ワイヤリングコア/WSV | Encadear ロジック + ブロック ビルダー、永続化インデックス、エクスポート ハンドラー RPC。 | `cargo test -p iroha_core`、`integration_tests/tests/da/commitments.rs` バンドル証明のパスサム コム アサーション。 |
+| P2 - オペレーターのツール | Entregar ヘルパー CLI、ダッシュボード Grafana は、ドキュメントの検証を更新します。 | `iroha_cli app da prove-commitment` 開発ネットに反する機能。ダッシュボードのモストラ・ダドス・アオ・ヴィヴォ。 |
+| P3 - ガバナンカの門 | `iroha_config::nexus` のマルカダで、妥協を要求するブロックの有効性を確認してください。 | DA-3 と COMPLETADO のステータスとロードマップの更新を記録します。 |
 
-## Perguntas abertas
+## ペルグンタス・アベルタス1. **KZG とマークルのデフォルト** - Devemos のコミットメント KZG em blob
+   ペケノス・パラ・レドゥジル・オ・タマンホ・ド・ブロコ?プロポスタ: マンター `kzg_commitment`
+   `iroha_config::da.enable_kzg` 経由のオプションの電子ゲート。
+2. **シーケンス ギャップ** - 順序に従ってレーンを許可しますか?オ・プラノ・アチュアル・レジェイタ・ギャップ
+   緊急時の政府 `allow_sequence_skips` の一斉射撃。
+3. **ライトクライアント キャッシュ** - SDK の継続的なキャッシュ SQLite レベルの検証に時間がかかりません。
+   DA-8のペンデンテ。
 
-1. **KZG vs Merkle defaults** - Devemos sempre pular commitments KZG em blobs
-   pequenos para reduzir o tamanho do bloco? Proposta: manter `kzg_commitment`
-   opcional e gatear via `iroha_config::da.enable_kzg`.
-2. **Sequence gaps** - Permitimos lanes fora de ordem? O plano atual rejeita gaps
-   salvo se a governanca ativar `allow_sequence_skips` para replay de emergencia.
-3. **Light-client cache** - O time de SDK pediu um cache SQLite leve para proofs;
-   pendente em DA-8.
-
-Responder estas perguntas em PRs de implementacao move DA-3 de RASCUNHO (este
-documento) para EM ANDAMENTO quando o trabalho de codigo comecar.
+レスポンダーは、RASCUNHO で DA-3 を移動して PR を実行します (エステ
+documento) para EM ANDAMENTO quando o trabalho de codigo Comecar。

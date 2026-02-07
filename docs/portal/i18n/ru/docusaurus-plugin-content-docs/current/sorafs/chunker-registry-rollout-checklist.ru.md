@@ -4,102 +4,104 @@ direction: ltr
 source: docs/portal/docs/sorafs/chunker-registry-rollout-checklist.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: chunker-registry-rollout-checklist
-title: Чеклист rollout реестра chunker SoraFS
-sidebar_label: Чеклист rollout chunker
-description: Пошаговый план rollout для обновлений реестра chunker.
+идентификатор: chunker-registry-rollout-checklist
+title: Чеклист развертывания реестра chunker SoraFS
+Sidebar_label: Чанкер развертывания Чеклиста
+описание: Пошаговый план внедрения обновленного реестра chunker.
 ---
 
 :::note Канонический источник
-Отражает `docs/source/sorafs/chunker_registry_rollout_checklist.md`. Держите обе копии синхронизированными, пока набор документации Sphinx не будет выведен из эксплуатации.
+Отражает `docs/source/sorafs/chunker_registry_rollout_checklist.md`. Держите копии синхронизированными, пока набор документации Sphinx не будет выведен из эксплуатации.
 :::
 
-# Чеклист rollout реестра SoraFS
+# Чеклист реестра внедрения SoraFS
 
-Этот чеклист фиксирует шаги, необходимые для продвижения нового профиля chunker
-или bundle provider admission от ревью до продакшена после ратификации
-governance charter.
+Этот чек-лист фиксирует шаги, необходимые для продвижения нового профиля чанкера.
+или допуск поставщика пакета от проверки до продакшена после ратификации
+устав управления.
 
 > **Область:** применяется ко всем релизам, которые меняют
-> `sorafs_manifest::chunker_registry`, provider admission envelopes или
-> канонические fixture bundles (`fixtures/sorafs_chunker/*`).
+> `sorafs_manifest::chunker_registry`, конверты приема поставщика услуг или
+> Канонные комплекты крепежа (`fixtures/sorafs_chunker/*`).
 
 ## 1. Предварительная валидация
 
-1. Перегенерируйте fixtures и проверьте детерминизм:
+1. Перегенерируйте светильники и проверьте детерминизм:
    ```bash
    cargo run --locked -p sorafs_chunker --bin export_vectors
    cargo test -p sorafs_chunker --offline vectors
    ci/check_sorafs_fixtures.sh
    ```
-2. Убедитесь, что hashes детерминизма в
-   `docs/source/sorafs/reports/sf1_determinism.md` (или релевантном отчете
-   профиля) совпадают с регенерированными артефактами.
-3. Убедитесь, что `sorafs_manifest::chunker_registry` компилируется с
+2. Убедитесь, что хеши детерминированы в
+   `docs/source/sorafs/reports/sf1_determinism.md` (или соответствующий отчет
+   профиль) происходит с регенерированными документами.
+3. Убедитесь, что `sorafs_manifest::chunker_registry` скомпилирован с
    `ensure_charter_compliance()` при запуске:
    ```bash
    cargo test -p sorafs_manifest --lib chunker_registry::tests::ensure_charter_compliance
    ```
-4. Обновите dossier предложения:
+4. Обновите досье предложения:
    - `docs/source/sorafs/proposals/<profile>.json`
-   - Запись minutes совета в `docs/source/sorafs/council_minutes_*.md`
+   - Запись протокола совета в `docs/source/sorafs/council_minutes_*.md`
    - Отчет о детерминизме
 
-## 2. Governance sign-off
+## 2. Утверждение управления
 
-1. Представьте отчет Tooling Working Group и digest предложения в
-   Sora Parliament Infrastructure Panel.
+1. Просмотрите отчет Tooling Working Group и обобщите предложения в
+   Группа по инфраструктуре парламента Сора.
 2. Зафиксируйте детали одобрения в
    `docs/source/sorafs/council_minutes_YYYY-MM-DD.md`.
-3. Опубликуйте envelope, подписанный парламентом, вместе с fixtures:
+3. Опубликуйте конверт, подписанный парламентом, вместе с приспособлениями:
    `fixtures/sorafs_chunker/manifest_signatures.json`.
-4. Проверьте, что envelope доступен через helper получения governance:
+4. Проверьте, что конверт доступен через вспомогательное управление получением:
    ```bash
    cargo xtask sorafs-fetch-fixture \
      --signatures <url-or-path-to-manifest_signatures.json> \
      --out fixtures/sorafs_chunker
    ```
 
-## 3. Staging rollout
+## 3. Поэтапное развертывание
 
-Подробный walkthrough см. в [staging manifest playbook](./staging-manifest-playbook).
+Подробное прохождение см. в [промежуточный манифест манифеста] (./staging-manifest-playbook).
 
-1. Разверните Torii с включенным discovery `torii.sorafs` и включенным enforcement
-   admission (`enforce_admission = true`).
-2. Загрузите approved provider admission envelopes в staging registry directory,
+1. Развернуть Torii с включенным открытием `torii.sorafs` и включенным применением.
+   допуск (`enforce_admission = true`).
+2. Загрузите конверты одобренного поставщика в каталог промежуточного реестра,
    указанный в `torii.sorafs.discovery.admission.envelopes_dir`.
-3. Проверьте, что provider adverts распространяются через discovery API:
+3. Проверить, что провайдер размещает рекламу через обнаружение API:
    ```bash
    curl -sS http://<torii-host>/v1/sorafs/providers | jq .
    ```
-4. Прогоните endpoints manifest/plan с governance headers:
+4. Прогоните манифест/план конечных точек с заголовками управления:
    ```bash
    sorafs-fetch --plan fixtures/chunk_fetch_specs.json \
      --gateway-provider "...staging config..." \
      --gateway-manifest-id <manifest-hex> \
      --gateway-chunker-handle sorafs.sf1@1.0.0
    ```
-5. Убедитесь, что telemetry dashboards (`torii_sorafs_*`) и alert rules
+5. Убедитесь, что панели телеметрии (`torii_sorafs_*`) и правила оповещений
    отображают новый профиль без ошибок.
 
-## 4. Production rollout
+## 4. Развертывание производства
 
-1. Повторите шаги staging на продакшен Torii-узлах.
-2. Объявите окно активации (дата/время, grace period, rollback plan) в каналы
+1. Повторите шаги по продакшену Torii-узлах.
+2. Объявите окно активации (дата/время, льготный период, план отката) в файлах.
    операторов и SDK.
 3. Смёрджите релизный PR с:
-   - Обновленными fixtures и envelope
-   - Документационными изменениями (ссылки на charter, отчет о детерминизме)
-   - Обновлением roadmap/status
-4. Поставьте тег релиза и архивируйте подписанные артефакты для provenance.
+   - Обновленными приборами и конвертом
+   - Документационными изменениями (ссылки на устав, отчет о детерминизме)
+   - Обновление дорожной карты/статуса
+4. Поставьте тег релиза и заархивируйте подписанные документы для проверки происхождения.
 
-## 5. Post-rollout аудит
+## 5. Аудит после внедрения
 
-1. Снимите финальные метрики (discovery counts, fetch success rate, error
-   histograms) через 24 часа после rollout.
-2. Обновите `status.md` кратким резюме и ссылкой на отчет детерминизма.
-3. Заведите follow-up задачи (например, дополнительная guidance по authoring
-   профилей) в `roadmap.md`.
+1. Удалить окончательные метрики (количество открытий, вероятность успеха выборки, ошибка).
+   гистограммы) через 24 часа после развертывания.
+2. Обновите `status.md` краткое резюме и ссылку на отчет о детерминизме.
+3. Задайте последующие задачи (например, дополнительные рекомендации по написанию
+   профиль) в `roadmap.md`.

@@ -11,19 +11,20 @@ id: developer-ci
 title: SoraFS CI Recipes
 sidebar_label: CI Recipes
 description: Run the SoraFS CLI inside GitHub and GitLab pipelines with keyless signing.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
+::: Eslatma Kanonik manba
 :::
 
-# CI Recipes
+# CI retseptlari
 
-SoraFS pipelines benefit from deterministic chunking, manifest signing, and
-proof verification. The `sorafs_cli` command surface keeps those steps portable
-across CI providers. This page highlights the canonical recipes and points to
-ready-to-use templates.
+SoraFS quvurlari deterministik qismlarga ajratish, manifest imzolash va
+dalillarni tekshirish. `sorafs_cli` buyruq yuzasi bu qadamlarni ko'chma ushlab turadi
+CI provayderlari bo'ylab. Ushbu sahifa kanonik retseptlarni ta'kidlaydi va ularga ishora qiladi
+foydalanishga tayyor shablonlar.
 
-## GitHub Actions (keyless)
+## GitHub amallari (kalitsiz)
 
 ```yaml
 name: sorafs-artifacts
@@ -96,11 +97,11 @@ jobs:
           path: artifacts/
 ```
 
-Key points:
+Asosiy fikrlar:
 
-- No static signing keys are stored; OIDC tokens are fetched on-demand.
-- Artefacts (CAR, manifest, bundle, proof summaries) are uploaded for review.
-- The job reuses the same Norito schemas used in production rollouts.
+- Statik imzo kalitlari saqlanmaydi; OIDC tokenlari talab boʻyicha olinadi.
+- Artefaktlar (CAR, manifest, to'plam, isbot xulosalari) ko'rib chiqish uchun yuklanadi.
+- Ish ishlab chiqarishni yo'lga qo'yishda ishlatiladigan Norito sxemalarini qayta ishlatadi.
 
 ## GitLab CI
 
@@ -136,15 +137,15 @@ sorafs:publish:
       - artifacts/
 ```
 
-- Provision `SIGSTORE_ID_TOKEN` via GitLab’s workload identity federation or a
-  sealed secret before executing the publish stage.
-- Failure of any CLI step causes the pipeline to halt, preserving consistent
-  artefacts.
+- `SIGSTORE_ID_TOKEN`-ni GitLabning ish yukini aniqlash federatsiyasi yoki
+  nashr qilish bosqichini amalga oshirishdan oldin muhrlangan sir.
+- Har qanday CLI qadamining bajarilmasligi quvur liniyasining to'xtab qolishiga olib keladi va barqarorlikni saqlaydi
+  artefaktlar.
 
-## Additional resources
+## Qo'shimcha manbalar
 
-- End-to-end templates (includes Bash helpers, federated identity configuration,
-  and clean-up steps): `docs/examples/sorafs_ci.md`
-- CLI reference covering every option: `docs/source/sorafs_cli.md`
-- Governance/alias requirements prior to submission:
+- End-to-end shablonlari (o'z ichiga Bash yordamchilari, federatsiyalangan identifikatsiya konfiguratsiyasi,
+  va tozalash bosqichlari): `docs/examples/sorafs_ci.md`
+- Har bir variantni qamrab oluvchi CLI ma'lumotnomasi: `docs/source/sorafs_cli.md`
+- Taqdim etishdan oldin boshqaruv/taxallus talablari:
   `docs/source/sorafs/provider_admission_policy.md`

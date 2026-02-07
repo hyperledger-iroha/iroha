@@ -4,56 +4,56 @@ direction: rtl
 source: docs/portal/docs/sorafs/reports/sf2c-capacity-soak.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Informe de soak de acumulación de capacidad SF-2c
+# إعلام امتصاص السعة التراكمية SF-2c
 
-Fecha: 2026-03-21
+رسالة: 2026-03-21
 
-## Alcance
+## الكانس
 
-Este informe registra las pruebas determinísticas de soak de acumulación de capacidad SoraFS y pagos
-solicitadas bajo la hoja de ruta SF-2c.
+قم بإبلاغنا بتسجيل اختبار محددات امتصاص السعة التراكمية SoraFS والدفعات
+نطلب المساعدة من طريق SF-2c.
 
-- **Soak multi-provider de 30 días:** Ejecutado por
-  `capacity_fee_ledger_30_day_soak_deterministic` en
+- **نقع متعدد لمدة 30 يومًا:** تم تشغيله
+  `capacity_fee_ledger_30_day_soak_deterministic` ar
   `crates/iroha_core/src/smartcontracts/isi/sorafs.rs`.
-  El harness instancia cinco providers, abarca 30 ventanas de settlement y
-  valida que los totales del ledger coincidan con una proyección de referencia
-  calculada de forma independiente. La prueba emite un digest Blake3
-  (`capacity_soak_digest=...`) para que CI pueda capturar y comparar el snapshot
+  مقدمي خدمات El Harbour Instancia 5, Abarca 30 نوافذ التسوية ذ
+  التحقق من أن إجمالي دفتر الأستاذ يتزامن مع عرض مرجعي
+  حساب الشكل المستقل. التجربة تنبعث من هضم Blake3
+  (`capacity_soak_digest=...`) حتى يتمكن CI من التقاط اللقطة ومقارنتها
   canónico.
 - **Penalizaciones por subentrega:** Impuestas por
   `record_capacity_telemetry_penalises_persistent_under_delivery`
-  (mismo archivo). La prueba confirma que los umbrales de strikes, cooldowns,
-  slashes de collateral y contadores del ledger permanecen determinísticos.
+  (أرشيف ميسمو). يؤكد الاختبار أن مظلات الضربات وفترات التهدئة،
+  تخفيضات الضمانات وضوابط دفتر الأستاذ تحافظ على المحددات.
 
-## Ejecución
+## قذف
 
-Ejecuta las validaciones de soak localmente con:
+قم بتنفيذ عمليات التحقق من النقع محليًا باستخدام:
 
 ```bash
 cargo test -p iroha_core -- record_capacity_telemetry_penalises_persistent_under_delivery
 cargo test -p iroha_core -- capacity_fee_ledger_30_day_soak_deterministic
 ```
 
-Las pruebas completan en menos de un segundo en un portátil estándar y no requieren
-fixtures externas.
+تكتمل الاختبارات في أقل من ثانية على جهاز محمول قياسي ولا تتطلب
+تركيبات خارجية.
 
-## Observabilidad
+## إمكانية الملاحظة
 
-Torii ahora expone snapshots de crédito de providers junto a fee ledgers para que los dashboards
-puedan gatear sobre saldos bajos y penalty strikes:
-
-- REST: `GET /v1/sorafs/capacity/state` devuelve entradas `credit_ledger[*]` que
-  reflejan los campos del ledger verificados en la prueba de soak. Ver
+Torii يعرض الآن لقطات من موفري الائتمان جنبًا إلى جنب مع دفاتر رسوم الرسوم للوحات المعلومات
+Puedan Gatear sobre Saldos Bajos وضربات الجزاء:- الباقي: `GET /v1/sorafs/capacity/state` devuelve entradas `credit_ledger[*]` que
+  قم بإعادة النظر في مجالات دفتر الأستاذ التي تم التحقق منها في اختبار الامتصاص. الاصدار
   `crates/iroha_torii/src/sorafs/registry.rs`.
-- Importación de Grafana: `dashboards/grafana/sorafs_capacity_penalties.json` grafica los
-  contadores de strikes exportados, totales de penalizaciones y collateral en garantía para que el
-  equipo on-call pueda comparar los baselines de soak con entornos en vivo.
+- استيراد Grafana: `dashboards/grafana/sorafs_capacity_penalties.json` الرسوم البيانية
+  صدرت مواجهات الضربات وإجمالي العقوبات والضمانات لضمان أن
+  يمكن للمعدات عند الطلب مقارنة خطوط الأساس للنقع داخل الجسم الحي.
 
-## Seguimiento
+## متابعة
 
-- Programar ejecuciones de gate semanales en CI para reejecutar la prueba de soak (smoke-tier).
-- Extender el tablero de Grafana con objetivos de scrape de Torii cuando las exportaciones de
-  telemetry de producción estén disponibles.
+- برمجة عمليات تشغيل البوابة الفاصلة في CI لإعادة تشغيل اختبار النقع (طبقة الدخان).
+- موسع اللوحة Grafana بأهداف كشط Torii أثناء عمليات التصدير
+  القياس عن بعد للإنتاج متاح.

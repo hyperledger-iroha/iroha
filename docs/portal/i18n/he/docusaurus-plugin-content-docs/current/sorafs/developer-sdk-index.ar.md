@@ -4,12 +4,14 @@ direction: rtl
 source: docs/portal/docs/sorafs/developer-sdk-index.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
 id: developer-sdk-index
 title: أدلة SDK لـ SoraFS
-sidebar_label: أدلة SDK
+sidebar_label: SDK SDK
 description: مقتطفات خاصة بكل لغة لدمج آرتيفاكتات SoraFS.
 ---
 
@@ -44,7 +46,7 @@ description: مقتطفات خاصة بكل لغة لدمج آرتيفاكتات
 يعرّض كل من مساعد Python (`sorafs_multi_fetch_local`) وJavaScript
 (`sorafsMultiFetchLocal`) لوحة scoreboard الواعية بالتليمترية التي يستخدمها CLI:
 
-- تمكّن الثنائيات الإنتاجية scoreboard افتراضيًا؛ اضبط `use_scoreboard=True`
+- تمكّن الثنائيات الإنتاجية scoreboard افتراضيًا؛ גודל `use_scoreboard=True`
   (أو وفّر إدخالات `telemetry`) عند إعادة تشغيل fixtures حتى يستخلص المساعد ترتيب
   المزوّدين الموزون من بيانات adverts ولقطات التليمترية الحديثة.
 - اضبط `return_scoreboard=True` لتلقي الأوزان المحسوبة مع إيصالات الـ chunk حتى تتمكن
@@ -59,7 +61,7 @@ description: مقتطفات خاصة بكل لغة لدمج آرتيفاكتات
   حتى يتمكن `cargo xtask sorafs-adoption-check` من التحقق من آرتيفاكتات SDK، واستخدم
   `scoreboardNowUnixSecs` عندما تحتاج fixtures إلى قيمة `assume_now` ثابتة لبيانات
   وصفية قابلة لإعادة الإنتاج. في مساعد JavaScript يمكنك أيضًا ضبط
-  `scoreboardTelemetryLabel`/`scoreboardAllowImplicitMetadata`؛ وعند حذف الملصق
+  `scoreboardTelemetryLabel`/`scoreboardAllowImplicitMetadata`; وعند حذف الملصق
   يشتق `region:<telemetryRegion>` (مع fallback إلى `sdk:js`). يصدر مساعد Python تلقائيًا
   `telemetry_source="sdk:python"` كلما حفظ لوحة scoreboard ويُبقي البيانات الوصفية
   الضمنية معطّلة.

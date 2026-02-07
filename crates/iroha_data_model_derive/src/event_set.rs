@@ -328,38 +328,63 @@ impl ToTokens for EventSetEnum {
                 fn json_deserialize(
                     parser: &mut norito::json::Parser<'_>,
                 ) -> Result<Self, norito::json::Error> {
-                    let mut result = #set_ident::empty();
+                    let value =
+                        <norito::json::Value as norito::json::JsonDeserialize>::json_deserialize(
+                            parser,
+                        )?;
+                    <Self as norito::json::JsonDeserialize>::json_from_value(&value)
+                }
 
-                    parser.skip_ws();
-                    parser.consume_char(b'[')?;
-
-                    loop {
-                        parser.skip_ws();
-                        if parser.try_consume_char(b']')? {
-                            break;
+                fn json_from_value(value: &norito::json::Value) -> Result<Self, norito::json::Error> {
+                    fn format_invalid_type(value: &norito::json::Value) -> String {
+                        match value {
+                            norito::json::Value::Null => String::from("unit value"),
+                            norito::json::Value::Bool(value) => format!("boolean `{value}`"),
+                            norito::json::Value::Number(number) => match number {
+                                norito::json::Number::I64(value) => format!("integer `{value}`"),
+                                norito::json::Number::U64(value) => format!("integer `{value}`"),
+                                norito::json::Number::F64(value) => {
+                                    format!("floating point `{value}`")
+                                }
+                            },
+                            norito::json::Value::String(value) => format!("string {value:?}"),
+                            norito::json::Value::Array(_) => String::from("sequence"),
+                            norito::json::Value::Object(_) => String::from("map"),
                         }
+                    }
 
-                        let name = parser.parse_string()?;
+                    let values = match value {
+                        norito::json::Value::Array(values) => values,
+                        other => {
+                            return Err(norito::json::Error::Message(format!(
+                                "invalid type: {}, expected a sequence of strings",
+                                format_invalid_type(other)
+                            )));
+                        }
+                    };
+
+                    let mut result = #set_ident::empty();
+                    for value in values {
+                        let name = match value {
+                            norito::json::Value::String(name) => name,
+                            other => {
+                                return Err(norito::json::Error::Message(format!(
+                                    "invalid type: {}, expected a string",
+                                    format_invalid_type(other)
+                                )));
+                            }
+                        };
+
                         let event = match name.as_str() {
                             #(#flag_names => #flag_idents,)*
                             other => {
-                                return Err(norito::json::Error::InvalidField {
-                                    field: String::from("EventSet"),
-                                    message: format!(
-                                        "unknown event variant `{other}`, expected one of {}",
-                                        #flag_names_str
-                                    ),
-                                });
+                                return Err(norito::json::Error::Message(format!(
+                                    "unknown event variant `{other}`, expected one of {}",
+                                    #flag_names_str
+                                )));
                             }
                         };
                         result |= event;
-
-                        parser.skip_ws();
-                        if parser.try_consume_char(b',')? {
-                            continue;
-                        }
-                        parser.consume_char(b']')?;
-                        break;
                     }
 
                     Ok(result)

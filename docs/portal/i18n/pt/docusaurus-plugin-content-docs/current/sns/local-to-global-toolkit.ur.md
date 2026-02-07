@@ -4,24 +4,26 @@ direction: ltr
 source: docs/portal/docs/sns/local-to-global-toolkit.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 # Local -> Global ایڈریس ٹول کٹ
 
-یہ صفحہ `docs/source/sns/local_to_global_toolkit.md` کا عکاس ہے۔ یہ roadmap آئٹم **ADDR-5c** کے لیے درکار CLI helpers اور runbooks اکٹھے کرتا ہے۔
+یہ صفحہ `docs/source/sns/local_to_global_toolkit.md` کا عکاس ہے۔ یہ roadmap آئٹم **ADDR-5c** کے لیے درکار CLI helpers e runbooks اکٹھے کرتا ہے۔
 
 ## جائزہ
 
 - `scripts/address_local_toolkit.sh` `iroha` CLI کو wrap کرتا ہے تاکہ یہ پیدا کرے:
-  - `audit.json` -- `iroha tools address audit --format json` کا structured output۔
-  - `normalized.txt` -- ہر Local-domain selector کے لیے IH58 (ترجیحی) / compressed (`sora`, second-best) literals۔
-- اس اسکرپٹ کو address ingest dashboard (`dashboards/grafana/address_ingest.json`)
+  - `audit.json` -- `iroha tools address audit --format json` کا saída estruturada۔
+  - `normalized.txt` -- ہر Seletor de domínio local کے لیے IH58 (ترجیحی) / compactado (`sora`, segundo melhor) literais۔
+- اس اسکرپٹ کو painel de ingestão de endereço (`dashboards/grafana/address_ingest.json`)
   اور Alertmanager rules (`dashboards/alerts/address_ingest_rules.yml`) کے ساتھ استعمال کریں تاکہ
-  Local-8 / Local-12 cutover کی حفاظت ثابت ہو۔ Local-8 اور Local-12 collision panels اور
-  `AddressLocal8Resurgence`, `AddressLocal12Collision`, اور `AddressInvalidRatioSlo` alerts
-  کو manifest تبدیلیاں promote کرنے سے پہلے دیکھیں۔
-- UX اور incident-response کے لیے [Address Display Guidelines](address-display-guidelines.md) اور
-  [Address Manifest runbook](../../../source/runbooks/address_manifest_ops.md) کو دیکھیں۔
+  Corte local-8 / local-12 Local-8 ou Local-12 painéis de colisão
+  Alertas `AddressLocal8Resurgence`, `AddressLocal12Collision`, e `AddressInvalidRatioSlo`
+  کو manifesto تبدیلیاں promover کرنے سے پہلے دیکھیں۔
+- UX para resposta a incidentes کے لیے [Diretrizes de exibição de endereço](address-display-guidelines.md) اور
+  [Runbook de manifesto de endereço](../../../source/runbooks/address_manifest_ops.md) کو دیکھیں۔
 
 ## استعمال
 
@@ -29,24 +31,24 @@ generator: docs/portal/scripts/sync-i18n.mjs
 scripts/address_local_toolkit.sh       --input fixtures/address/local_digest_examples.txt       --output-dir artifacts/address_migration       --network-prefix 753       --format ih58
 ```
 
-اختیارات:
+Informações:
 
-- `--format compressed` IH58 کے بجائے `sora...` output کے لیے۔
-- `--no-append-domain` تاکہ bare literals نکلیں۔
-- `--audit-only` conversion step چھوڑنے کے لیے۔
-- `--allow-errors` تاکہ malformed rows پر بھی scan جاری رہے (CLI behavior جیسا)۔
+- `--format compressed` IH58 کے بجائے Saída `sora...` کے لیے۔
+- `--no-append-domain` تاکہ literais simples نکلیں۔
+- Etapa de conversão `--audit-only` چھوڑنے کے لیے۔
+- `--allow-errors` تاکہ linhas malformadas پر بھی scan جاری رہے (comportamento CLI جیسا)۔
 
-اسکرپٹ رن کے آخر میں artefact paths لکھتا ہے۔ دونوں فائلیں
-change-management ticket کے ساتھ منسلک کریں اور Grafana screenshot بھی شامل کریں جو
->=30 دن تک صفر Local-8 detections اور صفر Local-12 collisions دکھائے۔
+اسکرپٹ رن کے آخر میں caminhos de artefato لکھتا ہے۔ دونوں فائلیں
+ticket de gerenciamento de alterações کے ساتھ منسلک کریں اور Grafana captura de tela بھی شامل کریں جو
+>=30 دن تک صفر Detecções locais-8 اور صفر Colisões locais-12 دکھائے۔
 
 ## CI انضمام
 
-1. اسکرپٹ کو dedicated job میں چلائیں اور outputs اپ لوڈ کریں۔
-2. جب `audit.json` Local selectors رپورٹ کرے (`domain.kind = local12`) تو merges روک دیں۔
-   default `true` پر رکھیں (صرف dev/test میں regressions کی تشخیص کے وقت `false` کریں) اور
+1. اسکرپٹ کو trabalho dedicado میں چلائیں اور saídas اپ لوڈ کریں۔
+2. جب `audit.json` Seletores locais رپورٹ کرے (`domain.kind = local12`) تو mescla روک دیں۔
+   padrão `true` پر رکھیں (صرف dev/test میں regressões کی تشخیص کے وقت `false` کریں) اور
    `iroha tools address normalize --fail-on-warning --only-local` کو CI میں شامل کریں تاکہ
-   regressions production تک پہنچنے سے پہلے فیل ہوں۔
+   produção de regressões
 
-مزید تفصیلات، evidence checklists، اور release-note snippet کے لیے سورس دستاویز دیکھیں
-جسے آپ cutover کا اعلان کرتے وقت دوبارہ استعمال کر سکتے ہیں۔
+Listas de verificação de evidências e trechos de notas de lançamento کے لیے سورس دستاویز
+Qual é o corte de corte que você precisa e qual é o valor do seu cartão de crédito?

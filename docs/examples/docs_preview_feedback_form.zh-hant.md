@@ -7,62 +7,63 @@ generator: scripts/sync_docs_i18n.py
 source_hash: afb7e51ddc0b7e819f2cbf3888aadf907b0e0010c676cb44af648f9f4818f8f5
 source_last_modified: "2025-12-29T18:16:35.071058+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Docs preview feedback form (W1 partner wave)
+# 文檔預覽反饋表（W1 合作夥伴 Wave）
 
-Use this template when collecting feedback from W1 reviewers. Duplicate it per
-partner, fill the metadata, and store the completed copy under
-`artifacts/docs_preview/W1/preview-2025-04-12/feedback/<partner-id>/`.
+從 W1 審閱者收集反饋時使用此模板。複製它每
+合作夥伴，填寫元數據，並將完成的副本存儲在
+`artifacts/docs_preview/W1/preview-2025-04-12/feedback/<partner-id>/`。
 
-## Reviewer metadata
+## 審閱者元數據
 
-- **Partner ID:** `partner-w1-XX`
-- **Request ticket:** `DOCS-SORA-Preview-REQ-PXX`
-- **Invite sent (UTC):** `YYYY-MM-DD hh:mm`
-- **Acknowledged checksum (UTC):** `YYYY-MM-DD hh:mm`
-- **Primary focus areas:** (for example _SoraFS orchestrator docs_, _Torii ISO flows_)
+- **合作夥伴 ID：** `partner-w1-XX`
+- **請求票：** `DOCS-SORA-Preview-REQ-PXX`
+- **邀請已發送（UTC）：** `YYYY-MM-DD hh:mm`
+- **確認的校驗和（UTC）：** `YYYY-MM-DD hh:mm`
+- **主要關注領域：**（例如_SoraFS Orchestrator 文檔_、_Torii ISO 流程_）
 
-## Telemetry & artefact confirmations
+## 遙測和人工製品確認
 
-| Checklist item | Result | Evidence |
-| --- | --- | --- |
-| Checksum verification | ✅ / ⚠️ | Path to log (e.g., `build/checksums.sha256`) |
-| Try it proxy smoke test | ✅ / ⚠️ | `npm run manage:tryit-proxy …` transcript snippet |
-| Grafana dashboard review | ✅ / ⚠️ | Screenshot path(s) |
-| Portal probe report review | ✅ / ⚠️ | `artifacts/docs_preview/.../preflight-summary.json` |
+|清單項目 |結果 |證據|
+| ---| ---| ---|
+|校驗和驗證 | ✅ / ⚠️ |日誌路徑（例如，`build/checksums.sha256`）|
+|嘗試一下代理冒煙測試 | ✅ / ⚠️ | `npm run manage:tryit-proxy …` 轉錄片段 |
+| Grafana 儀表板回顧 | ✅ / ⚠️ |屏幕截圖路徑 |
+|門戶探查報告審查| ✅ / ⚠️ | `artifacts/docs_preview/.../preflight-summary.json` |
 
-Add rows for any additional SLOs a reviewer inspects.
+為審閱者檢查的任何其他 SLO 添加行。
 
-## Feedback log
+## 反饋日誌
 
-| Area | Severity (info/minor/major/blocker) | Description | Suggested fix or question | Tracker issue |
-| --- | --- | --- | --- | --- |
+|面積 |嚴重性（信息/次要/主要/阻止）|描述 |建議的修復或問題 |追踪器問題 |
+| ---| ---| ---| ---| ---|
 | | | | | |
 
-Reference the GitHub issue or internal ticket in the last column so the preview
-tracker can tie remediation items back to this form.
+參考最後一欄中的 GitHub 問題或內部票證，以便預覽
+跟踪器可以將補救項目與此表單聯繫起來。
 
-## Survey summary
+## 調查總結
 
-1. **How confident are you in the checksum guidance and invite process?** (1–5)
-2. **Which docs were the most/least helpful?** (short answer)
-3. **Were there any blockers accessing the Try it proxy or telemetry dashboards?**
-4. **Is additional localisation or accessibility content required?**
-5. **Any other comments before GA?**
+1. **您對校驗和指導和邀請流程有多大信心？ ** (1-5)
+2. **哪些文檔最有/最沒有幫助？ **（簡短回答）
+3. **是否有任何攔截器訪問 Try it 代理或遙測儀表板？ **
+4. **是否需要額外的本地化或輔助內容？ **
+5. **正式發布前還有其他意見嗎？ **
 
-Capture short answers and attach raw survey exports if you use an external form.
+如果您使用外部表單，請捕獲簡短的答案並附加原始調查導出。
 
-## Knowledge check
+## 知識檢查
 
-- Score: `__/10`
-- Incorrect questions (if any): `[#1, #4, …]`
-- Follow-up actions (if score < 9/10): remediation call scheduled? y/n
+- 分數：`__/10`
+- 錯誤問題（如有）：`[#1, #4, …]`
+- 後續行動（如果分數 < 9/10）：是否安排了補救電話？是/否
 
-## Sign-off
+## 簽核
 
-- Reviewer name & timestamp:
-- Docs/DevRel reviewer & timestamp:
+- 審稿人姓名和時間戳：
+- 文檔/DevRel 審閱者和時間戳：
 
-Store the signed copy with the associated artefacts so auditors can replay the
-wave without additional context.
+將簽名副本與相關工件一起存儲，以便審核員可以重播
+沒有額外上下文的揮手。

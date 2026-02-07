@@ -7,24 +7,26 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: JavaScript Connect preview recipe
 description: Stage Connect preview sessions, emit queue telemetry, and dial the `/v1/connect/ws` socket with `@iroha/iroha-js`.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-import SampleDownload from '@site/src/components/SampleDownload';
+SampleDownload-ı '@site/src/components/SampleDownload'dan idxal edin;
 
-This recipe shows how to combine `bootstrapConnectPreviewSession` with the
-WebSocket dialer exposed by `ToriiClient.openConnectWebSocket()`. The script
-mirrors the Connect section of the JS SDK roadmap: it mints deterministic
-preview URIs, records queue depth telemetry, and opens the canonical
-`/v1/connect/ws` endpoint using the `ws` package so Node.js apps can exercise the
-same flow as browsers.
+Bu resept `bootstrapConnectPreviewSession` ilə necə birləşdiriləcəyini göstərir
+WebSocket yığıcısı `ToriiClient.openConnectWebSocket()` tərəfindən ifşa edilib. Ssenari
+JS SDK yol xəritəsinin Qoşulma bölməsini əks etdirir: deterministikdir
+URI-ləri önizləyin, növbə dərinliyi telemetriyasını qeyd edir və kanonikləri açır
+`/v1/connect/ws` son nöqtəsi `ws` paketindən istifadə edərək Node.js tətbiqləri
+brauzerlər kimi eyni axın.
 
-<SampleDownload
+<Nümunə Yüklə
   href="/sdk-recipes/javascript/connect-preview.mjs"
-  filename="connect-preview.mjs"
-  description="Download the runnable script referenced in this recipe."
+  fayl adı = "connect-preview.mjs"
+  description="Bu reseptdə istinad edilən işlək skripti yükləyin."
 />
 
-## Prerequisites
+## İlkin şərtlər
 
 ```bash
 npm install @iroha/iroha-js ws
@@ -37,10 +39,10 @@ export IROHA_TORII_API_TOKEN="sandbox-token"
 export CONNECT_REGISTRATION_NODE="https://torii.backup.example"
 ```
 
-Set `CONNECT_ROLE` to `app` when you need to dial the application side of the
-handshake. The default role is `wallet`.
+Proqram tərəfini yığmaq lazım olduqda `CONNECT_ROLE`-ı `app` olaraq təyin edin.
+əl sıxma. Defolt rol `wallet`-dir.
 
-## Example script
+## Nümunə skript
 
 ```ts title="connect-preview.mjs"
 #!/usr/bin/env node
@@ -135,21 +137,21 @@ main().catch((error) => {
 });
 ```
 
-## Run & monitor
+## Çalışın və nəzarət edin
 
-- Execute the script with `node --env-file=.env connect-preview.mjs` (or export
-  the variables manually). The script logs the preview wallet URI, deeplink, and
-  queue depth before opening the WebSocket.
-- Feed telemetry dashboards by scraping the queue metrics the script prints for
-  overflow/expiry cases (`connect.queue_depth`, `connect.queue_overflow_total`,
-  `connect.queue_expired_total`). The `ConnectQueueError` helpers emit the
-  roadmap taxonomy (`queueOverflow`, `timeout`) so OTEL exporters can stay
-  consistent with Android/Swift clients.
-- Swap the role to `app` to inspect the application leg of the handshake. The
-  dialer automatically chooses the correct token (`token_app` vs. `token_wallet`)
-  and upgrades `http→ws`/`https→wss` so both roles share the same snippet.
+- Skripti `node --env-file=.env connect-preview.mjs` ilə icra edin (və ya ixrac
+  dəyişənləri əl ilə). Skript önizləmə cüzdanının URI-ni, dərin keçidi və qeyd edir
+  WebSocket-i açmadan əvvəl növbə dərinliyi.
+- Skriptin çap etdiyi növbə ölçülərini silməklə telemetriya tablosunu qidalandırın
+  daşqın/keçmə halları (`connect.queue_depth`, `connect.queue_overflow_total`,
+  `connect.queue_expired_total`). `ConnectQueueError` köməkçiləri
+  yol xəritəsi taksonomiyası (`queueOverflow`, `timeout`) beləliklə, OTEL ixracatçıları qala bilsinlər.
+  Android/Swift müştərilərinə uyğundur.
+- Əl sıxmanın tətbiq ayağını yoxlamaq üçün rolu `app` ilə dəyişdirin. The
+  yığan avtomatik olaraq düzgün nişanı seçir (`token_app` və `token_wallet`)
+  və `http→ws`/`https→wss` təkmilləşdirir ki, hər iki rol eyni parçanı paylaşır.
 
-This recipe closes the remaining JS5 documentation gap for the Connect preview
-story called out in `roadmap.md`: the portal now ships a turnkey sample plus
-queue telemetry guidance, matching the roadmap requirement to document the
-WebSocket walkthrough alongside the Connect session helpers.
+Bu resept Connect önizləməsi üçün qalan JS5 sənədləşmə boşluğunu bağlayır
+`roadmap.md`-də səslənən hekayə: portal indi açar təslim nümunəni göndərir.
+növbə telemetriya təlimatı, sənədləşdirmək üçün yol xəritəsi tələbinə uyğundur
+Qoşulma sessiyası köməkçiləri ilə yanaşı WebSocket prospekti.

@@ -4,39 +4,41 @@ direction: rtl
 source: docs/portal/docs/soranet/puzzle-service-operations.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: puzzle-service-operations
-title: Puzzle Service Operations Guide
-sidebar_label: Puzzle Service Ops
+מזהה: פאזל-שירות-פעולות
+כותרת: מדריך תפעול שירות פאזל
+sidebar_label: אופציות שירות פאזל
 description: Argon2/ML-DSA admission tickets کے لئے `soranet-puzzle-service` daemon کی آپریشنز۔
 ---
 
-:::note Canonical Source
+:::הערה מקור קנוני
 `docs/source/soranet/puzzle_service_operations.md` کی عکاسی کرتا ہے۔ جب تک پرانا documentation set retire نہ ہو، دونوں ورژنز sync رکھیں۔
 :::
 
-# Puzzle Service Operations Guide
+# מדריך תפעול שירות פאזל
 
-`tools/soranet-puzzle-service/` کا `soranet-puzzle-service` daemon
+`tools/soranet-puzzle-service/` או `soranet-puzzle-service` דמון
 Argon2-backed admission tickets جاری کرتا ہے جو relay کی `pow.puzzle.*` policy
 کو mirror کرتے ہیں، اور جب configure ہو تو edge relays کی جانب سے ML-DSA
 admission tokens broker کرتا ہے۔ یہ پانچ HTTP endpoints expose کرتا ہے:
 
-- `GET /healthz` - liveness probe.
-- `GET /v1/puzzle/config` - relay JSON (`handshake.descriptor_commit_hex`, `pow.*`) سے
+- `GET /healthz` - בדיקה חיה.
+- `GET /v1/puzzle/config` - ממסר JSON (`handshake.descriptor_commit_hex`, `pow.*`)
   اٹھائے گئے موثر PoW/puzzle parameters واپس کرتا ہے۔
-- `POST /v1/puzzle/mint` - Argon2 ticket mint کرتا ہے؛ optional JSON body
+- `POST /v1/puzzle/mint` - Argon2 ticket mint کرتا ہے؛ גוף JSON אופציונלי
   `{ "ttl_secs": <u64>, "transcript_hash_hex": "<32-byte hex>", "signed": true }`
   کم TTL کی درخواست کرتا ہے (policy window تک clamp)، ticket کو transcript hash
   سے bind کرتا ہے، اور signing keys configured ہوں تو relay-signed ticket +
   signature fingerprint واپس کرتا ہے۔
-- `GET /v1/token/config` - جب `pow.token.enabled = true` ہو تو active admission-token
+- `GET /v1/token/config` - ב-`pow.token.enabled = true` או או אסימון קבלה פעיל
   policy واپس کرتا ہے (issuer fingerprint، TTL/clock-skew bounds، relay ID، اور
-  merged revocation set).
-- `POST /v1/token/mint` - ML-DSA admission token mint کرتا ہے جو supplied resume hash
-  سے bound ہوتا ہے؛ request body `{ "transcript_hash_hex": "...", "ttl_secs": <u64>, "flags": <u8> }`
+  סט ביטולים ממוזג).
+- `POST /v1/token/mint` - אסימון כניסה של ML-DSA מנטה.
+  سے bound ہوتا ہے؛ גוף הבקשה `{ "transcript_hash_hex": "...", "ttl_secs": <u64>, "flags": <u8> }`
   قبول کرتا ہے۔
 
 Service کے بنائے گئے tickets کو integration test
@@ -78,43 +80,41 @@ cargo run -p soranet-puzzle-service -- \
 ```
 
 `--token-secret-hex` بھی دستیاب ہے جب secret out-of-band tooling pipeline کے ذریعے manage ہو۔
-Revocation file watcher `/v1/token/config` کو current رکھتا ہے؛ updates کو
-`soranet-admission-token revoke` کمانڈ کے ساتھ coordinate کریں تاکہ revocation state
-lag نہ کرے۔
-
-Relay JSON میں `pow.signed_ticket_public_key_hex` set کریں تاکہ signed PoW tickets
+Revocation file watcher `/v1/token/config` کو current رکھتا ہے؛ עדכונים קו
+`soranet-admission-token revoke` מצב ביטול קואורדינטה
+lag نہ کرے۔Relay JSON میں `pow.signed_ticket_public_key_hex` set کریں تاکہ signed PoW tickets
 verify کرنے کے لئے ML-DSA-44 public key advertise ہو؛ `/v1/puzzle/config` یہ key اور
 اس کا BLAKE3 fingerprint (`signed_ticket_public_key_fingerprint_hex`) echo کرتا ہے تاکہ
 clients verifier pin کر سکیں۔ Signed tickets relay ID اور transcript bindings کے خلاف
-validate ہوتے ہیں اور اسی revocation store کو share کرتے ہیں؛ raw 74-byte PoW tickets
-signed-ticket verifier configured ہونے پر بھی valid رہتے ہیں۔ Signer secret کو
+validate ہوتے ہیں اور اسی revocation store کو share کرتے ہیں؛ כרטיסי PoW גולמיים של 74 בתים
+signed-ticket verifier configured ہونے پر بھی valid رہتے ہیں۔ הסוד של החתימה
 `--signed-ticket-secret-hex` یا `--signed-ticket-secret-path` کے ذریعے service launch
 پر pass کریں؛ startup mismatched keypairs reject کرتا ہے اگر secret
 `pow.signed_ticket_public_key_hex` کے خلاف validate نہ ہو۔ `POST /v1/puzzle/mint`
 `"signed": true` (اور optional `"transcript_hash_hex"`) قبول کرتا ہے تاکہ Norito-encoded
-signed ticket raw ticket bytes کے ساتھ واپس ہو؛ responses میں `signed_ticket_b64`
+signed ticket raw ticket bytes کے ساتھ واپس ہو؛ תגובות מבית `signed_ticket_b64`
 اور `signed_ticket_fingerprint_hex` شامل ہوتے ہیں تاکہ replay fingerprints track ہوں۔
 ` signed = true` والی requests reject ہوتی ہیں اگر signer secret configured نہ ہو۔
 
-## Key rotation playbook
+## ספר הפעלה לסיבוב מפתח
 
 1. **نیا descriptor commit جمع کریں۔** Governance directory bundle میں relay
    descriptor commit publish کرتی ہے۔ Hex string کو relay JSON config میں
    `handshake.descriptor_commit_hex` میں copy کریں جو puzzle service کے ساتھ shared ہے۔
 2. **Puzzle policy bounds review کریں۔** تصدیق کریں کہ updated
-   `pow.puzzle.{memory_kib,time_cost,lanes}` values release plan کے مطابق ہیں۔ Operators کو
+   `pow.puzzle.{memory_kib,time_cost,lanes}` values ​​release plan کے مطابق ہیں۔ Operators کو
    Argon2 configuration relays میں deterministic رکھنا چاہئے (کم از کم 4 MiB memory،
-   1 <= lanes <= 16).
+   1 <= נתיבים <= 16).
 3. **Restart stage کریں۔** Governance rotation cutover announce کرے تو systemd unit یا
    container reload کریں۔ Service میں hot-reload نہیں ہے؛ نیا descriptor commit لینے کے لئے
    restart ضروری ہے۔
 4. **Validate کریں۔** `POST /v1/puzzle/mint` کے ذریعے ticket issue کریں اور تصدیق کریں کہ
-   `difficulty` اور `expires_at` نئی policy سے match ہوں۔ Soak report
+   `difficulty` اور `expires_at` نئی policy سے match ہوں۔ דוח להשרות
    (`docs/source/soranet/reports/pow_resilience.md`) reference کے لئے expected latency bounds
    capture کرتا ہے۔ Tokens enable ہوں تو `/v1/token/config` fetch کریں تاکہ advertised issuer
-   fingerprint اور revocation count expected values سے match ہوں۔
+   fingerprint اور revocation count expected values ​​سے match ہوں۔
 
-## Emergency disable procedure
+## נוהל השבתת חירום
 
 1. Shared relay configuration میں `pow.puzzle.enabled = false` set کریں۔
    `pow.required = true` رکھیں اگر hashcash fallback tickets لازمی رہنے چاہئیں۔
@@ -124,9 +124,7 @@ signed ticket raw ticket bytes کے ساتھ واپس ہو؛ responses میں `s
 4. `soranet_handshake_pow_difficulty` monitor کریں تاکہ difficulty expected hashcash value
    تک drop ہو، اور verify کریں کہ `/v1/puzzle/config` `puzzle = null` رپورٹ کرے۔
 
-## Monitoring اور alerting
-
-- **Latency SLO:** `soranet_handshake_latency_seconds` track کریں اور P95 کو 300 ms سے نیچے رکھیں۔
+## מעקב אחר התראת אויר- **Latency SLO:** `soranet_handshake_latency_seconds` track کریں اور P95 کو 300 ms سے نیچے رکھیں۔
   Soak test offsets guard throttles کے لئے calibration data فراہم کرتے ہیں۔
   【docs/source/soranet/reports/pow_resilience.md:1】
 - **Quota pressure:** `soranet_guard_capacity_report.py` کو relay metrics کے ساتھ استعمال کریں تاکہ
@@ -139,14 +137,14 @@ signed ticket raw ticket bytes کے ساتھ واپس ہو؛ responses میں `s
   revocation file rotate کرنا چاہئے جب کوئی token retire ہو تاکہ یہ endpoint درست رہے۔
 - **Service health:** `/healthz` کو معمول کی liveness cadence پر probe کریں اور alert کریں اگر
   `/v1/puzzle/mint` HTTP 500 responses دے (Argon2 parameter mismatch یا RNG failures کی نشاندہی).
-  Token minting errors `/v1/token/mint` پر HTTP 4xx/5xx responses کے ذریعے نظر آتے ہیں؛ repeated failures
+  Token minting errors `/v1/token/mint` پر HTTP 4xx/5xx responses کے ذریعے نظر آتے ہیں؛ כישלונות חוזרים ונשנים
   کو paging condition سمجھیں۔
 
-## Compliance اور audit logging
+## תאימות או רישום ביקורת
 
 Relays structured `handshake` events emit کرتے ہیں جن میں throttle reasons اور cooldown durations شامل ہوتے ہیں۔
 یقینی بنائیں کہ `docs/source/soranet/relay_audit_pipeline.md` میں بیان کردہ compliance pipeline ان logs کو ingest کرے
 تاکہ puzzle policy changes auditable رہیں۔ Puzzle gate enable ہو تو minted ticket samples اور Norito configuration
 snapshot کو rollout ticket کے ساتھ archive کریں تاکہ مستقبل کے audits کے لئے دستیاب ہوں۔ Maintenance windows سے پہلے
-mint کئے گئے admission tokens کو ان کے `token_id_hex` values کے ساتھ track کیا جانا چاہئے اور expire یا revoke ہونے
+mint کئے گئے admission tokens کو ان کے `token_id_hex` values ​​کے ساتھ track کیا جانا چاہئے اور expire یا revoke ہونے
 پر revocation file میں insert کیا جانا چاہئے۔

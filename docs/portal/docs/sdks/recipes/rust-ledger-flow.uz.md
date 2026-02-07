@@ -10,26 +10,27 @@ translation_last_reviewed: 2026-02-07
 title: Rust ledger flow recipe
 description: Use the Rust SDK to register an asset, mint supply, transfer it, and query balances against the default single-peer network.
 slug: /sdks/recipes/rust-ledger-flow
+translator: machine-google-reviewed
 ---
 
-import SampleDownload from '@site/src/components/SampleDownload';
+SampleDownloadni '@site/src/components/SampleDownload'dan import qilish;
 
-This recipe mirrors the [CLI ledger walkthrough](../../norito/ledger-walkthrough.md)
-but runs everything from a Rust binary. It reuses the default dev network
-(`docker compose -f defaults/docker-compose.single.yml up --build`) and the demo
-credentials in `defaults/client.toml`, so you can compare SDK and CLI hashes one
-for one.
+Ushbu retsept [CLI ledger walkthrough](../../norito/ledger-walkthrough.md)ni aks ettiradi
+lekin hamma narsani Rust ikkilik faylidan boshqaradi. U standart ishlab chiqaruvchi tarmog'idan qayta foydalanadi
+(`docker compose -f defaults/docker-compose.single.yml up --build`) va demo
+`defaults/client.toml` da hisob ma'lumotlari, shuning uchun siz SDK va CLI xeshlarini solishtirishingiz mumkin
+biri uchun.
 
-<SampleDownload
+<Namunani yuklab olish
   href="/sdk-recipes/rust/src/main.rs"
-  filename="src/main.rs"
-  description="Use this Rust source file as a baseline to follow along or to diff against your changes."
+  fayl nomi = "src/main.rs"
+  description="Ushbu Rust manba faylini kuzatish yoki oʻzgartirishlaringizdan farq qilish uchun asos sifatida foydalaning."
 />
 
-## Prerequisites
+## Old shartlar
 
-1. Run the dev peer with Docker Compose (see the [Norito quickstart](../../norito/quickstart.md)).
-2. Export the default admin/receiver accounts and the admin private key from
+1. Docker Compose bilan ishlab peerni ishga tushiring (qarang: [Norito tezkor boshlash](../../norito/quickstart.md)).
+2. Standart administrator/qabul qiluvchi hisoblarini va administrator shaxsiy kalitini eksport qiling
    `defaults/client.toml`:
 
    ```bash
@@ -38,16 +39,16 @@ for one.
    export ADMIN_PRIVATE_KEY="802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
    ```
 
-   The private key string is the multihash-encoded value stored under `[account].private_key`.
-3. Create a new workspace binary (or reuse an existing one):
+   Shaxsiy kalit qatori `[account].private_key` ostida saqlanadigan multixesh-kodlangan qiymatdir.
+3. Yangi ish maydoni ikkilik faylini yarating (yoki mavjudidan qayta foydalaning):
 
    ```bash
    cargo new --bin rust-ledger-recipe
    cd rust-ledger-recipe
    ```
 
-4. Add the dependencies (use a crates.io version if you are outside the
-   workspace):
+4. Bog'liqlarni qo'shing (agar siz tashqarida bo'lsangiz crates.io versiyasidan foydalaning
+   ish maydoni):
 
    ```toml title="Cargo.toml"
    [dependencies]
@@ -57,7 +58,7 @@ for one.
    iroha_data_model = { path = "../../crates/iroha_data_model", features = ["transparent_api", "json"] }
    ```
 
-## Example program
+## Namuna dastur
 
 ```rust title="src/main.rs"
 use std::str::FromStr;
@@ -112,28 +113,28 @@ fn main() -> Result<()> {
 }
 ```
 
-## Run the recipe
+## Retseptni ishga tushiring
 
 ```bash
 cargo run
 ```
 
-You should see log output similar to:
+Quyidagiga o'xshash jurnal chiqishini ko'rishingiz kerak:
 
 ```
 ih58... now holds:
   50 units of coffee#wonderland
 ```
 
-If the asset definition already exists, the register call returns a
-`ValidationError::Duplicate`. Either ignore it (the mint still succeeds) or pick
-a new name.
+Agar aktiv ta'rifi allaqachon mavjud bo'lsa, ro'yxatga olish chaqiruvi a ni qaytaradi
+`ValidationError::Duplicate`. Yoki buni e'tiborsiz qoldiring (yalpiz hali ham muvaffaqiyatli) yoki tanlang
+yangi nom.
 
-## Verify hashes and parity
+## Xesh va paritetni tekshiring
 
-- Use `iroha --config defaults/client.toml transaction get --hash <hash>` to
-  inspect the transactions that the SDK submitted.
-- Cross-check balances with `iroha --config defaults/client.toml asset list all --table`
-  or `asset list filter '{"id":"coffee#wonderland##<account>"}'`.
-- Repeat the same flow from the CLI walkthrough to confirm both surfaces produce
-  the same Norito payloads and transaction statuses.
+- `iroha --config defaults/client.toml transaction get --hash <hash>` dan foydalaning
+  SDK taqdim etgan tranzaktsiyalarni tekshiring.
+- `iroha --config defaults/client.toml asset list all --table` bilan balanslarni o'zaro tekshirish
+  yoki `asset list filter '{"id":"coffee#wonderland##<account>"}'`.
+- Ikkala sirt ishlab chiqarishni tasdiqlash uchun CLI-dan bir xil oqimni takrorlang
+  bir xil Norito foydali yuklar va tranzaksiya holatlari.

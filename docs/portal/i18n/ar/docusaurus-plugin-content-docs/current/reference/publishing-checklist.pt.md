@@ -4,42 +4,40 @@ direction: rtl
 source: docs/portal/docs/reference/publishing-checklist.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Checklist de publicacao
+# قائمة المراجعة العامة
 
-Use este checklist sempre que atualizar o portal de desenvolvedores. Ele garante que o build de CI, o deploy no GitHub Pages e os smoke tests manuais cobrem todas as secoes antes de um release ou marco do roadmap.
+استخدم قائمة التحقق هذه دائمًا لتحديث بوابة المطورين. إنه يضمن إنشاء CI، أو عدم نشر صفحات GitHub، كما يتم إجراء اختبارات الدخان على مدار كل الثواني قبل الإصدار أو وضع علامة على خريطة الطريق.
 
-## 1. Validacao local
+## 1. فاليداكاو محلي
 
-- `npm run sync-openapi -- --version=current --latest` (adicione um ou mais flags `--mirror=<label>` quando o Torii OpenAPI mudar para um snapshot congelado).
-- `npm run build` - confirme que o hero copy `Build on Iroha with confidence` ainda aparece em `build/index.html`.
-- `./docs/portal/scripts/preview_verify.sh --build-dir build` - verifique o manifesto de checksums (adicione `--descriptor`/`--archive` ao testar artefatos de CI baixados).
-- `npm run serve` - inicia o helper de preview com checksum gating que verifica o manifesto antes de chamar `docusaurus serve`, para que reviewers nunca naveguem um snapshot sem assinatura (o alias `serve:verified` permanece para chamadas explicitas).
-- Faca um spot-check do markdown alterado via `npm run start` e o servidor de live reload.
+- `npm run sync-openapi -- --version=current --latest` (أضف علامة أو أكثر إلى `--mirror=<label>` عندما أو Torii OpenAPI من أجل لقطة مجمعة).
+- `npm run build` - أكد أن البطل نسخة `Build on Iroha with confidence` سيظهر في `build/index.html`.
+- `./docs/portal/scripts/preview_verify.sh --build-dir build` - التحقق من بيان المجموع الاختباري (أضف `--descriptor`/`--archive` إلى اختبار CI baixados).
+- `npm run serve` - بدء مساعدة المعاينة من خلال المجموع الاختباري للتحقق من البيان قبل الاتصال بـ `docusaurus serve`، حتى لا يتمكن المراجعون من تصفح لقطة بدون حذفها (أو الاسم المستعار `serve:verified` للاستمرار في المكالمات الصريحة).
+- قم بإجراء فحص فوري لإجراء تخفيض السعر عبر `npm run start` وخادم إعادة التحميل المباشر.
 
-## 2. Checks de pull request
+## 2. الشيكات طلب السحب
 
-- Verifique que o job `docs-portal-build` passou em `.github/workflows/check-docs.yml`.
-- Confirme que `ci/check_docs_portal.sh` rodou (logs de CI mostram o hero smoke check).
-- Garanta que o workflow de preview enviou um manifesto (`build/checksums.sha256`) e que o script de verificacao de preview foi bem-sucedido (logs mostram a saida de `scripts/preview_verify.sh`).
-- Adicione a URL de preview publicada do ambiente GitHub Pages na descricao do PR.
+- تحقق من أن المهمة `docs-portal-build` تمر عبر `.github/workflows/check-docs.yml`.
+- قم بتأكيد `ci/check_docs_portal.sh` Rodou (سجلات CI Mostram أو فحص الدخان البطل).
+- ضمان أن سير العمل في المعاينة يرسل بيانًا (`build/checksums.sha256`) وأن نص التحقق من المعاينة قد نجح (يتم تسجيل الدخول إلى `scripts/preview_verify.sh`).
+- إضافة عنوان URL للمعاينة المنشورة لصفحات GitHub المحيطة لوصف العلاقات العامة.## 3. Aprovacao por secao
 
-## 3. Aprovacao por secao
-
-| Secao | Owner | Checklist |
+| سيكاو | المالك | قائمة المراجعة |
 |---------|-------|-----------|
-| Homepage | DevRel | Hero copy renderiza, quickstart cards linkam para rotas validas, botoes CTA resolvem. |
-| Norito | Norito WG | Guias overview e getting-started referenciam os flags mais recentes do CLI e os docs do schema Norito. |
-| SoraFS | Storage Team | Quickstart roda ate o fim, campos do report de manifest documentados, instrucoes de simulacao de fetch verificadas. |
-| SDK guides | SDK leads | Guias Rust/Python/JS compilam os exemplos atuais e linkam para repos live. |
-| Reference | Docs/DevRel | O index lista as specs mais recentes, a referencia do codec Norito coincide com `norito.md`. |
-| Preview artifact | Docs/DevRel | O artefato `docs-portal-preview` esta anexado ao PR, smoke checks passam, o link e compartilhado com reviewers. |
-| Security & Try it sandbox | Docs/DevRel / Security | OAuth device-code login configurado (`DOCS_OAUTH_*`), checklist `security-hardening.md` executada, headers CSP/Trusted Types verificados via `npm run build` ou `npm run probe:portal`. |
+| الصفحة الرئيسية | ديفريل | يتم عرض نسخة البطل، وربط بطاقات التشغيل السريع لتدوير الصالحيات، وحل أزرار CTA. |
+| Norito | Norito WG | نظرة عامة على الدليل ومرجع البدء للأعلام الأحدث لـ CLI والمستندات للمخطط Norito. |
+| SoraFS | فريق التخزين | قام برنامج Quickstart بقراءة الفيلم، حيث يقوم بالإبلاغ عن البيانات الموثقة، وتعليمات المحاكاة لجلب التحقق. |
+| أدلة SDK | يؤدي SDK | يقوم Guias Rust/Python/JS بتجميع الأمثلة حاليًا وربطها للتخزين المباشر. |
+| مرجع | مستندات/ديفريل | قائمة الفهرس حسب أحدث المواصفات، مرجعها إلى برنامج الترميز Norito يتزامن مع `norito.md`. |
+| معاينة القطعة الأثرية | مستندات/ديفريل | O artefato `docs-portal-preview` ista anexado ao PR, smoke checks passam, o link e compartilhado com reviewers. |
+| الأمان وجرب وضع الحماية | مستندات/DevRel / الأمن | تكوين تسجيل الدخول إلى رمز جهاز OAuth (`DOCS_OAUTH_*`)، وقائمة التحقق `security-hardening.md` المنفذة، ورؤوس CSP/الأنواع الموثوقة التي تم التحقق منها عبر `npm run build` أو `npm run probe:portal`. |
 
-Marque cada linha como parte do seu review do PR, ou anote tarefas de follow-up para manter o tracking de status preciso.
+قم بتمييز كل جزء من الجزء الخاص بك بمراجعة العلاقات العامة، أو قم بتدوين مهام المتابعة للمساعدة في تتبع الحالة بدقة.
 
-## 4. Release notes
-
-- Inclua `https://docs.iroha.tech/` (ou a URL do ambiente do job de deployment) nas release notes e atualizacoes de status.
-- Destaque quaisquer secoes novas ou alteradas para que as equipes downstream saibam onde reexecutar seus proprios smoke tests.
+## 4. ملاحظات الإصدار- قم بتضمين `https://docs.iroha.tech/` (أو عنوان URL المحيط بمهمة النشر) في ملاحظات الإصدار وتحديث الحالة.
+- قم بإزالة كل ما هو جديد أو متغير حتى تتمكن معدات سايبام من إعادة تنفيذ اختبارات الدخان الخاصة بها.

@@ -4,30 +4,32 @@ direction: ltr
 source: docs/portal/docs/norito/examples/call-transfer-asset.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-slug: /norito/examples/call-transfer-asset
-title: Invocar transferencia do host a partir de Kotodama
-description: Mostra como um entrypoint Kotodama pode chamar a instrucao do host `transfer_asset` com validacao inline de metadados.
-source: crates/ivm/docs/examples/08_call_transfer_asset.ko
+пул: /norito/examples/call-transfer-asset
+title: Invocar Transferencia do Host a Partir de Kotodama
+описание: Используйте точку входа Kotodama, чтобы получить инструкции для хоста `transfer_asset` с валидацией встроенных метаданных.
+источник: crates/ivm/docs/examples/08_call_transfer_asset.ko
 ---
 
-Mostra como um entrypoint Kotodama pode chamar a instrucao do host `transfer_asset` com validacao inline de metadados.
+Используя точку входа Kotodama, можно получить инструкции для хоста `transfer_asset` с подтверждением встроенных метаданных.
 
-## Roteiro do livro razao
+## Ротейру до Ливро Разау
 
-- Financie a autoridade do contrato (por exemplo `ih58...`) com o ativo que ela transferira e conceda a autoridade o papel `CanTransfer` ou permissao equivalente.
-- Chame o entrypoint `call_transfer_asset` para transferir 5 unidades da conta do contrato para `ih58...`, refletindo como a automacao on-chain pode envolver chamadas do host.
-- Verifique saldos via `FindAccountAssets` ou `iroha_cli ledger assets list --account ih58...` e inspecione eventos para confirmar que o guard de metadados registrou o contexto da transferencia.
+- Финансирование авторитарного договора (например, `ih58...`) как активная операция, требующая перевода и предоставление авторизации на бумаге `CanTransfer` или эквивалентного разрешения.
+- Вызовите точку входа `call_transfer_asset` для передачи 5 сообщений из договора по контрато для `ih58...`, отобразите как автоматический сетевой способ охвата хоста.
+- Подтвердите вводы через `FindAccountAssets` или `iroha_cli ledger assets list --account ih58...` и проверьте события, чтобы подтвердить защиту регистрации метаданных или контекста передачи.
 
-## Guias de SDK relacionados
+## Рекомендации по использованию SDK
 
-- [Quickstart do SDK Rust](/sdks/rust)
-- [Quickstart do SDK Python](/sdks/python)
-- [Quickstart do SDK JavaScript](/sdks/javascript)
+- [Краткий старт работы с SDK Rust](/sdks/rust)
+- [Краткий старт работы с SDK Python](/sdks/python)
+- [Быстрое начало работы с SDK JavaScript](/sdks/javascript)
 
-[Baixe a fonte Kotodama](/norito-snippets/call-transfer-asset.ko)
+[Вставьте шрифт Kotodama](/norito-snippets/call-transfer-asset.ko)
 
 ```text
 // Direct builtin call (no contract-style call syntax) inside a contract.

@@ -7,72 +7,73 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 305a3f3b253a013825d4dd798d2282e111913ec777fe0fbf5b02a92c7172b92a
 source_last_modified: "2025-12-29T18:16:35.076964+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
-# SNS Arbitration Transparency Report — <Month YYYY>
+# SNS арбитраж асыҡлыҡ тураһында отчет — <Ай ЙЫЙ>
 
-- **Suffix:** `<.sora / .nexus / .dao>`
-- **Reporting window:** `<ISO start>` → `<ISO end>`
-- **Prepared by:** `<Council liaison>`
-- **Source artefacts:** `cases.ndjson` SHA256 `<hash>`, dashboard export `<filename>.json`
+- **Ялым-төшөм:** `<.sora / .nexus / .dao>`
+- **Отчет тәҙрә:** I18NI000000003X → `<ISO end>`
+- **Әҙерләнгән:** `<Council liaison>`
+- **Сығанаҡ артефакттары:** I18NI000000006X SHA256 `<hash>`, приборҙар таҡтаһы экспорты I18NI0000008X.
 
-## 1. Executive Summary
+## 1. Башҡарма резюме
 
-- Total new cases: `<count>`
-- Cases closed this period: `<count>`
-- SLA compliance: `<ack %>` acknowledge / `<resolution %>` decision
-- Guardian overrides issued: `<count>`
-- Transfers/refunds executed: `<count>`
+- Дөйөм яңы осраҡтар: `<count>` X
+- Был осорҙо япты: I18NI000000010X
+- SLA үтәү: `<ack %>` таный / `<resolution %>` ҡарары
+- Һаҡсы өҫтөнлөк бирелгән: `<count>`
+- Трансферҙар/ҡайтарыу башҡарылған: `<count>`
 
-## 2. Case Mix
+## 2.
 
-| Dispute type | New cases | Closed cases | Median resolution (days) |
-|--------------|-----------|--------------|--------------------------|
-| Ownership | 0 | 0 | 0 |
-| Policy violation | 0 | 0 | 0 |
-| Abuse | 0 | 0 | 0 |
-| Billing | 0 | 0 | 0 |
-| Other | 0 | 0 | 0 |
+| Тип бәхәс | Яңы осраҡтар | Ябыҡ осраҡтар | Медиана асыҡлығы (көндәр) |
+|------------|-------------|----------------------------------------------|
+| Милек | 0 | 0 | 0 |
+| Сәйәсәт боҙоу | 0 | 0 | 0 |
+| Йәберләү | 0 | 0 | 0 |
+| Биллинг | 0 | 0 | 0 |
+| Башҡа | 0 | 0 | 0 |
 
-## 3. SLA Performance
+## 3. СЛА етештереүсәнлеге
 
-| Priority | Acknowledge SLA | Achieved | Resolution SLA | Achieved | Breaches |
-|----------|-----------------|----------|----------------|----------|----------|
-| Urgent | ≤ 2 h | 0% | ≤ 72 h | 0% | 0 |
-| High | ≤ 8 h | 0% | ≤ 10 d | 0% | 0 |
-| Standard | ≤ 24 h | 0% | ≤ 21 d | 0% | 0 |
-| Info | ≤ 3 d | 0% | ≤ 30 d | 0% | 0 |
+| Өҫтөнлөк | Ышаныс СЛА | Ҡабул ителгән | Резолюция СЛА | Ҡабул ителгән | Бығарыуҙар |
+|---------|------------------------------------------------------|---|--------------|
+| Ашығыс | ≤ 2h | 0% | ≤ 72h | 0% | 0 |
+| Юғары | ≤ 8h | 0% | ≤ 10d | 0% | 0 |
+| Стандарт | ≤ 24h | 0% | ≤ 21d | 0% | 0 |
+| Инфо | ≤ 3d | 0% | ≤ 30d | 0% | 0 |
 
-Describe root causes for any breaches and link to remediation tickets.
+Һүрәтләү өсөн тамыр сәбәптәре теләһә ниндәй боҙоуҙар һәм һылтанмаларҙы төҙәтеү билеттары.
 
-## 4. Case Register
+## 4.
 
-| Case ID | Selector | Priority | Status | Outcome | Notes |
-|---------|----------|----------|--------|---------|-------|
-| SNS-YYYY-NNNNN | `label.suffix` | Standard | Closed | Upheld | `<summary>` |
+| Идентификатор осрағы | Һайлаусы | Өҫтөнлөк | Статус | Һөҙөмтә | Иҫкәрмәләр |
+|--------|-----------|-----------|--------|----------|---------||
+| SNS-YYYY-NNNNN | `label.suffix` | Стандарт | Ябыҡ | Ҡабул итеү | `<summary>` |
 
-Provide one-line notes referencing anonymised facts or public vote links. Seal
-where required and mention redactions applied.
+Аноним факттар йәки йәмәғәт тауыш биреүҙең һылтанмалары һылтанма буйынса бер юллыҡ иҫкәрмәләр бирергә. Тюлень
+ҡайҙа кәрәк һәм телгә алыу редакциялар ҡулланыла.
 
-## 5. Actions & Remedies
+## 5. Акциялар һәм саралар
 
-- **Freezes / releases:** `<counts + case ids>`
-- **Transfers:** `<counts + assets moved>`
-- **Billing adjustments:** `<credits/debits>`
-- **Policy follow-ups:** `<tickets or RFCs opened>`
+- **Фриздар / релиздар:** `<counts + case ids>`
+- **Күсереүселәр:** I18NI000000018X.
+- **Биллинг көйләүҙәр:** I18NI000000019X X
+- **Сәйәсәтле күҙәтеүҙәр:** I18NI000000020X
 
-## 6. Appeals & Guardian Overrides
+## 6. Апелляция & Һаҡсы өҫтөнлөклө
 
-Summarise any appeals escalated to the guardian board, including timestamps and
-decisions (approve/deny). Link to `sns governance appeal` records or council
-votes.
+Йәмғеһе теләһә ниндәй мөрәжәғәттәрҙе опекун таҡтаһына, шул иҫәптән ваҡыт маркаларына һәм
+ҡарарҙар (раҫлау/инҡар итеү). Һылтанма I18NI000000021X рекордтары йәки совет
+тауыш бирә.
 
-## 7. Outstanding Items
+## 7. Күренекле әйберҙәр
 
-- `<Action item>` — Owner `<name>`, ETA `<date>`
-- `<Action item>` — Owner `<name>`, ETA `<date>`
+- I18NI000000022X — хужа `<name>`, ETA `<date>`.
+- I18NI000000025X — хужа `<name>`, ETA I18NI000000027ХХ.
 
-Attach NDJSON, Grafana exports, and CLI logs referenced in this report.
+NDJSON, I18NT0000000000X экспорты беркетергә, һәм был отчетта CLI журналдары һылтанма.

@@ -11,43 +11,44 @@ id: deploy-guide
 title: SoraFS Deployment Guide
 sidebar_label: Deployment Guide
 description: Promote the developer portal through the SoraFS pipeline with deterministic builds, Sigstore signing, and rollback drills.
+translator: machine-google-reviewed
 ---
 
-## Overview
+## მიმოხილვა
 
-This playbook converts roadmap items **DOCS-7** (SoraFS publishing) and **DOCS-8**
-(CI/CD pin automation) into an actionable procedure for the developer portal.
-It covers the build/lint phase, SoraFS packaging, Sigstore-backed manifest
-signing, alias promotion, verification, and rollback drills so every preview and
-release artefact is reproducible and auditable.
+ეს სათამაშო წიგნი გარდაქმნის საგზაო რუქის ერთეულებს **DOCS-7** (SoraFS გამომცემლობა) და **DOCS-8**
+(CI/CD pin ავტომატიზაცია) დეველოპერის პორტალისთვის მოქმედ პროცედურაში.
+იგი მოიცავს აწყობის/ჩამოყრის ფაზას, SoraFS შეფუთვას, Sigstore-ზე დამყარებულ მანიფესტს
+ხელმოწერის, მეტსახელის პრომოუშენის, გადამოწმების და უკან დაბრუნების წვრთნები ასე რომ ყოველი გადახედვა და
+გამოშვების არტეფაქტი არის რეპროდუცირებადი და აუდიტორული.
 
-The flow assumes you have the `sorafs_cli` binary (built with
-`--features cli`), access to a Torii endpoint with pin-registry permissions, and
-OIDC credentials for Sigstore. Store long-lived secrets (`IROHA_PRIVATE_KEY`,
-`SIGSTORE_ID_TOKEN`, Torii tokens) in your CI vault; local runs can source them
-from shell exports.
+ნაკადი ვარაუდობს, რომ თქვენ გაქვთ `sorafs_cli` ორობითი (აშენებული
+`--features cli`), წვდომა Torii საბოლოო წერტილზე პინი-რეესტრის ნებართვებით და
+OIDC რწმუნებათა სიგელები Sigstore-ისთვის. შეინახეთ ხანგრძლივი საიდუმლოებები (`IROHA_PRIVATE_KEY`,
+`SIGSTORE_ID_TOKEN`, Torii ჟეტონები) თქვენს CI სარდაფში; ადგილობრივ გაშვებებს შეუძლიათ მათი წყარო
+ჭურვის ექსპორტიდან.
 
-## Prerequisites
+## წინაპირობები
 
-- Node 18.18+ with `npm` or `pnpm`.
-- `sorafs_cli` from `cargo run -p sorafs_car --features cli --bin sorafs_cli`.
-- Torii URL that exposes `/v1/sorafs/*` plus an authority account/private key
-  that can submit manifests and aliases.
-- OIDC issuer (GitHub Actions, GitLab, workload identity, etc.) to mint a
+- კვანძი 18.18+ `npm` ან `pnpm`.
+- `sorafs_cli` `cargo run -p sorafs_car --features cli --bin sorafs_cli`-დან.
+- Torii URL, რომელიც ასახავს `/v1/sorafs/*`-ს, პლუს ავტორიტეტული ანგარიშის/პირადი გასაღების
+  რომელსაც შეუძლია მანიფესტებისა და მეტსახელების წარდგენა.
+- OIDC გამომცემელი (GitHub Actions, GitLab, სამუშაო დატვირთვის იდენტიფიკაცია და ა.შ.)
   `SIGSTORE_ID_TOKEN`.
-- Optional: `examples/sorafs_cli_quickstart.sh` for dry runs and
-  `docs/source/sorafs_ci_templates.md` for GitHub/GitLab workflow scaffolding.
-- Configure the Try it OAuth variables (`DOCS_OAUTH_*`) and run the
-  [security-hardening checklist](./security-hardening.md) before promoting a build
-  outside the lab. The portal build now fails when these variables are missing
-  or when the TTL/polling knobs fall outside the enforced windows; export
-  `DOCS_OAUTH_ALLOW_INSECURE=1` only for disposable local previews. Attach the
-  pen-test evidence to the release ticket.
+- სურვილისამებრ: `examples/sorafs_cli_quickstart.sh` მშრალი სირბილისთვის და
+  `docs/source/sorafs_ci_templates.md` GitHub/GitLab სამუშაო ნაკადის ხარაჩოებისთვის.
+- დააკონფიგურირეთ Try it OAuth ცვლადები (`DOCS_OAUTH_*`) და გაუშვით
+  [უსაფრთხოების გამკვრივების საკონტროლო სია] (./security-hardening.md) კონსტრუქციის დაწინაურებამდე
+  ლაბორატორიის გარეთ. პორტალის აწყობა ახლა ვერ ხერხდება, როდესაც ეს ცვლადები აკლია
+  ან როდესაც TTL/საარჩევნო ღილაკები ცვივა იძულებითი ფანჯრების გარეთ; ექსპორტი
+  `DOCS_OAUTH_ALLOW_INSECURE=1` მხოლოდ ერთჯერადი ადგილობრივი გადახედვისთვის. მიამაგრეთ
+  კალამი ტესტის მტკიცებულება გათავისუფლების ბილეთზე.
 
-## Step 0 — Capture a Try it proxy bundle
+## ნაბიჯი 0 - გადაიღეთ Try it proxy პაკეტი
 
-Before promoting a preview to Netlify or the gateway, stamp the Try it proxy
-sources and signed OpenAPI manifest digest into a deterministic bundle:
+სანამ Netlify-ზე ან კარიბჭეზე გადახედვის პოპულარიზაციას განახორციელებთ, დანიშნეთ ბეჭდით Try it proxy
+წყაროები და ხელმოწერილი OpenAPI მანიფესტი დაიჯესტი დეტერმინისტულ პაკეტში:
 
 ```bash
 cd docs/portal
@@ -57,14 +58,14 @@ npm run release:tryit-proxy -- \
   --label preview-2026-02-14
 ```
 
-`scripts/tryit-proxy-release.mjs` copies the proxy/probe/rollback helpers,
-verifies the OpenAPI signature, and writes `release.json` plus
-`checksums.sha256`. Attach this bundle to the Netlify/SoraFS gateway promotion
-ticket so reviewers can replay the exact proxy sources and Torii target hints
-without rebuilding. The bundle also records whether client-supplied bearers were
-enabled (`allow_client_auth`) to keep the rollout plan and CSP rules in sync.
+`scripts/tryit-proxy-release.mjs` აკოპირებს პროქსი/ზონდი/დაბრუნების დამხმარეებს,
+ამოწმებს OpenAPI ხელმოწერას და წერს `release.json` plus
+`checksums.sha256`. მიამაგრეთ ეს პაკეტი Netlify/SoraFS კარიბჭის აქციაზე
+ბილეთი, რათა მიმომხილველებმა შეძლონ გადაითამაშონ ზუსტი პროქსი წყაროები და Torii სამიზნე მინიშნებები
+აღდგენის გარეშე. პაკეტში ასევე აღირიცხება იყო თუ არა კლიენტის მიერ მიწოდებული მატარებლები
+ჩართულია (`allow_client_auth`), რათა შეინარჩუნოს გაშვების გეგმა და CSP წესები სინქრონიზებული.
 
-## Step 1 — Build and lint the portal
+## ნაბიჯი 1 - შექმენით და გააფართოვეთ პორტალი
 
 ```bash
 cd docs/portal
@@ -77,19 +78,19 @@ npm run check:links
 npm run build
 ```
 
-`npm run build` automatically executes `scripts/write-checksums.mjs`, producing:
+`npm run build` ავტომატურად ახორციელებს `scripts/write-checksums.mjs`-ს, აწარმოებს:
 
-- `build/checksums.sha256` — SHA256 manifest suitable for `sha256sum -c`.
-- `build/release.json` — metadata (`tag`, `generated_at`, `source`) pinned into
-  every CAR/manifest.
+- `build/checksums.sha256` — SHA256 მანიფესტი, რომელიც შესაფერისია `sha256sum -c`-ისთვის.
+- `build/release.json` — მეტამონაცემები (`tag`, `generated_at`, `source`) ჩამაგრებული
+  ყოველი მანქანა/მანიფესტი.
 
-Archive both files alongside the CAR summary so reviewers can diff preview
-artefacts without rebuilding.
+დაარქივეთ ორივე ფაილი CAR-ის შეჯამებასთან ერთად, რათა მიმომხილველებმა შეძლონ გადახედვის განსხვავება
+არტეფაქტები აღდგენის გარეშე.
 
-## Step 2 — Package the static assets
+## ნაბიჯი 2 - შეფუთეთ სტატიკური აქტივები
 
-Run the CAR packer against the Docusaurus output directory. The example below
-writes all artefacts under `artifacts/devportal/`.
+გაუშვით CAR შეფუთვა Docusaurus გამომავალი დირექტორიაში. მაგალითი ქვემოთ
+წერს ყველა არტეფაქტს `artifacts/devportal/` ქვეშ.
 
 ```bash
 OUT=artifacts/devportal
@@ -103,25 +104,25 @@ sorafs_cli car pack \
   --chunker-handle sorafs.sf1@1.0.0
 ```
 
-The summary JSON captures chunk counts, digests, and proof-planning hints that
-`manifest build` and CI dashboards reuse later.
+JSON-ის შეჯამება აღწერს ნაწილთა რაოდენობას, დაიჯესტს და მტკიცებულების დაგეგმვის მინიშნებებს, რომ
+`manifest build` და CI დაფები ხელახლა გამოიყენება მოგვიანებით.
 
-## Step 2b — Package OpenAPI and SBOM companions
+## ნაბიჯი 2b - პაკეტი OpenAPI და SBOM კომპანიონები
 
-DOCS-7 requires publishing the portal site, OpenAPI snapshot, and SBOM payloads
-as distinct manifests so gateways can staple `Sora-Proof`/`Sora-Content-CID`
-headers for each artefact. The release helper
-(`scripts/sorafs-pin-release.sh`) already packages the OpenAPI directory
-(`static/openapi/`) and SBOMs emitted via `syft` into separate
-`openapi.*`/`*-sbom.*` CARs and records the metadata in
-`artifacts/sorafs/portal.additional_assets.json`. When running the manual flow,
-repeat Steps 2–4 for each payload with its own prefixes and metadata labels
-(for example `--car-out "$OUT"/openapi.car` plus
-`--metadata alias_label=docs.sora.link/openapi`). Register every manifest/alias
-pair in Torii (site, OpenAPI, portal SBOM, OpenAPI SBOM) before switching DNS so
-the gateway can serve stapled proofs for all published artefacts.
+DOCS-7 მოითხოვს პორტალის საიტის, OpenAPI სნეპშოტის და SBOM დატვირთვის გამოქვეყნებას
+როგორც განსხვავებულად ვლინდება, ისე კარიბჭეებს შეუძლიათ დაამაგრონ `Sora-Proof`/`Sora-Content-CID`
+სათაურები თითოეული არტეფაქტისთვის. გათავისუფლების დამხმარე
+(`scripts/sorafs-pin-release.sh`) უკვე შეფუთულია OpenAPI დირექტორია
+(`static/openapi/`) და SBOM-ები, რომლებიც გამოსხივებულია `syft`-ით ცალკე
+`openapi.*`/`*-sbom.*` მანქანები და ჩაწერს მეტამონაცემებს
+`artifacts/sorafs/portal.additional_assets.json`. ხელით ნაკადის გაშვებისას,
+გაიმეორეთ ნაბიჯები 2–4 თითოეული დატვირთვისთვის საკუთარი პრეფიქსებითა და მეტამონაცემების ეტიკეტებით
+(მაგალითად `--car-out "$OUT"/openapi.car` პლუს
+`--metadata alias_label=docs.sora.link/openapi`). დაარეგისტრირეთ ყველა მანიფესტი/ალიასი
+დაწყვილება Torii-ში (საიტი, OpenAPI, პორტალი SBOM, OpenAPI SBOM) DNS-ის გადართვამდე.
+კარიბჭე შეიძლება ემსახურებოდეს ყველა გამოქვეყნებულ არტეფაქტს.
 
-## Step 3 — Build the manifest
+## ნაბიჯი 3 - შექმენით მანიფესტი
 
 ```bash
 sorafs_cli manifest build \
@@ -134,10 +135,10 @@ sorafs_cli manifest build \
   --metadata alias_label=docs.sora.link
 ```
 
-Tune pin-policy flags to your release window (for example, `--pin-storage-class
-hot` for canaries). The JSON variant is optional but convenient for code review.
+დაარეგულირეთ pin-policy flags თქვენი გამოშვების ფანჯარაში (მაგალითად, `--pin-storage-class
+ცხელი` კანარებისთვის). JSON ვარიანტი არჩევითია, მაგრამ მოსახერხებელია კოდის განხილვისთვის.
 
-## Step 4 — Sign with Sigstore
+## ნაბიჯი 4 — მოაწერეთ ხელი Sigstore-ით
 
 ```bash
 sorafs_cli manifest sign \
@@ -149,17 +150,17 @@ sorafs_cli manifest sign \
   --identity-token-audience sorafs-devportal
 ```
 
-The bundle records the manifest digest, chunk digests, and a BLAKE3 hash of the
-OIDC token without persisting the JWT. Keep both the bundle and detached
-signature; production promotions can reuse the same artefacts instead of resigning.
-Local runs can replace the provider flags with `--identity-token-env` (or set
-`SIGSTORE_ID_TOKEN` in the environment) when an external OIDC helper issues the
-token.
+ნაკრები იწერს მანიფესტის შეჯამებას, ნაწილაკების დაშლას და BLAKE3 ჰეშის
+OIDC ჟეტონი JWT-ის შენარჩუნების გარეშე. შეინახეთ შეკვრაც და განცალკევებით
+ხელმოწერა; წარმოების აქციებს შეუძლიათ იგივე არტეფაქტების ხელახლა გამოყენება თანამდებობიდან გადადგომის ნაცვლად.
+ლოკალურ გაშვებებს შეუძლიათ შეცვალონ პროვაიდერის დროშები `--identity-token-env`-ით (ან დააყენოთ
+`SIGSTORE_ID_TOKEN` გარემოში) როდესაც გარე OIDC დამხმარე გასცემს
+ჟეტონი.
 
-## Step 5 — Submit to the pin registry
+## ნაბიჯი 5 - გაგზავნეთ პინის რეესტრში
 
-Submit the signed manifest (and chunk plan) to Torii. Always request a summary
-so the resulting registry entry/alias proof is auditable.
+გაგზავნეთ ხელმოწერილი მანიფესტი (და ნაწილის გეგმა) Torii-ზე. ყოველთვის მოითხოვეთ რეზიუმე
+ასე რომ, რეესტრის ჩანაწერის/ალიასის მტკიცებულება არის აუდიტი.
 
 ```bash
 sorafs_cli manifest submit \
@@ -176,21 +177,21 @@ sorafs_cli manifest submit \
   --response-out "$OUT"/portal.submit.response.json
 ```
 
-When rolling out a preview or canary alias (`docs-preview.sora`), repeat the
-submission with a unique alias so QA can verify content before production
-promotion.
+გადახედვისას ან კანარის მეტსახელის (`docs-preview.sora`) გამოქვეყნებისას, გაიმეორეთ
+წარდგენა უნიკალური მეტსახელით, რათა QA-მ შეძლოს კონტენტის შემოწმება წარმოებამდე
+დაწინაურება.
 
-Alias binding requires three fields: `--alias-namespace`, `--alias-name`, and
-`--alias-proof`. Governance produces the proof bundle (base64 or Norito bytes)
-when the alias request is approved; store it in CI secrets and surface it as a
-file before invoking `manifest submit`. Leave the alias flags unset when you
-only intend to pin the manifest without touching DNS.
+Alias-ის დაკავშირება მოითხოვს სამ ველს: `--alias-namespace`, `--alias-name` და
+`--alias-proof`. Governance აწარმოებს მტკიცებულების პაკეტს (base64 ან Norito ბაიტი)
+როდესაც მეტსახელის მოთხოვნა დამტკიცდება; შეინახეთ იგი CI საიდუმლოებებში და მოათავსეთ როგორც ა
+შეიყვანეთ `manifest submit`-ის გამოძახებამდე. დატოვეთ მეტსახელის დროშები დაუყენებელი, როდესაც თქვენ
+განზრახული აქვს მხოლოდ მანიფესტის ჩამაგრება DNS-ის შეხების გარეშე.
 
-## Step 5b — Generate a governance proposal
+## ნაბიჯი 5b - შექმენით მმართველობის წინადადება
 
-Every manifest should travel with a Parliament-ready proposal so that any Sora
-citizen can introduce the change without borrowing privileged credentials.
-After the submit/sign steps, run:
+ყველა მანიფესტმა უნდა იმოგზაუროს პარლამენტისთვის მზა წინადადებით ისე, რომ ნებისმიერი სორა
+მოქალაქეს შეუძლია ცვლილება შეიტანოს პრივილეგირებული სერთიფიკატების სესხის გარეშე.
+გაგზავნის/ხელმოწერის ნაბიჯების შემდეგ გაუშვით:
 
 ```bash
 sorafs_cli manifest proposal \
@@ -201,15 +202,15 @@ sorafs_cli manifest proposal \
   --proposal-out "$OUT"/portal.pin.proposal.json
 ```
 
-`portal.pin.proposal.json` captures the canonical `RegisterPinManifest`
-instruction, chunk digest, policy, and alias hint. Attach it to the governance
-ticket or Parliament portal so delegates can diff the payload without rebuilding
-the artefacts. Because the command never touches the Torii authority key, any
-citizen can draft the proposal locally.
+`portal.pin.proposal.json` იღებს კანონიკურ `RegisterPinManifest`-ს
+ინსტრუქცია, ნაწილის დაიჯესტი, პოლიტიკა და მეტსახელის მინიშნება. მიამაგრეთ იგი მმართველობას
+ბილეთი ან პარლამენტის პორტალი, ასე რომ დელეგატებს შეუძლიათ განასხვავონ დატვირთვა აღდგენის გარეშე
+არტეფაქტები. რადგან ბრძანება არასოდეს ეხება Torii ავტორიტეტის გასაღებს, ნებისმიერს
+მოქალაქეს შეუძლია წინადადების შედგენა ადგილობრივად.
 
-## Step 6 — Verify proofs and telemetry
+## ნაბიჯი 6 - გადაამოწმეთ მტკიცებულებები და ტელემეტრია
 
-After pinning, run the deterministic verification steps:
+ჩამაგრების შემდეგ, გაიარეთ გადამოწმების განმსაზღვრელი ნაბიჯები:
 
 ```bash
 sorafs_cli proof verify \
@@ -223,18 +224,18 @@ sorafs_cli manifest verify-signature \
   --chunk-plan "$OUT"/portal.plan.json
 ```
 
-- Check `torii_sorafs_gateway_refusals_total` and
-  `torii_sorafs_replication_sla_total{outcome="missed"}` for anomalies.
-- Run `npm run probe:portal` to exercise the Try-It proxy and recorded links
-  against the newly pinned content.
-- Capture the monitoring evidence described in
-  [Publishing & Monitoring](./publishing-monitoring.md) so DOCS-3c’s
-  observability gate is satisfied alongside the publishing steps. The helper
-  now accepts multiple `bindings` entries (site, OpenAPI, portal SBOM, OpenAPI
-  SBOM) and enforces `Sora-Name`/`Sora-Proof`/`Sora-Content-CID` on the target
-  host via the optional `hostname` guard. The invocation below writes both a
-  single JSON summary and the evidence bundle (`portal.json`, `tryit.json`,
-  `binding.json`, and `checksums.sha256`) under the release directory:
+- შეამოწმეთ `torii_sorafs_gateway_refusals_total` და
+  `torii_sorafs_replication_sla_total{outcome="missed"}` ანომალიებისთვის.
+- გაუშვით `npm run probe:portal` Try-It პროქსისა და ჩაწერილი ბმულების გამოსაყენებლად
+  ახლად ჩამაგრებული კონტენტის წინააღმდეგ.
+- აიღეთ მონიტორინგის მტკიცებულებები, რომლებიც აღწერილია
+  [გამოქვეყნება და მონიტორინგი] (./publishing-monitoring.md) ასე რომ DOCS-3c's
+  დაკვირვებადობის კარიბჭე დაკმაყოფილებულია გამოქვეყნების საფეხურებთან ერთად. დამხმარე
+  ახლა იღებს მრავალ `bindings` ჩანაწერს (საიტი, OpenAPI, პორტალი SBOM, OpenAPI
+  SBOM) და ახორციელებს `Sora-Name`/`Sora-Proof`/`Sora-Content-CID` სამიზნეზე
+  მასპინძელი არჩევითი `hostname` მცველის მეშვეობით. ქვემოთ მოწოდება წერს ორივე ა
+  ერთი JSON შეჯამება და მტკიცებულებების ნაკრები (`portal.json`, `tryit.json`,
+  `binding.json` და `checksums.sha256`) გამოშვების დირექტორიაში:
 
   ```bash
   npm run monitor:publishing -- \
@@ -243,12 +244,12 @@ sorafs_cli manifest verify-signature \
     --evidence-dir ../../artifacts/sorafs/preview-2026-02-14/monitoring
   ```
 
-## Step 6a — Plan gateway certificates
+## ნაბიჯი 6a - დაგეგმეთ კარიბჭის სერთიფიკატები
 
-Derive the TLS SAN/challenge plan before creating GAR packets so the gateway
-team and DNS approvers review the same evidence. The new helper mirrors the
-DG-3 automation inputs by enumerating canonical wildcard hosts,
-pretty-host SANs, DNS-01 labels, and recommended ACME challenges:
+შექმენით TLS SAN/გამოწვევის გეგმა GAR პაკეტების შექმნამდე
+გუნდი და DNS-ის დამმტკიცებლები განიხილავენ იგივე მტკიცებულებებს. ახალი დამხმარე სარკეა
+DG-3 ავტომატიზაციის შეყვანები კანონიკური ბუნების მასპინძლების ჩამოთვლით,
+ლამაზი მასპინძელი SAN-ები, DNS-01 ლეიბლები და რეკომენდებული ACME გამოწვევები:
 
 ```bash
 cargo xtask soradns-acme-plan \
@@ -256,20 +257,20 @@ cargo xtask soradns-acme-plan \
   --json-out artifacts/sorafs/portal.acme-plan.json
 ```
 
-Commit the JSON alongside the release bundle (or upload it with the change
-ticket) so operators can paste the SAN values into Torii’s
-`torii.sorafs_gateway.acme` configuration and GAR reviewers can confirm the
-canonical/pretty mappings without re-running host derivations. Add additional
-`--name` arguments for each suffix promoted in the same release.
+ჩააბარეთ JSON გამოშვების პაკეტთან ერთად (ან ატვირთეთ იგი ცვლილებასთან ერთად
+ბილეთი), რათა ოპერატორებმა შეძლონ SAN მნიშვნელობების ჩასმა Torii-ში
+`torii.sorafs_gateway.acme` კონფიგურაცია და GAR მიმომხილველებს შეუძლიათ დაადასტურონ
+კანონიკური/საკმაოდ შესრულებული რუქები მასპინძელი წარმოებულების ხელახლა გაშვების გარეშე. დაამატეთ დამატებითი
+`--name` არგუმენტები თითოეული სუფიქსისთვის, რომელიც დაწინაურებულია იმავე გამოცემაში.
 
-## Step 6b — Derive canonical host mappings
+## ნაბიჯი 6b - გამოიღეთ მასპინძლის კანონიკური რუკები
 
-Before templating GAR payloads, record the deterministic host mapping for every
-alias. `cargo xtask soradns-hosts` hashes each `--name` into its canonical
-label (`<base32>.gw.sora.id`), emits the required wildcard
-(`*.gw.sora.id`), and derives the pretty host (`<alias>.gw.sora.name`). Persist
-the output in the release artefacts so DG-3 reviewers can diff the mapping
-alongside the GAR submission:
+GAR დატვირთვის შაბლონის შექმნამდე, ჩაწერეთ ჰოსტის განმსაზღვრელი რუკა თითოეულისთვის
+მეტსახელი. `cargo xtask soradns-hosts` ჰეშირებს თითოეულ `--name`-ს თავის კანონიკურში
+ლეიბლი (`<base32>.gw.sora.id`), ასხივებს საჭირო ბუნებრივ ბარათს
+(`*.gw.sora.id`) და იღებს ლამაზ ჰოსტს (`<alias>.gw.sora.name`). დაჟინებით
+გამოსავალი გამოშვების არტეფაქტებში, რათა DG-3-ის მიმომხილველებმა შეძლონ განასხვავონ რუქები
+GAR წარდგენის პარალელურად:
 
 ```bash
 cargo xtask soradns-hosts \
@@ -277,10 +278,10 @@ cargo xtask soradns-hosts \
   --json-out artifacts/sorafs/portal.canonical-hosts.json
 ```
 
-Use `--verify-host-patterns <file>` to fail fast whenever a GAR or gateway
-binding JSON omits one of the required hosts. The helper accepts multiple
-verification files, making it easy to lint both the GAR template and the
-stapled `portal.gateway.binding.json` in the same invocation:
+გამოიყენეთ `--verify-host-patterns <file>` სწრაფად წარუმატებლობისთვის GAR ან კარიბჭის დროს
+binding JSON გამოტოვებს ერთ-ერთ საჭირო ჰოსტს. დამხმარე იღებს მრავალჯერადს
+ვერიფიკაციის ფაილები, რაც გაადვილებს როგორც GAR შაბლონს, ასევე
+დამაგრებული `portal.gateway.binding.json` იმავე გამოძახებაში:
 
 ```bash
 cargo xtask soradns-hosts \
@@ -290,38 +291,36 @@ cargo xtask soradns-hosts \
   --verify-host-patterns artifacts/sorafs/portal.gateway.binding.json
 ```
 
-Attach the summary JSON and verification log to the DNS/gateway change ticket so
-auditors can confirm the canonical, wildcard, and pretty hosts without re-running
-the derivation scripts. Re-run the command whenever new aliases are added to the
-bundle so subsequent GAR updates inherit the same evidence trail.
+მიამაგრეთ შემაჯამებელი JSON და ვერიფიკაციის ჟურნალი DNS/gateway-ის შეცვლის ბილეთს
+აუდიტორებს შეუძლიათ დაადასტურონ კანონიკური, wildcard და ლამაზი ჰოსტები ხელახლა გაშვების გარეშე
+წარმოებული სკრიპტები. ხელახლა გაუშვით ბრძანება, როდესაც მას ახალი მეტსახელები დაემატება
+შეფუთეთ, ამიტომ GAR-ის შემდგომი განახლებები მემკვიდრეობით მიიღებს იგივე მტკიცებულების კვალს.
 
-## Step 7 — Generate the DNS cutover descriptor
+## ნაბიჯი 7 — შექმენით DNS cutover descriptor
 
-Production cutovers require an auditable change packet. After a successful
-submission (alias binding), the helper emits
-`artifacts/sorafs/portal.dns-cutover.json`, capturing:
+წარმოების წყვეტები საჭიროებს აუდიტორულ ცვლილებების პაკეტს. წარმატებულის შემდეგ
+წარდგენა (ასევე სავალდებულო), დამხმარე გამოსცემს
+`artifacts/sorafs/portal.dns-cutover.json`, გადაღება:- მეტამონაცემების მეტამონაცემების მეტამონაცემების (სახელების სივრცე/სახელი/მტკიცებულება, მანიფესტის შეჯამება, Torii URL,
+  წარდგენილი ეპოქა, ავტორიტეტი);
+- გამოშვების კონტექსტი (თეგი, მეტსახელის ლეიბლი, მანიფესტის/CAR ბილიკები, ნაწილის გეგმა, Sigstore
+  შეკვრა);
+- გადამოწმების მაჩვენებლები (ზონდის ბრძანება, მეტსახელი + Torii საბოლოო წერტილი); და
+- სურვილისამებრ ცვლილების კონტროლის ველები (ბილეთის ID, ამოღების ფანჯარა, ოპერაციული კონტაქტი,
+  წარმოების ჰოსტის სახელი/ზონა);
+- მარშრუტის სარეკლამო მეტამონაცემები, რომლებიც მიღებულია დამაგრებული `Sora-Route-Binding`-დან
+  სათაური (კანონიკური ჰოსტი/CID, სათაური + სავალდებულო ბილიკები, გადამოწმების ბრძანებები),
+  გარანტია, რომ GAR-ის დაწინაურება და სარეზერვო წვრთნები ეხება იმავე მტკიცებულებებს;
+- გენერირებული მარშრუტის გეგმის არტეფაქტები (`gateway.route_plan.json`,
+  სათაურის შაბლონები და სურვილისამებრ დაბრუნების სათაურები) ამიტომ შეცვალეთ ბილეთები და CI
+  lint hook-ებს შეუძლიათ დაადასტურონ, რომ ყველა DG-3 პაკეტი მიუთითებს კანონიკურზე
+  ხელშეწყობა/დაბრუნების გეგმები დამტკიცებამდე;
+- სურვილისამებრ ქეშის გაუქმების მეტამონაცემები (გასუფთავების საბოლოო წერტილი, auth ცვლადი, JSON
+  payload და მაგალითად `curl` ბრძანება); და
+- უკან დაბრუნების მინიშნებები, რომლებიც მიუთითებს წინა აღწერზე (გაათავისუფლეთ ტეგი და მანიფესტი
+  დაიჯესტი) ასე რომ, შეცვალეთ ბილეთები და მიიღეთ დეტერმინისტული სარეზერვო გზა.
 
-- alias binding metadata (namespace/name/proof, manifest digest, Torii URL,
-  submitted epoch, authority);
-- release context (tag, alias label, manifest/CAR paths, chunk plan, Sigstore
-  bundle);
-- verification pointers (probe command, alias + Torii endpoint); and
-- optional change-control fields (ticket id, cutover window, ops contact,
-  production hostname/zone);
-- route promotion metadata derived from the stapled `Sora-Route-Binding`
-  header (canonical host/CID, header + binding paths, verification commands),
-  ensuring GAR promotion and fallback drills refer to the same evidence;
-- the generated route-plan artefacts (`gateway.route_plan.json`,
-  header templates, and optional rollback headers) so change tickets and CI
-  lint hooks can verify that every DG-3 packet references the canonical
-  promotion/rollback plans before approval;
-- optional cache invalidation metadata (purge endpoint, auth variable, JSON
-  payload, and example `curl` command); and
-- rollback hints pointing at the previous descriptor (release tag and manifest
-  digest) so change tickets capture a deterministic fallback path.
-
-When the release requires cache purges, generate a canonical plan alongside the
-cutover descriptor:
+როდესაც გამოშვება მოითხოვს ქეშის გაწმენდას, შექმენით კანონიკური გეგმა გვერდით
+ჭრის აღმწერი:
 
 ```bash
 cargo xtask soradns-cache-plan \
@@ -333,15 +332,15 @@ cargo xtask soradns-cache-plan \
   --json-out artifacts/sorafs/portal.cache_plan.json
 ```
 
-Attach the resulting `portal.cache_plan.json` to the DG-3 packet so operators
-have deterministic hosts/paths (and the matching auth hints) when issuing
-`PURGE` requests. The descriptor’s optional cache metadata section can reference
-this file directly, keeping change-control reviewers aligned on exactly which
-endpoints are flushed during a cutover.
+მიამაგრეთ მიღებული `portal.cache_plan.json` DG-3 პაკეტზე, რათა ოპერატორები
+ჰქონდეთ დეტერმინისტული ჰოსტები/ბილიკები (და შესაბამისი auth მინიშნებები) გაცემისას
+`PURGE` ითხოვს. აღწერის არჩევითი ქეშის მეტამონაცემების განყოფილებას შეუძლია მიმართოს
+ეს ფაილი პირდაპირ, ზუსტად რომელზეა გათვლილი ცვლილებების კონტროლის მიმომხილველები
+ბოლო წერტილები ჩამოირეცხება ამოჭრის დროს.
 
-Every DG-3 packet also needs a promotion + rollback checklist. Generate it via
-`cargo xtask soradns-route-plan` so change-control reviewers can trace the exact
-preflight, cutover, and rollback steps per alias:
+ყველა DG-3 პაკეტს ასევე სჭირდება ხელშეწყობა + დაბრუნების ჩამონათვალი. გენერირება მეშვეობით
+`cargo xtask soradns-route-plan`, რათა ცვლილებების კონტროლის მიმომხილველებმა შეძლონ ზუსტი მიკვლევა
+ფრენის წინ, გათიშვისა და უკან დაბრუნების ნაბიჯები მეტსახელის მიხედვით:
 
 ```bash
 cargo xtask soradns-route-plan \
@@ -349,14 +348,14 @@ cargo xtask soradns-route-plan \
   --json-out artifacts/sorafs/gateway.route_plan.json
 ```
 
-The emitted `gateway.route_plan.json` captures canonical/pretty hosts, staged
-health-check reminders, GAR binding updates, cache purges, and rollback actions.
-Bundle it with the GAR/binding/cutover artefacts before submitting the change
-ticket so Ops can rehearse and sign off on the same scripted steps.
+ემიტირებული `gateway.route_plan.json` იჭერს კანონიკურ/ლამაზ მასპინძლებს, დადგმული
+ჯანმრთელობის შემოწმების შეხსენებები, GAR სავალდებულო განახლებები, ქეშის გასუფთავება და უკან დაბრუნება.
+შეაერთეთ იგი GAR/შემკვრელი/დაჭრილი არტეფაქტებით ცვლილების გაგზავნამდე
+ბილეთი, რათა Ops-მა შეძლოს რეპეტიცია და ხელი მოაწეროს იმავე სკრიპტულ ნაბიჯებს.
 
-`scripts/generate-dns-cutover-plan.mjs` powers this descriptor and runs
-automatically from `sorafs-pin-release.sh`. To regenerate or customize it
-manually:
+`scripts/generate-dns-cutover-plan.mjs` ამარაგებს ამ დესკრიპტორს და მუშაობს
+ავტომატურად `sorafs-pin-release.sh`-დან. მისი რეგენერაცია ან მორგება
+ხელით:
 
 ```bash
 node scripts/generate-dns-cutover-plan.mjs \
@@ -371,74 +370,74 @@ node scripts/generate-dns-cutover-plan.mjs \
   --previous-dns-plan artifacts/sorafs/previous.dns-cutover.json
 ```
 
-Populate the optional metadata via environment variables before running the pin
-helper:
+შეავსეთ არასავალდებულო მეტამონაცემები გარემოს ცვლადების მეშვეობით პინის გაშვებამდე
+დამხმარე:
 
-| Variable | Purpose |
+| ცვლადი | დანიშნულება |
 |----------|---------|
-| `DNS_CHANGE_TICKET` | Ticket ID stored in the descriptor. |
-| `DNS_CUTOVER_WINDOW` | ISO8601 cutover window (e.g., `2026-03-21T15:00Z/2026-03-21T15:30Z`). |
-| `DNS_HOSTNAME`, `DNS_ZONE` | Production hostname + authoritative zone. |
-| `DNS_OPS_CONTACT` | On-call alias or escalation contact. |
-| `DNS_CACHE_PURGE_ENDPOINT` | Cache purge endpoint recorded in the descriptor. |
-| `DNS_CACHE_PURGE_AUTH_ENV` | Env var containing the purge token (defaults to `CACHE_PURGE_TOKEN`). |
-| `DNS_PREVIOUS_PLAN` | Path to the prior cutover descriptor for rollback metadata. |
+| `DNS_CHANGE_TICKET` | ბილეთის ID ინახება აღწერში. |
+| `DNS_CUTOVER_WINDOW` | ISO8601 ამოჭრილი ფანჯარა (მაგ., `2026-03-21T15:00Z/2026-03-21T15:30Z`). |
+| `DNS_HOSTNAME`, `DNS_ZONE` | წარმოების ჰოსტის სახელი + ავტორიტეტული ზონა. |
+| `DNS_OPS_CONTACT` | გამოძახების მეტსახელი ან ესკალაციის კონტაქტი. |
+| `DNS_CACHE_PURGE_ENDPOINT` | ქეშის გასუფთავების საბოლოო წერტილი ჩაწერილია აღმწერში. |
+| `DNS_CACHE_PURGE_AUTH_ENV` | Env var შეიცავს გაწმენდის ჟეტონს (ნაგულისხმევი `CACHE_PURGE_TOKEN`). |
+| `DNS_PREVIOUS_PLAN` | გადაბრუნების მეტამონაცემების წინა ამოღების აღწერის გზა. |
 
-Attach the JSON to the DNS change review so approvers can verify manifest
-digests, alias bindings, and probe commands without scraping CI logs.
-CLI flags `--dns-change-ticket`, `--dns-cutover-window`, `--dns-hostname`,
+მიამაგრეთ JSON DNS-ის ცვლილების მიმოხილვას, რათა დამმტკიცებლებმა შეძლონ მანიფესტის დადასტურება
+digests, alias bindings და probe ბრძანებები CI ჟურნალების გაფუჭების გარეშე.
+CLI დროშები `--dns-change-ticket`, `--dns-cutover-window`, `--dns-hostname`,
 `--dns-zone`, `--ops-contact`, `--cache-purge-endpoint`,
-`--cache-purge-auth-env`, and `--previous-dns-plan` provide the same overrides
-when running the helper outside CI.
+`--cache-purge-auth-env` და `--previous-dns-plan` უზრუნველყოფს იგივე გადაფარვას
+დამხმარე CI-ს გარეთ გაშვებისას.
 
-## Step 8 — Emit the resolver zonefile skeleton (optional)
+## ნაბიჯი 8 - გადამწყვეტი ზონის ფაილის ჩონჩხის გამოშვება (სურვილისამებრ)
 
-When the production cutover window is known, the release script can emit the
-SNS zonefile skeleton and resolver snippet automatically. Pass the desired DNS
-records and metadata via either environment variables or CLI options; the helper
-will call `scripts/sns_zonefile_skeleton.py` immediately after the cutover
-descriptor is generated. Provide at least one A/AAAA/CNAME value and the GAR
-digest (BLAKE3-256 of the signed GAR payload). If the zone/hostname are known
-and `--dns-zonefile-out` is omitted, the helper writes to
-`artifacts/sns/zonefiles/<zone>/<hostname>.json` and populates
-`ops/soradns/static_zones.<hostname>.json` as the resolver snippet.
+როდესაც წარმოების ამოღების ფანჯარა ცნობილია, გამოშვების სკრიპტს შეუძლია გამოუშვას ის
+SNS ზონის ფაილის ჩონჩხი და გადამწყვეტი ფრაგმენტი ავტომატურად. გაიარეთ სასურველი DNS
+ჩანაწერები და მეტამონაცემები გარემოს ცვლადების ან CLI პარამეტრების მეშვეობით; დამხმარე
+დარეკვისთანავე დაურეკავს `scripts/sns_zonefile_skeleton.py`-ს
+წარმოიქმნება აღმწერი. მიუთითეთ მინიმუმ ერთი A/AAAA/CNAME მნიშვნელობა და GAR
+დაიჯესტი (BLAKE3-256 ხელმოწერილი GAR ტვირთის). თუ ზონა/მასპინძლის სახელი ცნობილია
+და `--dns-zonefile-out` გამოტოვებულია, წერს დამხმარე
+`artifacts/sns/zonefiles/<zone>/<hostname>.json` და ავსებს
+`ops/soradns/static_zones.<hostname>.json` როგორც გადამწყვეტი ფრაგმენტი.
 
-| Variable / flag | Purpose |
+| ცვლადი / დროშა | დანიშნულება |
 |-----------------|---------|
-| `DNS_ZONEFILE_OUT`, `--dns-zonefile-out` | Path for the generated zonefile skeleton. |
-| `DNS_ZONEFILE_RESOLVER_SNIPPET`, `--dns-zonefile-resolver-snippet` | Resolver snippet path (defaults to `ops/soradns/static_zones.<hostname>.json` when omitted). |
-| `DNS_ZONEFILE_TTL`, `--dns-zonefile-ttl` | TTL applied to generated records (default: 600 seconds). |
-| `DNS_ZONEFILE_IPV4`, `--dns-zonefile-ipv4` | IPv4 addresses (comma-separated env or repeatable CLI flag). |
-| `DNS_ZONEFILE_IPV6`, `--dns-zonefile-ipv6` | IPv6 addresses. |
-| `DNS_ZONEFILE_CNAME`, `--dns-zonefile-cname` | Optional CNAME target. |
-| `DNS_ZONEFILE_SPKI`, `--dns-zonefile-spki-pin` | SHA-256 SPKI pins (base64). |
-| `DNS_ZONEFILE_TXT`, `--dns-zonefile-txt` | Additional TXT entries (`key=value`). |
-| `DNS_ZONEFILE_VERSION`, `--dns-zonefile-version` | Override the computed zonefile version label. |
-| `DNS_ZONEFILE_EFFECTIVE_AT`, `--dns-zonefile-effective-at` | Force the `effective_at` timestamp (RFC3339) instead of the cutover window start. |
-| `DNS_ZONEFILE_PROOF`, `--dns-zonefile-proof` | Override the proof literal recorded in the metadata. |
-| `DNS_ZONEFILE_CID`, `--dns-zonefile-cid` | Override the CID recorded in the metadata. |
-| `DNS_ZONEFILE_FREEZE_STATE`, `--dns-zonefile-freeze-state` | Guardian freeze state (soft, hard, thawing, monitoring, emergency). |
-| `DNS_ZONEFILE_FREEZE_TICKET`, `--dns-zonefile-freeze-ticket` | Guardian/council ticket reference for freezes. |
-| `DNS_ZONEFILE_FREEZE_EXPIRES_AT`, `--dns-zonefile-freeze-expires-at` | RFC3339 timestamp for thawing. |
-| `DNS_ZONEFILE_FREEZE_NOTES`, `--dns-zonefile-freeze-note` | Additional freeze notes (comma-separated env or repeatable flag). |
-| `DNS_GAR_DIGEST`, `--dns-gar-digest` | BLAKE3-256 digest (hex) of the signed GAR payload. Required whenever gateway bindings are present. |
+| `DNS_ZONEFILE_OUT`, `--dns-zonefile-out` | გენერირებული ზონის ფაილის ჩონჩხის გზა. |
+| `DNS_ZONEFILE_RESOLVER_SNIPPET`, `--dns-zonefile-resolver-snippet` | Resolver snippet-ის ბილიკი (ნაგულისხმევად `ops/soradns/static_zones.<hostname>.json`, როდესაც გამოტოვებულია). |
+| `DNS_ZONEFILE_TTL`, `--dns-zonefile-ttl` | TTL გამოიყენება გენერირებულ ჩანაწერებზე (ნაგულისხმევი: 600 წამი). |
+| `DNS_ZONEFILE_IPV4`, `--dns-zonefile-ipv4` | IPv4 მისამართები (მძიმით გამოყოფილი env ან განმეორებადი CLI დროშა). |
+| `DNS_ZONEFILE_IPV6`, `--dns-zonefile-ipv6` | IPv6 მისამართები. |
+| `DNS_ZONEFILE_CNAME`, `--dns-zonefile-cname` | სურვილისამებრ CNAME სამიზნე. |
+| `DNS_ZONEFILE_SPKI`, `--dns-zonefile-spki-pin` | SHA-256 SPKI ქინძისთავები (base64). |
+| `DNS_ZONEFILE_TXT`, `--dns-zonefile-txt` | დამატებითი TXT ჩანაწერები (`key=value`). |
+| `DNS_ZONEFILE_VERSION`, `--dns-zonefile-version` | გამოთვალეთ zonefile ვერსიის ლეიბლი. |
+| `DNS_ZONEFILE_EFFECTIVE_AT`, `--dns-zonefile-effective-at` | იძულებითი `effective_at` დროის შტამპი (RFC3339) გადაწყვეტის ფანჯრის დაწყების ნაცვლად. |
+| `DNS_ZONEFILE_PROOF`, `--dns-zonefile-proof` | გადააჭარბეთ მეტამონაცემებში ჩაწერილი მტკიცებულების სიტყვასიტყვით. |
+| `DNS_ZONEFILE_CID`, `--dns-zonefile-cid` | გადააჭარბეთ მეტამონაცემებში ჩაწერილი CID. |
+| `DNS_ZONEFILE_FREEZE_STATE`, `--dns-zonefile-freeze-state` | მეურვის გაყინვის მდგომარეობა (რბილი, მყარი, დათბობა, მონიტორინგი, საგანგებო). |
+| `DNS_ZONEFILE_FREEZE_TICKET`, `--dns-zonefile-freeze-ticket` | მეურვის/საკრებულოს ბილეთის მითითება გაყინვისთვის. |
+| `DNS_ZONEFILE_FREEZE_EXPIRES_AT`, `--dns-zonefile-freeze-expires-at` | RFC3339 დათბობის დროის შტამპი. |
+| `DNS_ZONEFILE_FREEZE_NOTES`, `--dns-zonefile-freeze-note` | დამატებითი გაყინვის შენიშვნები (მძიმით გამოყოფილი env ან განმეორებადი დროშა). |
+| `DNS_GAR_DIGEST`, `--dns-gar-digest` | BLAKE3-256 დაიჯესტი (ექვსკუთხა) ხელმოწერილი GAR ტვირთის. საჭიროა კარიბჭის შესაკრავების არსებობისას. |
 
-The GitHub Actions workflow reads these values from repository secrets so every production pin emits the zonefile artefacts automatically. Configure the following secrets (strings may contain comma-separated lists for multi-value fields):
+GitHub Actions სამუშაო ნაკადი კითხულობს ამ მნიშვნელობებს საცავის საიდუმლოებიდან, ასე რომ, წარმოების ყველა პინი ავტომატურად გამოსცემს zonefile არტეფაქტებს. დააკონფიგურირეთ შემდეგი საიდუმლოებები (სტრიქონები შეიძლება შეიცავდეს მძიმით გამოყოფილ სიებს მრავალმნიშვნელოვანი ველებისთვის):
 
-| Secret | Purpose |
+| საიდუმლო | დანიშნულება |
 |--------|---------|
-| `DOCS_SORAFS_DNS_HOSTNAME`, `DOCS_SORAFS_DNS_ZONE` | Production hostname/zone passed to the helper. |
-| `DOCS_SORAFS_DNS_OPS_CONTACT` | On-call alias stored in the descriptor. |
-| `DOCS_SORAFS_ZONEFILE_IPV4`, `DOCS_SORAFS_ZONEFILE_IPV6` | IPv4/IPv6 records to publish. |
-| `DOCS_SORAFS_ZONEFILE_CNAME` | Optional CNAME target. |
-| `DOCS_SORAFS_ZONEFILE_SPKI` | Base64 SPKI pins. |
-| `DOCS_SORAFS_ZONEFILE_TXT` | Additional TXT entries. |
-| `DOCS_SORAFS_ZONEFILE_FREEZE_STATE/TICKET/EXPIRES_AT/NOTES` | Freeze metadata recorded in the skeleton. |
-| `DOCS_SORAFS_GAR_DIGEST` | Hex-encoded BLAKE3 digest of the signed GAR payload. |
+| `DOCS_SORAFS_DNS_HOSTNAME`, `DOCS_SORAFS_DNS_ZONE` | წარმოების ჰოსტის სახელი/ზონა გადაეცა დამხმარეს. |
+| `DOCS_SORAFS_DNS_OPS_CONTACT` | გამოძახების მეტსახელი ინახება აღწერში. |
+| `DOCS_SORAFS_ZONEFILE_IPV4`, `DOCS_SORAFS_ZONEFILE_IPV6` | IPv4/IPv6 ჩანაწერები გამოსაქვეყნებლად. |
+| `DOCS_SORAFS_ZONEFILE_CNAME` | სურვილისამებრ CNAME სამიზნე. |
+| `DOCS_SORAFS_ZONEFILE_SPKI` | Base64 SPKI ქინძისთავები. |
+| `DOCS_SORAFS_ZONEFILE_TXT` | დამატებითი TXT ჩანაწერები. |
+| `DOCS_SORAFS_ZONEFILE_FREEZE_STATE/TICKET/EXPIRES_AT/NOTES` | ჩონჩხში ჩაწერილი მეტამონაცემების გაყინვა. |
+| `DOCS_SORAFS_GAR_DIGEST` | თექვსმეტობით კოდირებული BLAKE3 დაიჯესტი ხელმოწერილი GAR ტვირთის. |
 
-When triggering `.github/workflows/docs-portal-sorafs-pin.yml`, provide the `dns_change_ticket` and `dns_cutover_window` inputs so the descriptor/zonefile inherit the correct change window metadata. Leave them blank only when running dry runs.
+`.github/workflows/docs-portal-sorafs-pin.yml` ჩართვისას მიაწოდეთ `dns_change_ticket` და `dns_cutover_window` შეყვანები, რათა აღწერილმა/ზონის ფაილმა დაიმკვიდროს სწორი ცვლილების ფანჯრის მეტამონაცემები. დატოვე ისინი ცარიელი მხოლოდ მშრალი გაშვებისას.
 
-Typical invocation (matching the SN-7 owner runbook):
+ტიპიური მოწოდება (შეესაბამება SN-7 მფლობელის წიგნს):
 
 ```bash
 ./docs/portal/scripts/sorafs-pin-release.sh \
@@ -453,42 +452,42 @@ Typical invocation (matching the SN-7 owner runbook):
   …other flags…
 ```
 
-The helper automatically carries over the change ticket as a TXT entry and
-inherits the cutover window start as the `effective_at` timestamp unless
-overridden. For the full operational workflow, see
+დამხმარე ავტომატურად ატარებს ცვლილების ბილეთს, როგორც TXT ჩანაწერს და
+მემკვიდრეობით იღებს ამოღების ფანჯრის დაწყებას, როგორც `effective_at` დროის ნიშანს, თუ
+გადააჭარბა. სრული ოპერაციული სამუშაო პროცესისთვის იხ
 `docs/source/sorafs_gateway_dns_owner_runbook.md`.
 
-### Public DNS delegation note
+### საჯარო DNS დელეგაციის შენიშვნა
 
-The zonefile skeleton only defines authoritative records for the zone. You
-still need to configure parent-zone NS/DS delegation at your registrar or DNS
-provider so the regular internet can discover the nameservers.
+zonefile ჩონჩხი განსაზღვრავს მხოლოდ ავტორიტეტულ ჩანაწერებს ზონისთვის. შენ
+ჯერ კიდევ გჭირდებათ მშობლის ზონის NS/DS დელეგაციის კონფიგურაცია თქვენს რეგისტრატორში ან DNS-ში
+პროვაიდერი, რათა რეგულარულ ინტერნეტს შეეძლოს სახელების სერვერების აღმოჩენა.
 
-- For apex/TLD cutovers, use ALIAS/ANAME (provider-specific) or publish A/AAAA
-  records pointing at the gateway anycast IPs.
-- For subdomains, publish a CNAME to the derived pretty host
+- apex/TLD ამონაჭრებისთვის გამოიყენეთ ALIAS/ANAME (პროვაიდერის სპეციფიკური) ან გამოაქვეყნეთ A/AAAA
+  ჩანაწერები, რომლებიც მიუთითებს კარიბჭეზე anycast IP-ებზე.
+- ქვედომენებისთვის, გამოაქვეყნეთ CNAME მიღებული ლამაზი ჰოსტისთვის
   (`<fqdn>.gw.sora.name`).
-- The canonical host (`<hash>.gw.sora.id`) stays under the gateway domain and
-  is not published inside your public zone.
+- კანონიკური ჰოსტი (`<hash>.gw.sora.id`) რჩება კარიბჭის დომენის ქვეშ და
+  არ არის გამოქვეყნებული თქვენს საჯარო ზონაში.
 
-### Gateway header template
+### კარიბჭის სათაურის შაბლონი
 
-The deploy helper also emits `portal.gateway.headers.txt` and
-`portal.gateway.binding.json`, two artefacts that satisfy DG-3’s
-gateway-content-binding requirement:
+განლაგების დამხმარე ასევე ასხივებს `portal.gateway.headers.txt` და
+`portal.gateway.binding.json`, ორი არტეფაქტი, რომელიც აკმაყოფილებს DG-3-ს
+კარიბჭე-შიგთავსის სავალდებულო მოთხოვნა:
 
-- `portal.gateway.headers.txt` contains the full HTTP header block (including
-  `Sora-Name`, `Sora-Content-CID`, `Sora-Proof`, CSP, HSTS, and the
-  `Sora-Route-Binding` descriptor) that edge gateways must staple onto every
-  response.
-- `portal.gateway.binding.json` records the same information in machine-readable
-  form so change tickets and automation can diff host/cid bindings without
-  scraping shell output.
+- `portal.gateway.headers.txt` შეიცავს სრულ HTTP სათაურის ბლოკს (მათ შორის
+  `Sora-Name`, `Sora-Content-CID`, `Sora-Proof`, CSP, HSTS და
+  `Sora-Route-Binding` აღმწერი), რომელიც კიდეების კარიბჭეები უნდა დამაგრდეს ყველა
+  პასუხი.
+- `portal.gateway.binding.json` იწერს იგივე ინფორმაციას მანქანით წასაკითხად
+  ფორმა ისე, რომ შეცვალეთ ბილეთები და ავტომატიზაციამ შეიძლება განასხვავოს მასპინძელი/ციდი კავშირის გარეშე
+  scraping shell გამომავალი.
 
-They are generated automatically via
+ისინი იქმნება ავტომატურად მეშვეობით
 `cargo xtask soradns-binding-template`
-and capture the alias, manifest digest, and gateway hostname that were supplied
-to `sorafs-pin-release.sh`. To regenerate or customise the header block, run:
+და აიღეთ მეტსახელი, მანიფესტის დაიჯესტი და კარიბჭის ჰოსტის სახელი, რომელიც იყო მოწოდებული
+`sorafs-pin-release.sh`-მდე. სათაურის ბლოკის რეგენერაციის ან მორგებისთვის, გაუშვით:
 
 ```bash
 cargo xtask soradns-binding-template \
@@ -500,18 +499,18 @@ cargo xtask soradns-binding-template \
   --headers-out artifacts/sorafs/portal.gateway.headers.txt
 ```
 
-Pass `--csp-template`, `--permissions-template`, or `--hsts-template` to override
-the default header templates when a specific deployment needs additional
-directives; combine them with the existing `--no-*` switches to drop a header
-entirely.
+გაიარეთ `--csp-template`, `--permissions-template`, ან `--hsts-template` გადასაფარებლად
+ნაგულისხმევი სათაურის შაბლონები, როდესაც კონკრეტულ განლაგებას სჭირდება დამატებითი
+დირექტივები; დააკავშირეთ ისინი არსებულ `--no-*` კონცენტრატორებთან სათაურის ჩამოსაშლელად
+მთლიანად.
 
-Attach the header snippet to the CDN change request and feed the JSON document
-into the gateway automation pipeline so the actual host promotion matches the
-release evidence.
+მიამაგრეთ ჰედერის ფრაგმენტი CDN ცვლილების მოთხოვნას და მიამაგრეთ JSON დოკუმენტი
+კარიბჭის ავტომატიზაციის მილსადენში, ასე რომ, მასპინძლის რეალური ხელშეწყობა ემთხვევა
+გაათავისუფლეს მტკიცებულებები.
 
-The release script runs the verification helper automatically so DG-3 tickets
-always include recent evidence. Re-run it manually whenever you tweak the
-binding JSON by hand:
+გამოშვების სკრიპტი ავტომატურად აწარმოებს გადამოწმების დამხმარეს, ასე რომ DG-3 ბილეთებს
+ყოველთვის შეიცავს უახლეს მტკიცებულებებს. ხელახლა გაუშვით ხელით, როცა შეცვლით
+JSON-ის ხელით შეკვრა:
 
 ```bash
 cargo xtask soradns-verify-binding \
@@ -522,26 +521,24 @@ cargo xtask soradns-verify-binding \
   --manifest-json artifacts/sorafs/portal.manifest.json
 ```
 
-The command validates the `Sora-Proof` payload captured in the binding bundle,
-ensures the `Sora-Route-Binding` metadata matches the manifest CID + hostname,
-and fails fast if any header drifts. Archive the console output next to the
-other deployment artefacts whenever you run the command outside CI so DG-3
-reviewers have proof that the binding was validated prior to cutover.
+ბრძანება ამოწმებს `Sora-Proof` დატვირთვას, რომელიც დაფიქსირებულია სავალდებულო პაკეტში,
+უზრუნველყოფს `Sora-Route-Binding` მეტამონაცემების მანიფესტის CID + ჰოსტის სახელს,
+და სწრაფად იშლება, თუ რომელიმე სათაური გადაინაცვლებს. დაარქივეთ კონსოლის გამომავალი გვერდით
+განლაგების სხვა არტეფაქტები, როდესაც თქვენ აწარმოებთ ბრძანებას CI-ს გარეთ DG-3
+რეცენზენტებს აქვთ მტკიცებულება, რომ სავალდებულო იყო დამოწმებული გადაწყვეტამდე.> **DNS აღწერის ინტეგრაცია:** `portal.dns-cutover.json` ახლა ჩაშენებულია
+> `gateway_binding` განყოფილება, რომელიც მიუთითებს ამ არტეფაქტებზე (ბილიკები, შინაარსის CID,
+> მტკიცებულების სტატუსი და პირდაპირი სათაურის შაბლონი) **და** `route_plan` სტროფი
+> მითითება `gateway.route_plan.json` პლუს მთავარ + დაბრუნების სათაური
+> შაბლონები. ჩართეთ ეს ბლოკები DG-3-ის ყველა ცვლილების ბილეთში, რათა მიმომხილველებმა შეძლონ
+> განასხვავეთ ზუსტი `Sora-Name/Sora-Proof/CSP` მნიშვნელობები და დაადასტურეთ, რომ მარშრუტი
+> დაწინაურების/დაბრუნების გეგმები ემთხვევა მტკიცებულებების პაკეტს კონსტრუქციის გახსნის გარეშე
+> არქივი.
 
-> **DNS descriptor integration:** `portal.dns-cutover.json` now embeds a
-> `gateway_binding` section pointing at these artefacts (paths, content CID,
-> proof status, and the literal header template) **and** a `route_plan` stanza
-> referencing `gateway.route_plan.json` plus the main + rollback header
-> templates. Include those blocks in every DG-3 change ticket so reviewers can
-> diff the exact `Sora-Name/Sora-Proof/CSP` values and confirm that the route
-> promotion/rollback plans match the evidence bundle without opening the build
-> archive.
+## ნაბიჯი 9 - გაუშვით საგამომცემლო მონიტორები
 
-## Step 9 — Run publishing monitors
-
-Roadmap task **DOCS-3c** requires continuous evidence that the portal, Try it
-proxy, and gateway bindings stay healthy after a release. Run the consolidated
-monitor immediately after Steps 7–8 and wire it into your scheduled probes:
+საგზაო რუკის ამოცანა **DOCS-3c** მოითხოვს უწყვეტ მტკიცებულებას, რომ პორტალი, სცადეთ
+პროქსი, და კარიბჭის საკინძები რჩება ჯანმრთელი გამოშვების შემდეგ. გაუშვით კონსოლიდირებული
+დააკვირდით დაუყოვნებლივ 7–8 ნაბიჯების შემდეგ და შეაერთეთ იგი თქვენს დაგეგმილ ზონდებში:
 
 ```bash
 cd docs/portal
@@ -551,89 +548,89 @@ npm run monitor:publishing -- \
   --evidence-dir ../../artifacts/sorafs/${RELEASE_TAG}/monitoring
 ```
 
-- `scripts/monitor-publishing.mjs` loads the config file (see
-  `docs/portal/docs/devportal/publishing-monitoring.md` for the schema) and
-  executes three checks: portal path probes + CSP/Permissions-Policy validation,
-  Try it proxy probes (optionally hitting its `/metrics` endpoint), and the
-  gateway binding verifier (`cargo xtask soradns-verify-binding`) which checks
-  the captured binding bundle against the expected alias, host, proof status,
-  and manifest JSON.
-- The command exits non-zero whenever any probe fails so CI, cron jobs, or
-  runbook operators can halt a release before promoting aliases.
-- Passing `--json-out` writes a single summary JSON payload with per-target
-  status; `--evidence-dir` emits `summary.json`, `portal.json`, `tryit.json`,
-  `binding.json`, and `checksums.sha256` so governance reviewers can diff the
-  results without re-running the monitors. Archive this directory under
-  `artifacts/sorafs/<tag>/monitoring/` alongside the Sigstore bundle and DNS
-  cutover descriptor.
-- Include the monitor output, Grafana export (`dashboards/grafana/docs_portal.json`),
-  and Alertmanager drill ID in the release ticket so the DOCS-3c SLO can be
-  audited later. The dedicated publishing monitor playbook lives at
+- `scripts/monitor-publishing.mjs` ატვირთავს კონფიგურაციის ფაილს (იხ
+  `docs/portal/docs/devportal/publishing-monitoring.md` სქემისთვის) და
+  ახორციელებს სამ შემოწმებას: პორტალის ბილიკების გამოკვლევები + CSP/ნებართვები-პოლიტიკის ვალიდაცია,
+  სცადეთ პროქსი ზონდები (სურვილისამებრ შეეხეთ მის `/metrics` საბოლოო წერტილს) და
+  კარიბჭის სავალდებულო დამადასტურებელი (`cargo xtask soradns-verify-binding`), რომელიც ამოწმებს
+  აღბეჭდილი სავალდებულო პაკეტი მოსალოდნელი მეტსახელის, მასპინძლის, მტკიცებულების სტატუსის წინააღმდეგ,
+  და მანიფესტი JSON.
+- ბრძანება გამოდის ნულის გარეშე, როდესაც რომელიმე ზონდი ვერ ხერხდება, ამიტომ CI, cron სამუშაოები ან
+  runbook ოპერატორებს შეუძლიათ შეაჩერონ გამოშვება მეტსახელების პოპულარიზაციამდე.
+- `--json-out`-ის გავლისას იწერება ერთი შემაჯამებელი JSON დატვირთვა თითო სამიზნეზე
+  სტატუსი; `--evidence-dir` ასხივებს `summary.json`, `portal.json`, `tryit.json`,
+  `binding.json` და `checksums.sha256`, რათა მმართველობის მიმომხილველებმა განასხვავონ
+  შედეგები მონიტორების ხელახლა გაშვების გარეშე. დაარქივეთ ეს დირექტორია ქვეშ
+  `artifacts/sorafs/<tag>/monitoring/` Sigstore პაკეტთან და DNS-თან ერთად
+  ამოჭრის აღმწერი.
+- ჩართეთ მონიტორის გამომავალი, Grafana ექსპორტი (`dashboards/grafana/docs_portal.json`),
+  და Alertmanager საბურღი ID გამოშვების ბილეთში, რათა DOCS-3c SLO იყოს
+  აუდიტი მოგვიანებით. გამომცემლობის მონიტორის სათამაშო წიგნი ცხოვრობს
   `docs/portal/docs/devportal/publishing-monitoring.md`.
 
-Portal probes require HTTPS and reject `http://` base URLs unless
-`allowInsecureHttp` is set in the monitor config; keep production/staging
-targets on TLS and only enable the override for local previews.
+პორტალის ზონდებს სჭირდება HTTPS და უარყოფს `http://` საბაზისო URL-ებს, თუ
+`allowInsecureHttp` დაყენებულია მონიტორის კონფიგურაციაში; წარმოება/დადგმის შენარჩუნება
+მიზნად ისახავს TLS-ს და ჩართეთ მხოლოდ ადგილობრივი გადახედვის უგულებელყოფა.
 
-Automate the monitor via `npm run monitor:publishing` in Buildkite/cron once the
-portal is live. The same command, pointed at production URLs, feeds the ongoing
-health checks that SRE/Docs rely on between releases.
+მონიტორის ავტომატიზაცია `npm run monitor:publishing`-ის საშუალებით Buildkite/cron-ში ერთხელ
+პორტალი პირდაპირ ეთერშია. იგივე ბრძანება, რომელიც მითითებულია წარმოების URL-ებზე, აწვდის მიმდინარეობას
+ჯანმრთელობის შემოწმებები, რომლებსაც SRE/Docs ეყრდნობა გამოშვებებს შორის.
 
-## Automating with `sorafs-pin-release.sh`
+## ავტომატიზაცია `sorafs-pin-release.sh`-ით
 
-`docs/portal/scripts/sorafs-pin-release.sh` encapsulates Steps 2–6. It:
+`docs/portal/scripts/sorafs-pin-release.sh` აერთიანებს ნაბიჯებს 2–6. ეს:
 
-1. archives `build/` into a deterministic tarball,
-2. runs `car pack`, `manifest build`, `manifest sign`, `manifest verify-signature`,
-   and `proof verify`,
-3. optionally executes `manifest submit` (including alias binding) when Torii
-   credentials are present, and
-4. writes `artifacts/sorafs/portal.pin.report.json`, the optional
-  `portal.pin.proposal.json`, the DNS cutover descriptor (after submissions),
-  and the gateway binding bundle (`portal.gateway.binding.json` plus the
-  text header block) so governance, networking, and ops teams can diff the
-  evidence bundle without scraping CI logs.
+1. დაარქივებს `build/` დეტერმინისტულ ტარბოლში,
+2. მუშაობს `car pack`, `manifest build`, `manifest sign`, `manifest verify-signature`,
+   და `proof verify`,
+3. სურვილისამებრ ახორციელებს `manifest submit` (მათ შორის მეტსახელის სავალდებულოა), როდესაც Torii
+   რწმუნებათა სიგელები არსებობს და
+4. წერს `artifacts/sorafs/portal.pin.report.json`, სურვილისამებრ
+  `portal.pin.proposal.json`, DNS cutover descriptor (გაგზავნის შემდეგ),
+  და კარიბჭის შესაკრავის ნაკრები (`portal.gateway.binding.json` პლუს
+  ტექსტის სათაურის ბლოკი) ასე რომ მმართველობის, ქსელის და ოპერაციების გუნდებს შეუძლიათ განასხვავონ ისინი
+  მტკიცებულებათა ნაკრები CI ჟურნალების გახეხვის გარეშე.
 
-Set `PIN_ALIAS`, `PIN_ALIAS_NAMESPACE`, `PIN_ALIAS_NAME`, and (optionally)
-`PIN_ALIAS_PROOF_PATH` before invoking the script. Use `--skip-submit` for dry
-runs; the GitHub workflow described below toggles this via the `perform_submit`
-input.
+დააყენეთ `PIN_ALIAS`, `PIN_ALIAS_NAMESPACE`, `PIN_ALIAS_NAME` და (სურვილისამებრ)
+`PIN_ALIAS_PROOF_PATH` სკრიპტის გამოძახებამდე. გამოიყენეთ `--skip-submit` გასაშრობად
+ეშვება; ქვემოთ აღწერილი GitHub სამუშაო ნაკადი ცვლის ამას `perform_submit`-ის მეშვეობით
+შეყვანა.
 
-## Step 8 — Publish OpenAPI specs & SBOM bundles
+## ნაბიჯი 8 — გამოაქვეყნეთ OpenAPI სპეციფიკაციები და SBOM პაკეტები
 
-DOCS-7 requires the portal build, OpenAPI spec, and SBOM artefacts to travel
-through the same deterministic pipeline. The existing helpers cover all three:
+DOCS-7 საჭიროებს პორტალის აგებას, OpenAPI სპეციფიკაციას და SBOM არტეფაქტებს მოგზაურობისთვის
+იგივე დეტერმინისტული მილსადენით. არსებული დამხმარეები მოიცავს სამივეს:
 
-1. **Regenerate & sign the spec.**
+1. ** რეგენერაცია და ხელი მოაწერეთ სპეციფიკაციას. **
 
    ```bash
    npm run sync-openapi -- --version=2025-q3 --mirror=current --latest
    cargo xtask openapi --sign docs/portal/static/openapi/manifest.json
    ```
 
-   Pass a release label via `--version=<label>` whenever you want to preserve a
-   historical snapshot (for example `2025-q3`). The helper writes the snapshot
-   to `static/openapi/versions/<label>/torii.json`, mirrors it into
-   `versions/current`, and records the metadata (SHA-256, manifest status, and
-   updated timestamp) in `static/openapi/versions.json`. The developer portal
-   reads that index so the Swagger/RapiDoc panels can present a version picker
-   and display the associated digest/signature info inline. Omitting
-   `--version` keeps the previous release labels intact and only refreshes the
-   `current` + `latest` pointers.
+   გადაიტანეთ გამოშვების ლეიბლი `--version=<label>`-ის საშუალებით, როდესაც გსურთ შეინარჩუნოთ
+   ისტორიული სურათი (მაგალითად, `2025-q3`). დამხმარე წერს კადრს
+   `static/openapi/versions/<label>/torii.json`-მდე, ასახავს მას
+   `versions/current` და ჩაწერს მეტამონაცემებს (SHA-256, მანიფესტის სტატუსი და
+   განახლებული დროის შტამპი) `static/openapi/versions.json`-ში. დეველოპერის პორტალი
+   კითხულობს ამ ინდექსს, რათა Swagger/RapiDoc პანელებმა წარმოადგინონ ვერსიის ამომრჩევი
+   და აჩვენეთ ასოცირებული დაიჯესტის/ხელმოწერის ინფორმაცია ხაზში. გამოტოვება
+   `--version` ინარჩუნებს წინა გამოშვების ლეიბლებს ხელუხლებლად და მხოლოდ განაახლებს
+   `current` + `latest` მაჩვენებლები.
 
-   The manifest captures SHA-256/BLAKE3 digests so the gateway can staple
-   `Sora-Proof` headers for `/reference/torii-swagger`.
+   მანიფესტი იჭერს SHA-256/BLAKE3-ის მონელებას, რათა კარიბჭე შეძლოს დამაგრება
+   `Sora-Proof` სათაურები `/reference/torii-swagger`-ისთვის.
 
-2. **Emit CycloneDX SBOMs.** The release pipeline already expects syft-based
-   SBOMs per `docs/source/sorafs_release_pipeline_plan.md`. Keep the output
-   next to the build artefacts:
+2. **Emit CycloneDX SBOMs.** გამოშვების მილსადენი უკვე მოელის syft-ზე დაფუძნებულს
+   SBOM-ები `docs/source/sorafs_release_pipeline_plan.md`-ზე. შეინახეთ გამომავალი
+   შენობის არტეფაქტების გვერდით:
 
    ```bash
    syft dir:build -o json > "$OUT"/portal.sbom.json
    syft file:docs/portal/static/openapi/torii.json -o json > "$OUT"/openapi.sbom.json
    ```
 
-3. **Pack each payload into a CAR.**
+3. ** ჩაალაგეთ თითოეული ტვირთი მანქანაში.**
 
    ```bash
    sorafs_cli car pack \
@@ -649,32 +646,32 @@ through the same deterministic pipeline. The existing helpers cover all three:
      --summary-out "$OUT"/portal.sbom.car.json
    ```
 
-   Follow the same `manifest build` / `manifest sign` steps as the main site,
-   tuning aliases per asset (for example, `docs-openapi.sora` for the spec and
-   `docs-sbom.sora` for the signed SBOM bundle). Maintaining distinct aliases
-   keeps SoraDNS proofs, GARs, and rollback tickets scoped to the exact payload.
+   მიჰყევით იგივე `manifest build` / `manifest sign` ნაბიჯებს, როგორც მთავარი საიტი,
+   თითო აქტივზე მეტსახელების დარეგულირება (მაგალითად, `docs-openapi.sora` სპეციფიკაციისთვის და
+   `docs-sbom.sora` ხელმოწერილი SBOM პაკეტისთვის). განსხვავებული მეტსახელების შენარჩუნება
+   ინახავს SoraDNS მტკიცებულებებს, GAR-ებს და უკან დაბრუნების ბილეთებს ზუსტი დატვირთვის ფარგლებში.
 
-4. **Submit and bind.** Reuse the existing authority + Sigstore bundle, but
-   record the alias tuple in the release checklist so auditors can track which
-   Sora name maps to which manifest digest.
+4. **გააგზავნეთ და დააკავშირეთ.** ხელახლა გამოიყენეთ არსებული ავტორიტეტი + Sigstore პაკეტი, მაგრამ
+   ჩაწერეთ მეტსახელი tuple გამოშვების სიაში, რათა აუდიტორებმა შეძლონ თვალყური ადევნონ რომელი
+   სორას სახელების რუქები, რომლებზეც მანიფესტი დაიჯესტება.
 
-Archiving the spec/SBOM manifests alongside the portal build ensures every
-release ticket contains the full artefact set without rerunning the packer.
+სპეციფიკაციის/SBOM-ის არქივირება პორტალის აწყობასთან ერთად უზრუნველყოფს ყველა
+გამოშვების ბილეთი შეიცავს სრულ არტეფაქტის კომპლექტს შეფუთვის ხელახლა გაშვების გარეშე.
 
-### Automation helper (CI/package script)
+### ავტომატიზაციის დამხმარე (CI/პაკეტის სკრიპტი)
 
-`./ci/package_docs_portal_sorafs.sh` codifies Steps 1–8 so roadmap item
-**DOCS‑7** can be exercised with a single command. The helper:
+`./ci/package_docs_portal_sorafs.sh` აკოდირებს ნაბიჯებს 1–8, ასე რომ, საგზაო რუქის ერთეული
+**DOCS‑7** შეიძლება განხორციელდეს ერთი ბრძანებით. დამხმარე:
 
-- runs the required portal prep (`npm ci`, OpenAPI/norito sync, widget tests);
-- emits the portal, OpenAPI, and SBOM CARs + manifest pairs via `sorafs_cli`;
-- optionally runs `sorafs_cli proof verify` (`--proof`) and Sigstore signing
+- აწარმოებს პორტალის საჭირო მომზადებას (`npm ci`, OpenAPI/norito სინქრონიზაცია, ვიჯეტის ტესტები);
+- ასხივებს პორტალს, OpenAPI და SBOM CARs + manifest წყვილებს `sorafs_cli`-ის მეშვეობით;
+- სურვილისამებრ მუშაობს `sorafs_cli proof verify` (`--proof`) და Sigstore ხელმოწერა
   (`--sign`, `--sigstore-provider`, `--sigstore-audience`);
-- drops every artefact under `artifacts/devportal/sorafs/<timestamp>/` and
-  writes `package_summary.json` so CI/release tooling can ingest the bundle; and
-- refreshes `artifacts/devportal/sorafs/latest` to point at the most recent run.
+- ჩამოაგდებს ყველა არტეფაქტს `artifacts/devportal/sorafs/<timestamp>/`-ის ქვეშ და
+  წერს `package_summary.json`, რათა CI/release tooling-მა შეძლოს პაკეტის გადაყლაპვა; და
+- განაახლებს `artifacts/devportal/sorafs/latest`, რათა მიუთითოს ბოლო გაშვებაზე.
 
-Example (full pipeline with Sigstore + PoR):
+მაგალითი (სრული მილსადენი Sigstore + PoR):
 
 ```bash
 ./ci/package_docs_portal_sorafs.sh \
@@ -684,45 +681,45 @@ Example (full pipeline with Sigstore + PoR):
   --sigstore-audience=sorafs-devportal
 ```
 
-Flags worth knowing:
+დროშები, რომლებიც უნდა იცოდეთ:
 
-- `--out <dir>` – override the artefact root (default keeps timestamped folders).
-- `--skip-build` – reuse an existing `docs/portal/build` (handy when CI cannot
-  rebuild due to offline mirrors).
-- `--skip-sync-openapi` – skip `npm run sync-openapi` when `cargo xtask openapi`
-  cannot reach crates.io.
-- `--skip-sbom` – avoid calling `syft` when the binary is not installed (the
-  script prints a warning instead).
-- `--proof` – run `sorafs_cli proof verify` for each CAR/manifest pair. Multi-
-  file payloads still require chunk-plan support in the CLI, so leave this flag
-  unset if you hit `plan chunk count` errors and verify manually once the
-  upstream gate lands.
-- `--sign` – invoke `sorafs_cli manifest sign`. Provide a token with
-  `SIGSTORE_ID_TOKEN` (or `--sigstore-token-env`) or let the CLI fetch it using
+- `--out <dir>` – არტეფაქტის ფესვის გადაფარვა (ნაგულისხმევი ინახავს დროის შტამპის საქაღალდეებს).
+- `--skip-build` - ხელახლა გამოიყენე არსებული `docs/portal/build` (მოხერხებულია, როცა CI ვერ
+  რეკონსტრუქცია ოფლაინ სარკეების გამო).
+- `--skip-sync-openapi` – გამოტოვეთ `npm run sync-openapi` როდესაც `cargo xtask openapi`
+  ვერ აღწევს crates.io.
+- `--skip-sbom` - მოერიდეთ `syft`-ს დარეკვას, როდესაც ორობითი არ არის დაინსტალირებული (
+  სკრიპტი ბეჭდავს გაფრთხილებას).
+- `--proof` – გაუშვით `sorafs_cli proof verify` თითოეული CAR/მანიფესტის წყვილისთვის. მრავალ-
+  ფაილების დატვირთვა კვლავ საჭიროებს chunk-plan მხარდაჭერას CLI-ში, ამიტომ დატოვეთ ეს დროშა
+  გააუქმეთ დაყენება, თუ დააწექით `plan chunk count` შეცდომებს და გადაამოწმეთ ხელით ერთხელ
+  ზემოთ კარიბჭის მიწები.
+- `--sign` – გამოძახება `sorafs_cli manifest sign`. მიაწოდეთ ნიშანი
+  `SIGSTORE_ID_TOKEN` (ან `--sigstore-token-env`) ან ნება მიეცით CLI-ს მიიღოს ის გამოყენებით
   `--sigstore-provider/--sigstore-audience`.
 
-When shipping production artefacts use `docs/portal/scripts/sorafs-pin-release.sh`.
-It now packages the portal, OpenAPI, and SBOM payloads, signs each manifest, and
-records extra asset metadata in `portal.additional_assets.json`. The helper
-understands the same optional knobs used by the CI packager plus the new
-`--openapi-*`, `--portal-sbom-*`, and `--openapi-sbom-*` switches so you can
-assign alias tuples per artefact, override the SBOM source via
-`--openapi-sbom-source`, skip certain payloads (`--skip-openapi`/`--skip-sbom`),
-and point at a non-default `syft` binary with `--syft-bin`.
+წარმოების არტეფაქტების გადაზიდვისას გამოიყენეთ `docs/portal/scripts/sorafs-pin-release.sh`.
+ახლა ის ავსებს პორტალს, OpenAPI და SBOM დატვირთვას, ხელს აწერს თითოეულ მანიფესტს და
+აღრიცხავს დამატებით აქტივების მეტამონაცემებს `portal.additional_assets.json`-ში. დამხმარე
+ესმის იგივე არჩევითი სახელურები, რომლებიც გამოიყენება CI პაკეტერის მიერ, პლუს ახალი
+`--openapi-*`, `--portal-sbom-*` და `--openapi-sbom-*` გადამრთველები ასე რომ თქვენ შეგიძლიათ
+მივანიჭოთ მეტსახელის ტოპები თითო არტეფაქტზე, გადააჭარბეთ SBOM წყაროს მეშვეობით
+`--openapi-sbom-source`, გამოტოვეთ გარკვეული დატვირთვა (`--skip-openapi`/`--skip-sbom`),
+და მიუთითეთ არანაგულისხმევი `syft` ორობითი `--syft-bin`-ით.
 
-The script surfaces every command it runs; copy the log into the release ticket
-alongside `package_summary.json` so reviewers can diff CAR digests, plan
-metadata, and Sigstore bundle hashes without spelunking ad‑hoc shell output.
+სკრიპტი ასახავს ყველა ბრძანებას, რომელსაც ის აწარმოებს; დააკოპირეთ ჟურნალი გამოშვების ბილეთში
+`package_summary.json`-თან ერთად, რათა მიმომხილველებმა განასხვავონ CAR დაჯესტები, დაგეგმონ
+მეტამონაცემები და Sigstore ნაკრების ჰეშები სპელუნგური ad-hoc ჭურვის გამოშვების გარეშე.
 
-## Step 9 — Gateway + SoraDNS verification
+## ნაბიჯი 9 - კარიბჭე + SoraDNS დადასტურება
 
-Before announcing a cutover, prove the new alias resolves via SoraDNS and that
-gateways staple fresh proofs:
+შეწყვეტის გამოცხადებამდე, დაადასტურეთ, რომ ახალი მეტსახელი წყდება SoraDNS-ის მეშვეობით და ეს
+კარიბჭეები ახალი მტკიცებულებებია:
 
-1. **Run the probe gate.** `ci/check_sorafs_gateway_probe.sh` exercises
-   `cargo xtask sorafs-gateway-probe` against the demo fixtures in
-   `fixtures/sorafs_gateway/probe_demo/`. For real deployments, point the probe
-   at the target hostname:
+1. **გაუშვით ზონდის კარი.** `ci/check_sorafs_gateway_probe.sh` სავარჯიშოები
+   `cargo xtask sorafs-gateway-probe` დემო მოწყობილობების წინააღმდეგ
+   `fixtures/sorafs_gateway/probe_demo/`. რეალური განლაგებისთვის, მიუთითეთ ზონდი
+   სამიზნე ჰოსტის სახელზე:
 
    ```bash
    ./ci/check_sorafs_gateway_probe.sh -- \
@@ -734,75 +731,73 @@ gateways staple fresh proofs:
      --report-json artifacts/sorafs_gateway_probe/ci/docs.json
    ```
 
-   The probe decodes `Sora-Name`, `Sora-Proof`, and `Sora-Proof-Status` per
-   `docs/source/sorafs_alias_policy.md` and fails when the manifest digest,
-   TTLs, or GAR bindings drift.
+   ზონდი შიფრავს `Sora-Name`, `Sora-Proof` და `Sora-Proof-Status`
+   `docs/source/sorafs_alias_policy.md` და მარცხდება მანიფესტის მონელებისას,
+   TTL-ები, ან GAR-ის შეკვრა დრიფტი.
 
-   For lightweight spot checks (for example, when only the binding bundle
-   changed), run `cargo xtask soradns-verify-binding --binding <portal.gateway.binding.json> --alias "<alias>" --hostname "<gateway-host>" --proof-status ok --manifest-json <portal.manifest.json>`.
-   The helper validates the captured binding bundle and is handy for release
-   tickets that only need binding confirmation instead of a full probe drill.
+   მსუბუქი ლაქების შემოწმებისთვის (მაგალითად, როდესაც მხოლოდ შეკვრაა
+   შეიცვალა), გაუშვით `cargo xtask soradns-verify-binding --binding <portal.gateway.binding.json> --alias "<alias>" --hostname "<gateway-host>" --proof-status ok --manifest-json <portal.manifest.json>`.
+   დამხმარე ამოწმებს დაჭერილ შეკვრას და მოსახერხებელია გამოსაშვებად
+   ბილეთები, რომლებსაც სჭირდებათ მხოლოდ სავალდებულო დადასტურება სრული გამოძიების სავარჯიშოს ნაცვლად.
 
-2. **Capture drill evidence.** For operator drills or PagerDuty dry runs, wrap
-   the probe with `scripts/telemetry/run_sorafs_gateway_probe.sh --scenario
-   devportal-rollout -- …`. The wrapper stores headers/logs under
-   `artifacts/sorafs_gateway_probe/<stamp>/`, updates `ops/drill-log.md`, and
-   (optionally) triggers rollback hooks or PagerDuty payloads. Set
-   `--host docs.sora` to validate the SoraDNS path instead of hard-coding an IP.
-
-3. **Verify DNS bindings.** When governance publishes the alias proof, record
-   the GAR file referenced in the probe (`--gar`) and attach it to the release
-   evidence. Resolver owners can mirror the same input through
-   `tools/soradns-resolver` to ensure cached entries honour the new manifest.
-   Before attaching the JSON, run
+2. **საბურღი მტკიცებულების დაჭერა.** ოპერატორის საბურღი ან PagerDuty მშრალი გაშვებისთვის, შეფუთეთ
+   ზონდი `scripts/telemetry/run_sorafs_gateway_probe.sh --სცენარით
+   devportal-rollout --…`. შეფუთვა ინახავს სათაურებს/ ჟურნალებს ქვეშ
+   `artifacts/sorafs_gateway_probe/<stamp>/`, განახლებები `ops/drill-log.md` და
+   (სურვილისამებრ) ააქტიურებს rollback hooks ან PagerDuty payloads. კომპლექტი
+   `--host docs.sora`, რათა დაადასტუროს SoraDNS გზა, IP-ის მყარი კოდირების ნაცვლად.3. ** გადაამოწმეთ DNS-ის კავშირები.** როცა მმართველობა აქვეყნებს ალიასის მტკიცებულებას, ჩაწერეთ
+   GAR ფაილი, რომელიც მითითებულია ზონდში (`--gar`) და მიამაგრეთ იგი გამოშვებას
+   მტკიცებულება. Resolver-ის მფლობელებს შეუძლიათ იგივე შეყვანის ასახვა
+   `tools/soradns-resolver` იმის უზრუნველსაყოფად, რომ ქეშირებული ჩანაწერები დაიცვან ახალი მანიფესტი.
+   JSON-ის დამაგრებამდე გაუშვით
    `cargo xtask soradns-verify-gar --gar <path> --name <alias> [--manifest-cid <cid>] [--telemetry-label <label>]`
-   so the deterministic host mapping, manifest metadata, and telemetry labels are
-   validated offline. The helper can emit a `--json-out` summary alongside the
-   signed GAR so reviewers have verifiable evidence without opening the binary.
-  When drafting a new GAR, prefer
+   ასე რომ, მასპინძლის განმსაზღვრელი რუკების, მანიფესტის მეტამონაცემების და ტელემეტრიის ეტიკეტები არის
+   დადასტურებულია ხაზგარეშე. დამხმარეს შეუძლია გამოუშვას `--json-out` რეზიუმე გვერდით
+   ხელი მოაწერა GAR-ს, რათა მიმომხილველებს ჰქონდეთ გადამოწმებადი მტკიცებულებები ბინარის გახსნის გარეშე.
+  ახალი GAR-ის შედგენისას უპირატესობა მიანიჭეთ
   `cargo xtask soradns-gar-template --name <alias> --manifest <portal.manifest.json> --telemetry-label <label> ...`
-  (fall back to `--manifest-cid <cid>` only when a manifest file is not
-  available). The helper now derives the CID **and** BLAKE3 digest directly from
-  the manifest JSON, trims whitespace, deduplicates repeated `--telemetry-label`
-  flags, sorts the labels, and emits the default CSP/HSTS/Permissions-Policy
-  templates before writing the JSON so the payload stays deterministic even when
-  operators capture labels from different shells.
+  (დაბრუნდით `--manifest-cid <cid>`-ზე მხოლოდ მაშინ, როდესაც manifest ფაილი არ არის
+  ხელმისაწვდომი). დამხმარე ახლა იღებს CID ** და ** BLAKE3 დაიჯესტს პირდაპირ საიდან
+  მანიფესტის JSON, წყვეტს თეთრ სივრცეს, ამოიღებს განმეორებით `--telemetry-label`-ს
+  მონიშვნა, ახარისხებს ლეიბლებს და გამოსცემს ნაგულისხმევ CSP/HSTS/Permissions-პოლიტიკას
+  შაბლონები JSON-ის დაწერამდე, ასე რომ დატვირთვა დეტერმინისტული რჩება მაშინაც კი, როცა
+  ოპერატორები იჭერენ ეტიკეტებს სხვადასხვა ჭურვიდან.
 
-4. **Watch alias metrics.** Keep `torii_sorafs_alias_cache_refresh_duration_ms`
-   and `torii_sorafs_gateway_refusals_total{profile="docs"}` on screen while the
-   probe is running; both series are charted in
+4. **უყურეთ მეტსახელის მეტიკას.** შეინახეთ `torii_sorafs_alias_cache_refresh_duration_ms`
+   და `torii_sorafs_gateway_refusals_total{profile="docs"}` ეკრანზე, ხოლო
+   ზონდი მუშაობს; ორივე სერია ჩარტშია
    `dashboards/grafana/docs_portal.json`.
 
-## Step 10 — Monitoring & evidence bundling
+## ნაბიჯი 10 - მონიტორინგი და მტკიცებულებების შეფუთვა
 
-- **Dashboards.** Export `dashboards/grafana/docs_portal.json` (portal SLOs),
-  `dashboards/grafana/sorafs_gateway_observability.json` (gateway latency +
-  proof health), and `dashboards/grafana/sorafs_fetch_observability.json`
-  (orchestrator health) for every release. Attach the JSON exports to the
-  release ticket so reviewers can replay the Prometheus queries.
-- **Probe archives.** Keep `artifacts/sorafs_gateway_probe/<stamp>/` in git-annex
-  or your evidence bucket. Include the probe summary, headers, and PagerDuty
-  payload captured by the telemetry script.
-- **Release bundle.** Store the portal/SBOM/OpenAPI CAR summaries, manifest
-  bundles, Sigstore signatures, `portal.pin.report.json`, Try-It probe logs, and
-  link-check reports under a single timestamped folder (for example,
+- **Dashboards.** ექსპორტი `dashboards/grafana/docs_portal.json` (პორტალი SLOs),
+  `dashboards/grafana/sorafs_gateway_observability.json` (კარიბჭის შეყოვნება +
+  ჯანმრთელობის მტკიცებულება), და `dashboards/grafana/sorafs_fetch_observability.json`
+  (ორკესტრის ჯანმრთელობა) ყოველი გამოშვებისთვის. მიამაგრეთ JSON ექსპორტი
+  გაათავისუფლეთ ბილეთი, რათა მიმომხილველებმა შეძლონ Prometheus მოთხოვნების გამეორება.
+- **გამოძიების არქივები.** შეინახეთ `artifacts/sorafs_gateway_probe/<stamp>/` git-დანართში
+  ან თქვენი მტკიცებულებების თაიგული. ჩართეთ გამოძიების რეზიუმე, სათაურები და PagerDuty
+  ტელემეტრიული სკრიპტით აღბეჭდილი დატვირთვა.
+- ** პაკეტის გამოშვება. ** შეინახეთ პორტალი/SBOM/OpenAPI CAR შეჯამებები, მანიფესტი
+  პაკეტები, Sigstore ხელმოწერები, `portal.pin.report.json`, Try-It probe ჟურნალები და
+  ბმულის შემოწმება ანგარიშების ერთი დროის შტამპით საქაღალდეში (მაგალითად,
   `artifacts/sorafs/devportal/20260212T1103Z/`).
-- **Drill log.** When probes are part of a drill, let
-  `scripts/telemetry/run_sorafs_gateway_probe.sh` append to `ops/drill-log.md`
-  so the same evidence satisfies the SNNet-5 chaos requirement.
-- **Ticket links.** Reference the Grafana panel IDs or attached PNG exports in
-  the change ticket, together with the probe report path, so change-reviewers
-  can cross-check the SLOs without shell access.
+- **საბურღი ჟურნალი.** როცა ზონდები საბურღი ნაწილია, ნება
+  `scripts/telemetry/run_sorafs_gateway_probe.sh` დაურთოს `ops/drill-log.md`
+  ასე რომ, იგივე მტკიცებულება აკმაყოფილებს SNNet-5 ქაოსის მოთხოვნას.
+- **ბილეთების ბმულები.** მიუთითეთ Grafana პანელის ID ან თანდართული PNG ექსპორტი
+  შეცვლის ბილეთი, გამოძიების ანგარიშის გზასთან ერთად, ასე რომ, ცვლილებები-მიმომხილველები
+  შეუძლია SLO-ების ჯვარედინი შემოწმება ჭურვის წვდომის გარეშე.
 
-## Step 11 — Multi-source fetch drill & scoreboard evidence
+## ნაბიჯი 11 - მრავალ წყაროს მოტანის საბურღი და ანგარიშის დაფის მტკიცებულება
 
-Publishing to SoraFS now requires multi-source fetch evidence (DOCS-7/SF-6)
-alongside the DNS/gateway proofs above. After pinning the manifest:
+SoraFS-ზე გამოქვეყნება ახლა მოითხოვს მრავალ წყაროს მოპოვების მტკიცებულებებს (DOCS-7/SF-6)
+ზემოთ DNS/gateway მტკიცებულებებთან ერთად. მანიფესტის ჩამაგრების შემდეგ:
 
-1. **Run `sorafs_fetch` against the live manifest.** Use the same plan/manifest
-   artefacts produced in Steps 2–3 plus the gateway credentials issued for each
-   provider. Persist every output so auditors can replay the orchestrator
-   decision trail:
+1. **გაუშვით `sorafs_fetch` პირდაპირი მანიფესტის წინააღმდეგ.** გამოიყენეთ იგივე გეგმა/მანიფესტი
+   2–3 ნაბიჯებში წარმოებული არტეფაქტები პლუს თითოეულისთვის გაცემული კარიბჭის სერთიფიკატები
+   პროვაიდერი. შეასრულეთ ყველა გამომავალი, რათა აუდიტორებმა შეძლონ ორკესტრის გამეორება
+   გადაწყვეტილების ბილიკი:
 
    ```bash
    OUT=artifacts/sorafs/devportal
@@ -823,112 +818,112 @@ alongside the DNS/gateway proofs above. After pinning the manifest:
      --retry-budget=4
    ```
 
-   - Fetch the provider adverts referenced by the manifest first (for example
+   - ჯერ მიიღეთ პროვაიდერის რეკლამები, რომლებიც მითითებულია მანიფესტში (მაგალითად
      `sorafs_cli manifest describe --provider-adverts-out artifacts/sorafs/provider_adverts/`)
-     and pass them via `--provider-advert name=path` so the scoreboard can
-     evaluate capability windows deterministically. Use
-     `--allow-implicit-provider-metadata` **only** when replaying fixtures in
-     CI; production drills must cite the signed adverts that landed with the
-     pin.
-   - When the manifest references additional regions, repeat the command with
-     the corresponding provider tuples so every cache/alias has a matching
-     fetch artefact.
+     და გაიარეთ ისინი `--provider-advert name=path`-ის მეშვეობით, რათა დაფასმა შეძლოს
+     შეაფასეთ შესაძლებლობები windows-ის განმსაზღვრელად. გამოყენება
+     `--allow-implicit-provider-metadata` **მხოლოდ** მოწყობილობების ხელახლა დაკვრისას
+     CI; საწარმოო წვრთნებში უნდა იყოს მითითებული ხელმოწერილი რეკლამები, რომლებიც დაეშვათ
+     ქინძისთავი.
+   - როდესაც manifest მიუთითებს დამატებით რეგიონებზე, გაიმეორეთ ბრძანება
+     შესაბამისი პროვაიდერი მრავლდება, ასე რომ ყველა ქეშს/ალიასს აქვს შესაბამისი
+     არტეფაქტის მოტანა.
 
-2. **Archive the outputs.** Store `scoreboard.json`,
-   `providers.ndjson`, `fetch.json`, and `chunk_receipts.ndjson` under the
-   release evidence folder. These files capture the peer weighting, retry
-   budget, latency EWMA, and per-chunk receipts that the governance packet must
-   retain for SF-7.
+2. **გამოსვლების დაარქივება.** შეინახეთ `scoreboard.json`,
+   `providers.ndjson`, `fetch.json` და `chunk_receipts.ndjson` ქვეშ
+   გაათავისუფლე მტკიცებულებათა საქაღალდე. ეს ფაილები აღრიცხავს თანატოლთა წონას, სცადეთ ხელახლა
+   ბიუჯეტი, შეყოვნება EWMA და თითო ცალი ქვითრები, რომლებიც უნდა იყოს მმართველი პაკეტი
+   შეინარჩუნეთ SF-7.
 
-3. **Update telemetry.** Import the fetch outputs into the **SoraFS Fetch
-   Observability** dashboard (`dashboards/grafana/sorafs_fetch_observability.json`),
-   watching `torii_sorafs_fetch_duration_ms`/`_failures_total` and the
-   provider-range panels for anomalies. Link the Grafana panel snapshots to the
-   release ticket alongside the scoreboard path.
+3. **განახლეთ ტელემეტრია.** ჩაწერეთ გამოსავლების იმპორტი **SoraFS Fetch-ში
+   დაკვირვებადობა** დაფა (`dashboards/grafana/sorafs_fetch_observability.json`),
+   ვუყურებ `torii_sorafs_fetch_duration_ms`/`_failures_total` და
+   პროვაიდერის დიაპაზონის პანელები ანომალიებისთვის. დააკავშირეთ Grafana პანელის სნეპშოტები
+   გამოშვების ბილეთი საანგარიშო დაფის გასწვრივ.
 
-4. **Smoke the alert rules.** Run `scripts/telemetry/test_sorafs_fetch_alerts.sh`
-   to validate the Prometheus alert bundle before closing the release. Attach
-   the promtool output to the ticket so DOCS-7 reviewers can confirm the stall
-   and slow-provider alerts remain armed.
+4. **მოწიეთ გაფრთხილების წესები.** გაუშვით `scripts/telemetry/test_sorafs_fetch_alerts.sh`
+   Prometheus გაფრთხილების ნაკრების დასადასტურებლად გამოშვების დახურვამდე. მიამაგრეთ
+   promtool გამომავალი ბილეთზე, რათა DOCS-7 მიმომხილველებმა დაადასტურონ გაჩერება
+   და ნელი პროვაიდერის სიგნალიზაცია რჩება შეიარაღებული.
 
-5. **Wire into CI.** The portal pin workflow keeps a `sorafs_fetch` step behind
-   the `perform_fetch_probe` input; enable it for staging/production runs so the
-   fetch evidence is produced alongside the manifest bundle without manual
-   intervention. Local drills can reuse the same script by exporting the
-   gateway tokens and setting `PIN_FETCH_PROVIDERS` to the comma-separated
-   provider list.
+5. **გადაიყვანეთ CI-ში.** პორტალის პინის სამუშაო პროცესი ინარჩუნებს `sorafs_fetch` ნაბიჯს უკან
+   `perform_fetch_probe` შეყვანა; ჩართეთ იგი დადგმისთვის/წარმოების გაშვებისთვის ისე
+   მოპოვების მტკიცებულება წარმოებულია მანიფესტის პაკეტთან ერთად სახელმძღვანელოს გარეშე
+   ჩარევა. ადგილობრივ სავარჯიშოებს შეუძლიათ იგივე სკრიპტის ხელახლა გამოყენება ექსპორტით
+   კარიბჭის ნიშნები და `PIN_FETCH_PROVIDERS` დაყენება მძიმით გამოყოფილი
+   პროვაიდერების სია.
 
-## Promotion, observability, and rollback
+## პოპულარიზაცია, დაკვირვებადობა და უკან დაბრუნება
 
-1. **Promotion:** keep separate staging and production aliases. Promote by
-   re-running `manifest submit` with the same manifest/bundle, swapping
-   `--alias-namespace/--alias-name` to point at the production alias. This
-   avoids rebuilding or resigning once QA approves the staging pin.
-2. **Monitoring:** import the pin-registry dashboard
-   (`docs/source/grafana_sorafs_pin_registry.json`) plus the portal-specific
-   probes (see `docs/portal/docs/devportal/observability.md`). Alert on checksum
-   drift, failed probes, or proof retry spikes.
-3. **Rollback:** to revert, resubmit the previous manifest (or retire the
-   current alias) using `sorafs_cli manifest submit --alias ... --retire`.
-   Always keep the last known-good bundle and CAR summary so rollback proofs can
-   be recreated if the CI logs rotate.
+1. **პრომოცია:** შეინახეთ ცალკე დადგმისა და წარმოების მეტსახელები. დაწინაურება მიერ
+   `manifest submit`-ის ხელახლა გაშვება იმავე მანიფესტთან/პაკეტით, შეცვლა
+   `--alias-namespace/--alias-name` წარმოების მეტსახელის აღსანიშნავად. ეს
+   თავიდან აიცილებს აღდგენას ან გადადგომას მას შემდეგ, რაც QA დაამტკიცებს დადგმის პინს.
+2. **მონიტორინგი:** პინ-რეესტრის დაფის იმპორტი
+   (`docs/source/grafana_sorafs_pin_registry.json`) პლუს პორტალისთვის სპეციფიკური
+   ზონდები (იხ. `docs/portal/docs/devportal/observability.md`). გაფრთხილება საკონტროლო ჯამზე
+   დრიფტი, წარუმატებელი ზონდები ან მტკიცებულება ხელახლა ცდის მწვერვალები.
+3. **დაბრუნება:** დასაბრუნებლად, ხელახლა გაგზავნეთ წინა მანიფესტი (ან გააუქმეთ
+   მიმდინარე მეტსახელი) `sorafs_cli manifest submit --alias ... --retire`-ის გამოყენებით.
+   ყოველთვის შეინახეთ ბოლო ცნობილი კარგი პაკეტი და CAR შეჯამება, რათა უკან დაბრუნების მტკიცებულებები შეძლონ
+   ხელახლა შეიქმნება, თუ CI ჟურნალები ბრუნავს.
 
-## CI workflow template
+## CI სამუშაო ნაკადის შაბლონი
 
-At minimum, your pipeline should:
+თქვენი მილსადენი მინიმუმ უნდა:
 
-1. Build + lint (`npm ci`, `npm run build`, checksum generation).
-2. Package (`car pack`) and compute manifests.
-3. Sign using the job-scoped OIDC token (`manifest sign`).
-4. Upload artefacts (CAR, manifest, bundle, plan, summaries) for auditing.
-5. Submit to the pin registry:
-   - Pull requests → `docs-preview.sora`.
-   - Tags / protected branches → production alias promotion.
-6. Run probes + proof verification gates before exiting.
+1. Build + lint (`npm ci`, `npm run build`, საკონტროლო ჯამის გენერაცია).
+2. პაკეტი (`car pack`) და გამოთვალეთ მანიფესტები.
+3. მოაწერეთ ხელი სამუშაოს ფარგლებში OIDC ჟეტონის (`manifest sign`) გამოყენებით.
+4. ატვირთეთ არტეფაქტები (CAR, მანიფესტი, ნაკრები, გეგმა, რეზიუმეები) აუდიტისთვის.
+5. გაგზავნეთ პინის რეესტრში:
+   - გაიყვანეთ მოთხოვნები → `docs-preview.sora`.
+   - ტეგები / დაცული ფილიალები → წარმოების მეტსახელი ხელშეწყობა.
+6. გაუშვით ზონდები + მტკიცებულების დამადასტურებელი კარიბჭე გასვლამდე.
 
-`.github/workflows/docs-portal-sorafs-pin.yml` wires all of these steps together
-for manual releases. The workflow:
+`.github/workflows/docs-portal-sorafs-pin.yml` ხაზს უსვამს ყველა ამ ნაბიჯს
+ხელით გამოშვებისთვის. სამუშაო პროცესი:
 
-- builds/tests the portal,
-- packages the build via `scripts/sorafs-pin-release.sh`,
-- signs/verifies the manifest bundle using GitHub OIDC,
-- uploads the CAR/manifest/bundle/plan/proof summaries as artifacts, and
-- (optionally) submits the manifest + alias binding when secrets are present.
+- აშენებს/ამოწმებს პორტალს,
+- აწყობს კონსტრუქციას `scripts/sorafs-pin-release.sh`-ით,
+- ხელს აწერს/ამოწმებს manifest-ის პაკეტს GitHub OIDC-ის გამოყენებით,
+- ატვირთავს CAR/მანიფესტს/ნაკრებს/გეგმის/მტკიცებულების შეჯამებებს არტეფაქტებად და
+- (სურვილისამებრ) წარუდგენს მანიფესტს + მეტსახელის სავალდებულოა, როდესაც საიდუმლოებები არსებობს.
 
-Configure the following repository secrets/variables before triggering the job:
+სამუშაოს დაწყებამდე დააკონფიგურირეთ საცავის საიდუმლოებები/ცვლადები:
 
-| Name | Purpose |
+| სახელი | დანიშნულება |
 |------|---------|
-| `DOCS_SORAFS_TORII_URL` | Torii host that exposes `/v1/sorafs/pin/register`. |
-| `DOCS_SORAFS_SUBMITTED_EPOCH` | Epoch identifier recorded with submissions. |
-| `DOCS_SORAFS_AUTHORITY` / `DOCS_SORAFS_PRIVATE_KEY` | Signing authority for the manifest submission. |
-| `DOCS_SORAFS_ALIAS_NAMESPACE` / `DOCS_SORAFS_ALIAS_NAME` | Alias tuple bound to the manifest when `perform_submit` is `true`. |
-| `DOCS_SORAFS_ALIAS_PROOF_B64` | Base64-encoded alias proof bundle (optional; omit to skip alias binding). |
-| `DOCS_ANALYTICS_*` | Existing analytics/probe endpoints reused by other workflows. |
+| `DOCS_SORAFS_TORII_URL` | Torii ჰოსტი, რომელიც ავლენს `/v1/sorafs/pin/register`-ს. |
+| `DOCS_SORAFS_SUBMITTED_EPOCH` | ეპოქის იდენტიფიკატორი ჩაწერილია წარდგინებით. |
+| `DOCS_SORAFS_AUTHORITY` / `DOCS_SORAFS_PRIVATE_KEY` | მანიფესტის წარდგენის ხელმომწერი უფლებამოსილება. |
+| `DOCS_SORAFS_ALIAS_NAMESPACE` / `DOCS_SORAFS_ALIAS_NAME` | მეტსახელის ტიპი მიბმულია მანიფესტთან, როდესაც `perform_submit` არის `true`. |
+| `DOCS_SORAFS_ALIAS_PROOF_B64` | Base64-ში დაშიფრული ალიასის დამადასტურებელი ნაკრები (არასავალდებულო; გამოტოვეთ ფსევდონიმების დაკავშირება). |
+| `DOCS_ANALYTICS_*` | არსებული ანალიტიკა/გამოძიების საბოლოო წერტილები, რომლებიც ხელახლა გამოიყენება სხვა სამუშაო პროცესების მიერ. |
 
-Trigger the workflow via the Actions UI:
+გააქტიურეთ სამუშაო ნაკადი Actions UI-ის მეშვეობით:
 
-1. Provide `alias_label` (e.g., `docs.sora.link`), optional `proposal_alias`,
-   and an optional `release_tag` override.
-2. Leave `perform_submit` unchecked to generate artefacts without touching Torii
-   (useful for dry runs) or enable it to publish directly to the configured
-   alias.
+1. მიაწოდეთ `alias_label` (მაგ., `docs.sora.link`), სურვილისამებრ `proposal_alias`,
+   და სურვილისამებრ `release_tag` უგულებელყოფა.
+2. დატოვეთ `perform_submit` მონიშნული არტეფაქტების გენერირებისთვის Torii-ის შეხების გარეშე
+   (გამოსადეგია მშრალი გაშვებისთვის) ან ჩართეთ მისი გამოქვეყნება პირდაპირ კონფიგურირებულში
+   მეტსახელი.
 
-`docs/source/sorafs_ci_templates.md` still documents the generic CI helpers for
-projects outside this repository, but the portal workflow should be preferred
-for day-to-day releases.
+`docs/source/sorafs_ci_templates.md` ჯერ კიდევ დოკუმენტირებულია ზოგადი CI დამხმარეებისთვის
+პროექტები ამ საცავის მიღმა, მაგრამ უპირატესობა უნდა მიენიჭოს პორტალზე მუშაობის პროცესს
+ყოველდღიური გამოშვებისთვის.
 
-## Checklist
+## საკონტროლო სია
 
-- [ ] `npm run build`, `npm run test:*`, and `npm run check:links` are green.
-- [ ] `build/checksums.sha256` and `build/release.json` captured in artefacts.
-- [ ] CAR, plan, manifest, and summary generated under `artifacts/`.
-- [ ] Sigstore bundle + detached signature stored with logs.
-- [ ] `portal.manifest.submit.summary.json` and `portal.manifest.submit.response.json`
-      captured when submissions occur.
-- [ ] `portal.pin.report.json` (and optional `portal.pin.proposal.json`)
-      archived alongside CAR/manifest artefacts.
-- [ ] `proof verify` and `manifest verify-signature` logs archived.
-- [ ] Grafana dashboards updated + Try-It probes successful.
-- [ ] Rollback notes (previous manifest ID + alias digest) attached to the
-      release ticket.
+- [ ] `npm run build`, `npm run test:*` და `npm run check:links` მწვანეა.
+- [ ] `build/checksums.sha256` და `build/release.json` აღბეჭდილი არტეფაქტებში.
+- [ ] CAR, გეგმა, მანიფესტი და შეჯამება გენერირებული `artifacts/`-ის ქვეშ.
+- [ ] Sigstore პაკეტი + მოწყვეტილი ხელმოწერა შენახული ჟურნალებით.
+- [ ] `portal.manifest.submit.summary.json` და `portal.manifest.submit.response.json`
+      გადაღებული წარდგენის დროს.
+- [ ] `portal.pin.report.json` (და სურვილისამებრ `portal.pin.proposal.json`)
+      დაარქივებულია CAR/მანიფესტის არტეფაქტებთან ერთად.
+- [ ] `proof verify` და `manifest verify-signature` ჟურნალები დაარქივებულია.
+- [ ] განახლებულია Grafana დაფები + Try-It probes წარმატებით.
+- [ ] უკან დაბრუნების შენიშვნები (წინა მანიფესტის ID + მეტსახელი დაიჯესტი) მიმაგრებულია
+      გათავისუფლების ბილეთი.

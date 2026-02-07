@@ -11,136 +11,137 @@ id: pin-registry-plan
 title: SoraFS Pin Registry Implementation Plan
 sidebar_label: Pin Registry Plan
 description: SF-4 implementation plan covering registry state machine, Torii facade, tooling, and observability.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
-:::
+:::иҫкәртергә канонлы сығанаҡ
+::: 1990 й.
 
-# SoraFS Pin Registry Implementation Plan (SF-4)
+# I18NT000000013X булавка теркәүен тормошҡа ашырыу планы (SF-4)
 
-SF-4 delivers the Pin Registry contract and supporting services that store
-manifest commitments, enforce pin policies, and expose APIs to Torii, gateways,
-and orchestrators. This document expands the validation plan with concrete
-implementation tasks, covering on-chain logic, host-side services, fixtures,
-and operational requirements.
+SF-4 тапшыра Pin Registry килешеп һәм ярҙам хеҙмәттәре, улар һаҡлай .
+асыҡ йөкләмәләр, штекер сәйәсәтен үтәү, һәм API-ларҙы I18NT000000014X, шлюздар,
+һәм оркестристар. Был документ идентификация планын бетон менән киңәйтә
+тормошҡа ашырыу бурыстары, сылбырҙа логика, хужа яғынан хеҙмәттәр, ҡоролмалар ҡаплау,
+һәм оператив талаптар.
 
-## Scope
+## Масштаб
 
-1. **Registry state machine**: Norito-defined records for manifests, aliases,
-   successor chains, retention epochs, and governance metadata.
-2. **Contract implementation**: deterministic CRUD operations for pin lifecycle
-   (`ReplicationOrder`, `Precommit`, `Completion`, eviction).
-3. **Service facade**: gRPC/REST endpoints backed by the registry that Torii
-   and SDKs consume, including pagination and attestation.
-4. **Tooling & fixtures**: CLI helpers, test vectors, and documentation to keep
-   manifests, aliases, and governance envelopes in sync.
-5. **Telemetry & ops**: metrics, alerts, and runbooks for registry health.
+1. **Берләшкән дәүләт машинаһы**: I18NT00000000003X-билдәләнгән яҙмалар өсөн манифест, псевдоним, псевдоним,
+   вариҫы сылбырҙары, һаҡлау эпохалары һәм идара итеү метамағлүмәттәре.
+2. **Контракт тормошҡа ашырыу**: детерминистик CRUD операциялары өсөн булавка йәшәү циклы
+   (`ReplicationOrder`, `Precommit`, `Completion`, күсерелгән).
+3. **Хеҙмәт фасады**: gRPC/REST ос нөктәләре ярҙамында реестр, тип I18NT000000015X
+   һәм SDKs ҡуллана, шул иҫәптән pagination һәм аттестация.
+4. **Тулы һәм ҡоролмалары**: CLI ярҙамсылары, һынау векторҙары, һәм документация һаҡлау өсөн
+   төҫлө, псевдоним һәм идара итеү синхронлаштырыу уратып ала.
+5. **Телеметрия & опс**: метрика, иҫкәртмәләр, һәм runbooks өсөн реестр һаулығы.
 
-## Data Model
+## Мәғлүмәттәр моделе
 
-### Core Records (Norito)
+### Ядро яҙмалары (I18NT000000004X)
 
-| Struct | Description | Fields |
-|--------|-------------|--------|
-| `PinRecordV1` | Canonical manifest entry. | `manifest_cid`, `chunk_plan_digest`, `por_root`, `profile_handle`, `approved_at`, `retention_epoch`, `pin_policy`, `successor_of`, `governance_envelope_hash`. |
-| `AliasBindingV1` | Maps alias -> manifest CID. | `alias`, `manifest_cid`, `bound_at`, `expiry_epoch`. |
-| `ReplicationOrderV1` | Instruction for providers to pin manifest. | `order_id`, `manifest_cid`, `providers`, `redundancy`, `deadline`, `policy_hash`. |
-| `ReplicationReceiptV1` | Provider acknowledgement. | `order_id`, `provider_id`, `status`, `timestamp`, `por_sample_digest`. |
-| `ManifestPolicyV1` | Governance policy snapshot. | `min_replicas`, `max_retention_epochs`, `allowed_profiles`, `pin_fee_basis_points`. |
+| Струк | Тасуирлама | Яландар |
+|-------|-------------|--------|
+| `PinRecordV1` | Канонлы манифест яҙмаһы. | I18NI000000025X, `chunk_plan_digest`, `por_root`, I18NI000000028X, `approved_at` X, I18NI00000000030, I18NI000000031X, `successor_of`, I18NI000000033X. |
+| `AliasBindingV1` | Карталар псевдоним -> асыҡ CID. | I18NI000000035X, I18NI000000036X, `bound_at`, I18NI000000038X. |
+| `ReplicationOrderV1` | Инструкция өсөн провайдерҙар өсөн пенсорный манифест. | I18NI000000040X, `manifest_cid`, I18NI000000042X, `redundancy`, `deadline`, I18NI000000000045X. |
+| `ReplicationReceiptV1` | Провайдер таныу. | I18NI000000047X, I18NI000000048X, I18NI000000049X X, `timestamp`, `por_sample_digest`. |
+| `ManifestPolicyV1` | Идара итеү сәйәсәте снимок. | `min_replicas`, `max_retention_epochs`, `allowed_profiles`, `pin_fee_basis_points`. |
 
-Implementation reference: see `crates/sorafs_manifest/src/pin_registry.rs` for the
-Rust Norito schemas and validation helpers backing these records. Validation
-mirrors the manifest tooling (chunker registry lookup, pin policy gating) so the
-contract, Torii facades, and CLI share identical invariants.
+Ғәмәлгә ашырыу һылтанмаһы: ҡарағыҙ I18NI000000057X өсөн
+Rust I18NT000000005X схемалары һәм валидация ярҙамсылары был яҙмаларҙы яҡлай. Валидация
+көҙгөләй асыҡ инструменталь (chunker реестр эҙләү, булавка сәйәсәт ҡапҡаһы) шулай итеп
+контракт, I18NT000000016X фасадтары, һәм CLI өлөшө бер үк инварианттар.
 
-Tasks:
-- Finalise Norito schemas in `crates/sorafs_manifest/src/pin_registry.rs`.
-- Generate code (Rust + other SDKs) using Norito macros.
-- Update docs (`sorafs_architecture_rfc.md`) once schemas land.
+Бурыстар:
+- I18NI0000000058X-та I18NT000000006X схемалары.
+- I18NT000000007X макрос ҡулланып, кодты генерациялау (Раст + башҡа SDKs).
+- Яңыртыу документтары (I18NI000000059X) бер тапҡыр схемалар ере.
 
-## Contract Implementation
+## Контракт тормошҡа ашырыу
 
-| Task | Owner(s) | Notes |
+| Эш | Хужа(тар) | Иҫкәрмәләр |
 |------|----------|-------|
-| Implement registry storage (sled/sqlite/off-chain) or smart contract module. | Core Infra / Smart Contract Team | Provide deterministic hashing, avoid floating point. |
-| Entry points: `submit_manifest`, `approve_manifest`, `bind_alias`, `issue_replication_order`, `complete_replication`, `evict_manifest`. | Core Infra | Leverage `ManifestValidator` from validation plan. Alias binding now flows through `RegisterPinManifest` (Torii DTO surfacing) while dedicated `bind_alias` remains planned for successive updates. |
-| State transitions: enforce succession (manifest A -> B), retention epochs, alias uniqueness. | Governance Council / Core Infra | Alias uniqueness, retention limits, and predecessor approval/retirement checks now live in `crates/iroha_core/src/smartcontracts/isi/sorafs.rs`; multi-hop succession detection and replication bookkeeping remain open. |
-| Governed parameters: load `ManifestPolicyV1` from config/governance state; allow updates via governance events. | Governance Council | Provide CLI for policy updates. |
-| Event emission: emit Norito events for telemetry (`ManifestApproved`, `ReplicationOrderIssued`, `AliasBound`). | Observability | Define event schema + logging. |
+| Ҡабул итеү реестры һаҡлау (саңғы/клит/өҫтөндә-сылбыр) йәки аҡыллы килешеп модуль. | Ядро Инфра / Аҡыллы килешәү командаһы | Детерминистик хешинг бирегеҙ, йөҙөү нөктәһенән ҡасығыҙ. |
+| 18NI00000000061X, I18NI000000000062X, I18NI0000000063X, I18NI0000000064X, `evict_manifest`. | Ядро Инфра | Һөйләшеү I18NI000000066X валидация планынан. псевдоним хәҙер `RegisterPinManifest` аша аға (I18NT00000000017X DTO өҫтөнлөгө), шул уҡ ваҡытта бағышланған I18NI0000000068X эҙмә-эҙлекле яңыртыу өсөн планлаштырылған булып ҡала. |
+| Дәүләт күсеүҙәре: эҙмә-эҙлеклелекте үтәү (төшөү А -> Б), һаҡлау эпохалары, псевдонимдар үҙенсәлекле. | Идара итеү советы / Ядро инфра | псевдоним үҙенсәлеге, һаҡлау сиктәре, һәм алдан раҫлау/пенсия тикшерелеүҙәре хәҙер йәшәй I18NI000000069X X; күп-хоп эҙмә-эҙлекле асыҡлау һәм репликация бухгалтерия асыҡ ҡала. |
+| Идаралы параметрҙар: йөк I18NI000000070X конфиг/идара итеү хәленән; идара итеү саралары аша яңыртыуҙарҙы рөхсәт итә. | Идара итеү советы | Сәйәсәт яңыртыуҙары өсөн CLI бирергә. |
+| Ваҡиға эмиссияһы: телеметрия өсөн Norito саралары (`ManifestApproved`, `ReplicationOrderIssued`, `AliasBound`). | Күҙәтеүсән | Ваҡиға схемаһын билдәләү + логин. |
 
-Testing:
-- Unit tests for each entry point (positive + rejection).
-- Property tests for succession chain (no cycles, monotonic epochs).
-- Fuzz validation by generating random manifests (bounded).
+Һынау:
+- Һәр инеү нөктәһе өсөн берәмек һынауҙары (ыңғай + кире ҡағыу).
+- Вариҫлыҡ сылбырына мөлкәт һынауҙары (циклдар юҡ, монотонлы эпохалар).
+- осраҡлы манифесттар генерациялау юлы менән Fuzz раҫлау (сикләнгән).
 
-## Service Facade (Torii/SDK Integration)
+## Хеҙмәтләндереүҙең фасады (I18NT00000000018X/SDK интеграцияһы)
 
-| Component | Task | Owner(s) |
-|-----------|------|----------|
-| Torii Service | Expose `/v1/sorafs/pin` (submit), `/v1/sorafs/pin/{cid}` (lookup), `/v1/sorafs/aliases` (list/bind), `/v1/sorafs/replication` (orders/receipts). Provide pagination + filtering. | Networking TL / Core Infra |
-| Attestation | Include registry height/hash in responses; add Norito attestation struct consumed by SDKs. | Core Infra |
-| CLI | Extend `sorafs_manifest_stub` or new `sorafs_pin` CLI with `pin submit`, `alias bind`, `order issue`, `registry export`. | Tooling WG |
-| SDK | Generate client bindings (Rust/Go/TS) from Norito schema; add integration tests. | SDK Teams |
+| Компонент | Эш | Хужа(тар) |
+|---------|-------|----------|
+| I18NT000000019X хеҙмәте | `/v1/sorafs/pin` (баҫма), I18NI000000075X (ҡарап), I18NI000000076X (исемлеге/бәйләнеш), ​​I18NI0000077X (заказ/квитанциялар). Ярлыҡ + фильтрация тәьмин итеү. | Селтәрле ТЛ / Ядро Инфра |
+| Аттестация | Яуаптарҙа реестр бейеклеге/хэш индереү; өҫтәү I18NT0000000009X аттестация структур ҡулланыу SDKs. | Ядро Инфра |
+| CLI | I18NI0000078X йәки яңы I18NI0000000079X CLI менән I18NI000000080X, `alias bind`, `order issue`, `registry export`. | Ҡолғау WG |
+| SDK | Клиент бәйләүҙәрен генерациялау (Раст/Го/ТС) I18NT000000010X схемаһы; интеграция һынауҙары өҫтәү. | SDK командалары |
 
-Operations:
-- Add caching layer/ETag for GET endpoints.
-- Provide rate limiting / auth consistent with Torii policies.
+Операциялар:
+- GET ос нөктәләре өсөн кэшлау ҡатламы/ETag өҫтәгеҙ.
+- ставкаһын сикләү / auth тура килә I18NT0000000020X сәйәсәте.
 
-## Fixtures & CI
+## Фикстуралар & CI
 
-- Fixtures directory: `crates/iroha_core/tests/fixtures/sorafs_pin_registry/` stores signed manifest/alias/order snapshots regenerated by `cargo run -p iroha_core --example gen_pin_snapshot`.
-- CI step: `ci/check_sorafs_fixtures.sh` regenerates the snapshot and fails if diffs appear, keeping CI fixtures aligned.
-- Integration tests (`crates/iroha_core/tests/pin_registry.rs`) exercise the happy path plus duplicate-alias rejection, alias approval/retention guards, mismatched chunker handles, replica-count validation, and successor-guard failures (unknown/pre-approved/retired/self pointers); see `register_manifest_rejects_*` cases for coverage details.
-- Unit tests now cover alias validation, retention guards, and successor checks in `crates/iroha_core/src/smartcontracts/isi/sorafs.rs`; multi-hop succession detection once state machine lands.
-- Golden JSON for events used by observability pipelines.
+- Fixtures каталогы: I18NI000000084X магазиндарында ҡул ҡуйылған манифест/сәйәхәт/заказ снимоктары тергеҙелә I18NI000000085X.
+- CI аҙым: `ci/check_sorafs_fixtures.sh` тергеҙелә снимок һәм уңышһыҙлыҡҡа осрай, әгәр диффтар барлыҡҡа килә, CI ҡорамалдар тура килтереп тота.
+- Интеграция һынауҙары (`crates/iroha_core/tests/pin_registry.rs`) бәхетле юлды ғәмәлгә ашырыу плюс-псевдонимдарҙы кире ҡағыу, псевдонимдарҙы раҫлау/һаҡлау һаҡсылары, тап килмәгән chunker ручкалары, реплика-һайлау раҫлау, һәм вариҫ-һаҡсылар (билдәһеҙ/алдан раҫланған/пенсия/үҙенсәлекле күрһәткестәр); ҡарағыҙ I18NI000000088X осраҡтар өсөн ҡаплау реквизиттары.
+- Блок һынауҙары хәҙер псевдонимдарҙы раҫлау, һаҡлау һаҡсылары һәм вариҫы тикшерелгән I18NI000000089X; күп-хоп эҙмә-эҙлекле асыҡлау бер тапҡыр дәүләт машинаһы ерҙәре.
+- Күҙәтеүсәнлек торбалары ҡулланған ваҡиғалар өсөн алтын JSON.
 
-## Telemetry & Observability
+## Телеметрия & Күҙәтеүсәнлек
 
-Metrics (Prometheus):
-- `torii_sorafs_registry_manifests_total{status="pending|approved|retired"}`
-- `torii_sorafs_registry_aliases_total`
-- `torii_sorafs_registry_orders_total{status="pending|completed|expired"}`
-- `torii_sorafs_replication_sla_total{outcome="met|missed|pending"}`
+Метрика (I18NT000000000X):
+- I18NI000000090X
+- I18NI000000091X
+- I18NI000000092X
+- I18NI000000093X
 - `torii_sorafs_replication_completion_latency_epochs{stat="avg|p95|max|count"}`
-- `torii_sorafs_replication_deadline_slack_epochs{stat="avg|p95|max|count"}`
-- Existing provider telemetry (`torii_sorafs_capacity_*`, `torii_sorafs_fee_projection_nanos`) remains in scope for end-to-end dashboards.
+- I18NI0000000955Х.
+- Ғәмәлдәге провайдер телеметрияһы (`torii_sorafs_capacity_*`X, I18NI000000097X) ос-остан-осоу таҡталары өсөн даирәлә ҡала.
 
-Logs:
-- Structured Norito event stream for governance audits (signed?).
+Журнал:
+- Структуралы I18NT000000011X ваҡиғалар ағымы өсөн идара итеү аудиты (ҡулға алынған?).
 
-Alerts:
-- Pending replication orders exceeding SLA.
-- Alias expiry < threshold.
-- Retention violations (manifest not renewed before expiry).
+Иҫкәртмәләр:
+- репликация бойороҡтарын көтөп SLA-нан артып китә.
+- Псевдоним < сиге.
+- Һаҡлау боҙоуҙар (ваҡытын бөткәнсе яңыртылмаған төйөн).
 
-Dashboards:
-- Grafana JSON `docs/source/grafana_sorafs_pin_registry.json` tracks manifest lifecycle totals, alias coverage, backlog saturation, SLA ratio, latency vs slack overlays, and missed-order rates for on-call review.
+Приборҙар таҡталары:
+- Grafana JSON `docs/source/grafana_sorafs_pin_registry.json` тректар тормош циклы дөйөм, псевдоним яҡтыртыу, артта ҡалған туйындырыу, SLA нисбәте, латентлыҡ ҡаршы ялҡаулыҡ, һәм шылтыратыуҙарҙы тикшерергә заказ биргән ставкалар.
 
-## Runbooks & Documentation
+## Ранбуктар & Документация
 
-- Update `docs/source/sorafs/migration_ledger.md` to include registry status updates.
-- Operator guide: `docs/source/sorafs/runbooks/pin_registry_ops.md` (now published) covering metrics, alerting, deployment, backup, and recovery flows.
-- Governance guide: describe policy parameters, approval workflow, dispute handling.
-- API reference pages for each endpoint (Docusaurus docs).
+- Яңыртыу I18NI000000099X X реестр статусын яңыртыуҙы индереү өсөн.
+- Оператор етәксеһе: `docs/source/sorafs/runbooks/pin_registry_ops.md` (хәҙер баҫылған) ҡаплау метрикаһы, иҫкәртеү, таратыу, резерв һәм тергеҙеү ағымдары.
+- Идара итеү етәксеһе: сәйәсәт параметрҙарын һүрәтләү, раҫлау эш ағымы, бәхәстәр менән эш итеү.
+- API һылтанма биттәре өсөн һәр ос нөктәһе (I18NT000000001X docs).
 
-## Dependencies & Sequencing
+## Зависимость & Секвенирование
 
-1. Complete validation plan tasks (ManifestValidator integration).
-2. Finalise Norito schema + policy defaults.
-3. Implement contract + service, wire telemetry.
-4. Regenerate fixtures, run integration suites.
-5. Update docs/runbooks and mark roadmap items complete.
+1. Тулы раҫлау планы бурыстары (ManifestValidator интеграцияһы).
+2. Финаллаштырыу I18NT000000012X схемаһы + сәйәсәт ғәҙәттәгесә.
+3. Ҡабул итеү килешүе + хеҙмәте, сым телеметрияһы.
+4. Регенерация ҡоролмалары, интеграция люкстарын эшләтеү.
+5. Яңыртыу docs/ranbooks һәм юл картаһы әйберҙәрен билдәләү.
 
-Each roadmap checklist item under SF-4 should reference this plan when progress is made.
-The REST façade now ships with attested listing endpoints:
+Һәр юл картаһы тикшерелгән исемлек элементы буйынса SF-4 был планға һылтанма яһарға тейеш, ҡасан прогресс яһала.
+REST фасады хәҙер аттеслы исемлектең ос нөктәләре менән йөк ташый:
 
-- `GET /v1/sorafs/pin` and `GET /v1/sorafs/pin/{digest}` return manifests with
-  alias bindings, replication orders, and an attestation object derived from the
-  latest block hash.
-- `GET /v1/sorafs/aliases` and `GET /v1/sorafs/replication` expose the active
-  alias catalogue and replication order backlog with consistent pagination and
-  status filters.
+- I18NI000000101X һәм I18NI000000102X кире ҡайтарыу маскировкалары менән
+  псевдонимдар бәйләүҙәр, репликация тәртибе һәм аттестация объекты алынған
+  һуңғы блок хеш.
+- I18NI000000103X һәм I18NI000000104X әүҙем фашлау
+  псевдоним каталог һәм репликация тәртибе артта ҡалыу менән эҙмә-эҙлекле страница һәм
+  статус фильтрҙары.
 
-The CLI wraps these calls (`iroha app sorafs pin list`, `pin show`, `alias list`,
-`replication list`) so operators can script registry audits without touching
-lower-level APIs.
+CLI был шылтыратыуҙарҙы урап ала (`iroha app sorafs pin list`, `pin show`, `alias list`,
+I18NI000000108X) шулай итеп, операторҙар сценарий реестр аудиттары теймәйенсә ала
+түбән кимәлдәге API-лар.

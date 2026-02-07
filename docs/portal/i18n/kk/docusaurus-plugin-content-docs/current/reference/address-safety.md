@@ -6,71 +6,73 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: Address Safety & Accessibility
 description: UX requirements for presenting and sharing Iroha addresses safely (ADDR-6c).
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-This page captures the ADDR-6c documentation deliverable. Apply these
-constraints to wallets, explorers, SDK tooling, and any portal surface that
-renders or accepts human-facing addresses. The canonical data model lives in
+Бұл бетте жеткізілетін ADDR-6c құжаттамасы жазылған. Осыларды қолданыңыз
+әмияндарға, зерттеушілерге, SDK құралдарына және кез келген портал бетіне шектеулер
+renders or accepts human-facing addresses. Канондық деректер моделі өмір сүреді
 `docs/account_structure.md`; the checklist below explains how to expose those
-formats without compromising safety or accessibility.
+қауіпсіздік пен қол жетімділікке зиян келтірмейтін пішімдер.
 
-## Safe sharing flows
+## Қауіпсіз бөлісу ағындары
 
-- Default every copy/share action to the IH58 address. Display the resolved
-  domain as supporting context so the checksummed string stays front and centre.
-- Offer a “Share” affordance that bundles the full plain-text address and a QR
+- IH58 мекенжайына әрбір көшіру/бөліс әрекетін әдепкі етіп жасаңыз. Шешілгенді көрсету
+  доменді қолдаушы контекст ретінде, бақылау қосындысы жолы алдыңғы және ортасында қалады.
+- Толық кәдімгі мекенжай мен QR жиынтығын біріктіретін «Бөлісу» мүмкіндігін ұсыныңыз.
   code derived from the same payload. Let users inspect both before committing.
-- When space requires truncation (tiny cards, notifications), keep the leading
-  human-readable prefix, show ellipses, and retain the final 4–6 characters so
+- Кеңістік қысқартуды қажет еткенде (кішкентай карталар, хабарландырулар), алдыңғы қатарды сақтаңыз
+  адам оқи алатын префикс, эллипстерді көрсетіңіз және соңғы 4-6 таңбаны сақтаңыз
   the checksum anchor survives. Provide a tap/keyboard shortcut to copy the full
   string without truncation.
-- Prevent clipboard desync by emitting a confirmation toast that previews the
+- Алдын ала қарайтын растау тосттарын шығару арқылы алмасу буферінің синхрондауына жол бермеңіз
   exact IH58 string that was copied. Where telemetry is available, count copy
-  attempts versus share actions so UX regressions surface quickly.
+  әрекетті бөлісу әрекеттеріне қарсы UX регрессиялары тез пайда болуы үшін.
 
 ## IME & input safeguards
 
 - Reject non-ASCII input in address fields. When IME composition artefacts (full
-  width, Kana, tone marks) appear, surface an inline warning that explains how
-  to switch the keyboard to Latin input before retrying.
-- Provide a plain-text paste zone that strips combining marks and replaces
+  ені, Кана, тон белгілері) пайда болса, қалай екенін түсіндіретін кірістірілген ескерту пайда болады
+  әрекетті қайталаудан бұрын пернетақтаны латынша енгізуге ауыстыру үшін.
+- Біріктіретін белгілерді алып тастайтын және ауыстыратын кәдімгі мәтінді қою аймағын қамтамасыз етіңіз
   whitespace with ASCII spaces before validation. This keeps users from losing
-  progress when they disable their IME mid-flow.
-- Harden validation against zero-width joiners, variation selectors, and other
-  stealth Unicode code points. Log the rejected code point category so fuzzing
-  suites can import the telemetry.
+  олар IME орта ағынын өшірген кезде прогресс.
+- Ені нөлдік біріктіргіштерге, вариация селекторларына және т.б. қарсы тексеруді күшейтіңіз
+  жасырын Юникод код нүктелері. Қабылданбаған код нүктесінің санатын бұлыңғыр етіп тіркеңіз
+  Suites телеметрияны импорттай алады.
 
 ## Assistive technology expectations
 
-- Annotate every address block with `aria-label` or `aria-describedby` that
-  spells out the human-readable prefix and chunks the payload in 4–8 character
-  groups (“ih dash b three two …”). This stops screen readers from producing an
-  unintelligible stream of characters.
-- Announce successful copy/share events via a polite live region update. Include
-  the destination (clipboard, share sheet, QR) so the user knows the action
-  completed without moving focus.
-- Supply descriptive `alt` text for QR previews (e.g., “IH58 address for
-  `<account>` on chain `0x1234`”). Provide a “Copy address as text”
-  fallback adjacent to the QR canvas for low-vision users.
+- Әрбір мекенжай блогына `aria-label` немесе `aria-describedby` арқылы түсініктеме беріңіз
+  адам оқи алатын префиксті айтып береді және пайдалы жүктемені 4–8 таңбаға бөледі
+  топтар («ih сызықша b үш екі ...»). This stops screen readers from producing an
+  түсініксіз кейіпкерлер легі.
+- Сәтті көшіру/бөлісу оқиғаларын сыпайы тірі аймақ жаңартуы арқылы хабарлаңыз. Қосу
+  тағайындалған орын (аралық сақтағыш, ортақ парақ, QR), сондықтан пайдаланушы әрекетті біледі
+  фокусты жылжытпай аяқталды.
+- QR алдын ала қарау үшін сипаттамалық `alt` мәтінін беріңіз (мысалы, «IH58 мекенжайы үшін
+  `<account>` `0x1234` тізбегінде”). «Мекенжайды мәтін ретінде көшіру» қамтамасыз етіңіз
+  көру қабілеті нашар пайдаланушылар үшін QR кенепіне жақын орналасқан резерв.
 
-## Sora-only compressed addresses
+## Тек Sora үшін қысылған мекенжайлар
 
-- Gating: hide the `sora…` compressed string behind an explicit confirmation.
-  The confirmation must reiterate that the form only works on Sora Nexus chains.
-- Labelling: every occurrence must include a visible “Sora-only” badge and a
-  tooltip describing why other networks require the IH58 form.
-- Guardrails: if the active chain discriminant is not the Nexus allocation,
-  refuse to generate the compressed address entirely and direct the user back to
+- Gating: `sora…` қысылған жолды анық растаудың артына жасырыңыз.
+  Растау пішін тек Sora Nexus тізбектерінде жұмыс істейтінін қайталауы керек.
+- Белгілеу: әрбір оқиғада көрінетін "Тек Sora" белгісі және а
+  басқа желілер неге IH58 пішінін қажет ететінін сипаттайтын кеңес.
+- Қорғаулар: егер белсенді тізбек дискриминанты Nexus бөлінуі болмаса,
+  қысылған мекенжайды толығымен жасаудан бас тарту және пайдаланушыны кері бағыттау
   IH58.
-- Telemetry: record how often the compressed form is requested and copied so the
-  incident playbook can detect accidental sharing spikes.
+- Телеметрия: қысылған пішіннің қаншалықты жиі сұралатынын және осылайша көшірілетінін жазып алыңыз
+  оқиғаны ойнату кітабы кездейсоқ бөлісу өсімдерін анықтай алады.
 
-## Quality gates
+## Сапалы қақпалар
 
-- Extend automated UI tests (or storybook a11y suites) to assert that address
-  components expose the required ARIA metadata and that IME rejection messages
-  appear.
-- Include manual QA scenarios for IME input (kana, pinyin), screen reader pass
-  (VoiceOver/NVDA), and QR copy on high-contrast themes before releasing.
-- Surface these checks in release checklists alongside the IH58 parity tests
-  so regressions remain blocked until corrected.
+- Бұл мекенжайды бекіту үшін автоматтандырылған UI сынақтарын (немесе әңгімелер кітабы a11y люкстерін) кеңейтіңіз
+  құрамдас бөліктер қажетті ARIA метадеректерін және сол IME қабылдамау хабарларын көрсетеді
+  пайда болады.
+- IME енгізу (кана, пиньинь), экраннан оқу құралының өтуі үшін қолмен QA сценарийлерін қосыңыз
+  (VoiceOver/NVDA) және шығарар алдында жоғары контрастты тақырыптар бойынша QR көшірмелері.
+- Бұл тексерулерді IH58 паритеттік сынақтарымен қатар шығарылымды тексеру парақтарында көрсетіңіз
+  сондықтан регрессиялар түзетілгенге дейін блокталған күйде қалады.

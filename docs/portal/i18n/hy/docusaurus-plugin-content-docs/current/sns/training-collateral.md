@@ -7,30 +7,32 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: SNS Training Collateral
 description: Curriculum, localization workflow, and annex evidence capture required by SN-8.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-> Mirrors `docs/source/sns/training_collateral.md`. Use this page when briefing
-> registrar, DNS, guardian, and finance teams ahead of each suffix launch.
+> Հայելիներ `docs/source/sns/training_collateral.md`. Օգտագործեք այս էջը ճեպազրույցի ժամանակ
+> գրանցող, DNS, խնամակալ և ֆինանսական թիմեր յուրաքանչյուր վերջածանցի գործարկումից առաջ:
 
-## 1. Curriculum snapshot
+## 1. Ուսումնական պլանի պատկեր
 
-| Track | Objectives | Pre-reads |
+| Հետևել | Նպատակները | Նախնական ընթերցումներ |
 |-------|------------|-----------|
-| Registrar ops | Submit manifests, monitor KPI dashboards, escalate errors. | `sns/onboarding-kit`, `sns/kpi-dashboard`. |
-| DNS & gateway | Apply resolver skeletons, rehearse freezes/rollback. | `sorafs/gateway-dns-runbook`, direct-mode policy samples. |
-| Guardians & council | Execute disputes, update governance addenda, log annexes. | `sns/governance-playbook`, steward scorecards. |
-| Finance & analytics | Capture ARPU/bulk metrics, publish annex bundles. | `finance/settlement-iso-mapping`, KPI dashboard JSON. |
+| Գրանցողի գործեր | Ներկայացրեք մանիֆեստներ, վերահսկեք KPI վահանակները, ավելացրեք սխալները: | `sns/onboarding-kit`, `sns/kpi-dashboard`. |
+| DNS & gateway | Կիրառեք լուծիչի կմախքներ, փորձեք սառեցում/վերադարձ: | `sorafs/gateway-dns-runbook`, ուղղակի ռեժիմի քաղաքականության նմուշներ: |
+| Խնամակալներ և խորհուրդ | Իրականացնել վեճերը, թարմացնել կառավարման հավելումները, գրանցման հավելվածները: | `sns/governance-playbook`, ստյուարդի գնահատականներ: |
+| Ֆինանսներ և վերլուծություն | Ձեռք բերեք ARPU/մեծ չափումներ, հրապարակեք հավելվածների փաթեթներ: | `finance/settlement-iso-mapping`, KPI վահանակ JSON: |
 
-### Module flow
+### Մոդուլի հոսք
 
-1. **M1 — KPI orientation (30 min):** Walk suffix filters, exports, and fugitive
-   freeze counters. Deliverable: PDF/CSV snapshots with SHA-256 digest.
-2. **M2 — Manifest lifecycle (45 min):** Build & validate registrar manifests,
-   generate resolver skeletons via `scripts/sns_zonefile_skeleton.py`. Deliverable:
-   git diff showing skeleton + GAR evidence.
-3. **M3 — Dispute drills (40 min):** Simulate guardian freeze + appeal, capture
-   guardian CLI logs beneath `artifacts/sns/training/<suffix>/<cycle>/logs/`.
-4. **M4 — Annex capture (25 min):** Export dashboard JSON and run:
+1. **M1 — KPI կողմնորոշում (30 րոպե):** Քայլելու վերջածանցի զտիչներ, արտահանումներ և փախուստ
+   սառեցնել հաշվիչներ. Առաքման հնարավորություն՝ PDF/CSV ակնարկներ SHA-256 դիջիստով:
+2. **M2 — մանիֆեստի կյանքի ցիկլը (45 րոպե):** Ստեղծել և հաստատել գրանցման մանիֆեստները,
+   ստեղծեք լուծիչի կմախքներ `scripts/sns_zonefile_skeleton.py`-ի միջոցով: Առաքվող:
+   git diff-ը ցույց է տալիս կմախք + ԳԱՐ ապացույց:
+3. **M3 — Վեճերի վարժություններ (40 րոպե):** Խնամակալների սառեցում + բողոքարկում, գրավում
+   guardian CLI-ի տեղեկամատյանները `artifacts/sns/training/<suffix>/<cycle>/logs/`-ի տակ:
+4. **M4 — Հավելվածի նկարահանում (25 րոպե):** Արտահանեք JSON վահանակը և գործարկեք.
 
    ```bash
    cargo xtask sns-annex \
@@ -43,43 +45,43 @@ description: Curriculum, localization workflow, and annex evidence capture requi
      --portal-entry docs/portal/docs/sns/regulatory/<memo-id>.md
    ```
 
-   Deliverable: updated annex Markdown + regulatory + portal memo blocks.
+   Առաքում. թարմացված հավելված Markdown + կարգավորիչ + պորտալի հուշագրությունների բլոկներ:
 
-## 2. Localization workflow
+## 2. Տեղայնացման աշխատանքային հոսք
 
-- Languages: `ar`, `es`, `fr`, `ja`, `pt`, `ru`, `ur`.
-- Each translation lives beside the source file
-  (`docs/source/sns/training_collateral.<lang>.md`). Update `status` +
-  `translation_last_reviewed` after refreshing.
-- Assets per language belong under
-  `artifacts/sns/training/<suffix>/<lang>/<cycle>/` (slides/, workbooks/,
-  recordings/, logs/).
-- Run `python3 scripts/sync_docs_i18n.py --lang <code>` after editing the English
-  source so translators see the new hash.
+- Լեզուներ.
+- Յուրաքանչյուր թարգմանություն ապրում է աղբյուրի ֆայլի կողքին
+  (`docs/source/sns/training_collateral.<lang>.md`): Թարմացրեք `status` +
+  `translation_last_reviewed` թարմացումից հետո:
+- Ակտիվները մեկ լեզվի տակ են
+  `artifacts/sns/training/<suffix>/<lang>/<cycle>/` (սլայդներ/, աշխատանքային գրքույկներ/,
+  ձայնագրություններ/, տեղեկամատյաններ/):
+- Անգլերենը խմբագրելուց հետո գործարկեք `python3 scripts/sync_docs_i18n.py --lang <code>`-ը
+  աղբյուր, որպեսզի թարգմանիչները տեսնեն նոր հեշը:
 
-### Delivery checklist
+### Առաքման ստուգաթերթ
 
-1. Update translation stub (`status: complete`) once localized.
-2. Export slides to PDF and upload to the per-language `slides/` directory.
-3. Record ≤10 min KPI walkthrough; link from the language stub.
-4. File governance ticket tagged `sns-training` containing slide/workbook
-   digests, recording links, and annex evidence.
+1. Թարմացրեք թարգմանության կոճակը (`status: complete`) տեղայնացվելուց հետո:
+2. Արտահանեք սլայդները PDF և վերբեռնեք յուրաքանչյուր լեզվով `slides/` գրացուցակում:
+3. Արձանագրել ≤10 րոպե KPI քայլք; հղումը լեզվի անավարտից։
+4. Ֆայլի կառավարման տոմս՝ հատկորոշված `sns-training`, որը պարունակում է սլայդ/աշխատանքային գրքույկ
+   մարսողություններ, ձայնագրման հղումներ և հավելվածների ապացույցներ:
 
-## 3. Training assets
+## 3. Վերապատրաստման ակտիվներ
 
-- Slide outline: `docs/examples/sns_training_template.md`.
-- Workbook template: `docs/examples/sns_training_workbook.md` (one per attendee).
-- Invite + reminders: `docs/examples/sns_training_invite_email.md`.
-- Evaluation form: `docs/examples/sns_training_eval_template.md` (responses
-  archived under `artifacts/sns/training/<suffix>/<cycle>/feedback/`).
+- Սլայդի ուրվագիծը՝ `docs/examples/sns_training_template.md`:
+- Աշխատանքային գրքույկի ձևանմուշ՝ `docs/examples/sns_training_workbook.md` (մեկը յուրաքանչյուր մասնակցի համար):
+- Հրավիրել + հիշեցումներ՝ `docs/examples/sns_training_invite_email.md`:
+- Գնահատման ձև՝ `docs/examples/sns_training_eval_template.md` (պատասխաններ
+  արխիվացված `artifacts/sns/training/<suffix>/<cycle>/feedback/` տակ):
 
-## 4. Scheduling & metrics
+## 4. Ժամանակացույց և չափումներ
 
-| Cycle | Window | Metrics | Notes |
+| Ցիկլ | Պատուհան | Չափիչ | Ծանոթագրություններ |
 |-------|--------|---------|-------|
-| 2026‑03 | Post KPI review | Attendance %, annex digest logged | `.sora` + `.nexus` cohorts |
-| 2026‑06 | Pre `.dao` GA | Finance readiness ≥90 % | Include policy refresh |
-| 2026‑09 | Expansion | Dispute drill <20 min, annex SLA ≤2 days | Align with SN-7 incentives |
+| 2026-03 | Տեղադրել KPI վերանայում | Հաճախումների %, հավելվածի ամփոփում գրանցված | `.sora` + `.nexus` խմբեր |
+| 2026-06 | Pre `.dao` GA | Ֆինանսական պատրաստվածություն ≥90% | Ներառել քաղաքականության թարմացում |
+| 2026-09 | Ընդարձակում | Վեճային վարժանք <20 րոպե, հավելված SLA ≤2 օր | Համապատասխանեցվել SN-7 խթաններին |
 
-Capture anonymous feedback in `docs/source/sns/reports/sns_training_feedback.md`
-so subsequent cohorts can improve localization and labs.
+Ստացեք անանուն արձագանք `docs/source/sns/reports/sns_training_feedback.md`-ում
+այնպես որ հետագա խմբերը կարող են բարելավել տեղայնացումը և լաբորատորիաները:

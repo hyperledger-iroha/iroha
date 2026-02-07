@@ -7,19 +7,21 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraFS Capacity Reconciliation
 description: Nightly workflow for matching capacity fee ledgers to XOR transfer exports.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-Roadmap item **SF-2c** mandates that treasury proves the capacity fee ledger
-matches the XOR transfers executed each night. Use the
-`scripts/telemetry/capacity_reconcile.py` helper to compare the
-`/v1/sorafs/capacity/state` snapshot against the executed transfer batch and
-emit Prometheus textfile metrics for Alertmanager.
+Жол картасының **SF-2c** тармағы қазынашылық сыйақыны төлеу кітабын растауды талап етеді
+әр түнде орындалатын XOR тасымалдауларына сәйкес келеді. пайдаланыңыз
+салыстыру үшін `scripts/telemetry/capacity_reconcile.py` көмекшісі
+Орындалған тасымалдау бумасына қарсы `/v1/sorafs/capacity/state` суреті және
+Alertmanager үшін Prometheus мәтіндік файл көрсеткіштерін шығарыңыз.
 
-## Prerequisites
-- Capacity state snapshot (`fee_ledger` entries) exported from Torii.
-- Ledger export for the same window (JSON or NDJSON with `provider_id_hex`,
-  `kind` = settlement/penalty, and `amount_nano`).
-- Path to the node_exporter textfile collector if you want alerts.
+## Алғышарттар
+- Torii ішінен экспортталған сыйымдылық күйінің суреті (`fee_ledger` жазбалары).
+- Бір терезеге арналған кітап экспорты (`provider_id_hex` бар JSON немесе NDJSON,
+  `kind` = есеп айырысу/айыппұл, және `amount_nano`).
+- Ескертулер қажет болса, node_exporter мәтіндік файл жинағышына жол.
 
 ## Runbook
 ```bash
@@ -31,25 +33,25 @@ python3 scripts/telemetry/capacity_reconcile.py \
   --prom-out "${SORAFS_CAPACITY_RECONCILE_TEXTFILE:-artifacts/sorafs/capacity/reconcile.prom}"
 ```
 
-- Exit codes: `0` on a clean match, `1` when settlements/penalties are missing
-  or overpaid, `2` on invalid inputs.
-- Attach the JSON summary + hashes to the treasury packet in
+- Шығу кодтары: таза сәйкестікте `0`, есеп айырысулар/айыппұлдар болмаған кезде `1`
+  немесе артық төленген, жарамсыз кірістерде `2`.
+- JSON қорытындысын + хэштерді қазыналық пакетке тіркеңіз
   `docs/examples/sorafs_capacity_marketplace_validation/`.
-- When the `.prom` file lands in the textfile collector, the alert
-  `SoraFSCapacityReconciliationMismatch` (see
-  `dashboards/alerts/sorafs_capacity_rules.yml`) fires whenever missing,
-  overpaid, or unexpected provider transfers are detected.
+- `.prom` файлы мәтіндік файл коллекторына түскенде, ескерту
+  `SoraFSCapacityReconciliationMismatch` (қараңыз
+  `dashboards/alerts/sorafs_capacity_rules.yml`) жоғалған кезде өрт шығады,
+  артық төленген немесе күтпеген провайдер аударымдары анықталды.
 
-## Outputs
-- Per-provider statuses with diffs for settlements and penalties.
-- Totals exported as gauges:
+## Шығыстар
+- Есеп айырысулар мен айыппұлдар бойынша айырмашылықтары бар провайдерлердің мәртебесі.
+- Өлшемдер ретінде экспортталған жиынтықтар:
   - `sorafs_capacity_reconciliation_missing_total{kind}`
   - `sorafs_capacity_reconciliation_overpaid_total{kind}`
   - `sorafs_capacity_reconciliation_unexpected_transfers_total`
   - `sorafs_capacity_reconciliation_expected_nano{kind}`
   - `sorafs_capacity_reconciliation_actual_nano{kind}`
 
-## Expected Ranges and Tolerances
-- Reconciliation is exact: expected vs actual settlement/penalty nanos should match with zero tolerance. Any non-zero diff should page operators.
-- CI pins a 30-day soak digest for the capacity fee ledger (test `capacity_fee_ledger_30_day_soak_deterministic`) to `71db9e1a17f66920cd4fe6d2bb6a1b008f9cfe1acbb3149d727fa9c80eee80d1`. Refresh the digest only when pricing or cooldown semantics change.
-- In the soak profile (`penalty_bond_bps=0`, `strike_threshold=u32::MAX`) penalties stay at zero; production should only emit penalties when utilisation/uptime/PoR floors are breached and respect the configured cooldown before successive slashes.
+## Күтілетін ауқымдар мен төзімділіктер
+- Сәйкестік дәл: күтілетін және нақты есеп айырысу/айыппұл наностары нөлдік төзімділікке сәйкес келуі керек. Кез келген нөлдік емес айырмашылық операторларды беттеу керек.
+- CI сыйымдылық алымы кітабына (`capacity_fee_ledger_30_day_soak_deterministic` сынағы) `71db9e1a17f66920cd4fe6d2bb6a1b008f9cfe1acbb3149d727fa9c80eee80d1` дейін 30 күндік сіңіру дайджестін бекітеді. Баға немесе салқындату семантикасы өзгерген кезде ғана дайджестті жаңартыңыз.
+- Жібіту профилінде (`penalty_bond_bps=0`, `strike_threshold=u32::MAX`) айыппұлдар нөлде қалады; Өндіріс пайдалану/жұмыс уақыты/PoR қабаттары бұзылған кезде ғана айыппұлдар шығаруы және кезекті қиғаш сызықтар алдында конфигурацияланған салқындату мерзімін сақтауы керек.

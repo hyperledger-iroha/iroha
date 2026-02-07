@@ -10,95 +10,96 @@ translation_last_reviewed: 2026-02-07
 id: nexus-bootstrap-plan
 title: Sora Nexus bootstrap & observability
 description: Operational plan for bringing the core Nexus validator cluster online before layering SoraFS and SoraNet services.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
-This page mirrors `docs/source/soranexus_bootstrap_plan.md`. Keep both copies aligned until localized versions land in the portal.
+::: Каноник эх сурвалжийг анхаарна уу
+Энэ хуудас нь `docs/source/soranexus_bootstrap_plan.md`-ийг толилуулж байна. Нутагшуулсан хувилбарууд портал дээр буух хүртэл хоёр хуулбарыг зэрэгцүүлэн хадгална уу.
 :::
 
 # Sora Nexus Bootstrap & Observability Plan
 
-## Objectives
-- Stand up the base Sora Nexus validator/observer network with governance keys, Torii APIs, and consensus monitoring.
-- Validate core services (Torii, consensus, persistence) before enabling SoraFS/SoraNet piggyback deployments.
-- Establish CI/CD workflows and observability dashboards/alerts to ensure network health.
+## Зорилтууд
+- Засаглалын түлхүүр, Torii API, зөвшилцлийн мониторинг бүхий Sora Nexus баталгаажуулагч/ажиглагчийн сүлжээг бий болго.
+- SoraFS/SoraNet байршуулалтыг идэвхжүүлэхийн өмнө үндсэн үйлчилгээг (Torii, зөвшилцөл, тууштай байдал) баталгаажуулна уу.
+- Сүлжээний эрүүл мэндийг хангахын тулд CI/CD ажлын урсгал болон ажиглалтын хяналтын самбар/сануулгыг бий болгох.
 
-## Prerequisites
-- Governance key material (council multisig, committee keys) available in HSM or Vault.
-- Baseline infrastructure (Kubernetes clusters or bare-metal nodes) in primary/secondary regions.
-- Updated bootstrap configuration (`configs/nexus/bootstrap/*.toml`) reflecting latest consensus parameters.
+## Урьдчилсан нөхцөл
+- Засаглалын гол материал (зөвлөлийн multisig, хорооны түлхүүрүүд) HSM эсвэл Vault дээр байдаг.
+- Анхан шатны/хоёрдогч бүс нутагт суурь дэд бүтэц (Кубернетес кластерууд эсвэл нүцгэн металлын зангилаа).
+- Хамгийн сүүлийн үеийн зөвшилцлийн параметрүүдийг тусгасан ачаалагчийн тохиргоо (`configs/nexus/bootstrap/*.toml`) шинэчлэгдсэн.
 
-## Network Environments
-- Operate two Nexus environments with distinct network prefixes:
-- **Sora Nexus (mainnet)** – production network prefix `nexus`, hosting canonical governance and SoraFS/SoraNet piggyback services (chain ID `0x02F1` / UUID `00000000-0000-0000-0000-000000000753`).
-- **Sora Testus (testnet)** – staging network prefix `testus`, mirroring mainnet configuration for integration testing and pre-release validation (chain UUID `809574f5-fee7-5e69-bfcf-52451e42d50f`).
-- Maintain separate genesis files, governance keys, and infrastructure footprints for each environment. Testus acts as the proving ground for all SoraFS/SoraNet rollouts before promotion to Nexus.
-- CI/CD pipelines should deploy to Testus first, execute automated smoke tests, and require manual promotion to Nexus once checks pass.
-- Reference configuration bundles live under `configs/soranexus/nexus/` (mainnet) and `configs/soranexus/testus/` (testnet), each containing sample `config.toml`, `genesis.json`, and Torii admission directories.
+## Сүлжээний орчин
+- Өөр өөр сүлжээний угтвар бүхий хоёр Nexus орчныг ажиллуулах:
+- **Sora Nexus (үндсэн сүлжээ)** – үйлдвэрлэлийн сүлжээний угтвар `nexus`, каноник засаглал болон SoraFS/SoraNet-н тусламж үйлчилгээ (гинжин хэлхээний ID `0x02F1` / UU028X / U0020).
+- **Sora Testus (testnet)** – `testus` үе шаттай сүлжээний угтвар, нэгтгэх тест болон хувилбарын өмнөх баталгаажуулалтад зориулсан үндсэн сүлжээний тохиргоог тусгадаг (UUID `809574f5-fee7-5e69-bfcf-52451e42d50f` хэлхээ).
+- Орчны бүрд тусад нь үүслийн файлууд, засаглалын түлхүүрүүд, дэд бүтцийн ул мөрийг хадгалах. Testus нь Nexus-д дэвшихээс өмнө SoraFS/SoraNet-ийн бүх хувилбаруудын туршилтын үндэс болдог.
+- CI/CD дамжуулах хоолойг эхлээд Testus-д байрлуулж, автомат утааны туршилт хийж, шалгалтад тэнцсэний дараа Nexus руу гар аргаар дэвшүүлэх шаардлагатай.
+- Лавлагаа тохиргооны багцууд нь `configs/soranexus/nexus/` (үндсэн сүлжээ) болон `configs/soranexus/testus/` (testnet) дор амьдардаг бөгөөд тус бүр нь `config.toml`, `genesis.json`, Torii элсэлтийн лавлахуудыг агуулна.
 
-## Step 1 – Configuration Review
-1. Audit existing documentation:
-   - `docs/source/nexus/architecture.md` (consensus, Torii layout).
-   - `docs/source/nexus/deployment_checklist.md` (infra requirements).
-   - `docs/source/nexus/governance_keys.md` (key custody procedures).
-2. Validate genesis files (`configs/nexus/genesis/*.json`) align with current validator roster and staking weights.
-3. Confirm network parameters:
-   - Consensus committee size & quorum.
-   - Block interval / finality thresholds.
-   - Torii service ports and TLS certificates.
+## Алхам 1 – Тохиргоог шалгах
+1. Одоо байгаа баримт бичигт аудит хийх:
+   - `docs/source/nexus/architecture.md` (зөвшилцөл, Torii зохион байгуулалт).
+   - `docs/source/nexus/deployment_checklist.md` (дэд шаардлага).
+   - `docs/source/nexus/governance_keys.md` (асран хамгаалах үндсэн журам).
+2. Генезисийн файлуудыг (`configs/nexus/genesis/*.json`) одоогийн баталгаажуулагчийн жагсаалт болон stavking жинтэй нийцүүлээрэй.
+3. Сүлжээний параметрүүдийг баталгаажуулна уу:
+   - Зөвшилцлийн хорооны тоо, чуулга.
+   - Блокийн интервал / эцсийн босго.
+   - Torii үйлчилгээний портууд болон TLS сертификатууд.
 
-## Step 2 – Bootstrap Cluster Deployment
-1. Provision validator nodes:
-   - Deploy `irohad` instances (validators) with persistent volumes.
-   - Ensure network firewall rules allow consensus & Torii traffic between nodes.
-2. Start Torii services (REST/WebSocket) on each validator with TLS.
-3. Deploy observer nodes (read-only) for extra resilience.
-4. Run bootstrap scripts (`scripts/nexus_bootstrap.sh`) to distribute genesis, start consensus, and register nodes.
-5. Execute smoke tests:
-   - Submit test transactions via Torii (`iroha_cli tx submit`).
-   - Verify block production/finality through telemetry.
-   - Check ledger replication across validators/observers.
+## Алхам 2 – Bootstrap Cluster Deployment
+1. Баталгаажуулагчийн зангилаанууд:
+   - Байнгын эзлэхүүнтэй `irohad` инстансуудыг (баталгаажуулагч) байрлуул.
+   - Сүлжээний галт ханын дүрмүүд нь зангилаа хоорондын зөвшилцөл ба Torii урсгалыг зөвшөөрдөг эсэхийг шалгаарай.
+2. TLS-тэй баталгаажуулагч бүр дээр Torii үйлчилгээг (REST/WebSocket) эхлүүлнэ үү.
+3. Ажиглагчийн зангилаануудыг (зөвхөн унших боломжтой) илүү уян хатан болгохын тулд байрлуул.
+4. Эхлэлийг түгээх, зөвшилцлийг эхлүүлэх, зангилаа бүртгэхийн тулд ачаалах скриптүүдийг (`scripts/nexus_bootstrap.sh`) ажиллуул.
+5. Утааны туршилтыг гүйцэтгэх:
+   - Torii (`iroha_cli tx submit`)-ээр дамжуулан туршилтын гүйлгээг илгээнэ үү.
+   - Телеметрийн тусламжтайгаар блокийн үйлдвэрлэл/эцсийн байдлыг баталгаажуулах.
+   - Баталгаажуулагч/ажиглагчдын дунд дэвтрийн хуулбарыг шалгах.
 
-## Step 3 – Governance & Key Management
-1. Load council multisig configuration; confirm governance proposals can be submitted and ratified.
-2. Securely store consensus/committee keys; configure automatic backups with access logging.
-3. Set up emergency key rotation procedures (`docs/source/nexus/key_rotation.md`) and verify runbook.
+## Алхам 3 – Засаглал ба гол удирдлага
+1. Зөвлөлийн multisig тохиргоог ачаалах; засаглалын санал оруулж, соёрхон батлах боломжтой.
+2. Зөвшилцөл/хорооны түлхүүрүүдийг найдвартай хадгалах; хандалтын бүртгэлтэй автомат нөөцлөлтийг тохируулах.
+3. Яаралтай түлхүүр эргүүлэх горимуудыг (`docs/source/nexus/key_rotation.md`) тохируулж, runbook-ийг шалгана уу.
 
-## Step 4 – CI/CD Integration
-1. Configure pipelines:
-   - Build & publish validator/Torii images (GitHub Actions or GitLab CI).
-   - Automated configuration validation (lint genesis, verify signatures).
-   - Deployment pipelines (Helm/Kustomize) for staging & production clusters.
-2. Implement smoke tests in CI (spin up ephemeral cluster, run canonical transaction suite).
-3. Add rollback scripts for failed deployments and document runbooks.
+## Алхам 4 – CI/CD интеграци
+1. Дамжуулах хоолойг тохируулах:
+   - Баталгаажуулагч/Torii зургийг бүтээх, нийтлэх (GitHub Actions эсвэл GitLab CI).
+   - Автоматжуулсан тохиргооны баталгаажуулалт (хөөсний эхлэл, гарын үсгийг баталгаажуулах).
+   - Үе шатлал, үйлдвэрлэлийн кластеруудад зориулж байршуулах дамжуулах хоолой (Helm/Kustomize).
+2. CI-д утааны туршилтыг хэрэгжүүлэх (түр зуурын кластер, каноник гүйлгээний багцыг ажиллуулах).
+3. Амжилтгүй байршуулалт болон баримт бичгийн runbook-д зориулж буцаах скриптүүдийг нэмнэ үү.
 
-## Step 5 – Observability & Alerts
-1. Deploy monitoring stack (Prometheus + Grafana + Alertmanager) per region.
-2. Collect core metrics:
+## Алхам 5 – Ажиглалт ба дохиолол
+1. Бүс бүрт хяналтын стекийг (Prometheus + Grafana + Alertmanager) байрлуул.
+2. Үндсэн хэмжүүрүүдийг цуглуул:
   - `nexus_consensus_height`, `nexus_finality_lag`, `torii_request_duration_seconds`, `validator_peer_count`.
-   - Logs via Loki/ELK for Torii & consensus services.
-3. Dashboards:
-   - Consensus health (block height, finality, peer status).
-   - Torii API latency/error rates.
-   - Governance transactions & proposal statuses.
-4. Alerts:
-   - Block production stall (>2 block intervals).
-   - Peer count drop below quorum.
-   - Torii error rate spikes.
-   - Governance proposal queue backlog.
+   - Torii болон зөвшилцлийн үйлчилгээнд Loki/ELK-ээр бүртгэл хийдэг.
+3. Хяналтын самбар:
+   - Зөвшилцлийн эрүүл мэнд (блокны өндөр, эцсийн байдал, үе тэнгийн статус).
+   - Torii API хоцролт/алдааны түвшин.
+   - Засаглалын гүйлгээ ба саналын статус.
+4. Анхааруулга:
+   - Блок үйлдвэрлэлийн лангуу (>2 блок интервал).
+   - Үе тэнгийнхний тоо чуулгын тооноос доогуур байна.
+   - Torii алдааны түвшин огцом нэмэгдсэн.
+   -Засаглалын саналын дараалал үүсээд байна.
 
-## Step 6 – Validation & Handoff
-1. Run end-to-end validation:
-   - Submit governance proposal (e.g., parameter change).
-   - Process it through council approval to ensure governance pipeline works.
-   - Run ledger state diff to ensure consistency.
-2. Document runbook for on-call (incident response, failover, scaling).
-3. Communicate readiness to SoraFS/SoraNet teams; confirm piggyback deployments can point to Nexus nodes.
+## Алхам 6 – Баталгаажуулалт ба шилжүүлэг
+1. Төгсгөл хоорондын баталгаажуулалтыг ажиллуулах:
+   - Засаглалын санал (жишээ нь, параметрийн өөрчлөлт) оруулах.
+   - Засаглалын шугам сүлжээний ажлыг баталгаажуулахын тулд зөвлөлийн зөвшөөрлөөр боловсруулна.
+   - Тогтвортой байдлыг хангахын тулд дэвтэрийн төлөвийн ялгааг ажиллуул.
+2. Дуудлагаар ажиллахад зориулсан runbook-г баримтжуулах (ямар нэгэн ослын хариу үйлдэл, бүтэлгүйтэл, масштаб).
+3. SoraFS/SoraNet багуудад бэлэн байдлын талаар мэдээлэх; Баталгаажуулах нь Nexus зангилаануудыг зааж өгч болно.
 
-## Implementation Checklist
-- [ ] Genesis/configuration audit completed.
-- [ ] Validator & observer nodes deployed with healthy consensus.
-- [ ] Governance keys loaded, proposal tested.
-- [ ] CI/CD pipelines running (build + deploy + smoke tests).
-- [ ] Observability dashboards live with alerting.
-- [ ] Handoff documentation delivered to downstream teams.
+## Хэрэгжилтийг шалгах хуудас
+- [ ] Эхлэл/тохируулгын аудит дууссан.
+- [ ] Баталгаажуулагч ба ажиглагчийн зангилаануудыг эрүүл зөвшилцлийн дагуу байрлуулсан.
+- [ ] Засаглалын түлхүүрүүдийг ачаалж, саналыг шалгасан.
+- [ ] CI/CD дамжуулах хоолой ажиллаж байна (барих + байрлуулах + утааны туршилт).
+- [ ] Ажиглалтын хяналтын самбар нь анхааруулгатай ажилладаг.
+- [ ] Дамжуулах бичиг баримтыг доод талын багуудад хүргэсэн.

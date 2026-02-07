@@ -7,16 +7,18 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: Account address compliance
 description: Summary of the ADDR-2 fixture workflow and how SDK teams stay in sync.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-The canonical ADDR-2 bundle (`fixtures/account/address_vectors.json`) captures
-IH58 (preferred), compressed (`sora`, second-best; half/full width), multisignature, and negative fixtures.
-Every SDK + Torii surface relies on the same JSON so we can detect any codec
-drift before it hits production. This page mirrors the internal status brief
-(`docs/source/account_address_status.md` in the root repository) so portal
-readers can reference the workflow without digging through the mono-repo.
+Канон ADDR-2 өйөмө (`fixtures/account/address_vectors.json`) тота
+IH58 (өҫтөнлөк), ҡыҫылған (`sora`, икенсе-иң яҡшы; ярты/тулы киңлеге), күп ҡултамғалы һәм кире ҡорамалдар.
+Һәр SDK + I18NT00000000004X өҫтө шул уҡ JSON-ға таяна, шуға күрә беҙ теләһә ниндәй кодекты асыҡлай алабыҙ.
+дрейфы етештереүгә һуҡҡансы. Был бит эске статус брифын көҙгөләй
+(I18NI000000010X тамыр һаҡлағысында) шулай портал
+уҡыусылар эш ағымына һылтанма яһай ала, ҡаҙылмай ашамай моно-репо.
 
-## Regenerate or verify the bundle
+## Регенерация йәки раҫлау өйөм
 
 ```bash
 # Refresh the canonical fixture (writes fixtures/account/address_vectors.json)
@@ -26,34 +28,34 @@ cargo xtask address-vectors --out fixtures/account/address_vectors.json
 cargo xtask address-vectors --verify
 ```
 
-Flags:
+Флагтар:
 
-- `--stdout` — emit the JSON to stdout for ad-hoc inspection.
-- `--out <path>` — write to a different path (e.g., when diffing changes locally).
-- `--verify` — compare the working copy against freshly generated content (cannot
-  be combined with `--stdout`).
+- `--stdout` — JSON-ды реклама тикшерелеүе өсөн stdout ойошторорға сығара.
+- `--out <path>` — икенсе юлға яҙығыҙ (мәҫәлән, локаль рәүештә үҙгәргән саҡта).
+- `--verify` — эш күсермәһе менән яңы генерацияланған контентҡа ҡаршы сағыштырырға
+  `--stdout` менән берләштерелә).
 
-The CI workflow **Address Vector Drift** runs `cargo xtask address-vectors --verify`
-any time the fixture, generator, or docs change to alert reviewers immediately.
+CI эш ағымы **Adress Вектор дрифт** эшләй I18NI000000015X
+теләһә ниндәй ваҡытта ҡоролма, генератор, йәки docs үҙгәрә уяу рецензенттар шунда уҡ.
 
-## Who consumes the fixture?
+## Кем ҡуллана ҡоролма?
 
-| Surface | Validation |
-|---------|------------|
-| Rust data-model | `crates/iroha_data_model/tests/account_address_vectors.rs` |
-| Torii (server) | `crates/iroha_torii/tests/account_address_vectors.rs` |
+| Ер өҫтө | Валидация |
+|--------|-------------|
+| Кире мәғлүмәт-модель | `crates/iroha_data_model/tests/account_address_vectors.rs` |
+| Torii (сервер) | `crates/iroha_torii/tests/account_address_vectors.rs` |
 | JavaScript SDK | `javascript/iroha_js/test/address.test.js` |
-| Swift SDK | `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift` |
-| Android SDK | `java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java` |
+| Свифт СДК | `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressTests.swift` |
+| Андроид СДК | `java/iroha_android/src/test/java/org/hyperledger/iroha/android/address/AccountAddressTests.java` |
 
-Each harness round-trips canonical bytes + IH58 + compressed (`sora`, second-best) encodings and
-checks that Norito-style error codes line up with the fixture for negative cases.
+Һәр йүгән түңәрәк-трип канонлы байт + IH58 + ҡыҫылған (`sora`, икенсе-иң яҡшы) кодлау һәм
+тикшерә, тип I18NT00000000003Х-стиль хата кодтары рәткә рәткә ҡоролма өсөн кире осраҡтар.
 
-## Need automation?
+## Автоматлаштырыу кәрәкме?
 
-Release tooling can script fixture refreshes with the helper
-`scripts/account_fixture_helper.py`, which fetches or verifies the canonical
-bundle without copy/paste steps:
+Релиз инструменттары сценарий ҡоролмаһы менән ярҙамсы менән яңыртыу мөмкин
+I18NI000000022Х, был канонлы йәки раҫлаусы канонлы
+күсермә/йәбештереү аҙымдары булмаған өйөм:
 
 ```bash
 # Download to a custom path (defaults to fixtures/account/address_vectors.json)
@@ -69,20 +71,20 @@ python3 scripts/account_fixture_helper.py check \
   --metrics-label android
 ```
 
-The helper accepts `--source` overrides or the `IROHA_ACCOUNT_FIXTURE_URL`
-environment variable so SDK CI jobs can point at their preferred mirror.
-When `--metrics-out` is supplied the helper writes
-`account_address_fixture_check_status{target=\"…\"}` along with the canonical
-SHA-256 digest (`account_address_fixture_remote_info`) so Prometheus textfile
-collectors and Grafana dashboard `account_address_fixture_status` can prove
-every surface remains in sync. Alert whenever a target reports `0`. For
-multi-surface automation use the wrapper `ci/account_fixture_metrics.sh`
-(accepts repeated `--target label=path[::source]`) so on-call teams can publish
-one consolidated `.prom` file for the node-exporter textfile collector.
+Ярҙам `--source` ҡабул итә йәки `IROHA_ACCOUNT_FIXTURE_URL` .
+мөхит үҙгәртеүсән шулай SDK CI эш урындары уларҙы өҫтөнлөк көҙгө күрһәтә ала.
+Ҡасан I18NI000000025X тәьмин итеү ярҙамсы яҙа
+I18NI000000026X канон менән бергә
+SHA-256 үҙләштереү (`account_address_fixture_remote_info`) шулай I18NT000000001X текст файлы
+коллекционерҙар һәм I18NT0000000002X приборҙар таҡтаһы I18NI000000028X иҫбатлай ала
+һәр ер өҫтө синхронлаштырыла. Иҫкәртмә ҡасан да булһа маҡсатлы хәбәр I18NI000000029X. Өсөн
+күп ер өҫтө автоматлаштырыу ҡулланыу wrapper I18NI0000000030X
+(ҡабул итеү ҡабатланған I18NI0000000031X) шулай шылтыратыу командалары баҫтырып сығара ала
+бер консолидацияланған I18NI000000032X файл өсөн төйөн-экспортер текст файлы коллекторы.
 
-## Need the full brief?
+## Кәрәк тулы ҡыҫҡаса?
 
-The full ADDR-2 compliance status (owners, monitoring plan, open action items)
-lives in `docs/source/account_address_status.md` within the repository along
-with the Address Structure RFC (`docs/account_structure.md`). Use this page as a
-quick operational reminder; defer to the repo docs for in-depth guidance.
+Тулы ADDR-2 үтәү статусы (хужалар, мониторинг планы, асыҡ ғәмәлдәр пункттары)
+йәшәй I18NI0000000033X репозиторий сиктәрендә 2019 йылда .
+адрес структураһы менән RFC (`docs/account_structure.md`). Был битте ҡулланыу
+тиҙ оператив иҫкәртмә; тәрән етәкселек өсөн репо docs кисектереп.

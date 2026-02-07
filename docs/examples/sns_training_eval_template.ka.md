@@ -7,39 +7,40 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 0397eec8373494a74060a7244a7f923714723e5feacc4a54374ee4461f0ddde1
 source_last_modified: "2025-12-29T18:16:35.078130+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# SNS Training Evaluation Template
+# SNS ტრენინგის შეფასების შაბლონი
 
-Please distribute this survey immediately after each session. Responses can be
-captured via form tool or Markdown and archived under
+გთხოვთ, ყოველი სესიის შემდეგ დაუყოვნებლივ გაავრცელოთ ეს გამოკითხვა. პასუხები შეიძლება იყოს
+გადაღებული ფორმის ხელსაწყოს ან Markdown-ის საშუალებით და დაარქივებულია ქვეშ
 `artifacts/sns/training/<suffix>/<cycle>/feedback/`.
 
-## Session metadata
-- Suffix:
-- Cycle:
-- Language:
-- Date:
-- Facilitator(s):
+## სესიის მეტამონაცემები
+- სუფიქსი:
+- ციკლი:
+- ენა:
+- თარიღი:
+- ფასილიტატორი(ები):
 
-## Rating scale
-1 — Poor · 2 — Fair · 3 — Good · 4 — Very good · 5 — Excellent
+## სარეიტინგო მასშტაბი
+1 — ცუდი · 2 — საკმაოდ · 3 — კარგი · 4 — ძალიან კარგი · 5 — შესანიშნავი
 
-| Question | 1 | 2 | 3 | 4 | 5 |
+| კითხვა | 1 | 2 | 3 | 4 | 5 |
 |----------|---|---|---|---|---|
-| Clarity of KPI walkthrough | ☐ | ☐ | ☐ | ☐ | ☐ |
-| Usefulness of labs | ☐ | ☐ | ☐ | ☐ | ☐ |
-| Pace + time allocation | ☐ | ☐ | ☐ | ☐ | ☐ |
-| Localization quality (slides + facilitation) | ☐ | ☐ | ☐ | ☐ | ☐ |
-| Overall confidence entering suffix launch | ☐ | ☐ | ☐ | ☐ | ☐ |
+| KPI-ის სიცხადე | ☐ | ☐ | ☐ | ☐ | ☐ |
+| ლაბორატორიების სარგებლობა | ☐ | ☐ | ☐ | ☐ | ☐ |
+| ტემპი + დროის განაწილება | ☐ | ☐ | ☐ | ☐ | ☐ |
+| ლოკალიზაციის ხარისხი (სლაიდები + ფასილიტაცია) | ☐ | ☐ | ☐ | ☐ | ☐ |
+| საერთო ნდობა შესვლის სუფიქსის გაშვება | ☐ | ☐ | ☐ | ☐ | ☐ |
 
-## Open questions
-1. Which topic needs more depth?
-2. Were any tools/docs missing from the workbook?
-3. Did the localization meet your expectations? If not, why?
-4. Additional comments / blockers the program should track.
+## ღია კითხვები
+1. რომელ თემას სჭირდება მეტი სიღრმე?
+2. იყო თუ არა რაიმე ხელსაწყო/დოკუმენტი სამუშაო წიგნში?
+3. დააკმაყოფილა თუ არა ლოკალიზაცია თქვენი მოლოდინი? თუ არა, რატომ?
+4. დამატებითი კომენტარები/ბლოკატორები, რომელსაც პროგრამა უნდა აკონტროლებდეს.
 
-## Follow-up
-- `[]` Feedback logged in governance tracker (ticket: __________)
-- `[]` Annex export captured (path: ____________________)
-- `[]` Action items assigned (owner + due date)
+## შემდგომი
+- `[]` უკუკავშირი შესული მმართველობის ტრეკერში (ბილეთი: __________)
+- `[]` დანართის ექსპორტი აღებული (გზა: ____________________)
+- მინიჭებული `[]` ქმედების ერთეულები (მფლობელი + ვადა)

@@ -4,27 +4,29 @@ direction: ltr
 source: docs/portal/docs/reference/torii-rapidoc.mdx
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-import RapiDocPanel from '@site/src/components/RapiDocPanel.jsx';
+RapiDocPanel-ის იმპორტი '@site/src/components/RapiDocPanel.jsx'-დან;
 
 # Torii API (RapiDoc)
 
-`RapiDoc` offers a compact, documentation-first rendering of the same Torii
-OpenAPI document. Use it when you need a denser overview or read-only review of
-request/response models.
+`RapiDoc` გთავაზობთ კომპაქტურ, დოკუმენტაციას, იგივე Torii-ის პირველ რენდერს
+OpenAPI დოკუმენტი. გამოიყენეთ ის, როდესაც გჭირდებათ უფრო მჭიდრო მიმოხილვა ან მხოლოდ წაკითხვადი მიმოხილვა
+მოთხოვნის/პასუხის მოდელები.
 
-## Usage tips
+## გამოყენების რჩევები
 
-- Enter a bearer token to enable interactive calls. The value is forwarded as an
-  `X-TryIt-Auth` header and normalised by the proxy.
-- Configure `TRYIT_PROXY_PUBLIC_URL` when serving the portal so interactive
-  requests are routed through the staging proxy. The widget warns when the proxy
-  URL is missing.
-- Use the “OpenAPI snapshot” dropdown to load historical specs published by
-  `npm run sync-openapi`; the `Latest (tracked)` option always resolves to
+- შეიყვანეთ გადამტანი ჟეტონი ინტერაქტიული ზარების გასააქტიურებლად. ღირებულება გადაგზავნილია როგორც
+  `X-TryIt-Auth` სათაური და ნორმალიზებულია პროქსის მიერ.
+- დააკონფიგურირეთ `TRYIT_PROXY_PUBLIC_URL`, როდესაც პორტალს ასე ინტერაქტიულად ემსახურება
+  მოთხოვნების მარშრუტი ხდება დადგმის პროქსის მეშვეობით. ვიჯეტი აფრთხილებს პროქსის დროს
+  URL აკლია.
+- გამოიყენეთ ჩამოსაშლელი მენიუ „OpenAPI Snapshot“ ისტორიული სპეციფიკაციების ჩასატვირთად, რომელიც გამოქვეყნებულია
+  `npm run sync-openapi`; `Latest (tracked)` ვარიანტი ყოველთვის გადაწყვეტს
   `/openapi/torii.json`.
-- Combine with the “[Try it](/api/overview#try-it-sandbox-docs-3)” console when
-  working against staged gateways requiring the proxy.
+- შეუთავსეთ „[სცადეთ](/api/overview#try-it-sandbox-docs-3)“ კონსოლთან, როდესაც
+  მუშაობს ეტაპობრივი კარიბჭეების წინააღმდეგ, რომლებიც საჭიროებენ პროქსის.
 
 <RapiDocPanel />

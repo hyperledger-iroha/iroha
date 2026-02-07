@@ -7,53 +7,54 @@ generator: scripts/sync_docs_i18n.py
 source_hash: e77b792e19fbfa8e1efeddd042adbe68a48287a582a1be76aa518af7830774e2
 source_last_modified: "2026-01-05T09:28:11.879581+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 # SoraFS Chunking → Manifest Pipeline
 
-This companion to the quickstart traces the end-to-end pipeline that turns raw
-bytes into Norito manifests suitable for the SoraFS Pin Registry. The content is
-adapted from [`docs/source/sorafs/manifest_pipeline.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/manifest_pipeline.md);
-consult that document for the canonical specification and changelog.
+სწრაფი სტარტის ეს კომპანიონი ადევნებს მილსადენს ბოლოდან ბოლომდე, რომელიც ნედლეულია
+ბაიტები Norito მანიფესტებში, რომლებიც შესაფერისია SoraFS პინის რეესტრისთვის. შინაარსი არის
+ადაპტირებულია [`docs/source/sorafs/manifest_pipeline.md`]-დან (https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/manifest_pipeline.md);
+იხილეთ ეს დოკუმენტი კანონიკური სპეციფიკაციისა და ცვლილებების ჟურნალისთვის.
 
-## 1. Chunk deterministically
+## 1. ბლოკი დეტერმინისტულად
 
-SoraFS uses the SF-1 (`sorafs.sf1@1.0.0`) profile: a FastCDC-inspired rolling
-hash with a 64 KiB minimum chunk size, 256 KiB target, 512 KiB maximum, and a
-`0x0000ffff` break mask. The profile is registered in
+SoraFS იყენებს SF-1 (`sorafs.sf1@1.0.0`) პროფილს: FastCDC ინსპირირებული მოძრავი
+ჰეში 64 KiB მინიმალური ბლოკის ზომით, 256 KiB სამიზნე, 512 KiB მაქსიმალური და
+`0x0000ffff` შესვენების ნიღაბი. პროფილი რეგისტრირებულია
 `sorafs_manifest::chunker_registry`.
 
-### Rust helpers
+### ჟანგის დამხმარეები
 
-- `sorafs_car::CarBuildPlan::single_file` – Emits chunk offsets, lengths, and
-  BLAKE3 digests while preparing CAR metadata.
-- `sorafs_car::ChunkStore` – Streams payloads, persists chunk metadata, and
-  derives the 64 KiB / 4 KiB Proof-of-Retrievability (PoR) sampling tree.
-- `sorafs_chunker::chunk_bytes_with_digests` – Library helper behind both CLIs.
+- `sorafs_car::CarBuildPlan::single_file` - ასხივებს ნაწილაკების ოფსეტებს, სიგრძეებს და
+  BLAKE3 შეიმუშავებს CAR მეტამონაცემების მომზადებისას.
+- `sorafs_car::ChunkStore` – გადასცემს დატვირთვას, აგრძელებს მეტამონაცემების ნაწილს და
+  იღებს 64KiB / 4KiB Proof-of-Retrievability (PoR) შერჩევის ხეს.
+- `sorafs_chunker::chunk_bytes_with_digests` – ბიბლიოთეკის დამხმარე ორივე CLI-ის უკან.
 
-### CLI tooling
+### CLI ინსტრუმენტები
 
 ```bash
 cargo run -p sorafs_chunker --bin sorafs-chunk-dump -- ./payload.bin \
   > chunk-plan.json
 ```
 
-The JSON contains the ordered offsets, lengths, and chunk digests. Persist the
-plan when constructing manifests or orchestrator fetch specifications.
+JSON შეიცავს მოწესრიგებულ ოფსეტებს, სიგრძეებს და ნაწილაკებს. გაგრძელდეს
+დაგეგმეთ მანიფესტების აგებისას ან ორკესტრის მოპოვების სპეციფიკაციების დროს.
 
-### PoR witnesses
+### PoR მოწმეები
 
-`ChunkStore` exposes `--por-proof=<chunk>:<segment>:<leaf>` and
-`--por-sample=<count>` so auditors can request deterministic witness sets. Pair
-those flags with `--por-proof-out` or `--por-sample-out` to record the JSON.
+`ChunkStore` ამხელს `--por-proof=<chunk>:<segment>:<leaf>` და
+`--por-sample=<count>`, რათა აუდიტორებმა მოითხოვონ დეტერმინისტული მოწმეების ნაკრები. წყვილი
+იმ დროშებით `--por-proof-out` ან `--por-sample-out` JSON-ის ჩასაწერად.
 
-## 2. Wrap a manifest
+## 2. შეფუთეთ მანიფესტი
 
-`ManifestBuilder` combines chunk metadata with governance attachments:
+`ManifestBuilder` აერთიანებს მეტამონაცემებს მართვის დანართებთან:
 
-- Root CID (dag-cbor) and CAR commitments.
-- Alias proofs and provider capability claims.
-- Council signatures and optional metadata (e.g., build IDs).
+- Root CID (dag-cbor) და CAR ვალდებულებები.
+- მეტსახელის მტკიცებულებები და პროვაიდერის შესაძლებლობების პრეტენზიები.
+- საბჭოს ხელმოწერები და არჩევითი მეტამონაცემები (მაგ., build ID).
 
 ```bash
 cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
@@ -64,57 +65,57 @@ cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
   --json-out=payload.report.json
 ```
 
-Important outputs:
+მნიშვნელოვანი შედეგები:
 
-- `payload.manifest` – Norito-encoded manifest bytes.
-- `payload.report.json` – Human/automation readable summary, including
-  `chunk_fetch_specs`, `payload_digest_hex`, CAR digests, and alias metadata.
-- `payload.manifest_signatures.json` – Envelope containing manifest BLAKE3
-  digest, chunk-plan SHA3 digest, and sorted Ed25519 signatures.
+- `payload.manifest` – Norito-ში კოდირებული მანიფესტის ბაიტი.
+- `payload.report.json` – ადამიანის/ავტომატიზაციის წაკითხვადი შეჯამება, მათ შორის
+  `chunk_fetch_specs`, `payload_digest_hex`, CAR დაიჯესტები და მეტამონაცემების მეტამონაცემები.
+- `payload.manifest_signatures.json` – კონვერტი, რომელიც შეიცავს მანიფესტ BLAKE3-ს
+  დაიჯესტი, chunk-plan SHA3 დაიჯესტი და დალაგებულია Ed25519 ხელმოწერები.
 
-Use `--manifest-signatures-in` to verify envelopes supplied by external
-signatories before writing them back out, and `--chunker-profile-id` or
-`--chunker-profile=<handle>` to lock the registry selection.
+გამოიყენეთ `--manifest-signatures-in` გარედან მოწოდებული კონვერტების შესამოწმებლად
+ხელმომწერები მათ უკან დაწერამდე და `--chunker-profile-id` ან
+`--chunker-profile=<handle>` რეესტრის არჩევანის დასაბლოკად.
 
-## 3. Publish and pin
+## 3. გამოაქვეყნეთ და დაამაგრეთ
 
-1. **Governance submission** – Provide the manifest digest and signature
-   envelope to the council so the pin can be admitted. External auditors should
-   store the chunk-plan SHA3 digest alongside the manifest digest.
-2. **Pin payloads** – Upload the CAR archive (and optional CAR index) referenced
-   in the manifest to the Pin Registry. Ensure the manifest and CAR share the
-   same root CID.
-3. **Record telemetry** – Persist the JSON report, PoR witnesses, and any fetch
-   metrics in release artifacts. These records feed operator dashboards and
-   help reproduce issues without downloading large payloads.
+1. **მმართველობის წარდგენა ** – მიაწოდეთ მანიფესტის შეჯამება და ხელმოწერა
+   კონვერტი საბჭოში, რათა ქინძისთავის დაშვება მოხდეს. გარე აუდიტორებმა უნდა
+   შეინახეთ chunk-plan SHA3 დაიჯესტი მანიფესტ დიჯესთან ერთად.
+2. **Pin payloads** – ატვირთეთ CAR არქივი (და სურვილისამებრ CAR ინდექსი) მითითებულ
+   მანიფესტში პინის რეესტრში. დარწმუნდით, რომ მანიფესტი და CAR გაზიარებულია
+   იგივე root CID.
+3. **ჩაწერეთ ტელემეტრია** – შეასრულეთ JSON ანგარიში, PoR მოწმეები და ნებისმიერი მიღება
+   მეტრიკა გამოშვების არტეფაქტებში. ეს ჩანაწერები კვებავს ოპერატორის დაფებს და
+   დაეხმარეთ პრობლემების რეპროდუცირებას დიდი დატვირთვის ჩამოტვირთვის გარეშე.
 
-## 4. Multi-provider fetch simulation
+## 4. მრავალპროვაიდერის მოპოვების სიმულაცია
 
 `cargo run -p sorafs_car --bin sorafs_fetch -- --plan=payload.report.json \
   --provider=alpha=providers/alpha.bin --provider=beta=providers/beta.bin#4@3 \
   --output=payload.bin --json-out=fetch_report.json`
 
-- `#<concurrency>` increases per-provider parallelism (`#4` above).
-- `@<weight>` tunes scheduling bias; defaults to 1.
-- `--max-peers=<n>` caps the number of providers scheduled for a run when
-  discovery yields more candidates than desired.
-- `--expect-payload-digest` and `--expect-payload-len` guard against silent
-  corruption.
-- `--provider-advert=name=advert.to` verifies provider capabilities before
-  using them in the simulation.
-- `--retry-budget=<n>` overrides the per-chunk retry count (default: 3) so CI
-  can surface regressions faster when testing failure scenarios.
+- `#<concurrency>` ზრდის თითო პროვაიდერის პარალელიზმს (`#4` ზემოთ).
+- `@<weight>` მელოდიების დაგეგმვის მიკერძოება; ნაგულისხმევად არის 1.
+- `--max-peers=<n>` ზღუდავს პროვაიდერების რაოდენობას, რომლებიც დაგეგმილია გაშვებისთვის, როდესაც
+  აღმოჩენა სასურველზე მეტ კანდიდატს მოაქვს.
+- `--expect-payload-digest` და `--expect-payload-len` იცავენ ჩუმისგან
+  კორუფცია.
+- `--provider-advert=name=advert.to` ადრე ამოწმებს პროვაიდერის შესაძლებლობებს
+  მათი გამოყენება სიმულაციაში.
+- `--retry-budget=<n>` უგულებელყოფს თითო ნაწილზე ხელახალი ცდის რაოდენობას (ნაგულისხმევი: 3), ამიტომ CI
+  წარუმატებლობის სცენარების ტესტირებისას შეუძლია რეგრესია უფრო სწრაფად წარმოაჩინოს.
 
-`fetch_report.json` surfaces aggregated metrics (`chunk_retry_total`,
-`provider_failure_rate`, etc.) suitable for CI assertions and observability.
+`fetch_report.json` ზედაპირების აგრეგირებული მეტრიკა (`chunk_retry_total`,
+`provider_failure_rate` და ა.შ.) შესაფერისია CI მტკიცებებისა და დაკვირვებისთვის.
 
-## 5. Registry updates & governance
+## 5. რეესტრის განახლებები და მართვა
 
-When proposing new chunker profiles:
+ჩუნკერის ახალი პროფილების შემოთავაზებისას:
 
-1. Author the descriptor in `sorafs_manifest::chunker_registry_data`.
-2. Update `docs/source/sorafs/chunker_registry.md` and related charters.
-3. Regenerate fixtures (`export_vectors`) and capture signed manifests.
-4. Submit the charter compliance report with governance signatures.
+1. აღწერის ავტორი `sorafs_manifest::chunker_registry_data`-ში.
+2. განაახლეთ `docs/source/sorafs/chunker_registry.md` და მასთან დაკავშირებული წესდება.
+3. მოწყობილობების რეგენერაცია (`export_vectors`) და აღბეჭდეთ ხელმოწერილი მანიფესტები.
+4. წარადგინეთ წესდების შესაბამისობის ანგარიში მმართველობის ხელმოწერებით.
 
-Automation should prefer canonical handles (`namespace.name@semver`) and fall
+ავტომატიზაციას უნდა ურჩევნია კანონიკური სახელურები (`namespace.name@semver`) და დაეცემა

@@ -6,27 +6,29 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: SNS metrics & onboarding kit
 description: Dashboard, pricing, and automation artifacts referenced by roadmap item SN-8.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# SNS Metrics & Onboarding Kit
+# የኤስኤንኤስ መለኪያዎች እና የመሳፈሪያ መሣሪያ
 
-Roadmap item **SN-8** bundles two promises:
+የመንገድ ካርታ ንጥል **SN-8** ሁለት ቃል ኪዳኖችን ያጠቃልላል
 
-1. Publish dashboards that expose registrations, renewals, ARPU, disputes, and
-   freeze windows for `.sora`, `.nexus`, and `.dao`.
-2. Ship an onboarding kit so registrars and stewards can wire DNS, pricing, and
-   APIs consistently before any suffix goes live.
+1. ምዝገባዎችን፣ እድሳትን፣ ARPUን፣ አለመግባባቶችን እና የሚያሳዩ ዳሽቦርዶችን ያትሙ
+   መስኮቶችን ለ`.sora`፣ I18NI0000018X፣ እና `.dao` ያቀዘቅዙ።
+2. መዝጋቢዎች እና መጋቢዎች ዲ ኤን ኤስን፣ ዋጋን እና ዋጋን ማገናኘት እንዲችሉ የመሳፈሪያ ኪት ይላኩ።
+   ማንኛውም ቅጥያ በቀጥታ ከመለቀቁ በፊት ያለማቋረጥ ኤፒአይዎች።
 
-This page mirrors the source version
+ይህ ገጽ የምንጭ ሥሪትን ያንጸባርቃል
 [`docs/source/sns/onboarding_kit.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sns/onboarding_kit.md)
-so external reviewers can follow the same procedure.
+ስለዚህ የውጭ ገምጋሚዎች ተመሳሳይ አሰራርን ሊከተሉ ይችላሉ.
 
-## 1. Metric bundle
+## 1. ሜትሪክ ጥቅል
 
-### Grafana dashboard & portal embed
+### Grafana ዳሽቦርድ እና ፖርታል መክተት
 
-- Import `dashboards/grafana/sns_suffix_analytics.json` into Grafana (or another
-  analytics host) via the standard API:
+- `dashboards/grafana/sns_suffix_analytics.json` ወደ I18NT0000002X (ወይም ሌላ አስመጣ)
+  የትንታኔ አስተናጋጅ) በመደበኛ ኤፒአይ በኩል፡-
 
 ```bash
 curl -H "Content-Type: application/json" \
@@ -35,31 +37,31 @@ curl -H "Content-Type: application/json" \
      --data-binary @dashboards/grafana/sns_suffix_analytics.json
 ```
 
-- The same JSON powers this portal page’s iframe (see **SNS KPI Dashboard**).
-  Whenever you bump the dashboard, run
-  `npm run build && npm run serve-verified-preview` inside `docs/portal` to
-  confirm both Grafana and the embed stay in sync.
+- ተመሳሳዩ JSON የዚህን ፖርታል ገጽ iframe ያበረታታል ( ** SNS KPI Dashboard ይመልከቱ ** ይመልከቱ
+  ዳሽቦርዱን ባጋጨህ ቁጥር ሩጥ
+  `npm run build && npm run serve-verified-preview` በ `docs/portal` ወደ
+  ሁለቱንም Grafana እና የተከተተውን ቆይታ በማመሳሰል ያረጋግጡ።
 
-### Panels & evidence
+### ፓነሎች እና ማስረጃዎች
 
-| Panel | Metrics | Governance evidence |
-|-------|---------|---------------------|
-| Registrations & renewals | `sns_registrar_status_total` (success + renewal resolver labels) | Per-suffix throughput + SLA tracking. |
-| ARPU / net units | `sns_bulk_release_payment_net_units`, `sns_bulk_release_payment_gross_units` | Finance can match registrar manifests to revenue. |
-| Disputes & freezes | `guardian_freeze_active`, `sns_dispute_outcome_total`, `sns_governance_activation_total` | Shows active freezes, arbitration cadence, and guardian workload. |
-| SLA/error rates | `torii_request_duration_seconds`, `sns_registrar_status_total{status="error"}` | Highlights API regressions before they impact customers. |
-| Bulk manifest tracker | `sns_bulk_release_manifest_total`, payment metrics with `manifest_id` labels | Connects CSV drops to settlement tickets. |
+| ፓነል | መለኪያዎች | የአስተዳደር ማስረጃ |
+|-------|--------|
+| ምዝገባዎች እና እድሳት | `sns_registrar_status_total` (ስኬት + እድሳት ፈቺ መለያዎች) | በአንድ-ቅጥያ ልቀት + SLA መከታተያ. |
+| ARPU / የተጣራ አሃዶች | `sns_bulk_release_payment_net_units`, `sns_bulk_release_payment_gross_units` | ፋይናንስ የመዝጋቢ መግለጫዎችን ከገቢው ጋር ማዛመድ ይችላል። |
+| ውዝግቦች እና ውዝግቦች | `guardian_freeze_active`፣ `sns_dispute_outcome_total`፣ `sns_governance_activation_total` | ንቁ ቅዝቃዜዎችን፣ የግልግል ዳኝነትን እና የአሳዳጊ የስራ ጫናን ያሳያል። |
+| SLA / ስህተት ተመኖች | `torii_request_duration_seconds`, `sns_registrar_status_total{status="error"}` | የ API regressions ደንበኞችን ከመነካታቸው በፊት ያደምቃል። |
+| የጅምላ አንጸባራቂ መከታተያ | `sns_bulk_release_manifest_total`፣ የክፍያ መለኪያዎች ከ I18NI0000033X መለያዎች ጋር | የCSV ጠብታዎችን ወደ የሰፈራ ትኬቶች ያገናኛል። |
 
-Export a PDF/CSV from Grafana (or the embedded iframe) during the monthly KPI
-review and attach it to the relevant annex entry under
-`docs/source/sns/regulatory/<suffix>/YYYY-MM.md`. Stewards also capture the SHA-256
-of the exported bundle under `docs/source/sns/reports/` (for example,
-`steward_scorecard_2026q1.md`) so audits can replay the evidence path.
+በወርሃዊው KPI ከGrafana (ወይም የተከተተው iframe) ፒዲኤፍ/CSV ወደ ውጪ ላክ
+ይገምግሙ እና ከስር ከሚመለከተው አባሪ ጋር አያይዘው።
+`docs/source/sns/regulatory/<suffix>/YYYY-MM.md`. መጋቢዎች SHA-256ን ይይዛሉ
+ወደ ውጭ የተላከው ጥቅል በ `docs/source/sns/reports/` (ለምሳሌ ፣
+`steward_scorecard_2026q1.md`) ስለዚህ ኦዲቶች የማስረጃ መንገዱን እንደገና ማጫወት ይችላሉ።
 
-### Annex automation
+### አባሪ አውቶማቲክ
 
-Generate annex files directly from the dashboard export so reviewers get a
-consistent digest:
+ገምጋሚዎች ሀ ለማግኘት በቀጥታ ከዳሽቦርድ ወደ ውጭ መላኪያ አባሪ ፋይሎችን ይፍጠሩ
+ወጥነት ያለው የምግብ መፈጨት;
 
 ```bash
 cargo xtask sns-annex \
@@ -72,77 +74,77 @@ cargo xtask sns-annex \
   --portal-entry docs/portal/docs/sns/regulatory/eu-dsa-2026-03.md
 ```
 
-- The helper hashes the export, captures the UID/tags/panel count, and writes a
-  Markdown annex under `docs/source/sns/reports/.<suffix>/<cycle>.md` (see the
-  `.sora/2026-03` sample committed alongside this doc).
-- `--dashboard-artifact` copies the export into
-  `artifacts/sns/regulatory/<suffix>/<cycle>/` so the annex references the
-  canonical evidence path; use `--dashboard-label` only when you need to point
-  at an out-of-band archive.
-- `--regulatory-entry` points at the governing memo. The helper inserts (or
-  replaces) a `KPI Dashboard Annex` block that records the annex path, dashboard
-  artefact, digest, and timestamp so evidence stays in sync after re-runs.
-- `--portal-entry` keeps the Docusaurus copy (`docs/portal/docs/sns/regulatory/*.md`)
-  aligned so reviewers do not have to diff separate annex summaries manually.
-- If you skip `--regulatory-entry`/`--portal-entry`, attach the generated file to
-  the memos manually and still upload the PDF/CSV snapshots captured from Grafana.
-- For recurring exports, list the suffix/cycle pairs in
-  `docs/source/sns/regulatory/annex_jobs.json` and run
-  `python3 scripts/run_sns_annex_jobs.py --verbose`. The helper walks every entry,
-  copies the dashboard export (defaulting to `dashboards/grafana/sns_suffix_analytics.json`
-  when unspecified), and refreshes the annex block inside each regulatory (and,
-  when available, portal) memo in one pass.
-- Run `python3 scripts/check_sns_annex_schedule.py --jobs docs/source/sns/regulatory/annex_jobs.json --regulatory-root docs/source/sns/regulatory --report-root docs/source/sns/reports` (or `make check-sns-annex`) to prove the job list stays sorted/deduped, each memo carries the matching `sns-annex` marker, and the annex stub exists. The helper writes `artifacts/sns/annex_schedule_summary.json` beside the locale/hash summaries used in governance packets.
-This removes manual copy/paste steps and keeps SN-8 annex evidence consistent while
-guarding schedule, marker, and localization drift in CI.
+- ረዳቱ ወደ ውጭ መላኩን ያጭዳል፣ የ UID/መለያዎች/የፓነል ብዛት ይይዛል እና ሀ ይጽፋል
+  የማርክ ዳውን አባሪ በI18NI0000037X (ይመልከቱ
+  `.sora/2026-03` ናሙና ከዚህ ሰነድ ጋር ተፈፅሟል)።
+- `--dashboard-artifact` ወደ ውጭ መላክ ይገለበጣል
+  `artifacts/sns/regulatory/<suffix>/<cycle>/` ስለዚህ አባሪው የሚያመለክተው
+  ቀኖናዊ ማስረጃ መንገድ; መጠቆም ሲፈልጉ ብቻ `--dashboard-label` ይጠቀሙ
+  ከባንዱ ውጪ በሆነ መዝገብ ቤት።
+- በአስተዳደር ማስታወሻ ላይ `--regulatory-entry` ነጥቦች። ረዳቱ ያስገባል (ወይም
+  የሚተካ) የ I18NI0000043X ብሎክ የአባሪውን መንገድ፣ ዳሽቦርድ ይመዘግባል
+  artefact፣ መፍጨት እና የጊዜ ማህተም ስለዚህ ማስረጃው በድጋሚ ከሮጠ በኋላ እንደተመሳሰለ ይቆያል።
+- `--portal-entry` I18NT0000000X ቅጂን ያቆያል (`docs/portal/docs/sns/regulatory/*.md`)
+  ተሰልፏል ስለዚህ ገምጋሚዎች የተለያዩ አባሪ ማጠቃለያዎችን በእጅ መለየት የለባቸውም።
+- `--regulatory-entry`/I18NI0000047X ከዘለሉ የመነጨውን ፋይል ያያይዙ
+  ማስታወሻዎቹ በእጅ እና አሁንም ከGrafana የተነሱ የፒዲኤፍ/CSV ቅጽበተ-ፎቶዎችን ይስቀሉ።
+- ለተደጋጋሚ ወደ ውጭ መላክ፣ ቅጥያ/ዑደት ጥንዶችን ይዘርዝሩ
+  `docs/source/sns/regulatory/annex_jobs.json` እና አሂድ
+  `python3 scripts/run_sns_annex_jobs.py --verbose`. ረዳቱ በእያንዳንዱ መግቢያ ላይ ይሄዳል ፣
+  ዳሽቦርዱን ወደ ውጭ መላክ ይገለበጣል (ወደ `dashboards/grafana/sns_suffix_analytics.json` ነባሪ
+  ሳይገለጽ) እና በእያንዳንዱ የቁጥጥር ስር ያለውን አባሪ ብሎክ ያድሳል (እና፣
+  ሲገኝ፣ ፖርታል) ማስታወሻ በአንድ ማለፊያ።
+- የስራ ዝርዝሩ ተስተካክሎ/ ተቀናሽ ሆኖ መቆየቱን ለማረጋገጥ `python3 scripts/check_sns_annex_schedule.py --jobs docs/source/sns/regulatory/annex_jobs.json --regulatory-root docs/source/sns/regulatory --report-root docs/source/sns/reports` (ወይም `make check-sns-annex`) ያሂዱ፣ እያንዳንዱ ማስታወሻ የሚዛመደውን I18NI0000053X ማርከር ይይዛል፣ እና አባሪው ግንድ አለ። ረዳቱ በአስተዳደር እሽጎች ውስጥ ከሚጠቀሙት የአካባቢ/ሃሽ ማጠቃለያዎች ጎን I18NI0000054X ይጽፋል።
+ይህ በእጅ የመገልበጥ/የመለጠፍ ደረጃዎችን ያስወግዳል እና የ SN-8 አባሪ ማስረጃ በሚቆይበት ጊዜ እንዲቆይ ያደርገዋል
+በCI ውስጥ የጥበቃ መርሐግብር፣ ማርከር እና የትርጉም ጉዞ።
 
-## 2. Onboarding kit components
+## 2. የቦርዲንግ ኪት ክፍሎች
 
-### Suffix wiring
+### ቅጥያ ሽቦ
 
-- Registry schema + selector rules:
+- የመመዝገቢያ ንድፍ + መራጭ ህጎች:
   [`docs/source/sns/registry_schema.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sns/registry_schema.md)
-  and [`docs/source/sns/local_to_global_toolkit.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sns/local_to_global_toolkit.md).
-- DNS skeleton helper:
+  እና [`docs/source/sns/local_to_global_toolkit.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sns/local_to_global_toolkit.md)።
+- ዲ ኤን ኤስ አጽም ረዳት;
   [`scripts/sns_zonefile_skeleton.py`](https://github.com/hyperledger-iroha/iroha/blob/master/scripts/sns_zonefile_skeleton.py)
-  with the rehearsal flow captured in the
-  [gateway/DNS runbook](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs_gateway_dns_owner_runbook.md).
-- For every registrar launch, file a short note under
-  `docs/source/sns/reports/` summarising selector samples, GAR proofs, and DNS hashes.
+  በ ውስጥ ከተያዘው የልምምድ ፍሰት ጋር
+  [ጌትዌይ/ዲኤንኤስ runbook](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs_gateway_dns_owner_runbook.md)።
+- ለእያንዳንዱ ሬጅስትራር ማስጀመሪያ ከታች አጭር ማስታወሻ ያስገቡ
+  `docs/source/sns/reports/` የመምረጫ ናሙናዎችን፣ GAR ማረጋገጫዎችን እና የዲ ኤን ኤስ ሃሾችን ማጠቃለል።
 
-### Pricing cheatsheet
+### የዋጋ ማጭበርበር
 
-| Label length | Base fee (USD equiv) |
-|--------------|---------------------|
-| 3 | $240 |
+| የመለያ ርዝመት | ቤዝ ክፍያ (USD equiv) |
+|-------------|
+| 3 | 240 ዶላር |
 | 4 | $90 |
 | 5 | $30 |
-| 6–9 | $12 |
+| 6–9 | $ 12 |
 | 10+ | $8 |
 
-Suffix coefficients: `.sora` = 1.0×, `.nexus` = 0.8×, `.dao` = 1.3×.  
-Term multipliers: 2‑year −5 %, 5‑year −12 %; grace window = 30 days, redemption
-= 60 days (20 % fee, min $5, max $200). Record negotiated deviations in the
-registrar ticket.
+ድህረ-ቅጥያዎች፡- `.sora` = 1.0×፣ `.nexus` = 0.8×፣ `.dao` = 1.3×።  
+የጊዜ ማባዣዎች፡ 2-አመት -5%፣ 5-አመት -12%; ጸጋ መስኮት = 30 ቀናት, ቤዛ
+= 60 ቀናት (20% ክፍያ፣ ደቂቃ $5፣ ከፍተኛው $200)። በ ውስጥ የተደራደሩ ልዩነቶችን ይመዝግቡ
+የመመዝገቢያ ትኬት.
 
-### Premium auctions vs renewals
+### ፕሪሚየም ጨረታዎች ከእድሳት ጋር
 
-1. **Premium pool** — sealed-bid commit/reveal (SN-3). Track bids with
-   `sns_premium_commit_total`, and publish the manifest under
+1. ** ፕሪሚየም ገንዳ *** - የታሸገ-ጨረታ ቁርጠኝነት/መገለጥ (SN-3)። ጋር ጨረታዎችን ይከታተሉ
+   `sns_premium_commit_total`፣ እና አንጸባራቂውን በስር ያትሙ
    `docs/source/sns/reports/`.
-2. **Dutch reopen** — after grace + redemption expire, start a 7‑day Dutch sale
-   at 10× that decays 15 % per day. Label manifests with `manifest_id` so the
-   dashboard can surface progress.
-3. **Renewals** — monitor `sns_registrar_status_total{resolver="renewal"}` and
-   capture the autorenew checklist (notifications, SLA, fallback payment rails)
-   inside the registrar ticket.
+2. **ደች እንደገና ተከፈተ** — ከጸጋ + መቤዠት ካለቀ በኋላ የ7 ቀን የሆላንድ ሽያጭ ይጀምሩ
+   በቀን 15% የሚበሰብስ በ 10 ×. መለያው በI18NI0000064X ይገለጻል።
+   ዳሽቦርድ ወደላይ መሻሻል ይችላል።
+3. ** እድሳት *** - ክትትል I18NI0000065X እና
+   የራስ-አድሶ ማረጋገጫ ዝርዝሩን ይያዙ (ማሳወቂያዎች ፣ SLA ፣ የመመለሻ ክፍያ ሀዲዶች)
+   በመዝጋቢ ትኬት ውስጥ።
 
-### Developer APIs & automation
+### የገንቢ ኤፒአይዎች እና አውቶሜሽን
 
-- API contracts: [`docs/source/sns/registrar_api.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sns/registrar_api.md).
-- Bulk helper & CSV schema:
-  [`docs/source/sns/bulk_onboarding_toolkit.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sns/bulk_onboarding_toolkit.md).
-- Example command:
+- API ኮንትራቶች፡ [I18NI0000066X](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sns/registrar_api.md)።
+- የጅምላ ረዳት እና የCSV እቅድ፡
+  [`docs/source/sns/bulk_onboarding_toolkit.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sns/bulk_onboarding_toolkit.md)።
+- ምሳሌ ትዕዛዝ:
 
 ```bash
 python3 scripts/sns_bulk_onboard.py registrations.csv \
@@ -152,27 +154,27 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
   --submit-token-file ~/.config/sora/tokens/registrar.token
 ```
 
-Include the manifest ID (`--submission-log` output) in the KPI dashboard filter
-so finance can reconcile revenue panels per release.
+የሰነድ መታወቂያውን (`--submission-log` ውፅዓት) በKPI ዳሽቦርድ ማጣሪያ ውስጥ ያካትቱ
+ስለዚህ ፋይናንስ በየልቀት የገቢ ፓነሎችን ማስታረቅ ይችላል።
 
-### Evidence bundle
+### የማስረጃ ጥቅል
 
-1. Registrar ticket with contacts, suffix scope, and payment rails.
-2. DNS/resolver evidence (zonefile skeletons + GAR proofs).
-3. Pricing worksheet + any overrides approved by governance.
-4. API/CLI smoke-test artefacts (`curl` samples, CLI transcripts).
-5. KPI dashboard screenshot + CSV export, attached to the monthly annex.
+1. የመመዝገቢያ ትኬት ከእውቂያዎች፣ ከቅጥያ ወሰን እና ከክፍያ ሀዲዶች ጋር።
+2. የዲ ኤን ኤስ / የመፍታት ማስረጃ (የዞንፋይል አፅሞች + GAR ማረጋገጫዎች).
+3. የዋጋ አሰጣጥ ሉህ + በአስተዳደር የጸደቀ ማናቸውንም መሻር።
+4. API/CLI የጭስ-ሙከራ ቅርሶች (`curl` ናሙናዎች፣ የCLI ግልባጮች)።
+5. የKPI ዳሽቦርድ ቅጽበታዊ ገጽ እይታ + CSV ወደ ውጪ መላክ፣ ከወርሃዊው አባሪ ጋር ተያይዟል።
 
-## 3. Launch checklist
+## 3. የማረጋገጫ ዝርዝርን አስጀምር
 
-| Step | Owner | Artefact |
-|------|-------|----------|
-| Dashboard imported | Product Analytics | Grafana API response + dashboard UID |
-| Portal embed validated | Docs/DevRel | `npm run build` logs + preview screenshot |
-| DNS rehearsal complete | Networking/Ops | `sns_zonefile_skeleton.py` outputs + runbook log |
-| Registrar automation dry run | Registrar Eng | `sns_bulk_onboard.py` submissions log |
-| Governance evidence filed | Governance Council | Annex link + SHA-256 of exported dashboard |
+| ደረጃ | ባለቤት | Artefact |
+|-------------|-------|
+| ዳሽቦርድ ገብቷል | የምርት ትንታኔ | Grafana API ምላሽ + ዳሽቦርድ UID |
+| ፖርታል መክተቱ ተረጋግጧል | ሰነዶች/DevRel | `npm run build` መዝገቦች + ቅድመ እይታ ቅጽበታዊ ገጽ እይታ |
+| የዲኤንኤስ ልምምድ ተጠናቅቋል | አውታረ መረብ / ኦፕስ | `sns_zonefile_skeleton.py` ውጤቶች + runbook መዝገብ |
+| ሬጅስትራር አውቶሜሽን ደረቅ ሩጫ | ሬጅስትራር ኢንጅነር | `sns_bulk_onboard.py` ማስገቢያ መዝገብ |
+| የመንግስት ማስረጃ ቀረበ | አስተዳደር ምክር ቤት | አባሪ አገናኝ + SHA-256 ወደ ውጭ የተላከ ዳሽቦርድ |
 
-Complete the checklist before activating a registrar or suffix. The signed
-bundle clears the SN-8 roadmap gate and gives auditors a single reference when
-reviewing marketplace launches.
+መዝጋቢ ወይም ቅጥያ ከማንቃትዎ በፊት የማረጋገጫ ዝርዝሩን ይሙሉ። የተፈረመው
+ጥቅል የ SN-8 የመንገድ ካርታ በርን ያጸዳል እና መቼ ኦዲተሮችን አንድ ማጣቀሻ ይሰጣል
+የገበያ ቦታዎችን መገምገም.

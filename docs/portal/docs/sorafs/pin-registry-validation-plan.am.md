@@ -11,27 +11,28 @@ id: pin-registry-validation-plan
 title: Pin Registry Manifest Validation Plan
 sidebar_label: Pin Registry Validation
 description: Validation plan for ManifestV1 gating ahead of the SF-4 Pin Registry rollout.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
-:::
+::: ማስታወሻ ቀኖናዊ ምንጭ
+::
 
-# Pin Registry Manifest Validation Plan (SF-4 Prep)
+# የፒን መዝገብ ቤት መግለጫ ማረጋገጫ እቅድ (SF-4 መሰናዶ)
 
-This plan outlines the steps required to thread `sorafs_manifest::ManifestV1`
-validation into the forthcoming Pin Registry contract so that SF-4 work can
-build on the existing tooling without duplicating encode/decode logic.
+ይህ እቅድ `sorafs_manifest::ManifestV1` ክር ለመስራት የሚያስፈልጉትን ደረጃዎች ይዘረዝራል።
+የ SF-4 ሥራ እንዲሠራ በሚመጣው የፒን መዝገብ ቤት ውል ውስጥ ማረጋገጥ
+ኢንኮድ/አመክንዮ ሳይገለብጡ አሁን ባለው መሳሪያ ላይ ይገንቡ።
 
-## Goals
+# ግቦች
 
-1. Host-side submission paths verify manifest structure, chunking profile, and
-   governance envelopes before accepting proposals.
-2. Torii and gateway services reuse the same validation routines to ensure
-   deterministic behaviour across hosts.
-3. Integration tests cover positive/negative cases for manifest acceptance,
-   policy enforcement, and error telemetry.
+1. የአስተናጋጅ-ጎን የማስረከቢያ ዱካዎች አንጸባራቂ አወቃቀሩን ያረጋግጣሉ፣ መገለጫን መቆራረጥ እና
+   ሀሳቦችን ከመቀበልዎ በፊት የአስተዳደር ፖስታዎች ።
+2. Torii እና የጌትዌይ አገልግሎቶችን ለማረጋገጥ ተመሳሳይ የማረጋገጫ ስልቶችን በድጋሚ ይጠቀማሉ።
+   በመላ አስተናጋጆች ላይ የሚወሰን ባህሪ።
+3. የውህደት ሙከራዎች በግልጽ ተቀባይነት ለማግኘት አወንታዊ/አሉታዊ ጉዳዮችን ይሸፍናሉ።
+   የፖሊሲ አፈፃፀም እና የቴሌሜትሪ ስህተት።
 
-## Architecture
+## አርክቴክቸር
 
 ```mermaid
 flowchart LR
@@ -43,46 +44,46 @@ flowchart LR
     registry --> torii
 ```
 
-### Components
+### አካላት
 
-- `ManifestValidator` (new module in `sorafs_manifest` or `sorafs_pin` crate)
-  encapsulates structural checks and policy gates.
-- Torii exposes a gRPC endpoint `SubmitManifest` that calls into
-  `ManifestValidator` before forwarding to the contract.
-- Gateway fetch path optionally consumes the same validator when caching new
-  manifests from the registry.
+- `ManifestValidator` (አዲስ ሞጁል በ I18NI0000015X ወይም I18NI0000016X crate)
+  መዋቅራዊ ቼኮችን እና የፖሊሲ በሮችን ያጠቃልላል።
+- Torii ወደ ውስጥ የሚጠራውን የ gRPC የመጨረሻ ነጥብ `SubmitManifest` ያጋልጣል
+  ወደ ውሉ ከማስተላለፉ በፊት `ManifestValidator`።
+- የጌትዌይ ዱካ እንደ አማራጭ አዲስ ሲሸጎጥ ተመሳሳዩን አረጋጋጭ ይበላል
+  ከመዝገቡ ውስጥ ይገለጣል.
 
-## Task Breakdown
+## የተግባር ዝርዝር መግለጫ
 
-| Task | Description | Owner | Status |
-|------|-------------|-------|--------|
-| V1 API skeleton | Add `validate_manifest(manifest: &ManifestV1, policy: &PinPolicyInputs) -> Result<(), ValidationError>` to `sorafs_manifest`. Include BLAKE3 digest verification and chunker registry lookup. | Core Infra | ✅ Done | Shared helpers (`validate_chunker_handle`, `validate_pin_policy`, `validate_manifest`) now live in `sorafs_manifest::validation`. |
-| Policy wiring | Map registry policy config (`min_replicas`, expiry windows, allowed chunker handles) into validation inputs. | Governance / Core Infra | Pending — tracked in SORAFS-215 |
-| Torii integration | Call validator inside Torii manifest submission path; return structured Norito errors on failure. | Torii Team | Planned — tracked in SORAFS-216 |
-| Host contract stub | Ensure contract entrypoint rejects manifests that fail validation hash; expose metrics counters. | Smart Contract Team | ✅ Done | `RegisterPinManifest` now invokes the shared validator (`ensure_chunker_handle`/`ensure_pin_policy`) before mutating state and unit tests cover the failure cases. |
-| Tests | Add unit tests for validator + trybuild cases for invalid manifests; integration tests in `crates/iroha_core/tests/pin_registry.rs`. | QA Guild | 🟠 In progress | Validator unit tests landed alongside on-chain rejection tests; full integration suite still pending. |
-| Docs | Update `docs/source/sorafs_architecture_rfc.md` and `migration_roadmap.md` once validator lands; document CLI usage in `docs/source/sorafs/manifest_pipeline.md`. | Docs Team | Pending — tracked in DOCS-489 |
+| ተግባር | መግለጫ | ባለቤት | ሁኔታ |
+|-------------|-------|--------|
+| V1 API አጽም | `validate_manifest(manifest: &ManifestV1, policy: &PinPolicyInputs) -> Result<(), ValidationError>` ወደ I18NI0000020X ያክሉ። BLAKE3 ዳይጀስት ማረጋገጫ እና chunker መዝገብ ፍለጋን ያካትቱ። | ኮር ኢንፍራ | ✅ ተፈጸመ | የተጋሩ ረዳቶች (I18NI0000021X፣ `validate_pin_policy`፣ I18NI0000023X) አሁን በ`sorafs_manifest::validation` ይኖራሉ። |
+| ፖሊሲ ሽቦ | የካርታ መዝገብ ፖሊሲ ​​ውቅረት (`min_replicas`፣ ጊዜው ያለፈበት ዊንዶውስ፣ የተፈቀደ ቻንከር እጀታ) ወደ የማረጋገጫ ግብዓቶች። | አስተዳደር / ኮር ኢንፍራ | በመጠባበቅ ላይ - በ SORAFS-215 |
+| Torii ውህደት | በI18NT0000007X አንጸባራቂ የማስረከቢያ መንገድ ውስጥ አረጋጋጭ ይደውሉ; በብልሽት ላይ የተዋቀሩ I18NT0000000X ስህተቶችን መመለስ። | Torii ቡድን | የታቀደ - በ SORAFS-216 |
+| አስተናጋጅ ውል stub | የኮንትራት መግቢያ ነጥብ ውድቅ ማድረጉን ማረጋገጥ ያልተሳካ የማረጋገጫ ሃሽ; መለኪያዎች ቆጣሪዎችን ያጋልጡ። | ብልጥ የኮንትራት ቡድን | ✅ ተፈጸመ | `RegisterPinManifest` አሁን የተጋራውን አረጋጋጭ (`ensure_chunker_handle`/`ensure_pin_policy`) የግዛት እና የዩኒት ሙከራዎች የውድቀት ጉዳዮችን ይሸፍናሉ። |
+| ፈተናዎች | ልክ ላልሆኑ አንጸባራቂዎች የክፍል ሙከራዎችን ለአረጋጋጭ + trybuild ጉዳዮችን ያክሉ። በ I18NI0000029X ውስጥ የውህደት ሙከራዎች። | QA Guild | 🟠 በሂደት ላይ | የማረጋገጫ ክፍል ሙከራዎች በሰንሰለት ላይ ካለመቀበል ሙከራዎች ጎን ለጎን አርፈዋል። ሙሉ ውህደት ስብስብ አሁንም በመጠባበቅ ላይ። |
+| ሰነዶች | `docs/source/sorafs_architecture_rfc.md` እና `migration_roadmap.md` አንዴ የተረጋገጠ መሬቶችን አዘምን; የሰነድ CLI አጠቃቀም በ I18NI0000032X. | ሰነዶች ቡድን | በመጠባበቅ ላይ - በ DOCS-489 |
 
-## Dependencies
+## ጥገኛዎች
 
-- Pin Registry Norito schema finalisation (ref: SF-4 item in roadmap).
-- Council-signed chunker registry envelopes (ensures validator mapping is
-  deterministic).
-- Torii authentication decisions for manifest submission.
+- የፒን መዝገብ ቤት I18NT0000001X እቅድ ማጠናቀቅ (ማጣቀሻ፡ SF-4 በፍኖተ ካርታ)።
+- በካውንስሉ የተፈረመ የ chunker መዝገብ ቤት ፖስታዎች (አረጋጋጭ የካርታ ስራ መሆኑን ያረጋግጣል
+  ቆራጥ)።
+- ለአንጸባራቂ ግቤት Torii የማረጋገጫ ውሳኔዎች።
 
-## Risks & Mitigations
+## አደጋዎች እና ቅነሳዎች
 
-| Risk | Impact | Mitigation |
-|------|--------|------------|
-| Divergent policy interpretation between Torii and contract | Non-deterministic acceptance. | Share validation crate + add integration tests that compare host vs on-chain decisions. |
-| Performance regression for large manifests | Slower submission | Benchmark via cargo criterion; consider caching manifest digest results. |
-| Error messaging drift | Operator confusion | Define Norito error codes; document them in `manifest_pipeline.md`. |
+| ስጋት | ተጽዕኖ | ቅነሳ |
+|-------|--------|-----------|
+| በ Torii እና በኮንትራት መካከል ያለው ልዩነት የፖሊሲ ትርጓሜ | የማይወሰን ተቀባይነት. | የማረጋገጫ ሳጥን ያጋሩ + አስተናጋጁ በሰንሰለት ላይ ካሉ ውሳኔዎች ጋር የሚያወዳድሩ የውህደት ሙከራዎችን ያክሉ። |
+| ለትልልቅ መገለጫዎች የአፈጻጸም መመለሻ | ቀስ ብሎ ማስረከብ | ቤንችማርክ በጭነት መስፈርት; አንጸባራቂ የምግብ መፈጨት ውጤቶችን መሸጎጥ ያስቡበት። |
+| ስህተት የመልእክት መንሸራተት | ኦፕሬተር ግራ መጋባት | Norito የስህተት ኮዶችን ይግለጹ; በ `manifest_pipeline.md` ሰነዳቸው። |
 
-## Timeline Targets
+## የጊዜ መስመር ኢላማዎች
 
-- Week 1: Land `ManifestValidator` skeleton + unit tests.
-- Week 2: Wire Torii submission path and update CLI to surfacing validation errors.
-- Week 3: Implement contract hooks, add integration tests, update docs.
-- Week 4: Run end-to-end rehearsal with migration ledger entry, capture council sign-off.
+- 1ኛው ሳምንት፡ የመሬት I18NI0000034X አጽም + የክፍል ሙከራዎች።
+- 2ኛው ሳምንት፡ Wire Torii የማስረከቢያ መንገድ እና CLIን ወደ የማረጋገጫ ስህተቶች ያዘምኑ።
+- 3ኛው ሳምንት፡ የኮንትራት መንጠቆዎችን ይተግብሩ፣ የውህደት ሙከራዎችን ያክሉ፣ ሰነዶችን ያዘምኑ።
+- 4ኛው ሳምንት፡ ከጫፍ እስከ ጫፍ ልምምዱን ከስደት ደብተር መግቢያ ጋር ያካሂዱ፣ የምክር ቤት ማቋረጥ።
 
-This plan will be referenced in the roadmap once the validator work begins.
+የማረጋገጫው ሥራ ከጀመረ በኋላ ይህ እቅድ በፍኖተ ካርታው ውስጥ ይጠቀሳል።

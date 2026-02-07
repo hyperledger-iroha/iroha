@@ -7,32 +7,33 @@ generator: scripts/sync_docs_i18n.py
 source_hash: f11f0a83efc46035aeeaf4c1ad626a2a773303e9dfab188704016cf483a78ce6
 source_last_modified: "2026-01-23T08:31:38.611123+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# AMX Execution & Operations Guide
+# AMX 执行和操作指南
 
-**Status:** Draft (NX-17)  
-**Audience:** Core protocol, AMX/consensus engineers, SRE/Telemetry, SDK & Torii teams  
-**Context:** Completes the roadmap item “Documentation (owner: Docs) — update `docs/amx.md` with timing diagrams, error catalog, operator expectations, and developer guidance for generating/using PVOs.”【roadmap.md:2497】
+**状态：** 草案（NX-17）  
+**受众：** 核心协议、AMX/共识工程师、SRE/Telemetry、SDK & Torii 团队  
+**上下文：** 完成路线图项目“文档（所有者：Docs）——使用时序图、错误目录、操作员期望以及生成/使用 PVO 的开发人员指南更新 `docs/amx.md`。”【roadmap.md:2497】
 
-## Summary
+## 总结
 
-Atomic cross-data-space transactions (AMX) let a single submission touch multiple data spaces (DS) while preserving 1 s slot finality, deterministic failure codes, and confidentiality for private DS fragments. This guide captures the timing model, canonical error handling, operator evidence requirements, and developer expectations for Proof Verification Objects (PVOs) so the roadmap deliverable remains self-contained outside the Nexus design paper (`docs/source/nexus.md`).
+原子跨数据空间事务 (AMX) 允许单次提交触及多个数据空间 (DS)，同时保留 1s 时隙最终性、确定性故障代码和私有 DS 片段的机密性。本指南捕获了时序模型、规范错误处理、操作员证据要求以及开发人员对证明验证对象 (PVO) 的期望，因此路线图交付成果在 Nexus 设计文件 (`docs/source/nexus.md`) 之外保持独立。
 
-Key guarantees:
+主要保证：
 
-- Every AMX submission receives deterministic prepare/commit budgets; overruns abort with documented codes rather than hanging lanes.
-- DA samples that miss the budget are logged as missing availability evidence and the transaction remains queued for the next slot instead of silently stalling throughput.
-- Proof Verification Objects (PVOs) decouple heavy proofs from the 1 s slot by letting clients/batchers pre-register artefacts that the nexus host validates quickly in-slot.
-- IVM hosts derive per-dataspace AXT policy from the Space Directory: handles must target the lane advertised in the catalog, present the latest manifest root, satisfy expiry_slot, handle_era, and sub_nonce minima, and reject unknown dataspaces with `PermissionDenied` before execution.
-- Slot expiry uses `nexus.axt.slot_length_ms` (default `1` ms, validated between `1` ms and `600_000` ms) plus the bounded `nexus.axt.max_clock_skew_ms` (default `0` ms, capped by the slot length and `60_000` ms). Hosts compute `current_slot = block.creation_time_ms / slot_length_ms`, apply the skew allowance to proof and handle expiry checks, and reject handles that advertise a larger skew than the configured limit.
-- Proof cache TTL bounds reuse: `nexus.axt.proof_cache_ttl_slots` (default `1`, validated `1`–`64`) limits how long accepted or rejected proofs stay in the host cache; entries drop once the TTL window or the proof’s `expiry_slot` elapses so replay protection stays bounded.
-- Replay ledger retention: `nexus.axt.replay_retention_slots` (default `128`, validated `1`–`4_096`) sets the minimum slot window of handle-usage history retained for replay rejection across peers/restarts; align it with the longest handle-validity window you expect operators to issue. The ledger is persisted in WSV, hydrated on startup, and pruned deterministically once both the retention window and handle expiry have elapsed (whichever is later) so peer switches do not reopen replay gaps.
-- Debugging cache status: Torii exposes `/v1/debug/axt/cache` (telemetry/developer gate) to return the current AXT policy snapshot version, the most recent reject (lane/reason/version), cached proofs (dataspace/status/manifest root/slots), and reject hints (`next_min_handle_era`/`next_min_sub_nonce`). Use this endpoint to confirm slot/manifest rotations are reflected in cache state and to refresh handles deterministically during troubleshooting.
+- 每个 AMX 提交都会收到确定性的准备/提交预算；使用记录的代码而不是悬挂通道溢出中止。
+- 未达到预算的 DA 样本将被记录为缺少可用性证据，并且事务将继续排队等待下一个时隙，而不是默默地停止吞吐量。
+- 证明验证对象 (PVO) 通过让客户端/批处理程序预先注册 Nexus 主机在时隙中快速验证的工件，将繁重的证明与 1s 时隙解耦。
+- IVM 主机从空间目录派生每个数据空间 AXT 策略：句柄必须以目录中通告的通道为目标，提供最新的清单根，满足 expiry_slot、handle_era 和 sub_nonce 最小值，并在执行前使用 `PermissionDenied` 拒绝未知数据空间。
+- 时隙到期使用 `nexus.axt.slot_length_ms`（默认 `1`ms，在 `1`ms 和 `600_000`ms 之间验证）加上有界的 `nexus.axt.max_clock_skew_ms`（默认 `0`ms，由时隙长度和`60_000`ms）。主机计算 `current_slot = block.creation_time_ms / slot_length_ms`，应用偏差限额来证明和处理过期检查，并拒绝通告偏差大于配置限制的句柄。
+- 证明缓存 TTL 边界重用：`nexus.axt.proof_cache_ttl_slots`（默认 `1`，经过验证的 `1`–`64`）限制接受或拒绝的证明在主机缓存中保留的时间；一旦 TTL 窗口或证明的 `expiry_slot` 过去，条目就会丢失，因此重放保护保持有限。
+- 重放账本保留：`nexus.axt.replay_retention_slots`（默认 `128`，经过验证的 `1`–`4_096`）设置保留的句柄使用历史记录的最小槽窗口，以便跨对等/重新启动拒绝重放；将其与您期望操作员发出的最长句柄有效性窗口对齐。账本持久保存在 WSV 中，在启动时进行水合，并在保留窗口和句柄到期（以较晚者为准）后确定性地进行修剪，因此对等交换机不会重新打开重播间隙。
+- 调试缓存状态：Torii 公开 `/v1/debug/axt/cache`（遥测/开发人员门）以返回当前 AXT 策略快照版本、最近的拒绝（通道/原因/版本）、缓存的证明（数据空间/状态/清单根/插槽）和拒绝提示（`next_min_handle_era`/`next_min_sub_nonce`）。使用此端点来确认插槽/清单轮换是否反映在缓存状态中，并在故障排除期间确定性地刷新句柄。
 
-## Slot Timing Model
+## 时隙时序模型
 
-### Timeline
+### 时间轴
 
 ```text
 t=0ms           70ms             300ms              600ms       840ms    1000ms
@@ -42,12 +43,12 @@ t=0ms           70ms             300ms              600ms       840ms    1000ms
 │  ingest │sample (≤300ms) │(≤300ms)           │(≤250ms)      │(≤40ms)   │(≤40ms) │
 ```
 
-- Budgets align with the global ledger plan: mempool 70 ms, DA commit ≤300 ms, consensus 300 ms, IVM/AMX 250 ms, settlement 40 ms, guard 40 ms.【roadmap.md:2529】
-- Transactions breaching the DA window are logged as missing availability evidence and retried in the next slot; all other breaches surface codes such as `AMX_TIMEOUT` or `SETTLEMENT_ROUTER_UNAVAILABLE`.
-- The guard slice absorbs telemetry export and final auditing so the slot still closes at 1 s even if exporters lag briefly.
-- Configuration tips: defaults keep expiry strict (`slot_length_ms = 1`, `max_clock_skew_ms = 0`). For a 1 s cadence set `slot_length_ms = 1_000` and `max_clock_skew_ms = 250`; for a 2 s cadence use `slot_length_ms = 2_000` and `max_clock_skew_ms = 500`. Values outside the validated window (`1`–`600_000` ms or `max_clock_skew_ms` greater than the slot length/`60_000` ms) are rejected at config-parse time, and advertised handle skew must stay within the configured bound.
+- 预算与全球账本计划一致：mempool 70ms，DA commit ≤300ms，共识 300ms，IVM/AMX 250ms，结算 40ms，guard 40ms。【roadmap.md:2529】
+- 违反 DA 窗口的交易将被记录为缺少可用性证据，并在下一个时隙中重试；所有其他违规表面代码，例如 `AMX_TIMEOUT` 或 `SETTLEMENT_ROUTER_UNAVAILABLE`。
+- 保护切片吸收遥测导出和最终审核，因此即使导出器短暂滞后，插槽仍会在 1 秒处关闭。
+- 配置提示：默认保持严格过期（`slot_length_ms = 1`、`max_clock_skew_ms = 0`）。对于 1s 节奏集 `slot_length_ms = 1_000` 和 `max_clock_skew_ms = 250`；对于 2 秒的节奏，请使用 `slot_length_ms = 2_000` 和 `max_clock_skew_ms = 500`。验证窗口之外的值（`1`–`600_000`ms 或 `max_clock_skew_ms` 大于槽长度/`60_000`ms）将在配置解析时被拒绝，并且通告的句柄偏差必须保持在配置的范围内。
 
-### Cross-DS swim lane
+###跨DS泳道
 
 ```text
 Client        DS A (public)        DS B (private)        Nexus Lane        Settlement
@@ -61,189 +62,185 @@ Client        DS A (public)        DS B (private)        Nexus Lane        Settl
   │◀──────────│ result + code │◀────│ result + code │◀────│ outcome│          receipt
 ```
 
-Each DS fragment must finish its 30 ms prepare window before the lane assembles the slot. Missing proofs stay in the mempool for the next slot rather than blocking peers.
+每个 DS 片段必须在通道组装插槽之前完成其 30ms 准备窗口。丢失的证明会保留在内存池中的下一个槽位，而不是阻塞对等点。
 
-### Instrumentation checklist
+### 仪器清单
 
-| Metric / Trace | Source | SLO / Alert | Notes |
-|----------------|--------|-------------|-------|
-| `iroha_slot_duration_ms` (histogram) / `iroha_slot_duration_ms_latest` (gauge) | `iroha_telemetry` | p95 ≤ 1000 ms | Ci gate described in `ans3.md`. |
-| `iroha_da_quorum_ratio` | `iroha_telemetry` (commit hook) | ≥0.95 per 30 min window | Derived from missing-availability telemetry so every block updates the gauge (`crates/iroha_core/src/telemetry.rs:3524`,`crates/iroha_core/src/telemetry.rs:4558`). |
-| `iroha_amx_prepare_ms` | IVM host | p95 ≤ 30 ms per DS scope | Drives `AMX_TIMEOUT` aborts. |
-| `iroha_amx_commit_ms` | IVM host | p95 ≤ 40 ms per DS scope | Covers delta merge + trigger execution. |
-| `iroha_ivm_exec_ms` | IVM host | Alert if >250 ms per lane | Mirrors the IVM overlay chunk execution window. |
-| `iroha_amx_abort_total{stage}` | Executor | Alert if >0.05 aborts/slot or sustained single-stage spikes | Stage labels: `prepare`, `exec`, `commit`. |
-| `iroha_amx_lock_conflicts_total` | AMX scheduler | Alert if >0.1 conflicts/slot | Indicates inaccurate R/W sets. |
-| `iroha_axt_policy_reject_total{lane,reason}` | IVM host | Watch for spikes | Distinguishes manifest/lane/era/sub_nonce/expiry rejects. |
-| `iroha_axt_policy_snapshot_cache_events_total{event}` | IVM host | Expect cache_miss only on startup/manifest change | Sustained misses indicate stale policy hydration. |
-| `iroha_axt_proof_cache_events_total{event}` | IVM host | Expect mostly `hit`/`miss` | `reject`/`expired` spikes usually indicate manifest drift or stale proofs. |
-| `iroha_axt_proof_cache_state{dsid,status,manifest_root_hex,verified_slot}` | IVM host | Inspect cached proofs | Gauge value is expiry_slot (with skew applied) for the cached proof. |
-| Missing availability evidence (`sumeragi_da_gate_block_total{reason="missing_local_data"}`) | Lane telemetry | Alert if >5% of tx per DS | Means attesters or proofs are lagging. |
+|公制/迹线 |来源 | SLO / 警报 |笔记|
+|----------------|--------|-------------|--------|
+| `iroha_slot_duration_ms`（直方图）/`iroha_slot_duration_ms_latest`（仪表）| `iroha_telemetry` | p95 ≤ 1000 毫秒 | Ci 门在 `ans3.md` 中描述。 |
+| `iroha_da_quorum_ratio` | `iroha_telemetry`（提交挂钩）|每 30 分钟窗口 ≥0.95 |源自缺失可用性遥测，因此每个块都会更新仪表（`crates/iroha_core/src/telemetry.rs:3524`，`crates/iroha_core/src/telemetry.rs:4558`）。 |
+| `iroha_amx_prepare_ms` | IVM 主机 |每个 DS 范围 p95 ≤ 30ms |驱动器 `AMX_TIMEOUT` 中止。 |
+| `iroha_amx_commit_ms` | IVM 主机 |每个 DS 范围 p95 ≤ 40ms |涵盖增量合并+触发器执行。 |
+| `iroha_ivm_exec_ms` | IVM 主机 |如果每通道 >250 毫秒，则发出警报 |镜像 IVM 覆盖块执行窗口。 |
+| `iroha_amx_abort_total{stage}` |执行人|如果 >0.05 中止/槽或持续单级尖峰，则发出警报 |阶段标签：`prepare`、`exec`、`commit`。 |
+| `iroha_amx_lock_conflicts_total` | AMX 调度程序 |如果每个槽冲突 >0.1，则发出警报 |表示 R/W 设置不准确。 |
+| `iroha_axt_policy_reject_total{lane,reason}` | IVM 主机 |留意尖峰 |区分manifest/lane/era/sub_nonce/expiry 拒绝。 |
+| `iroha_axt_policy_snapshot_cache_events_total{event}` | IVM 主机 |预计cache_miss仅在启动/清单更改时出现持续的失误表明政策的水分已经过时。 |
+| `iroha_axt_proof_cache_events_total{event}` | IVM 主机 |主要期待 `hit`/`miss` | `reject`/`expired` 峰值通常表示明显的漂移或过时的证明。 |
+| `iroha_axt_proof_cache_state{dsid,status,manifest_root_hex,verified_slot}` | IVM 主机 |检查缓存的证明 |缓存证明的计量值是 expiry_slot （应用了倾斜）。 |
+|缺少可用性证据 (`sumeragi_da_gate_block_total{reason="missing_local_data"}`) |车道遥测|如果每个 DS 的交易量 >5%，则发出警报 |意味着证明者或证明是滞后的。 |
 
-`/v1/debug/axt/cache` mirrors the `iroha_axt_proof_cache_state` gauge with a per-dataspace snapshot (status, manifest root, verified/expiry slots) for operators.
+`/v1/debug/axt/cache` 镜像 `iroha_axt_proof_cache_state` 仪表，并为操作员提供每个数据空间快照（状态、清单根、已验证/到期槽）。
 
-`iroha_amx_commit_ms` and `iroha_ivm_exec_ms` share the same latency buckets as
-`iroha_amx_prepare_ms`. The abort counter tags every rejection with the lane id
-and stage (`prepare` = overlay build/validation, `exec` = IVM chunk execution,
-`commit` = delta merge + trigger replay) so telemetry can highlight whether
-contention comes from read/write mismatches or post-state merges.
+`iroha_amx_commit_ms` 和 `iroha_ivm_exec_ms` 共享相同的延迟桶
+`iroha_amx_prepare_ms`。中止计数器用通道 ID 标记每次拒绝
+和阶段（`prepare` = 覆盖构建/验证，`exec` = IVM 块执行，
+`commit` = 增量合并 + 触发重播），因此遥测可以突出显示是否
+争用来自读/写不匹配或状态后合并。
 
-Operators must archive these metrics for audit alongside slot acceptance evidence and note regressions in `status.md`.
+运营商必须将这些指标与插槽接受证据一起存档以供审核，并在 `status.md` 中记录回归。
 
-### AXT golden fixtures
+### AXT 黄金赛程
 
-Norito fixtures for the descriptor/handle/policy snapshot live at `crates/iroha_data_model/tests/fixtures/axt_golden.rs`, with a regeneration helper in `crates/iroha_data_model/tests/axt_policy_vectors.rs` (`print_golden_vectors`). CoreHost consumes the same fixtures in `core_host_enforces_fixture_snapshot_fields` (`crates/ivm/tests/core_host_policy.rs`) to exercise lane binding, manifest root matching, expiry_slot freshness, handle_era/sub_nonce minima, and missing-dataspace rejections.
-- A multi-dataspace JSON fixture (`crates/iroha_data_model/tests/fixtures/axt_descriptor_multi_ds.json`) pins the descriptor/touch schema, canonical Norito bytes, and Poseidon binding (`compute_descriptor_binding`). The `axt_descriptor_fixture` test guards the encoded bytes, and SDKs can use `AxtDescriptorBuilder::builder` plus `TouchManifest::from_read_write` to assemble deterministic samples for docs/SDKs.
+Norito 描述符/句柄/策略快照的固定装置位于 `crates/iroha_data_model/tests/fixtures/axt_golden.rs`，并在 `crates/iroha_data_model/tests/axt_policy_vectors.rs` (`print_golden_vectors`) 中提供再生帮助程序。 CoreHost 使用 `core_host_enforces_fixture_snapshot_fields` (`crates/ivm/tests/core_host_policy.rs`) 中的相同装置来执行通道绑定、清单根匹配、expiry_slot 新鲜度、handle_era/sub_nonce 最小值和缺失数据空间拒绝。
+- 多数据空间 JSON 固定装置 (`crates/iroha_data_model/tests/fixtures/axt_descriptor_multi_ds.json`) 固定描述符/触摸模式、规范 Norito 字节和 Poseidon 绑定 (`compute_descriptor_binding`)。 `axt_descriptor_fixture` 测试保护编码字节，SDK 可以使用 `AxtDescriptorBuilder::builder` 和 `TouchManifest::from_read_write` 为文档/SDK 组装确定性示例。
 
-### Lane catalog mapping and manifests
+### Lane 目录映射和清单
 
-- AXT policy snapshots are built from the Space Directory manifest set and lane catalog. Each dataspace is mapped to its configured lane; active manifests contribute the manifest hash, activation epoch (`min_handle_era`), and sub-nonce floor. UAID bindings without an active manifest still emit a policy entry with a zeroed manifest root so lane gating remains active until a real manifest lands.
-- `current_slot` in the snapshot is derived from the latest committed block timestamp (`creation_time_ms / slot_length_ms`), falling back to the block height only before a committed header is available.
-- Telemetry surfaces the hydrated snapshot as `iroha_axt_policy_snapshot_version` (lower 64 bits of the Norito-encoded snapshot hash) and cache events via `iroha_axt_policy_snapshot_cache_events_total{event=cache_hit|cache_miss}`. Reject counters use the labels `lane`, `manifest`, `era`, `sub_nonce`, and `expiry` so operators can immediately see which field blocked a handle.
+- AXT 策略快照是根据空间目录清单集和通道目录构建的。每个数据空间都映射到其配置的通道；活动清单提供清单哈希、激活纪元 (`min_handle_era`) 和子随机数下限。没有活动清单的 UAID 绑定仍会发出具有归零清单根的策略条目，因此通道选通保持活动状态，直到真正的清单落地。
+- 快照中的 `current_slot` 源自最新提交的块时间戳 (`creation_time_ms / slot_length_ms`)，仅在提交的标头可用之前回落到块高度。
+- 遥测将水合快照显示为 `iroha_axt_policy_snapshot_version`（Norito 编码快照哈希的低 64 位），并通过 `iroha_axt_policy_snapshot_cache_events_total{event=cache_hit|cache_miss}` 缓存事件。拒绝计数器使用标签 `lane`、`manifest`、`era`、`sub_nonce` 和 `expiry`，因此操作员可以立即查看哪个字段阻止了句柄。
 
-### Cross-dataspace composability checklist
+### 跨数据空间可组合性清单- 确认空间目录中列出的每个数据空间都有通道条目和活动清单；旋转应该在发出新句柄之前刷新绑定和清单根。归零根意味着句柄将保持被拒绝状态，直到清单出现为止，并且主机/块验证现在拒绝呈现归零清单根的句柄。
+- 启动时和空间目录更改后，策略快照指标上预计会出现一个 `cache_miss`，随后是稳定的 `cache_hit` 事件；持续的错过率表明清单提要已过时或丢失。
+- 当句柄被拒绝时，查看 `iroha_axt_policy_reject_total{lane,reason}` 和快照版本，以决定是否请求刷新句柄 (`expiry`/`era`/`sub_nonce`) 或修复通道/清单绑定（`lane`/`manifest`）。 Torii 调试端点 `/v1/debug/axt/cache` 还返回 `reject_hints` 以及 `dataspace`、`target_lane`、`next_min_handle_era` 和 `next_min_sub_nonce`，以便操作员可以在策略碰撞后确定性地刷新句柄。
 
-- Confirm every dataspace listed in the Space Directory has a lane entry and an active manifest; rotation should refresh bindings and manifest roots before issuing new handles. Zeroed roots mean handles will stay denied until manifests are present, and hosts/block validation now reject handles that present zeroed manifest roots.
-- On startup and after Space Directory changes, expect one `cache_miss` followed by steady `cache_hit` events on the policy snapshot metric; a sustained miss rate points to a stale or missing manifest feed.
-- When a handle is rejected, look at `iroha_axt_policy_reject_total{lane,reason}` and the snapshot version to decide whether to request a refreshed handle (`expiry`/`era`/`sub_nonce`) or to repair the lane/manifest binding (`lane`/`manifest`). The Torii debug endpoint `/v1/debug/axt/cache` also returns `reject_hints` with `dataspace`, `target_lane`, `next_min_handle_era`, and `next_min_sub_nonce` so operators can refresh handles deterministically after a policy bump.
+### SDK示例：无令牌出口的远程支出
 
-### SDK sample: remote spend without token egress
+1. 构建一个 AXT 描述符，列出拥有资产的数据空间以及本地所需的任何读/写操作；保持描述符的确定性，以便绑定哈希保持稳定。
+2. 调用 `AXT_TOUCH` 获取具有您期望的清单视图的远程数据空间；如果主机需要，可以选择通过 `AXT_VERIFY_DS_PROOF` 附加证明。
+3. 请求或刷新资产句柄，并使用在远程数据空间内使用的 `RemoteSpendIntent` 调用 `AXT_USE_ASSET_HANDLE`（无桥接腿）。预算执行针对上述快照使用句柄的 `remaining`、`per_use`、`sub_nonce`、`handle_era` 和 `expiry_slot`。
+4.通过`AXT_COMMIT`提交；如果主机返回 `PermissionDenied`，则使用拒绝标签来决定是否获取新句柄（expiry/sub_nonce/era）或修复清单/通道绑定。
 
-1. Build an AXT descriptor listing the dataspace that owns the asset plus any read/write touches required locally; keep the descriptor deterministic so the binding hash stays stable.
-2. Call `AXT_TOUCH` for the remote dataspace with the manifest view you expect; optionally attach a proof via `AXT_VERIFY_DS_PROOF` if the host requires it.
-3. Request or refresh the asset handle and invoke `AXT_USE_ASSET_HANDLE` with a `RemoteSpendIntent` that spends inside the remote dataspace (no bridge leg). Budget enforcement uses the handle’s `remaining`, `per_use`, `sub_nonce`, `handle_era`, and `expiry_slot` against the snapshot described above.
-4. Commit via `AXT_COMMIT`; if the host returns `PermissionDenied`, use the reject label to decide whether to fetch a fresh handle (expiry/sub_nonce/era) or fix the manifest/lane binding.
+## 操作员期望
 
-## Operator Expectations
+1. **时段前准备**
+   - 确保每个配置文件的 DA 证明者池（A=12、B=9、C=7）健康；证明者流失记录在该槽的空间目录快照中。
+   - 在启用新的工作负载组合之前，验证 `iroha_amx_prepare_ms` 是否低于代表性运行者的预算。
 
-1. **Pre-slot readiness**
-   - Ensure DA attester pools per profile (A=12, B=9, C=7) are healthy; attester churn is recorded in the Space Directory snapshot for the slot.
-   - Validate `iroha_amx_prepare_ms` is below budget on representative runners before enabling new workload mixes.
+2. **槽内监控**
+   - 对缺失可用性峰值（两个连续时段> 5%）和 `AMX_TIMEOUT` 发出警报，因为两者都表明错过了预算。
+   - 跟踪 PVO 缓存利用率（`iroha_pvo_cache_hit_ratio`，由证明服务导出）以证明偏离路径验证与提交保持同步。
 
-2. **In-slot monitoring**
-   - Alert on missing-availability spikes (>5% for two consecutive slots) and on `AMX_TIMEOUT` because both indicate missed budgets.
-   - Track PVO cache utilisation (`iroha_pvo_cache_hit_ratio`, exported by the proof service) to prove that off-path verification keeps up with submissions.
+3. **证据捕获**
+   - 将 DA 收据集、AMX 准备直方图和 PVO 缓存报告附加到 `status.md` 引用的夜间工件包。
+   - 每当 DA 抖动、oracle 停止或缓冲区耗尽测试运行时，在 `ops/drill-log.md` 中记录混沌钻取输出。
 
-3. **Evidence capture**
-   - Attach DA receipt sets, AMX prepare histograms, and PVO cache reports to the nightly artefact bundle referenced from `status.md`.
-   - Record chaos drill outputs in `ops/drill-log.md` whenever DA jitter, oracle stalls, or buffer depletion tests run.
+4. **运行手册维护**
+   - 每当 AMX 错误代码或覆盖发生变化时，更新 Android/Swift SDK Runbook，以便客户端团队继承确定性故障语义。
+   - 使配置片段（例如，`iroha_config.amx.*`）与 `docs/source/nexus.md` 中的规范参数保持同步。
 
-4. **Runbook maintenance**
-   - Update the Android/Swift SDK runbooks whenever AMX error codes or overrides change so client teams inherit the deterministic failure semantics.
-   - Keep configuration snippets (e.g., `iroha_config.amx.*`) in sync with the canonical parameters in `docs/source/nexus.md`.
+## 遥测和故障排除
 
-## Telemetry & Troubleshooting
+### 遥测快速参考
 
-### Telemetry quick reference
+|来源 |捕捉什么 |命令/路径|证据预期|
+|--------|-----------------|----------------|------------------------|
+| Prometheus (`iroha_telemetry`) |插槽和 AMX SLO：`iroha_slot_duration_ms`、`iroha_amx_prepare_ms`、`iroha_amx_commit_ms`、`iroha_da_quorum_ratio`、`iroha_amx_abort_total{stage}` |抓取 `https://$TORII/telemetry/metrics` 或从 `docs/source/telemetry.md` 中描述的仪表板导出。 |将直方图快照（以及触发的警报历史记录）附加到夜间 `status.md` 注释中，以便审核员可以查看 p95/p99 值和警报状态。 |
+| Torii RBC 快照 | DA/RBC 积压：每个会话块积压、视图/高度元数据和 DA 可用性计数器（`sumeragi_da_gate_block_total{reason="missing_local_data"}`；`sumeragi_rbc_da_reschedule_total` 是旧版）。 | `GET /v1/sumeragi/rbc` 和 `GET /v1/sumeragi/rbc/sessions`（有关示例，请参阅 `docs/source/samples/sumeragi_rbc_status.md`）。 |每当 AMX DA 警报触发时，存储 JSON 响应（带有时间戳）；将它们包含在事件包中，以便审核人员可以确认背压与遥测相匹配。 |
+|证明服务指标| PVO 缓存运行状况：`iroha_pvo_cache_hit_ratio`、缓存填充/逐出计数器、证明队列深度 | `GET /metrics` 在证明服务 (`IROHA_PVO_METRICS_URL`) 上或通过共享 OTLP 收集器。 |导出缓存命中率和队列深度以及 AMX 插槽指标，以便路线图 OA/PVO 门具有确定性的人工制品。 |
+|验收线束|受控抖动下的端到端混合负载（时隙/DA/RBC/PVO）|重新运行 `ci/acceptance/slot_1s.yml`（或 CI 中的相同作业）并将日志包 + 生成的工件存档在 `artifacts/acceptance/slot_1s/<timestamp>/` 中。 |在 GA 之前以及起搏器/DA 设置更改时需要；在操作员移交数据包中包含 YAML 运行摘要以及 Prometheus 快照。 |
 
-| Source | What to capture | Command / Path | Evidence expectations |
-|--------|-----------------|----------------|-----------------------|
-| Prometheus (`iroha_telemetry`) | Slot and AMX SLOs: `iroha_slot_duration_ms`, `iroha_amx_prepare_ms`, `iroha_amx_commit_ms`, `iroha_da_quorum_ratio`, `iroha_amx_abort_total{stage}` | Scrape `https://$TORII/telemetry/metrics` or export from the dashboards described in `docs/source/telemetry.md`. | Attach histogram snapshots (and alert history if triggered) to the nightly `status.md` note so auditors can see p95/p99 values and alert states. |
-| Torii RBC snapshots | DA/RBC backlog: per-session chunk backlog, view/height metadata, and DA availability counters (`sumeragi_da_gate_block_total{reason="missing_local_data"}`; `sumeragi_rbc_da_reschedule_total` is legacy). | `GET /v1/sumeragi/rbc` and `GET /v1/sumeragi/rbc/sessions` (see `docs/source/samples/sumeragi_rbc_status.md` for examples). | Store the JSON responses (with timestamps) whenever AMX DA alerts fire; include them in the incident bundle so reviewers can confirm that backpressure matched telemetry. |
-| Proof service metrics | PVO cache health: `iroha_pvo_cache_hit_ratio`, cache fill/evict counters, proof queue depth | `GET /metrics` on the proof service (`IROHA_PVO_METRICS_URL`) or via the shared OTLP collector. | Export the cache hit ratio and queue depth alongside the AMX slot metrics so the roadmap OA/PVO gate has deterministic artefacts. |
-| Acceptance harness | End-to-end mixed load (slot/DA/RBC/PVO) under controlled jitter | Re-run `ci/acceptance/slot_1s.yml` (or the same job in CI) and archive the log bundle + generated artefacts in `artifacts/acceptance/slot_1s/<timestamp>/`. | Required before GA and whenever pacemaker/DA settings change; include the YAML run summary plus the Prometheus snapshots in the operator hand-off packet. |
+### 故障排除手册
 
-### Troubleshooting playbook
+|症状|先检查|建议补救措施|
+|--------|-------------|--------------------------|
+| `iroha_slot_duration_ms` p95 爬行超过 1000ms |从 `/telemetry/metrics` 导出 Prometheus 加上最新的 `/v1/sumeragi/rbc` 快照以确认 DA 延期；与最后一个 `ci/acceptance/slot_1s.yml` 工件进行比较。 |降低 AMX 批量大小或启用额外的 RBC 收集器 (`sumeragi.collectors.k`)，然后重新运行验收工具并捕获新的遥测证据。 |
+|缺少可用性峰值 | `/v1/sumeragi/rbc/sessions` 积压字段（`lane_backlog`、`dataspace_backlog`）以及证明者运行状况仪表板。 |移除不健康的证明者，暂时增加`redundant_send_r`以加快交付速度，并在`status.md`中发布修复说明。积压工作清除后，附上更新的 RBC 快照。 |
+|收据中频繁出现 `PVO_MISSING_OR_EXPIRED` |证明服务缓存指标 + 发行者的 PVO 调度程序日志。 |重新生成过时的 PVO 工件，缩短旋转节奏，并确保每个 SDK 在 `expiry_slot` 之前刷新手柄。在证据包中包含证明服务指标以证明缓存已恢复。 |
+|重复 `AMX_LOCK_CONFLICT` 或 `AMX_TIMEOUT` | `iroha_amx_lock_conflicts_total`、`iroha_amx_prepare_ms` 以及受影响的交易清单。 |重新运行 Norito 静态分析器，更正读/写选择器（或拆分批次），并发布更新的清单固定装置，以便冲突计数器返回到基线。 |
+| `SETTLEMENT_ROUTER_UNAVAILABLE` 警报 |结算路由器日志 (`docs/settlement-router.md`)、金库缓冲区仪表板和受影响的收据。 |充值 XOR 缓冲区或将通道翻转为仅 XOR 模式，记录财务操作，并重新运行时隙验收测试以证明结算已恢复。 |
 
-| Symptom | Inspect first | Recommended remediation |
-|---------|---------------|--------------------------|
-| `iroha_slot_duration_ms` p95 creeps above 1 000 ms | Prometheus export from `/telemetry/metrics` plus the latest `/v1/sumeragi/rbc` snapshot to confirm DA deferrals; compare against the last `ci/acceptance/slot_1s.yml` artefact. | Lower AMX batch sizes or enable additional RBC collectors (`sumeragi.collectors.k`), then rerun the acceptance harness and capture the new telemetry evidence. |
-| Missing availability spike | `/v1/sumeragi/rbc/sessions` backlog fields (`lane_backlog`, `dataspace_backlog`) alongside attester health dashboards. | Remove unhealthy attesters, temporarily increase `redundant_send_r` to speed up delivery, and publish the remediation notes in `status.md`. Attach updated RBC snapshots once the backlog clears. |
-| Frequent `PVO_MISSING_OR_EXPIRED` in receipts | Proof service cache metrics + the issuer’s PVO scheduler logs. | Regenerate stale PVO artefacts, shorten the rotation cadence, and ensure every SDK refreshes the handle before `expiry_slot`. Include the proof-service metrics in the evidence bundle to prove the cache recovered. |
-| Repeated `AMX_LOCK_CONFLICT` or `AMX_TIMEOUT` | `iroha_amx_lock_conflicts_total`, `iroha_amx_prepare_ms`, and the affected transaction manifests. | Re-run the Norito static analyzer, correct the read/write selectors (or split the batch), and publish the updated manifest fixtures so the conflict counter returns to baseline. |
-| `SETTLEMENT_ROUTER_UNAVAILABLE` alerts | Settlement router logs (`docs/settlement-router.md`), treasury buffer dashboards, and the affected receipts. | Top up XOR buffers or flip the lane to XOR-only mode, document the treasury action, and rerun the slot acceptance test to prove settlement resumed. |
+### AXT 拒绝信号
 
-### AXT rejection signals
+- 原因代码捕获为 `AxtRejectReason`（`lane`、`manifest`、`era`、`sub_nonce`、`expiry`、`missing_policy`、 `policy_denied`、`proof`、`budget`、`replay_cache`、`descriptor`、`duplicate`）。块验证现在显示 `AxtEnvelopeValidationFailed { message, reason, snapshot_version }`，因此事件可以将拒绝固定到特定的策略快照。
+- `/v1/debug/axt/cache` 返回 `{ policy_snapshot_version, last_reject, cache, hints }`，其中 `last_reject` 携带最近主机拒绝的通道/原因/版本，`hints` 提供 `next_min_handle_era`/`next_min_sub_nonce` 刷新指导以及缓存的证明状态。
+- 警报模板：当 `iroha_axt_policy_reject_total{reason="manifest"}` 或 `{reason="expiry"}` 在 5 分钟窗口内出现峰值时出现页面，将 `last_reject` 快照 + `policy_snapshot_version` 从 Torii 调试端点附加到事件，并使用提示有效负载在重试之前请求刷新句柄。
 
-- Reason codes are captured as `AxtRejectReason` (`lane`, `manifest`, `era`, `sub_nonce`, `expiry`, `missing_policy`, `policy_denied`, `proof`, `budget`, `replay_cache`, `descriptor`, `duplicate`). Block validation now surfaces `AxtEnvelopeValidationFailed { message, reason, snapshot_version }`, so incidents can pin the rejection to a specific policy snapshot.
-- `/v1/debug/axt/cache` returns `{ policy_snapshot_version, last_reject, cache, hints }`, where `last_reject` carries the lane/reason/version of the most recent host rejection and `hints` provide `next_min_handle_era`/`next_min_sub_nonce` refresh guidance alongside the cached proof state.
-- Alert template: page when `iroha_axt_policy_reject_total{reason="manifest"}` or `{reason="expiry"}` spikes over a 5‑minute window, attach the `last_reject` snapshot + `policy_snapshot_version` from the Torii debug endpoint to the incident, and use the hint payload to request refreshed handles before retrying.
+## 证明验证对象 (PVO)
 
-## Proof Verification Objects (PVOs)
+### 结构
 
-### Structure
+PVO 是 Norito 编码的信封，可让客户提前证明繁重的工作。规范字段是：
 
-PVOs are Norito-encoded envelopes that let clients prove heavy work ahead of time. The canonical fields are:
+|领域|描述 |
+|--------|-------------|
+| `circuit_id` |证明系统/声明的静态标识符（例如，`amx.transfer.v1`）。 |
+| `vk_hash` | DS 清单引用的验证密钥的 Blake2b-256 哈希值。 |
+| `proof_digest` |存储在时隙外 PVO 注册表中的序列化证明有效负载的波塞冬摘要。 |
+| `max_k` | AIR 域的上限；主机拒绝超过广告大小的证明。 |
+| `expiry_slot` |槽位高度，超过该高度后工件无效；将过时的证明排除在车道之外。 |
+| `profile` |可选提示（例如 DS 配置文件 A/B/C）可帮助调度程序批量共享配置文件的校样。 |
 
-| Field | Description |
-|-------|-------------|
-| `circuit_id` | Static identifier for the proof system/statement (e.g., `amx.transfer.v1`). |
-| `vk_hash` | Blake2b-256 hash of the verifying key referenced by the DS manifest. |
-| `proof_digest` | Poseidon digest of the serialized proof payload stored in the off-slot PVO registry. |
-| `max_k` | Upper bound on the AIR domain; hosts reject proofs exceeding the advertised size. |
-| `expiry_slot` | Slot height after which the artefact is invalid; keeps stale proofs out of lanes. |
-| `profile` | Optional hint (e.g., DS profile A/B/C) to help schedulers batch proofs that share a profile. |
+Norito 架构位于 `crates/iroha_data_model/src/nexus` 中的数据模型定义旁边，因此 SDK 无需 serde 即可派生它。
 
-The Norito schema lives beside the data model definitions in `crates/iroha_data_model/src/nexus` so SDKs can derive it without serde.
+### 生成管道1. **编译电路元数据** — 从证明者构建中导出 `circuit_id`、验证密钥和最大迹线大小（通常通过 `fastpq_prover` 报告）。
+2. **生成证明工件** — 运行时隙外证明器并存储完整的成绩单和承诺。
+3. **通过证明服务注册** — 将 Norito PVO 有效负载提交到时隙外验证器（请参阅路线图 NX-17 证明管道）。该服务验证一次，固定摘要，并通过 Torii 公开句柄。
+4. **交易中的参考** — 将 PVO 句柄附加到 AMX 构建器（`amx_touch` 或更高级别的 SDK 帮助程序）。主机查找摘要，验证缓存的结果，并且仅在缓存变冷时才在槽内重新计算。
+5. **到期时轮换** — SDK 必须在 `expiry_slot` 之前刷新任何缓存的句柄。过期对象会触发 `PVO_MISSING_OR_EXPIRED`。
 
-### Generation pipeline
+### 开发人员清单
 
-1. **Compile circuit metadata** — Export `circuit_id`, verifying key, and max trace size from your prover build (usually via `fastpq_prover` reports).
-2. **Produce proof artefacts** — Run the out-of-slot prover and store full transcripts plus commitments.
-3. **Register via the proof service** — Submit the Norito PVO payload to the off-slot verifier (see roadmap NX-17 proof pipeline). The service verifies once, pins the digest, and exposes the handle via Torii.
-4. **Reference in transactions** — Attach the PVO handle to AMX builders (`amx_touch` or higher-level SDK helpers). Hosts look up the digest, verify the cached result, and only recompute inside the slot if the cache is cold.
-5. **Rotate on expiry** — SDKs must refresh any cached handle before `expiry_slot`. Expired objects trigger `PVO_MISSING_OR_EXPIRED`.
+- 准确声明读/写集，以便 AMX 可以预取锁并避免 `AMX_LOCK_CONFLICT`。
+- 当跨 DS 传输触及受监管的 DS 时，将确定性津贴证明捆绑在同一 UAID 清单更新中。
+- 重试策略：缺少可用性证据→不采取任何行动（交易保留在内存池中）； `AMX_TIMEOUT` 或 `PVO_MISSING_OR_EXPIRED` → 重建工件并以指数方式回退。
+- 测试应包括缓存命中和冷启动（强制主机使用相同的 `max_k` 验证证明）以防止确定性回归。
+- 证明 blob (`ProofBlob`) 必须编码 `AxtProofEnvelope { dsid, manifest_root, da_commitment?, proof }`；主机将证明绑定到空间目录清单根，并使用 `iroha_axt_proof_cache_events_total{event="hit|miss|expired|reject|cleared"}` 缓存每个数据空间/槽的通过/失败结果。过期或清单不匹配的工件在提交之前会被拒绝，并在缓存的 `reject` 上的同一插槽短路中进行后续重试。
+- 证明缓存重用是槽范围的：经过验证的证明在同一槽内的信封上保持热状态，并在槽前进时自动逐出，因此重试保持确定性。
 
-### Developer checklist
+### 静态读/写分析器
 
-- Declare read/write sets accurately so AMX can prefetch locks and avoid `AMX_LOCK_CONFLICT`.
-- Bundle deterministic allowance proofs in the same UAID manifest update when cross-DS transfers touch regulated DSes.
-- Retrying strategy: missing availability evidence → no action (the tx stays in mempool); `AMX_TIMEOUT` or `PVO_MISSING_OR_EXPIRED` → rebuild artefacts and back off exponentially.
-- Tests should include both cache hits and cold starts (forcing the host to verify the proof with the same `max_k`) to guard against determinism regressions.
-- Proof blobs (`ProofBlob`) MUST encode an `AxtProofEnvelope { dsid, manifest_root, da_commitment?, proof }`; hosts bind proofs to the Space Directory manifest root and cache pass/fail results per dataspace/slot with `iroha_axt_proof_cache_events_total{event="hit|miss|expired|reject|cleared"}`. Expired or manifest-mismatched artefacts are rejected before commit and subsequent retries in the same slot short-circuit on the cached `reject`.
-- Proof cache reuse is slot-scoped: verified proofs stay hot across envelopes within the same slot and are evicted automatically when the slot advances so retries remain deterministic.
+编译时选择器必须匹配合约的实际行为，然后 AMX 才能
+预取锁或应用 UAID 清单。新的`ivm::analysis`模块
+(`crates/ivm/src/analysis.rs`) 公开 `analyze_program(&[u8])`，它解码
+`.to` 人工制品，记录寄存器读/写、内存操作和系统调用使用情况，
+并生成 SDK 清单可以嵌入的 JSON 友好的报告。运行它
+发布 UAID 时与 `koto_lint` 一起，因此生成的读/写摘要为
+在 NX-17 准备情况审查期间引用的证据包中捕获。
 
-### Static read/write analyzer
+## 空间目录策略执行
 
-Compile-time selectors must match the contract’s actual behaviour before AMX can
-prefetch locks or apply UAID manifests. The new `ivm::analysis` module
-(`crates/ivm/src/analysis.rs`) exposes `analyze_program(&[u8])` which decodes a
-`.to` artefact, tallies register reads/writes, memory ops, and syscall usage,
-and produces a JSON-friendly report that the SDK manifests can embed. Run it
-alongside `koto_lint` when publishing UAIDs so the generated R/W summary is
-captured in the evidence bundle referenced during NX-17 readiness reviews.
+当主机有权访问空间目录快照时，AXT 句柄验证现在默认为空间目录快照（测试中的 CoreHost，集成流程中的 WsvHost）。每个数据空间策略条目包含 `manifest_root`、`target_lane`、`min_handle_era`、`min_sub_nonce` 和 `current_slot`。主办方强制执行：
 
-## Space Directory policy enforcement
+- 通道绑定：句柄 `target_lane` 必须与空间目录条目匹配；
+- 清单绑定：非零 `manifest_root` 值必须与句柄的 `manifest_view_root` 匹配；
+- 过期：`current_slot`大于句柄的`expiry_slot`被拒绝；
+- 计数器：`handle_era` 和 `sub_nonce` 必须至少为广告的最小值；
+- 成员身份：拒绝快照中不存在的数据空间的句柄。
 
-AXT handle verification now defaults to the Space Directory snapshot when the host has access to it (CoreHost in tests, WsvHost in integration flows). Per-dataspace policy entries carry `manifest_root`, `target_lane`, `min_handle_era`, `min_sub_nonce`, and `current_slot`. Hosts enforce:
+故障映射到 `PermissionDenied`，`crates/ivm/tests/core_host_policy.rs` 中的 CoreHost 策略快照测试涵盖每个字段的允许/拒绝情况。
+块验证还需要每个数据空间的非空证明，其中 `expiry_slot` 覆盖策略槽（具有配置的偏差限额）并且在句柄之前不会过期，强制描述符绑定以及声明规范的触摸清单（并拒绝前缀外的条目），检查句柄意图不变量（非零金额、范围/主题对齐和非零era/sub_nonce/expiry），聚合每个数据空间的句柄预算，以及当信封提交时，`min_handle_era`/`min_sub_nonce` 会提前，因此即使在空间目录重建之后，重播的子随机数也会被拒绝。
 
-- lane binding: handle `target_lane` must match the Space Directory entry;
-- manifest binding: non-zero `manifest_root` values must match the handle’s `manifest_view_root`;
-- expiry: `current_slot` greater than the handle’s `expiry_slot` is rejected;
-- counters: `handle_era` and `sub_nonce` must be at least the advertised minima;
-- membership: handles for dataspaces absent from the snapshot are denied.
+## 错误目录
 
-Failures map to `PermissionDenied`, and the CoreHost policy snapshot tests in `crates/ivm/tests/core_host_policy.rs` cover allow/deny cases for each field.
-Block validation also requires non-empty proofs per dataspace with `expiry_slot` covering the policy slot (with the configured skew allowance) and not expiring before the handle, enforces descriptor binding plus touch manifests for declared specs (and rejects out-of-prefix entries), checks handle intent invariants (non-zero amounts, scope/subject alignment, and non-zero era/sub_nonce/expiry), aggregates handle budgets per dataspace, and advances `min_handle_era`/`min_sub_nonce` as envelopes commit so replayed sub-nonces are rejected even after Space Directory rebuilds.
+规范代码位于 `crates/iroha_data_model/src/errors.rs` 中。操作员必须在指标/日志中逐字显示它们，并且 SDK 应该将它们映射到可操作的重试。
 
-## Error Catalog
+|代码|触发|操作员回应 | SDK指导|
+|------|---------|--------------------|--------------|
+|缺少可用性证据（遥测）| 300 毫秒前验证的证明者收据少于 `q`。 |检查证明者的健康状况，扩大下一个槽的采样参数，保持事务排队，并捕获缺少可用性计数器以获取运行手册证据。 |没有行动；重试会自动发生，因为 tx 保持排队状态。 |
+| `DA_DEADLINE_EXCEEDED` | Δ 窗口期已过，但未达到 DA 法定人数。 |辞职违规证明者，发布事件记录，强迫客户重新提交。 |证明者返回后重建交易；考虑拆分批次。 |
+| `AMX_TIMEOUT` |每个 DS 切片的准备/提交组合时间超过 250 毫秒。 |捕获火焰图、验证 R/W 集并与 `iroha_amx_prepare_ms` 进行比较。 |使用较小的批次或减少争用后重试。 |
+| `AMX_LOCK_CONFLICT` |主机检测到重叠的写入集或无信号的触摸。 |检查UAID清单和静态分析报告；如果缺少选择器则更新清单。 |使用更正的读/写声明重新编译事务。 |
+| `PVO_MISSING_OR_EXPIRED` |引用的 PVO 句柄不在缓存中或位于 `expiry_slot` 之前。 |检查证明服务积压、重新生成工件并验证 Torii 索引。 |刷新证明工件并使用新句柄重新提交。 |
+| `RWSET_UNBOUNDED` |静态分析无法绑定读/写选择器。 |拒绝部署，记录选择器堆栈跟踪，要求开发人员在重试之前修复。 |更新合约以发出显式选择器。 |
+| `HEAVY_INSTRUCTION_DISALLOWED` |合约调用了 AMX 通道禁止的指令（例如，没有 PVO 的大型 FFT）。 |确保 Norito 构建器在重新启用之前使用批准的操作码集。 |分割工作负载或添加预先计算的证明。 |
+| `SETTLEMENT_ROUTER_UNAVAILABLE` |路由器无法计算确定性转换（路径丢失、缓冲区耗尽）。 |让 Treasury 重新填充缓冲区或翻转仅 XOR 模式；记录在结算操作手册中。 |缓冲区警报清除后重试；显示面向用户的警告。 |
 
-Canonical codes live in `crates/iroha_data_model/src/errors.rs`. Operators must surface them verbatim in metrics/logs, and SDKs should map them to actionable retries.
+SDK 团队应在集成测试中镜像这些代码，以便 `iroha_cli`、Android、Swift、JS 和 Python 表面就错误文本和建议的操作达成一致。
 
-| Code | Trigger | Operator response | SDK guidance |
-|------|---------|-------------------|--------------|
-| Missing availability evidence (telemetry) | Fewer than `q` attester receipts verified before 300 ms. | Inspect attester health, widen sampling parameters for next slot, keep the transaction queued, and capture the missing-availability counters for runbook evidence. | No action; retry happens automatically because the tx stays enqueued. |
-| `DA_DEADLINE_EXCEEDED` | Δ window elapsed without meeting DA quorum. | Resign offending attesters, publish incident note, force clients to resubmit. | Rebuild transaction once attesters are back; consider splitting the batch. |
-| `AMX_TIMEOUT` | Combined prepare/commit exceeded 250 ms per DS slice. | Capture flamegraphs, verify R/W sets, and compare against `iroha_amx_prepare_ms`. | Retry with smaller batch or after reducing contention. |
-| `AMX_LOCK_CONFLICT` | Host detected overlapping write sets or unsignaled touches. | Inspect UAID manifests and static analysis reports; update manifests if missing selectors. | Recompile transaction with corrected read/write declarations. |
-| `PVO_MISSING_OR_EXPIRED` | Referenced PVO handle not in cache or past `expiry_slot`. | Check proof service backlog, regenerate artefact, and verify Torii indexes. | Refresh proof artefact and resubmit with the new handle. |
-| `RWSET_UNBOUNDED` | Static analysis could not bound a read/write selector. | Reject deployment, log selector stack trace, require developer fix before retry. | Update contract to emit explicit selectors. |
-| `HEAVY_INSTRUCTION_DISALLOWED` | Contract invoked an instruction banned from AMX lanes (e.g., large FFT without PVO). | Make sure Norito builder uses the approved opcode set before re-enabling. | Split workload or add a pre-computed proof. |
-| `SETTLEMENT_ROUTER_UNAVAILABLE` | Router could not compute deterministic conversion (missing path, buffer drained). | Engage Treasury to refill buffers or flip XOR-only mode; record in settlement runbook. | Retry after buffer alert clears; show user-facing warning. |
+### AXT 拒绝可观察性
 
-SDK teams should mirror these codes in integration tests so `iroha_cli`, Android, Swift, JS, and Python surfaces agree on error text and recommended actions.
+- Torii 将策略失败显示为 `ValidationFail::AxtReject`（并将块验证显示为 `AxtEnvelopeValidationFailed`），具有稳定原因标签、活动 `snapshot_version`、可选 `lane`/`dataspace` 标识符以及提示字段`next_min_handle_era`/`next_min_sub_nonce`。 SDK 应该向用户冒泡这些字段，以便可以确定性地刷新过时的句柄。
+- Torii 现在还使用 `X-Iroha-Axt-*` 标头标记 HTTP 响应，以便快速分类：`Code`/`Reason`、`Snapshot-Version`、`Dataspace`、`Lane` 和可选`Next-Handle-Era`/`Next-Sub-Nonce`。 ISO 桥接拒绝带有匹配的 `PRTRY:AXT_*` 原因代码和相同的详细字符串，因此仪表板和操作员可以在 AXT 故障类别中键入警报，而无需解码完整的有效负载。
+- 主机使用相同字段记录 `AXT policy rejection recorded` 并通过遥测导出它们：`iroha_axt_policy_reject_total{lane,reason}` 计数拒绝，`iroha_axt_policy_snapshot_version` 跟踪活动快照的哈希值。证明缓存状态仍然可以通过 `/v1/debug/axt/cache`（数据空间/状态/​​清单根/插槽）获得。
+- 警报：监视由 `reason` 分组的 `iroha_axt_policy_reject_total` 中的峰值，并从日志/ValidationFail 中使用 `snapshot_version` 进行分页，以确认操作员是否需要轮换清单（通道/清单拒绝）或刷新句柄（era/sub_nonce/expiry）。将警报与证明缓存端点配对，以确认拒绝是与缓存相关还是与策略相关。
 
-### AXT rejection observability
+## 测试与证据
 
-- Torii surfaces policy failures as `ValidationFail::AxtReject` (and block validation as `AxtEnvelopeValidationFailed`) with a stable reason label, the active `snapshot_version`, optional `lane`/`dataspace` identifiers, and hint fields for `next_min_handle_era`/`next_min_sub_nonce`. SDKs should bubble these fields to users so stale handles can be refreshed deterministically.
-- Torii now also stamps HTTP responses with `X-Iroha-Axt-*` headers for quick triage: `Code`/`Reason`, `Snapshot-Version`, `Dataspace`, `Lane`, and optional `Next-Handle-Era`/`Next-Sub-Nonce`. ISO bridge rejections carry matching `PRTRY:AXT_*` reason codes and the same detail strings so dashboards and operators can key alerts off the AXT failure class without decoding the full payload.
-- Hosts log `AXT policy rejection recorded` with the same fields and export them via telemetry: `iroha_axt_policy_reject_total{lane,reason}` counts rejects, and `iroha_axt_policy_snapshot_version` tracks the hash of the active snapshot. Proof cache state remains available via `/v1/debug/axt/cache` (dataspace/status/manifest root/slots).
-- Alerting: watch for spikes in `iroha_axt_policy_reject_total` grouped by `reason` and page with the `snapshot_version` from logs/ValidationFail to confirm whether operators need to rotate manifests (lane/manifest rejects) or refresh handles (era/sub_nonce/expiry). Pair alerts with the proof-cache endpoint to confirm whether rejects are cache-related or policy-related.
+- CI 必须运行 `ci/acceptance/slot_1s.yml` 套件（30 分钟混合工作负载），并且当不满足插槽/DA/遥测阈值时合并失败，如 `ans3.md` 中所述。
+- 混沌演习（证明者抖动、预言机停顿、缓冲区耗尽）必须至少每季度执行一次，且工件存档在 `ops/drill-log.md` 下。
+- 状态更新应包括：最新的插槽 SLO 报告、突出的错误峰值以及最新 PVO 缓存快照的链接，以便路线图利益相关者可以审核准备情况。
 
-## Testing & Evidence
-
-- CI must run the `ci/acceptance/slot_1s.yml` suite (30 min mixed workloads) and fail merges when the slot/DA/telemetry thresholds are not met, as spelled out in `ans3.md`.
-- Chaos drills (attester jitter, oracle stalls, buffer depletion) must be executed at least quarterly with artefacts archived under `ops/drill-log.md`.
-- Status updates should include: most recent slot SLO report, outstanding error spikes, and a link to the latest PVO cache snapshot so roadmap stakeholders can audit readiness.
-
-By following this guide, contributors satisfy the roadmap requirement for AMX documentation and give operators and developers a single reference for timing, telemetry, and PVO workflows.
+通过遵循本指南，贡献者可以满足 AMX 文档的路线图要求，并为操作员和开发人员提供计时、遥测和 PVO 工作流程的单一参考。

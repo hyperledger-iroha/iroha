@@ -4,116 +4,118 @@ direction: ltr
 source: docs/portal/docs/sorafs/provider-admission-policy.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-> Adapted from [`docs/source/sorafs/provider_admission_policy.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/provider_admission_policy.md).
+> ከ[`docs/source/sorafs/provider_admission_policy.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/provider_admission_policy.md) የተወሰደ።
 
-# SoraFS Provider Admission & Identity Policy (SF-2b Draft)
+# SoraFS የአቅራቢ መግቢያ እና የማንነት ፖሊሲ (SF-2b ረቂቅ)
 
-This note captures the actionable deliverables for **SF-2b**: defining and
-enforcing the admission workflow, identity requirements, and attestation
-payloads for SoraFS storage providers. It expands the high-level process
-outlined in the SoraFS Architecture RFC and breaks the remaining work into
-trackable engineering tasks.
+ይህ ማስታወሻ ለ **SF-2b** ተግባራዊ ሊሆኑ የሚችሉ አቅርቦቶችን ይይዛል፡ መግለፅ እና
+የመግቢያ የስራ ሂደትን፣ የማንነት መስፈርቶችን እና ማረጋገጫን ማስፈጸም
+ለSoraFS ማከማቻ አቅራቢዎች የሚከፈል ጭነት። የከፍተኛ ደረጃ ሂደቱን ያሰፋዋል
+በI18NT0000011X Architecture RFC ውስጥ ተዘርዝሯል እና የቀረውን ስራ ወደ
+መከታተል የሚችሉ የምህንድስና ተግባራት.
 
-## Policy Goals
+## የፖሊሲ ግቦች
 
-- Ensure only vetted operators can publish `ProviderAdvertV1` records that the
-  network will accept.
-- Bind every advertisement key to a governance-approved identity document,
-  attested endpoints, and minimum stake contribution.
-- Provide deterministic verification tooling so Torii, gateways, and
-  `sorafs-node` enforce the same checks.
-- Support renewal and emergency revocation without breaking determinism or
-  tooling ergonomics.
+- የተረጋገጡ ኦፕሬተሮች ብቻ የ `ProviderAdvertV1` መዝገቦችን ማተም እንደሚችሉ ያረጋግጡ
+  አውታረ መረብ ይቀበላል.
+- እያንዳንዱን የማስታወቂያ ቁልፍ በአስተዳደር ከተረጋገጠ የማንነት ሰነድ ጋር ማሰር፣
+  የተመሰከረላቸው የመጨረሻ ነጥቦች፣ እና ዝቅተኛው የካስማ መዋጮ።
+- Torii፣ መግቢያ መንገዶች እና የማረጋገጫ መሳሪያዎችን ያቅርቡ
+  `sorafs-node` ተመሳሳይ ቼኮችን ያስፈጽማል።
+- እድሳት እና የአደጋ ጊዜ መሻርን ይደግፉ ቆራጥነት ሳይጣሱ ወይም
+  መሣሪያ ergonomics.
 
-## Identity & Stake Requirements
+## የማንነት እና የካስማ መስፈርቶች
 
-| Requirement | Description | Deliverable |
-|-------------|-------------|-------------|
-| Advertisement key provenance | Providers must register an Ed25519 keypair that signs every advert. The admission bundle stores the public key alongside a governance signature. | Extend `ProviderAdmissionProposalV1` schema with `advert_key` (32 bytes) and reference it from the registry (`sorafs_manifest::provider_admission`). |
-| Stake pointer | Admission requires a non-zero `StakePointer` pointing at an active staking pool. | Add validation in `sorafs_manifest::provider_advert::StakePointer::validate()` and surface errors in CLI/tests. |
-| Jurisdiction tags | Providers declare jurisdiction + legal contact. | Extend proposal schema with a `jurisdiction_code` (ISO 3166-1 alpha-2) and optional `contact_uri`. |
-| Endpoint attestation | Each advertised endpoint must be backed by an mTLS or QUIC certificate report. | Define `EndpointAttestationV1` Norito payload and store per endpoint inside the admission bundle. |
+| መስፈርት | መግለጫ | ሊደርስ የሚችል |
+|------------|------------|------------|
+| የማስታወቂያ ቁልፍ provenance | አቅራቢዎች እያንዳንዱን ማስታወቂያ የሚፈርም የ Ed25519 ኪይ ጥንድ መመዝገብ አለባቸው። የመግቢያ ቅርቅቡ የህዝብ ቁልፉን ከአስተዳደር ፊርማ ጋር ያከማቻል። | የ`ProviderAdmissionProposalV1` እቅድን ከI18NI0000029X (32 ባይት) ጋር ያራዝሙ እና ከመዝገቡ (`sorafs_manifest::provider_admission`) ያጣቅሱት። |
+| የካስማ ጠቋሚ | መግቢያ ዜሮ ያልሆነ I18NI0000031X ወደ ገባሪ ስቴኪንግ ገንዳ የሚያመለክት ያስፈልገዋል። | በ`sorafs_manifest::provider_advert::StakePointer::validate()` ውስጥ ማረጋገጫን እና የገጽታ ስህተቶችን በCLI/ሙከራዎች ይጨምሩ። |
+| ስልጣን መለያዎች | አቅራቢዎች ስልጣንን + ህጋዊ ግንኙነትን ያውጃሉ። | ከ`jurisdiction_code` (ISO 3166-1 alpha-2) እና ከተፈለገ `contact_uri` ጋር የፕሮፖዛል እቅድን ያራዝሙ። |
+| የመጨረሻ ነጥብ ማረጋገጫ | እያንዳንዱ የማስታወቂያ የመጨረሻ ነጥብ በmTLS ወይም QUIC ሰርተፍኬት ሪፖርት መደገፍ አለበት። | `EndpointAttestationV1` I18NT0000000X ክፍያን ይግለጹ እና በእያንዳንዱ የመጨረሻ ነጥብ በመግቢያ ቅርቅብ ውስጥ ያከማቹ። |
 
-## Admission Workflow
+## የመግቢያ የስራ ፍሰት
 
-1. **Proposal creation**
-   - CLI: add `cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission proposal …`
-     producing `ProviderAdmissionProposalV1` + attestation bundle.
-   - Validation: ensure required fields, stake > 0, canonical chunker handle in `profile_id`.
-2. **Governance endorsement**
-   - Council signs `blake3("sorafs-provider-admission-v1" || canonical_bytes)` using existing
-     envelope tooling (`sorafs_manifest::governance` module).
-   - Envelope is persisted to `governance/providers/<provider_id>/admission.json`.
-3. **Registry ingestion**
-   - Implement a shared verifier (`sorafs_manifest::provider_admission::validate_envelope`)
-     that Torii/gateways/CLI re-use.
-   - Update Torii admission path to reject adverts whose digest or expiry differs from the envelope.
-4. **Renewal & revocation**
-   - Add `ProviderAdmissionRenewalV1` with optional endpoint/stake updates.
-   - Expose a `--revoke` CLI path that records the revocation reason and pushes a governance event.
+1. ** ፕሮፖዛል መፍጠር ***
+   - CLI: `cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission proposal …` ይጨምሩ
+     `ProviderAdmissionProposalV1` + የማረጋገጫ ጥቅል በማዘጋጀት ላይ።
+   - ማረጋገጫ፡ አስፈላጊ የሆኑትን መስኮች፣ አክሲዮን> 0፣ ቀኖናዊ ቻንከር እጀታ በ`profile_id`።
+2. **የመንግስት ድጋፍ**
+   - ካውንስል `blake3("sorafs-provider-admission-v1" || canonical_bytes)` ነባሩን በመጠቀም ይፈርማል
+     የኤንቨሎፕ መሳሪያ (`sorafs_manifest::governance` ሞጁል)።
+   - ኤንቨሎፕ እስከ `governance/providers/<provider_id>/admission.json` ድረስ ይቆያል።
+3. **የመዝገብ ቤት መግባት**
+   - የጋራ አረጋጋጭ ይተግብሩ (`sorafs_manifest::provider_admission::validate_envelope`)
+     ያ Torii / ጌትዌይስ / CLI እንደገና ጥቅም ላይ ይውላል.
+   - የመግቢያ መንገዱን ያዘምኑ Torii ማስታዎቂያዎችን ላለመቀበል የምግብ መፈጨት ወይም የአገልግሎት ጊዜው ከፖስታው የሚለይ።
+4. ** መታደስ እና መሻር**
+   - `ProviderAdmissionRenewalV1` ከአማራጭ የመጨረሻ ነጥብ/የካስማ ዝማኔዎች ጋር ይጨምሩ።
+   - የተሻረበትን ምክንያት የሚመዘግብ እና የአስተዳደር ክስተትን የሚገፋውን የI18NI0000044X CLI ዱካ ያጋልጡ።
 
-## Implementation Tasks
+## የትግበራ ተግባራት
 
-| Area | Task | Owner(s) | Status |
-|------|------|----------|--------|
-| Schema | Define `ProviderAdmissionProposalV1`, `ProviderAdmissionEnvelopeV1`, `EndpointAttestationV1` (Norito) under `crates/sorafs_manifest/src/provider_admission.rs`. Implemented in `sorafs_manifest::provider_admission` with validation helpers.【F:crates/sorafs_manifest/src/provider_admission.rs#L1】 | Storage / Governance | ✅ Completed |
-| CLI tooling | Extend `sorafs_manifest_stub` with subcommands: `provider-admission proposal`, `provider-admission sign`, `provider-admission verify`. | Tooling WG | ✅ |
+| አካባቢ | ተግባር | ባለቤት(ዎች) | ሁኔታ |
+|-------------|-------|----|
+| እቅድ | `ProviderAdmissionProposalV1`፣ `ProviderAdmissionEnvelopeV1`፣ `EndpointAttestationV1` (Norito) በI18NI0000048X ይግለጹ። በI18NI0000049X ከማረጋገጫ ረዳቶች ጋር ተተግብሯል።【F:crates/sorafs_manifest/src/provider_admission.rs#L1】 | ማከማቻ / አስተዳደር | ✅ ተጠናቀቀ |
+| CLI መሳሪያ | `sorafs_manifest_stub`ን በንዑስ ትዕዛዞች ያራዝሙ፡ `provider-admission proposal`፣ `provider-admission sign`፣ `provider-admission verify`። | Tooling WG | ✅ |
 
-The CLI flow now accepts intermediate certificate bundles (`--endpoint-attestation-intermediate`), emits
-canonical proposal/envelope bytes, and validates council signatures during `sign`/`verify`. Operators can
-provide advert bodies directly, or reuse signed adverts, and signature files may be supplied by pairing
-`--council-signature-public-key` with `--council-signature-file` for automation friendliness.
+የCLI ፍሰት አሁን መካከለኛ የምስክር ወረቀት ቅርቅቦችን (`--endpoint-attestation-intermediate`) ይቀበላል።
+ቀኖናዊ ፕሮፖዛል/የኤንቨሎፕ ባይት፣ እና የምክር ቤት ፊርማዎችን በ`sign`/`verify` ጊዜ ያረጋግጣል። ኦፕሬተሮች ይችላሉ።
+የማስታወቂያ አካላትን በቀጥታ ያቅርቡ ወይም የተፈረሙ ማስታወቂያዎችን እንደገና ይጠቀሙ እና የፊርማ ፋይሎች በማጣመር ሊቀርቡ ይችላሉ
+`--council-signature-public-key` ከ `--council-signature-file` ጋር ለአውቶሜሽን ወዳጃዊነት።
 
-### CLI Reference
+### የ CLI ማጣቀሻ
 
-Run each command via `cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission …`.
+እያንዳንዱን ትዕዛዝ በ I18NI0000059X በኩል ያሂዱ።
 
 - `proposal`
-  - Required flags: `--provider-id=<hex32>`, `--chunker-profile=<namespace.name@semver>`,
-    `--stake-pool-id=<hex32>`, `--stake-amount=<amount>`, `--advert-key=<hex32>`,
-    `--jurisdiction-code=<ISO3166-1>`, and at least one `--endpoint=<kind:host>`.
-  - Per-endpoint attestation expects `--endpoint-attestation-attested-at=<secs>`,
-    `--endpoint-attestation-expires-at=<secs>`, a certificate via
-    `--endpoint-attestation-leaf=<path>` (plus optional `--endpoint-attestation-intermediate=<path>`
-    for each chain element) and any negotiated ALPN IDs
-    (`--endpoint-attestation-alpn=<token>`). QUIC endpoints may supply transport reports with
+  - አስፈላጊ ባንዲራዎች፡ I18NI0000061X፣ `--chunker-profile=<namespace.name@semver>`፣
+    `--stake-pool-id=<hex32>`፣ `--stake-amount=<amount>`፣ `--advert-key=<hex32>`፣
+    `--jurisdiction-code=<ISO3166-1>`፣ እና ቢያንስ አንድ I18NI0000067X።
+  - በየመጨረሻ ነጥብ ማረጋገጫ `--endpoint-attestation-attested-at=<secs>` ይጠብቃል፣
+    `--endpoint-attestation-expires-at=<secs>`፣ በ በኩል የምስክር ወረቀት
+    `--endpoint-attestation-leaf=<path>` (ከአማራጭ `--endpoint-attestation-intermediate=<path>` በተጨማሪ
+    ለእያንዳንዱ ሰንሰለት አባል) እና ማንኛውም የተደራደሩ ALPN መታወቂያዎች
+    (`--endpoint-attestation-alpn=<token>`)። የQUIC የመጨረሻ ነጥቦች የትራንስፖርት ሪፖርቶችን ሊያቀርቡ ይችላሉ።
     `--endpoint-attestation-report[-hex]=…`.
-  - Output: canonical Norito proposal bytes (`--proposal-out`) and a JSON summary
-    (default stdout or `--json-out`).
+  - ውፅዓት፡ ቀኖናዊ Norito ፕሮፖዛል ባይት (`--proposal-out`) እና የJSON ማጠቃለያ
+    (ነባሪ stdout ወይም `--json-out`)።
 - `sign`
-  - Inputs: a proposal (`--proposal`), a signed advert (`--advert`), optional advert body
-    (`--advert-body`), retention epoch, and at least one council signature. Signatures can be provided
-    inline (`--council-signature=<signer_hex:signature_hex>`) or via files by combining
-    `--council-signature-public-key` with `--council-signature-file=<path>`.
-  - Produces a validated envelope (`--envelope-out`) and JSON report indicating digest bindings,
-    signer count, and input paths.
+  - ግብዓቶች፡ ፕሮፖዛል (`--proposal`)፣ የተፈረመ ማስታወቂያ (`--advert`)፣ አማራጭ የማስታወቂያ አካል
+    (`--advert-body`)፣ የማቆየት ዘመን፣ እና ቢያንስ አንድ የምክር ቤት ፊርማ። ፊርማዎችን ማቅረብ ይቻላል
+    inline (`--council-signature=<signer_hex:signature_hex>`) ወይም በፋይሎች በማጣመር
+    `--council-signature-public-key` ከ `--council-signature-file=<path>` ጋር።
+  - የተረጋገጠ ኤንቨሎፕ (`--envelope-out`) እና የJSON ዘገባ የምግብ መፈጨት ትስስርን ያሳያል።
+    የፈራሚ ብዛት፣ እና የግቤት መንገዶች።
 - `verify`
-  - Validates an existing envelope (`--envelope`), optionally checking the matching proposal,
-    advert, or advert body. The JSON report highlights digest values, signature verification status,
-    and which optional artefacts matched.
+  - ያለውን ኤንቨሎፕ (`--envelope`) ያረጋግጣል፣ እንደ አማራጭ የሚዛመደውን ፕሮፖዛል በማጣራት፣
+    አካልን ማስተዋወቅ ወይም ማስተዋወቅ። የJSON ሪፖርቱ የመፍጨት እሴቶችን፣ የፊርማ ማረጋገጫ ሁኔታን፣
+    እና ከየትኞቹ አማራጭ ቅርሶች ጋር ይጣጣማሉ።
 - `renewal`
-  - Links a newly approved envelope to the previously ratified digest. Requires
-    `--previous-envelope=<path>` and the successor `--envelope=<path>` (both Norito payloads).
-    The CLI verifies that profile aliases, capabilities, and advert keys remain unchanged while
-    allowing stake, endpoints, and metadata updates. Outputs the canonical
-    `ProviderAdmissionRenewalV1` bytes (`--renewal-out`) plus a JSON summary.
+  - አዲስ የጸደቀ ኤንቨሎፕ ከዚህ ቀደም ከተረጋገጠው የምግብ መፍጨት ጋር ያገናኛል። ይፈልጋል
+    `--previous-envelope=<path>` እና ተተኪው `--envelope=<path>` (ሁለቱም Norito ጭነት)።
+    CLI የመገለጫ ተለዋጭ ስሞች፣ ችሎታዎች እና የማስታወቂያ ቁልፎች ሳይለወጡ እንደሚቆዩ ያረጋግጣል
+    የአክሲዮን፣ የመጨረሻ ነጥቦችን እና የሜታዳታ ዝመናዎችን መፍቀድ። ቀኖናዊውን ያወጣል።
+    `ProviderAdmissionRenewalV1` ባይት (I18NI0000090X) እና የJSON ማጠቃለያ።
 - `revoke`
-  - Issues an emergency `ProviderAdmissionRevocationV1` bundle for a provider whose envelope must
-    be withdrawn. Requires `--envelope=<path>`, `--reason=<text>`, at least one
-    `--council-signature`, and optional `--revoked-at`/`--notes`. The CLI signs and validates the
-    revocation digest, writes the Norito payload via `--revocation-out`, and prints a JSON report
-    capturing the digest and signature count.
-| Verification | Implement shared verifier used by Torii, gateways, and `sorafs-node`. Provide unit + CLI integration tests.【F:crates/sorafs_manifest/src/provider_admission.rs#L1】【F:crates/iroha_torii/src/sorafs/admission.rs#L1】 | Networking TL / Storage | ✅ Completed |
-| Torii integration | Thread verifier into Torii advertisement ingestion, reject out-of-policy adverts, emit telemetry. | Networking TL | ✅ Completed | Torii now loads governance envelopes (`torii.sorafs.admission_envelopes_dir`), verifies digest/signature matches during ingestion, and surfaces admission telemetry.【F:crates/iroha_torii/src/sorafs/admission.rs#L1】【F:crates/iroha_torii/src/sorafs/discovery.rs#L1】【F:crates/iroha_torii/src/sorafs/api.rs#L1】 |
-| Renewal | Add renewal / revocation schema + CLI helpers, publish lifecycle guide in docs (see runbook below and CLI commands in `provider-admission renewal`/`revoke`).【crates/sorafs_car/src/bin/sorafs_manifest_stub/provider_admission.rs#L477】【docs/source/sorafs/provider_admission_policy.md:120】 | Storage / Governance | ✅ Completed |
-| Telemetry | Define `provider_admission` dashboards & alerts (missing renewal, envelope expiry). | Observability | 🟠 In progress | Counter `torii_sorafs_admission_total{result,reason}` exists; dashboards/alerts pending.【F:crates/iroha_telemetry/src/metrics.rs#L3798】【F:docs/source/telemetry.md#L614】 |
-### Renewal & Revocation Runbook
+  - ፖስታው ላለበት አገልግሎት አቅራቢ የድንገተኛ I18NI0000092X ጥቅል ያወጣል።
+    መወገድ አለባቸው ። `--envelope=<path>`፣ `--reason=<text>`፣ ቢያንስ አንድ ያስፈልገዋል
+    `--council-signature`፣ እና አማራጭ I18NI0000096X/I18NI0000097X። CLI ይፈርማል እና ያረጋግጣል
+    የስረዛ መፍጨት፣ የNorito ክፍያን በI18NI0000098X ይጽፋል እና የJSON ሪፖርት ያትማል።
+    የምግብ መፍጫውን እና የፊርማውን ብዛት በመያዝ.
+| ማረጋገጫ | በTorii፣ ጌትዌይስ እና `sorafs-node` ጥቅም ላይ የዋለውን የጋራ አረጋጋጭ ተግብር። ክፍል + CLI ውህደት ሙከራዎችን ያቅርቡ።【F: crates/sorafs_manifest/src/provider_admission.rs#L1】【F:crates/iroha_torii/src/sorafs/admission.rs#L1】 | አውታረ መረብ TL / ማከማቻ | ✅ ተጠናቀቀ |
+| Torii ውህደት | የክር አረጋጋጭ ወደ I18NT0000017X ማስታወቂያ ማስገባት፣ ከፖሊሲ ውጪ ማስታወቂያዎችን አለመቀበል፣ ቴሌሜትሪ ልቀት። | አውታረ መረብ TL | ✅ ተጠናቀቀ | Torii አሁን የአስተዳደር ኤንቨሎፖችን (`torii.sorafs.admission_envelopes_dir`) ይጭናል፣ ወደ ውስጥ በሚገቡበት ጊዜ የምግብ መፈጨት/ፊርማ ግጥሚያዎችን ያረጋግጣል፣ እና የገጽታ መግቢያ telemetry.【F: crates/iroha_torii/src/sorafs/admission.rs#L1】【F:crates/iroha_torii/src/sorafs/discovery.rs#L1】【F:crates/iroha_torii/src/sorafs/api.rs#L1】 |
+| መታደስ | የእድሳት/የመሻሪያ እቅድ + CLI ረዳቶችን ያክሉ፣ የህይወት ኡደት መመሪያን በሰነዶች ውስጥ ያትሙ (ከዚህ በታች ያለውን runbook ይመልከቱ እና የ CLI ትዕዛዞች በ ውስጥ `provider-admission renewal`/`revoke`)【crates/sorafs_car/src/bin/sorafs_manifest_stub/provider_admission.rs#L477】【ዶክመንቶች/ምንጭ/sorafs/አቅራቢ_መመሪያ፡120】 ማከማቻ / አስተዳደር | ✅ ተጠናቀቀ |
+| ቴሌሜትሪ | `provider_admission` ዳሽቦርዶችን እና ማንቂያዎችን ይግለጹ (የጠፋ እድሳት፣ የኤንቨሎፕ ጊዜ ማብቂያ)። | ታዛቢነት | 🟠 በሂደት ላይ | ቆጣሪ `torii_sorafs_admission_total{result,reason}` አለ; ዳሽቦርዶች/ማንቂያዎች በመጠባበቅ ላይ።【F: crates/iroha_telemetry/src/metrics.rs#L3798】【F:docs/source/telemetry.md#L614】 |
+### እድሳት እና መሻር Runbook
 
-#### Scheduled renewal (stake/topology updates)
-1. Build the successor proposal/advert pair with `provider-admission proposal` and `provider-admission sign`, increasing `--retention-epoch` and updating stake/endpoints as required.
-2. Execute  
+#### የታቀደ እድሳት (የካስማ/የቶፖሎጂ ዝመናዎች)
+1. የተተኪውን ፕሮፖዛል/ማስታወቂያ ጥንድ ከ`provider-admission proposal` እና `provider-admission sign` ጋር ይገንቡ፣ `--retention-epoch` በመጨመር እና እንደአስፈላጊነቱ የአክሲዮን/የመጨረሻ ነጥቦችን ያዘምኑ።
+2. መፈጸም  
    ```bash
    cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission \
      renewal \
@@ -123,15 +125,15 @@ Run each command via `cargo run -p sorafs_manifest --bin sorafs_manifest_stub --
      --json-out=governance/providers/<id>/renewal.json \
      --notes="stake top-up 2025-03"
    ```
-   The command validates unchanged capability/profile fields via
-   `AdmissionRecord::apply_renewal`, emits `ProviderAdmissionRenewalV1`, and prints digests for the
-   governance log.【crates/sorafs_car/src/bin/sorafs_manifest_stub/provider_admission.rs#L477】【F:crates/sorafs_manifest/src/provider_admission.rs#L422】
-3. Replace the previous envelope in `torii.sorafs.admission_envelopes_dir`, commit the renewal Norito/JSON to the governance repository, and append the renewal hash + retention epoch to `docs/source/sorafs/migration_ledger.md`.
-4. Notify operators that the new envelope is live and monitor `torii_sorafs_admission_total{result="accepted",reason="stored"}` to confirm ingestion.
-5. Regenerate and commit the canonical fixtures via `cargo run -p sorafs_car --bin provider_admission_fixtures --features cli`; CI (`ci/check_sorafs_fixtures.sh`) validates the Norito outputs stay stable.
+   ትዕዛዙ ያልተለወጠ የችሎታ/የመገለጫ መስኮችን ያረጋግጣል
+   `AdmissionRecord::apply_renewal`፣ `ProviderAdmissionRenewalV1` ያወጣል፣ እና የምግብ መፈጨትን ያትማል ለ
+   የአስተዳደር መዝገብ
+3. የቀደመውን ፖስታ በ`torii.sorafs.admission_envelopes_dir` ይቀይሩት ፣እድሳቱን Norito/JSON በአስተዳደር ማከማቻው ላይ ያድርጉ እና የእድሳት ሀሽ + ማቆየት ዘመንን ከI18NI000001111X ጋር ጨምሩ።
+4. አዲሱ ፖስታ የቀጥታ ስርጭት መሆኑን ለኦፕሬተሮች ያሳውቁ እና `torii_sorafs_admission_total{result="accepted",reason="stored"}` መያዙን ያረጋግጡ።
+5. በ `cargo run -p sorafs_car --bin provider_admission_fixtures --features cli` በኩል የቀኖና ዕቃዎችን እንደገና ማደስ እና ማከናወን; CI (`ci/check_sorafs_fixtures.sh`) የNorito ውፅዓቶች ተረጋግተው እንዲቆዩ ያረጋግጣል።
 
-#### Emergency revocation
-1. Identify the compromised envelope and issue a revocation:
+#### የአደጋ መሻር
+1. የተጠለፈውን ኤንቨሎፕ ይለዩ እና መሻሪያውን ይስጡ፡-
    ```bash
    cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission \
      revoke \
@@ -143,30 +145,28 @@ Run each command via `cargo run -p sorafs_manifest --bin sorafs_manifest_stub --
      --revocation-out=governance/providers/<id>/revocation.to \
      --json-out=governance/providers/<id>/revocation.json
    ```
-   The CLI signs the `ProviderAdmissionRevocationV1`, verifies the signature set via
-   `verify_revocation_signatures`, and reports the revocation digest.【crates/sorafs_car/src/bin/sorafs_manifest_stub/provider_admission.rs#L593】【F:crates/sorafs_manifest/src/provider_admission.rs#L486】
-2. Remove the envelope from `torii.sorafs.admission_envelopes_dir`, distribute the revocation Norito/JSON to admission caches, and record the reason hash in the governance minutes.
-3. Watch `torii_sorafs_admission_total{result="rejected",reason="admission_missing"}` to confirm caches drop the revoked advert; keep the revocation artefacts in incident retrospectives.
+   CLI `ProviderAdmissionRevocationV1` ይፈርማል፣ የተቀመጠውን ፊርማ በ በኩል ያረጋግጣል
+   `verify_revocation_signatures`፣ እና የስረዛ መፍቻውን ሪፖርት ያደርጋል።【crates/sorafs_car/src/bin/sorafs_manifest_stub/provider_admission.rs#L593】【F:crates/sorafs_manifest/src/አቅራቢ_አድሚሽን.rs#486
+2. ፖስታውን ከ`torii.sorafs.admission_envelopes_dir` ያስወግዱ፣ መሻሪያውን Norito/JSON ወደ መግቢያ መሸጎጫዎች ያሰራጩ እና ምክንያቱን ሃሽ በአስተዳደር ደቂቃዎች ውስጥ ይመዝግቡ።
+3. መሸጎጫዎች የተሻረውን ማስታወቂያ መጣሉን ለማረጋገጥ `torii_sorafs_admission_total{result="rejected",reason="admission_missing"}` ይመልከቱ። የተሰረዙ ቅርሶችን ወደ ኋላ መለስ ብለው ያቆዩት።
 
-## Testing & Telemetry
-
-- Add golden fixtures for admission proposals and envelopes under
+## ሙከራ እና ቴሌሜትሪ- ለመግቢያ ፕሮፖዛል እና ኤንቨሎፕ ለታች ወርቃማ ዕቃዎችን ይጨምሩ
   `fixtures/sorafs_manifest/provider_admission/`.
-- Extend CI (`ci/check_sorafs_fixtures.sh`) to regenerate proposals and verify envelopes.
-- Generated fixtures include `metadata.json` with canonical digests; downstream tests assert
+- ፕሮፖዛሎችን ለማደስ እና ፖስታዎችን ለማረጋገጥ CI (`ci/check_sorafs_fixtures.sh`) ያራዝሙ።
+- የመነጩ መጫዎቻዎች `metadata.json` ከቀኖናዊ የምግብ መፍጫዎች ጋር; የታችኛው ተፋሰስ ሙከራዎች ያረጋግጣሉ
   `proposal_digest_hex` == `ca8e73a1f319ae83d7bd958ccb143f9b790c7e4d9c8dfe1f6ad37fa29facf936`.
-- Provide integration tests:
-  - Torii rejects adverts with missing or expired admission envelopes.
-  - CLI round-trips a proposal → envelope → verification.
-  - Governance renewal rotates endpoint attestation without changing provider ID.
-- Telemetry requirements:
-  - Emit `provider_admission_envelope_{accepted,rejected}` counters in Torii. ✅ `torii_sorafs_admission_total{result,reason}` now surfaces accepted/rejected outcomes.
-  - Add expiry warnings to observability dashboards (renewal due within 7 days).
+- የውህደት ሙከራዎችን ያቅርቡ;
+  - Torii የጎደሉ ወይም ጊዜው ያለፈባቸው የመግቢያ ኤንቨሎፖች ማስታወቂያዎችን ውድቅ ያደርጋል።
+  - CLI የዙር ጉዞዎች ፕሮፖዛል → ኤንቨሎፕ → ማረጋገጫ።
+  - የአስተዳደር መታደስ የአቅራቢ መታወቂያ ሳይለውጥ የመጨረሻ ነጥብ ማረጋገጫን ይሽከረከራል።
+- የቴሌሜትሪ መስፈርቶች;
+  - ኢምት `provider_admission_envelope_{accepted,rejected}` ቆጣሪዎች በ I18NT0000020X። ✅ `torii_sorafs_admission_total{result,reason}` አሁን ወደላይ ቀርቧል/የተቀበሉት ውጤቶች።
+  - የማለፊያ ማስጠንቀቂያዎችን ወደ ታዛቢነት ዳሽቦርዶች ያክሉ (በ7 ቀናት ውስጥ መታደስ ያስፈልጋል)።
 
-## Next Steps
+## ቀጣይ እርምጃዎች
 
-1. ✅ Finalised the Norito schema changes and landed validation helpers in
-   `sorafs_manifest::provider_admission`. No feature flags required.
-2. ✅ CLI workflows (`proposal`, `sign`, `verify`, `renewal`, `revoke`) are documented and exercised via integration tests; keep governance scripts in sync with the runbook.
-3. ✅ Torii admission/discovery ingest the envelopes and expose telemetry counters for acceptance/rejection.
-4. Focus on observability: finish the admission dashboards/alerts so renewals due within seven days raise warnings (`torii_sorafs_admission_total`, expiry gauges).
+1. ✅ የNorito የመርሃግብር ለውጦችን አጠናቅቋል እና የማረጋገጫ አጋዥዎችን በ
+   `sorafs_manifest::provider_admission`. ምንም የባህሪ ባንዲራዎች አያስፈልግም።
+2. ✅ CLI የስራ ፍሰቶች (`proposal`, `sign`, `verify`, `renewal`, `revoke`) በመዋሃድ ፈተናዎች አማካይነት ተመዝግበው ይሠራሉ; የአስተዳደር ስክሪፕቶችን ከ runbook ጋር ማመሳሰል።
+3. ✅ Torii መግቢያ/ግኝት ፖስታዎቹን አስገብቶ የቴሌሜትሪ ቆጣሪዎችን ለመቀበል/ለመቀበል ያጋልጣል።
+4. በታዛቢነት ላይ ያተኩሩ፡ የመግቢያ ዳሽቦርዶችን/ማስጠንቀቂያዎችን ይጨርሱ ስለዚህ በሰባት ቀናት ውስጥ የሚደረጉ እድሳት ማስጠንቀቂያዎችን ያሳድጋል (`torii_sorafs_admission_total`፣ ጊዜው ያለፈበት መለኪያዎች)።

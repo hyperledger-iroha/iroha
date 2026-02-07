@@ -8,62 +8,64 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: W1 partner preflight plan
 sidebar_label: W1 plan
 description: Tasks, owners, and evidence checklist for the partner preview cohort.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-| Item | Details |
+| ნივთი | დეტალები |
 | --- | --- |
-| Wave | W1 — Partners & Torii integrators |
-| Target window | Q2 2025 week 3 |
-| Artefact tag (planned) | `preview-2025-04-12` |
-| Tracker issue | `DOCS-SORA-Preview-W1` |
+| ტალღა | W1 — პარტნიორები და Torii ინტეგრატორები |
+| სამიზნე ფანჯარა | Q2 2025 კვირა 3 |
+| არტეფაქტის ტეგი (დაგეგმილი) | `preview-2025-04-12` |
+| ტრეკერის საკითხი | `DOCS-SORA-Preview-W1` |
 
-## Objectives
+## მიზნები
 
-1. Secure legal + governance approvals for partner preview terms.
-2. Stage the Try it proxy and telemetry snapshots used in the invite bundle.
-3. Refresh the checksum-verified preview artefact and probe results.
-4. Finalise the partner roster + request templates before invites are sent.
+1. დაიცავით პარტნიორის გადახედვის პირობების სამართლებრივი + მმართველობის დამტკიცებები.
+2. დადგმეთ Try it proxy და ტელემეტრიის სნეპშოტები, რომლებიც გამოიყენება მოწვევის პაკეტში.
+3. განაახლეთ საკონტროლო ჯამით დამოწმებული წინასწარი გადახედვის არტეფაქტი და გამოძიების შედეგები.
+4. დაასრულეთ პარტნიორების სია + მოთხოვნის შაბლონები მოწვევის გაგზავნამდე.
 
-## Task breakdown
+## დავალების დაშლა
 
-| ID | Task | Owner | Due | Status | Notes |
+| ID | ამოცანა | მფლობელი | ვადა | სტატუსი | შენიშვნები |
 | --- | --- | --- | --- | --- | --- |
-| W1-P1 | Obtain legal approval for the preview terms addendum | Docs/DevRel lead → Legal | 2025‑04‑05 | ✅ Completed | Legal ticket `DOCS-SORA-Preview-W1-Legal` signed off 2025‑04‑05; PDF attached to the tracker. |
-| W1-P2 | Capture Try it proxy staging window (2025‑04‑10) and validate proxy health | Docs/DevRel + Ops | 2025‑04‑06 | ✅ Completed | `npm run manage:tryit-proxy -- --stage preview-w1 --expires-in=21d --target https://tryit-preprod.sora` executed 2025‑04‑06; CLI transcript + `.env.tryit-proxy.bak` archived. |
-| W1-P3 | Build preview artefact (`preview-2025-04-12`), run `scripts/preview_verify.sh` + `npm run probe:portal`, archive descriptor/checksums | Portal TL | 2025‑04‑08 | ✅ Completed | Artefact + verification logs stored under `artifacts/docs_preview/W1/preview-2025-04-12/`; probe output attached to tracker. |
-| W1-P4 | Review partner intake forms (`DOCS-SORA-Preview-REQ-P01…P08`), confirm contacts + NDAs | Governance liaison | 2025‑04‑07 | ✅ Completed | All eight requests approved (last two cleared 2025‑04‑11); approvals linked in tracker. |
-| W1-P5 | Draft invite copy (based on `docs/examples/docs_preview_invite_template.md`), set `<preview_tag>` and `<request_ticket>` for each partner | Docs/DevRel lead | 2025‑04‑08 | ✅ Completed | Invite draft sent 2025‑04‑12 15:00 UTC alongside artefact links. |
+| W1-P1 | მიიღეთ კანონიერი დამტკიცება წინასწარი გადახედვის პირობების დამატებაზე | Docs/DevRel წამყვანი → Legal | 2025-04-05 | ✅ დასრულებული | იურიდიული ბილეთი `DOCS-SORA-Preview-W1-Legal` გაფორმებულია 2025-04-05; PDF მიმაგრებულია ტრეკერზე. |
+| W1-P2 | გადაიღეთ სცადეთ პროქსის დადგმის ფანჯარა (2025-04-10) და დაადასტურეთ პროქსის ჯანმრთელობა | Docs/DevRel + Ops | 2025-04-06 | ✅ დასრულებული | `npm run manage:tryit-proxy -- --stage preview-w1 --expires-in=21d --target https://tryit-preprod.sora` შესრულებული 2025-04-06; CLI ტრანსკრიპტი + `.env.tryit-proxy.bak` დაარქივებულია. |
+| W1-P3 | შექმენით წინასწარი გადახედვის არტეფაქტი (`preview-2025-04-12`), გაუშვით `scripts/preview_verify.sh` + `npm run probe:portal`, არქივის აღმწერი/შემოწმების ჯამები | პორტალი TL | 2025-04-08 | ✅ დასრულებული | `artifacts/docs_preview/W1/preview-2025-04-12/`-ში შენახული არტეფაქტი + ვერიფიკაციის ჟურნალები; ზონდის გამომავალი მიმაგრებულია ტრეკერზე. |
+| W1-P4 | პარტნიორის მიღების ფორმების გადახედვა (`DOCS-SORA-Preview-REQ-P01…P08`), დაადასტურეთ კონტაქტები + NDA | მმართველობითი კავშირი | 2025-04-07 | ✅ დასრულებული | რვავე მოთხოვნა დამტკიცდა (ბოლო ორი გაწმენდილი 2025-04-11); დამტკიცებები დაკავშირებულია ტრეკერში. |
+| W1-P5 | მოწვევის ასლის პროექტი (`docs/examples/docs_preview_invite_template.md`-ზე დაყრდნობით), კომპლექტი `<preview_tag>` და `<request_ticket>` თითოეული პარტნიორისთვის | Docs/DevRel წამყვანი | 2025-04-08 | ✅ დასრულებული | მოწვევის მონახაზი გაიგზავნა 2025-04-12 15:00UTC არტეფაქტის ბმულებთან ერთად. |
 
-## Preflight checklist
+## ფრენის წინ საკონტროლო სია
 
-> Tip: run `scripts/preview_wave_preflight.sh --tag preview-2025-04-12 --base-url https://preview.staging.sora --descriptor artifacts/preview-2025-04-12/descriptor.json --archive artifacts/preview-2025-04-12/docs-portal-preview.tar.zst --tryit-target https://tryit-proxy.staging.sora --output-json artifacts/preview-2025-04-12/preflight-summary.json` to execute steps 1‑5 automatically (build, checksum verification, portal probe, link checker, and Try it proxy update). The script records a JSON log you can attach to the tracker issue.
+> რჩევა: გაუშვით `scripts/preview_wave_preflight.sh --tag preview-2025-04-12 --base-url https://preview.staging.sora --descriptor artifacts/preview-2025-04-12/descriptor.json --archive artifacts/preview-2025-04-12/docs-portal-preview.tar.zst --tryit-target https://tryit-proxy.staging.sora --output-json artifacts/preview-2025-04-12/preflight-summary.json` 1-5 ნაბიჯების ავტომატურად შესასრულებლად (აშენება, საკონტროლო ჯამის დადასტურება, პორტალის გამოკვლევა, ბმულის შემოწმება და სცადეთ პროქსის განახლება). სკრიპტი ჩაწერს JSON ჟურნალს, რომელიც შეგიძლიათ დაურთოთ ტრეკერის პრობლემას.
 
-1. `npm run build` (with `DOCS_RELEASE_TAG=preview-2025-04-12`) to regenerate `build/checksums.sha256` and `build/release.json`.
+1. `npm run build` (`DOCS_RELEASE_TAG=preview-2025-04-12`-ით) `build/checksums.sha256` და `build/release.json`-ის რეგენერაციისთვის.
 2. `docs/portal/scripts/preview_verify.sh --build-dir docs/portal/build --descriptor artifacts/<tag>/descriptor.json --archive artifacts/<tag>/docs-portal-preview.tar.zst`.
 3. `PORTAL_BASE_URL=https://preview.staging.sora DOCS_RELEASE_TAG=preview-2025-04-12 npm run probe:portal -- --expect-release=preview-2025-04-12`.
-4. `DOCS_RELEASE_TAG=preview-2025-04-12 npm run check:links` and archive `build/link-report.json` beside the descriptor.
-5. `npm run manage:tryit-proxy -- update --target https://tryit-proxy.staging.sora` (or provide the appropriate target via `--tryit-target`); commit the updated `.env.tryit-proxy` and keep the `.bak` for rollback.
-6. Update the W1 tracker issue with log paths (descriptor checksum, probe output, Try it proxy change, Grafana snapshots).
+4. `DOCS_RELEASE_TAG=preview-2025-04-12 npm run check:links` და დაარქივეთ `build/link-report.json` აღწერის გვერდით.
+5. `npm run manage:tryit-proxy -- update --target https://tryit-proxy.staging.sora` (ან მიაწოდეთ შესაბამისი სამიზნე `--tryit-target`-ის მეშვეობით); ჩააბარეთ განახლებული `.env.tryit-proxy` და შეინახეთ `.bak` უკან დასაბრუნებლად.
+6. განაახლეთ W1 ტრეკერის საკითხი ჟურნალის ბილიკებით (აღმწერის შემოწმების ჯამი, გამოძიების გამომავალი, სცადეთ პროქსის შეცვლა, Grafana სნეპშოტები).
 
-## Evidence checklist
+## მტკიცებულებათა ჩამონათვალი
 
-- [x] Signed legal approval (PDF or ticket link) attached to `DOCS-SORA-Preview-W1`.
-- [x] Grafana screenshots for `docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals`.
-- [x] `preview-2025-04-12` descriptor + checksum log stored under `artifacts/docs_preview/W1/`.
-- [x] Invite roster table with `invite_sent_at` timestamps populated (see tracker W1 log).
-- [x] Feedback artifacts mirrored in [`preview-feedback/w1/log.md`](./log.md) with one row per partner (updated 2025-04-26 with roster/telemetry/issue data).
+- [x] ხელმოწერილი იურიდიული დამტკიცება (PDF ან ბილეთის ბმული) მიმაგრებული `DOCS-SORA-Preview-W1`-ზე.
+- [x] Grafana ეკრანის ანაბეჭდები `docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals`.
+- [x] `preview-2025-04-12` აღმწერი + საკონტროლო ჯამის ჟურნალი, რომელიც ინახება `artifacts/docs_preview/W1/`-ში.
+- [x] მოიწვიეთ ჩამონათვალის ცხრილი `invite_sent_at` დროის შტამპებით დასახლებული (იხილეთ ტრეკერის W1 ჟურნალი).
+- [x] გამოხმაურების არტეფაქტები ასახულია [`preview-feedback/w1/log.md`]-ში (./log.md) თითო მწკრივით თითო პარტნიორთან (განახლებულია 2025-04-26 სიაში/ტელემეტრია/გამოშვების მონაცემებით).
 
-Update this plan as tasks progress; the tracker references it to keep the roadmap
-auditable.
+განაახლეთ ეს გეგმა, როგორც ამოცანები პროგრესირებს; ტრეკერი მიუთითებს მას საგზაო რუქის შესანარჩუნებლად
+აუდიტორული.
 
-## Feedback workflow
+## უკუკავშირის სამუშაო პროცესი
 
-1. For each reviewer, duplicate the template in
+1. თითოეული მიმომხილველისთვის, დააკოპირეთ შაბლონი
    [`docs/examples/docs_preview_feedback_form.md`](../../../../../examples/docs_preview_feedback_form.md),
-   fill the metadata, and store the completed copy under
+   შეავსეთ მეტამონაცემები და შეინახეთ დასრულებული ასლი ქვემოთ
    `artifacts/docs_preview/W1/preview-2025-04-12/feedback/<partner-id>/`.
-2. Summarise invites, telemetry checkpoints, and open issues inside the live log at
-   [`preview-feedback/w1/log.md`](./log.md) so governance reviewers can replay the entire wave
-   without leaving the repository.
-3. When knowledge-check or survey exports arrive, attach them in the artefact path noted in the log
-   and cross-link the tracker issue.
+2. შეაჯამეთ მოწვევები, ტელემეტრიის საგუშაგოები და ღია საკითხები პირდაპირ ჟურნალში
+   [`preview-feedback/w1/log.md`](./log.md), რათა მმართველობის მიმომხილველებმა შეძლონ მთელი ტალღის გამეორება
+   საცავიდან გაუსვლელად.
+3. როდესაც ცოდნის შემოწმების ან კვლევის ექსპორტი მოდის, მიამაგრეთ ისინი ჟურნალში მითითებული არტეფაქტის გზაზე
+   და დააკავშირეთ ტრეკერის საკითხი.

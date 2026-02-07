@@ -9,32 +9,33 @@ source_last_modified: "2025-12-29T18:16:35.067551+00:00"
 translation_last_reviewed: 2026-02-07
 title: Try It Sandbox Guide
 summary: How to run the Torii staging proxy and developer portal sandbox.
+translator: machine-google-reviewed
 ---
 
-The developer portal ships a “Try it” console for the Torii REST API. This guide
-explains how to launch the supporting proxy and connect the console to a staging
-gateway without exposing credentials.
+დეველოპერის პორტალი აგზავნის „სცადე“ კონსოლს Torii REST API-სთვის. ეს სახელმძღვანელო
+განმარტავს, თუ როგორ უნდა გაუშვათ დამხმარე პროქსი და დააკავშიროთ კონსოლი დადგმას
+კარიბჭე რწმუნებათა სიგელების გამოვლენის გარეშე.
 
-## Prerequisites
+## წინაპირობები
 
-- Iroha repository checkout (workspace root).
-- Node.js 18.18+ (matches the portal baseline).
-- Torii endpoint reachable from your workstation (staging or local).
+- Iroha საცავის შეკვეთა (სამუშაო სივრცის ფესვი).
+- Node.js 18.18+ (ემთხვევა პორტალის საწყისს).
+- Torii საბოლოო წერტილი ხელმისაწვდომია თქვენი სამუშაო სადგურიდან (დადგმული ან ადგილობრივი).
 
-## 1. Generate the OpenAPI snapshot (optional)
+## 1. შექმენით OpenAPI სნეპშოტი (სურვილისამებრ)
 
-The console reuses the same OpenAPI payload as the portal reference pages. If
-you have changed Torii routes, regenerate the snapshot:
+კონსოლი ხელახლა იყენებს იმავე OpenAPI დატვირთვას, როგორც პორტალის საცნობარო გვერდებს. თუ
+თქვენ შეცვალეთ Torii მარშრუტები, განაახლეთ სნეპშოტი:
 
 ```bash
 cargo xtask openapi
 ```
 
-The task writes `docs/portal/static/openapi/torii.json`.
+დავალება წერს `docs/portal/static/openapi/torii.json`.
 
-## 2. Start the Try It proxy
+## 2. დაიწყეთ Try It პროქსი
 
-From the repository root:
+საცავის ფესვიდან:
 
 ```bash
 cd docs/portal
@@ -48,26 +49,26 @@ export TRYIT_PROXY_LISTEN="127.0.0.1:8787"
 npm run tryit-proxy
 ```
 
-### Environment variables
+### გარემოს ცვლადები
 
-| Variable | Description |
+| ცვლადი | აღწერა |
 |----------|-------------|
-| `TRYIT_PROXY_TARGET` | Torii base URL (required). |
-| `TRYIT_PROXY_ALLOWED_ORIGINS` | Comma-separated list of origins allowed to use the proxy (defaults to `http://localhost:3000`). |
-| `TRYIT_PROXY_BEARER` | Optional default bearer token applied to all proxied requests. |
-| `TRYIT_PROXY_ALLOW_CLIENT_AUTH` | Set to `1` to forward the caller’s `Authorization` header verbatim. |
-| `TRYIT_PROXY_RATE_LIMIT` / `TRYIT_PROXY_RATE_WINDOW_MS` | In-memory rate limiter settings (defaults: 60 requests per 60 s). |
-| `TRYIT_PROXY_MAX_BODY` | Maximum request payload accepted (bytes, default 1 MiB). |
-| `TRYIT_PROXY_TIMEOUT_MS` | Upstream timeout for Torii requests (default 10 000 ms). |
+| `TRYIT_PROXY_TARGET` | Torii საბაზისო URL (აუცილებელია). |
+| `TRYIT_PROXY_ALLOWED_ORIGINS` | მძიმით გამოყოფილი წარმოშობის სია დაშვებულია პროქსის გამოყენებაზე (ნაგულისხმევი `http://localhost:3000`). |
+| `TRYIT_PROXY_BEARER` | არასავალდებულო ნაგულისხმევი მატარებლის ჟეტონი გამოიყენება ყველა პროქსიდულ მოთხოვნაზე. |
+| `TRYIT_PROXY_ALLOW_CLIENT_AUTH` | დააყენეთ `1` აბონენტის `Authorization` სათაურის სიტყვასიტყვით გადასატანად. |
+| `TRYIT_PROXY_RATE_LIMIT` / `TRYIT_PROXY_RATE_WINDOW_MS` | მეხსიერების სიჩქარის შემზღუდველი პარამეტრები (ნაგულისხმევი: 60 მოთხოვნა 60 წმ-ზე). |
+| `TRYIT_PROXY_MAX_BODY` | მოთხოვნის მაქსიმალური დატვირთვა მიღებულია (ბაიტი, ნაგულისხმევი 1 MiB). |
+| `TRYIT_PROXY_TIMEOUT_MS` | Torii მოთხოვნისთვის (ნაგულისხმევი 10000 ms). |
 
-The proxy exposes:
+პროქსი ამხელს:
 
-- `GET /healthz` — readiness check.
-- `/proxy/*` — proxied requests, preserving the path and query string.
+- `GET /healthz` — მზადყოფნის შემოწმება.
+- `/proxy/*` — პროქსიირებული მოთხოვნები, ბილიკისა და მოთხოვნის სტრიქონის შენახვა.
 
-## 3. Launch the portal
+## 3. გაუშვით პორტალი
 
-In a separate terminal:
+ცალკე ტერმინალში:
 
 ```bash
 cd docs/portal
@@ -75,23 +76,23 @@ export TRYIT_PROXY_PUBLIC_URL="http://localhost:8787"
 npm run start
 ```
 
-Visit `http://localhost:3000/api/overview` and use the Try It console. The same
-environment variables configure the Swagger UI and RapiDoc embeds.
+ეწვიეთ `http://localhost:3000/api/overview` და გამოიყენეთ Try It კონსოლი. იგივე
+გარემოს ცვლადები აკონფიგურირებენ Swagger UI და RapiDoc ჩაშენებებს.
 
-## 4. Running unit tests
+## 4. გაშვებული ერთეულის ტესტები
 
-The proxy exposes a fast Node-based test suite:
+პროქსი ავლენს სწრაფ კვანძზე დაფუძნებულ ტესტის კომპლექტს:
 
 ```bash
 npm run test:tryit-proxy
 ```
 
-The tests cover address parsing, origin handling, rate limiting, and bearer
-injection.
+ტესტები მოიცავს მისამართების ანალიზს, წარმოშობის დამუშავებას, სიჩქარის შეზღუდვას და მატარებელს
+ინექცია.
 
-## 5. Probe automation & metrics
+## 5. გამოძიების ავტომატიზაცია და მეტრიკა
 
-Use the bundled probe to verify `/healthz` and a sample endpoint:
+გამოიყენეთ შეფუთული ზონდი `/healthz` და ნიმუშის საბოლოო წერტილის დასადასტურებლად:
 
 ```bash
 TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" \
@@ -99,18 +100,18 @@ TRYIT_PROXY_SAMPLE_PATH="/v1/status" \
 npm run probe:tryit-proxy
 ```
 
-Environment knobs:
+გარემოს სახელურები:
 
-- `TRYIT_PROXY_SAMPLE_PATH` — optional Torii route (without `/proxy`) to exercise.
-- `TRYIT_PROXY_SAMPLE_METHOD` — defaults to `GET`; set to `POST` for write routes.
-- `TRYIT_PROXY_PROBE_TOKEN` — injects a temporary bearer token for the sample call.
-- `TRYIT_PROXY_PROBE_TIMEOUT_MS` — overrides the default 5 s timeout.
-- `TRYIT_PROXY_PROBE_METRICS_FILE` — Prometheus textfile destination for `probe_success`/`probe_duration_seconds`.
-- `TRYIT_PROXY_PROBE_LABELS` — comma-separated `key=value` pairs appended to the metrics (defaults to `job=tryit-proxy` and `instance=<proxy URL>`).
+- `TRYIT_PROXY_SAMPLE_PATH` — სურვილისამებრ Torii მარშრუტი (`/proxy`-ის გარეშე) ვარჯიშისთვის.
+- `TRYIT_PROXY_SAMPLE_METHOD` — ნაგულისხმევად არის `GET`; დაყენებულია `POST`-ზე ჩაწერის მარშრუტებისთვის.
+- `TRYIT_PROXY_PROBE_TOKEN` — ახდენს დროებითი გადამტანის ჟეტონს სინჯის ზარისთვის.
+- `TRYIT_PROXY_PROBE_TIMEOUT_MS` — უგულებელყოფს ნაგულისხმევი 5s დროის ამოწურვას.
+- `TRYIT_PROXY_PROBE_METRICS_FILE` — Prometheus ტექსტური ფაილის დანიშნულება `probe_success`/`probe_duration_seconds`-ისთვის.
+- `TRYIT_PROXY_PROBE_LABELS` — მძიმით გამოყოფილი `key=value` წყვილი დართულია მეტრიკაზე (ნაგულისხმევია `job=tryit-proxy` და `instance=<proxy URL>`).
 
-When `TRYIT_PROXY_PROBE_METRICS_FILE` is set, the script rewrites the file
-atomically so your node_exporter/textfile collector always sees a complete
-payload. Example:
+როდესაც დაყენებულია `TRYIT_PROXY_PROBE_METRICS_FILE`, სკრიპტი ხელახლა წერს ფაილს
+ატომურად, ასე რომ, თქვენი node_exporter/textfile კოლექციონერი ყოველთვის ხედავს სრულ
+ტვირთამწეობა. მაგალითი:
 
 ```bash
 TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" \
@@ -119,16 +120,16 @@ TRYIT_PROXY_PROBE_LABELS="job=tryit-proxy,cluster=staging" \
 npm run probe:tryit-proxy
 ```
 
-Forward the resulting metrics to Prometheus and reuse the sample alert in the
-developer-portal docs to page when `probe_success` drops to `0`.
+გადაიტანეთ მიღებული მეტრიკა Prometheus-ზე და ხელახლა გამოიყენეთ ნიმუშის გაფრთხილება
+დეველოპერის-პორტალის დოკუმენტები გვერდზე, როდესაც `probe_success` ჩამოდის `0`-მდე.
 
-## 6. Production hardening checklist
+## 6. წარმოების გამკვრივების ჩამონათვალი
 
-Before publishing the proxy beyond local development:
+პროქსის გამოქვეყნებამდე ადგილობრივი განვითარების მიღმა:
 
-- Terminate TLS ahead of the proxy (reverse proxy or managed gateway).
-- Configure structured logging and forward to observability pipelines.
-- Rotate bearer tokens and store them in your secrets manager.
-- Monitor the proxy’s `/healthz` endpoint and aggregate latency metrics.
-- Align rate limits with your Torii staging quotas; adjust the `Retry-After`
-  behaviour to communicate throttling to clients.
+- შეწყვიტე TLS პროქსის წინ (უკუ პროქსი ან მართული კარიბჭე).
+- სტრუქტურირებული ხე-ტყის კონფიგურაცია და გადამისამართება დაკვირვებადობის მილსადენებზე.
+- დაატრიალეთ მატარებლის ნიშნები და შეინახეთ ისინი თქვენს საიდუმლო მენეჯერში.
+- თვალყური ადევნეთ პროქსის `/healthz` საბოლოო წერტილს და მთლიანი შეყოვნების მეტრიკას.
+- გაასწორეთ განაკვეთის ლიმიტები თქვენს Torii დადგმის კვოტებთან; დაარეგულირეთ `Retry-After`
+  ქცევა მომხმარებლებთან კომუნიკაციისთვის.

@@ -4,70 +4,72 @@ direction: rtl
 source: docs/portal/docs/devportal/public-preview-invite.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Playbook de invitaciones del preview publico
+# عوامی پیش نظارہ دعوت نامہ پلے بک
 
-## Objetivos del programa
+## پروگرام کے مقاصد
 
-Este playbook explica como anunciar y ejecutar el preview publico una vez que el
-workflow de onboarding de revisores este activo. Mantiene honesto el roadmap DOCS-SORA al
-asegurar que cada invitacion se envie con artefactos verificables, guia de seguridad y un
-camino claro de feedback.
+یہ پلے بوک وضاحت کرتا ہے کہ ایک بار عوامی پیش نظارہ کا اعلان اور چلائیں
+جائزہ لینے والا کام کرنے والا ورک فلو فعال ہے۔ DOCS-SORA روڈ میپ کو ایماندار رکھتا ہے
+اس بات کو یقینی بنائیں کہ ہر دعوت کو قابل تصدیق نمونے ، سیکیورٹی رہنمائی ، اور a کے ساتھ بھیجا گیا ہے
+واضح آراء کا راستہ۔
 
-- **Audiencia:** lista curada de miembros de la comunidad, partners y maintainers que
-  firmaron la politica de uso aceptable del preview.
-- **Limites:** tamano de ola por defecto <= 25 revisores, ventana de acceso de 14 dias, respuesta
-  a incidentes en 24h.
+- ** سامعین: ** کمیونٹی کے ممبروں ، شراکت داروں اور دیکھ بھال کرنے والوں کی فہرست کی فہرست جو
+  انہوں نے پیش نظارہ کی قابل قبول استعمال کی پالیسی پر دستخط کیے۔
+- ** حدود: ** پہلے سے طے شدہ لہر کا سائز <= 25 جائزہ لینے والے ، 14 دن تک رسائی ونڈو ، جواب
+  24 گھنٹوں میں واقعات میں۔
 
-## Checklist de gate de lanzamiento
+## لانچ گیٹ چیک لسٹ
 
-Completa estas tareas antes de enviar cualquier invitacion:
+کسی بھی دعوت نامے بھیجنے سے پہلے ان کاموں کو مکمل کریں:
 
-1. Ultimos artefactos de preview cargados en CI (`docs-portal-preview`,
-   manifest de checksum, descriptor, bundle SoraFS).
-2. `npm run --prefix docs/portal serve` (gateado por checksum) probado en el mismo tag.
-3. Tickets de onboarding de revisores aprobados y enlazados a la ola de invitaciones.
-4. Docs de seguridad, observabilidad e incidentes validados
-   ([`security-hardening`](./security-hardening.md),
-   [`observability`](./observability.md),
-   [`incident-runbooks`](./incident-runbooks.md)).
-5. Formulario de feedback o plantilla de issue preparada (incluye campos de severidad,
-   pasos de reproduccion, screenshots e info de entorno).
-6. Texto del anuncio revisado por Docs/DevRel + Governance.
+1. تازہ ترین پیش نظارہ سی آئی (`docs-portal-preview` میں بھری ہوئی ،
+   چیکسم مینی فیسٹ ، ڈسریکٹر ، بنڈل SoraFS)۔
+2. `npm run --prefix docs/portal serve` (چیکم گیٹڈ) اسی ٹیگ پر ٹیسٹ کیا گیا۔
+3. دعوت ناموں کی لہر سے منسلک منظور شدہ جائزہ لینے والوں سے جہاز پر چلنے والے ٹکٹ۔
+4. سیکیورٹی ، مشاہدہ اور جائز واقعہ دستاویزات
+   ([`security-hardening`] (./security-hardening.md) ،
+   [`observability`] (./observability.md) ،
+   [`incident-runbooks`] (./incident-runbooks.md))۔
+5. تیار کردہ آراء فارم یا ٹیمپلیٹ جاری کریں (شدت والے فیلڈز بھی شامل ہیں ،
+   پنروتپادن اقدامات ، اسکرین شاٹس اور ماحولیات کی معلومات)۔
+6. اعلان متن کا جائزہ دستاویزات/ڈیوریل + گورننس کے ذریعہ کیا گیا۔
 
-## Paquete de invitacion
+## دعوت پیکیج
 
-Cada invitacion debe incluir:
+ہر دعوت نامے میں شامل ہونا ضروری ہے:
 
-1. **Artefactos verificados** - Proporciona enlaces al manifiesto/plan de SoraFS o a los
-   artefactos de GitHub mas el manifest de checksum y el descriptor. Referencia el comando
-   de verificacion explicitamente para que los revisores puedan ejecutarlo antes de levantar
-   el sitio.
-2. **Instrucciones de serve** - Incluye el comando de preview gateado por checksum:
+1. ** تصدیق شدہ نمونے ** - SoraFS مینی فیسٹ/پلان یا کے لنک فراہم کرتا ہے
+   گٹ ہب نمونے کے علاوہ چیکسم ظاہر اور ڈسکرپٹر۔ کمانڈ کا حوالہ دیں
+   توثیق کا عمل واضح طور پر تاکہ جائزہ لینے والے اسے بڑھانے سے پہلے چلائیں
+   سائٹ
+2. ** ہدایات کی خدمت کریں ** - چیکسم کے ذریعہ پیش نظارہ کمانڈ شامل ہے:
 
    ```bash
    DOCS_RELEASE_TAG=preview-<stamp> npm run --prefix docs/portal serve
    ```
 
-3. **Recordatorios de seguridad** - Indica que los tokens expiran automaticamente, los links
-   no deben compartirse y los incidentes deben reportarse de inmediato.
-4. **Canal de feedback** - Enlaza la plantilla/formulario y aclara expectativas de tiempos de respuesta.
-5. **Fechas del programa** - Proporciona fechas de inicio/fin, office hours o syncs, y la proxima
-   ventana de refresh.
+3.
+   ان کا اشتراک نہیں کیا جانا چاہئے اور واقعات کی فوری اطلاع دی جانی چاہئے۔
+4. ** فیڈ بیک چینل ** - ٹیمپلیٹ/فارم کو لنک کریں اور جوابی وقت کی توقعات کو واضح کریں۔
+5. ** شیڈول کی تاریخیں ** - اسٹارٹ/اختتامی تاریخیں ، دفتر کے اوقات یا مطابقت پذیری اور اگلا فراہم کریں
+   ریفریش ونڈو۔
 
-El email de muestra en
-[`docs/examples/docs_preview_invite_template.md`](../../../examples/docs_preview_invite_template.md)
-cubre estos requisitos. Actualiza los placeholders (fechas, URLs, contactos)
-antes de enviar.
+نمونہ ای میل میں
+[`docs/examples/docs_preview_invite_template.md`] (../../../examples/docs_preview_invite_template.md)
+ان ضروریات کا احاطہ کرتا ہے۔ پلیس ہولڈرز کو اپ ڈیٹ کریں (تاریخیں ، یو آر ایل ، رابطے)
+بھیجنے سے پہلے
 
-## Exponer el host de preview
+## پیش نظارہ میزبان کو بے نقاب کریں
 
-Solo promociona el host de preview una vez que el onboarding este completo y el ticket de cambio
-este aprobado. Consulta la [guia de exposicion del host de preview](./preview-host-exposure.md)
-para los pasos end-to-end de build/publish/verify usados en esta seccion.
+آن بورڈنگ مکمل ہونے اور تبدیلی کا ٹکٹ صرف ایک بار پیش نظارہ میزبان کو فروغ دیں
+منظور شدہ ہے۔ [پیش نظارہ میزبان نمائش گائیڈ] (./preview-host-exposure.md) دیکھیں
+اس حصے میں استعمال ہونے والے اختتامی تعمیر/شائع/تصدیق کرنے والے اقدامات کے لئے۔
 
-1. **Build y empaquetado:** Marca el release tag y produce artefactos deterministas.
+1. ** تعمیر اور پیکیجنگ: ** ریلیز ٹیگ کو نشان زد کریں اور اختیاری نمونے تیار کریں۔
 
    ```bash
    cd docs/portal
@@ -84,19 +86,17 @@ para los pasos end-to-end de build/publish/verify usados en esta seccion.
      --manifest artifacts/checksums.sha256 \
      --archive artifacts/sorafs/portal.tar.gz \
      --out artifacts/sorafs/preview-descriptor.json
-   ```
+   ```پن اسکرپٹ `portal.car` ، `portal.manifest.*` ، `portal.pin.proposal.json` لکھتا ہے ،
+   اور `portal.dns-cutover.json` `artifacts/sorafs/` کے تحت۔ ان فائلوں کو لہر سے جوڑیں
+   دعوت نامے تاکہ ہر جائزہ لینے والا ایک ہی بٹس کو چیک کرسکے۔
 
-   El script de pin escribe `portal.car`, `portal.manifest.*`, `portal.pin.proposal.json`,
-   y `portal.dns-cutover.json` bajo `artifacts/sorafs/`. Adjunta esos archivos a la ola de
-   invitaciones para que cada revisor pueda verificar los mismos bits.
+2
+   (`TORII_URL` ، `AUTHORITY` ، `PRIVATE_KEY[_FILE]` ، اور جاری کردہ عرف ٹیسٹ فراہم کرتا ہے
+   گورننس کے ذریعہ)۔ اسکرپٹ `docs-preview.sora` کے ظاہر اور خارج ہوجائے گا
+   `portal.manifest.submit.summary.json` پلس `portal.pin.report.json` ثبوت کے بنڈل کے لئے۔
 
-2. **Publicar el alias de preview:** Repite el comando sin `--skip-submit`
-   (proporciona `TORII_URL`, `AUTHORITY`, `PRIVATE_KEY[_FILE]`, y la prueba de alias emitida
-   por gobernanza). El script enlazara el manifest a `docs-preview.sora` y emitira
-   `portal.manifest.submit.summary.json` mas `portal.pin.report.json` para el bundle de evidencia.
-
-3. **Probar el despliegue:** Confirma que el alias resuelve y que el checksum coincide con el tag
-   antes de enviar invitaciones.
+3. ** تعیناتی کی جانچ کریں: ** تصدیق کریں کہ عرف حل ہوجاتا ہے اور یہ کہ چیکسم ٹیگ سے مماثل ہے
+   دعوت نامے بھیجنے سے پہلے۔
 
    ```bash
    npm run probe:portal -- \
@@ -104,26 +104,26 @@ para los pasos end-to-end de build/publish/verify usados en esta seccion.
      --expect-release="$DOCS_RELEASE_TAG"
    ```
 
-   Mantener `npm run serve` (`scripts/serve-verified-preview.mjs`) a mano como fallback para
-   que los revisores puedan levantar una copia local si el edge de preview falla.
+   `npm run serve` (`scripts/serve-verified-preview.mjs`) کو فال بیک کے طور پر ہاتھ پر رکھیں
+   تاکہ جائزہ لینے والے مقامی کاپی اٹھا سکیں اگر پیش نظارہ ختم ہوجاتا ہے۔
 
-## Timeline de comunicaciones
+## مواصلات ٹائم لائن
 
-| Dia | Accion | Owner |
+| دن | ایکشن | مالک |
 | --- | --- | --- |
-| D-3 | Finalizar copy de invitacion, refrescar artefactos, dry-run de verificacion | Docs/DevRel |
-| D-2 | Sign-off de gobernanza + ticket de cambio | Docs/DevRel + Governance |
-| D-1 | Enviar invitaciones usando la plantilla, actualizar tracker con lista de destinatarios | Docs/DevRel |
-| D | Kickoff call / office hours, monitorear dashboards de telemetria | Docs/DevRel + On-call |
-| D+7 | Digest de feedback de mitad de ola, triage de issues bloqueantes | Docs/DevRel |
-| D+14 | Cerrar ola, revocar acceso temporal, publicar resumen en `status.md` | Docs/DevRel |
+| D-3 | دعوت نامے کی کاپی ، ریفریش نمونے ، تصدیق خشک رن | کو حتمی شکل دیں دستاویزات/ڈیوریل |
+| D-2 | گورننس سائن آف + تبدیلی ٹکٹ | دستاویزات/ڈیوریل + گورننس |
+| D-1 | ٹیمپلیٹ کا استعمال کرتے ہوئے دعوت نامے بھیجیں ، وصول کنندہ کی فہرست کے ساتھ ٹریکر کو اپ ڈیٹ کریں دستاویزات/ڈیوریل |
+| d | کک آف کال / آفس اوقات ، ٹیلی میٹری ڈیش بورڈز کی نگرانی کریں دستاویزات/ڈیوریل + آن کال |
+| D+7 | وسط لہر کی آراء ڈائجسٹ ، مسدود کرنے کے مسائل کی تکلیف | دستاویزات/ڈیوریل |
+| D+14 | بند لہر ، عارضی رسائی کو کالعدم ، پوسٹ سمری `status.md` | دستاویزات/ڈیوریل |
 
-## Seguimiento de acceso y telemetria
+## رسائی سے باخبر رہنے اور ٹیلی میٹری
 
-1. Registra cada destinatario, timestamp de invitacion y fecha de revocacion con el
-   preview feedback logger (ver
-   [`preview-feedback-log`](./preview-feedback-log)) para que cada ola comparta el mismo
-   rastro de evidencia:
+1. ہر وصول کنندہ ، دعوت نامہ ٹائم اسٹیمپ اور منسوخی کی تاریخ کے ساتھ رجسٹر کریں
+   پیش نظارہ رائے لاگ (دیکھیں
+   [`preview-feedback-log`] (./preview-feedback-log)) تاکہ ہر لہر ایک ہی ہو
+   ثبوت کا سراغ لگانا:
 
    ```bash
    # Agrega un nuevo evento de invitacion a artifacts/docs_portal_preview/feedback_log.json
@@ -134,42 +134,40 @@ para los pasos end-to-end de build/publish/verify usados en esta seccion.
      --notes "wave-01 seed"
    ```
 
-   Los eventos soportados son `invite-sent`, `acknowledged`,
-   `feedback-submitted`, `issue-opened`, y `access-revoked`. El log vive en
-   `artifacts/docs_portal_preview/feedback_log.json` por defecto; adjuntalo al ticket de
-   la ola de invitaciones junto con los formularios de consentimiento. Usa el helper de
-   summary para producir un resumen auditable antes de la nota de cierre:
+   تائید شدہ واقعات `invite-sent` ، `acknowledged` ہیں ،
+   `feedback-submitted` ، `issue-opened` ، اور `access-revoked`۔ لاگ رہتا ہے
+   `artifacts/docs_portal_preview/feedback_log.json` بذریعہ ڈیفالٹ ؛ اسے ٹکٹ سے منسلک کریں
+   رضامندی کے فارموں کے ساتھ دعوت ناموں کی لہر۔ مددگار استعمال کریں
+   اختتامی نوٹ سے پہلے آڈٹیبل سمری تیار کرنے کا خلاصہ:
 
    ```bash
    npm run --prefix docs/portal preview:summary -- --summary-json \
      > artifacts/docs_portal_preview/preview-20250303-summary.json
    ```
 
-   El summary JSON enumera invitaciones por ola, destinatarios abiertos, conteos de
-   feedback y el timestamp del evento mas reciente. El helper esta respaldado por
-   [`scripts/preview-feedback-log.mjs`](../../scripts/preview-feedback-log.mjs),
-   asi que el mismo workflow puede correr localmente o en CI. Usa la plantilla de digest en
-   [`docs/examples/docs_preview_feedback_digest.md`](../../../examples/docs_preview_feedback_digest.md)
-   al publicar el recap de la ola.
-2. Etiqueta los dashboards de telemetria con el `DOCS_RELEASE_TAG` usado para la ola para que
-   los picos se puedan correlacionar con las cohortes de invitacion.
-3. Ejecuta `npm run probe:portal -- --expect-release=<tag>` despues del deploy para confirmar
-   que el entorno de preview anuncia la metadata correcta de release.
-4. Registra cualquier incidente en la plantilla del runbook y enlazalo a la cohorte.
+   JSON خلاصہ لہر ، کھلی وصول کنندگان ، گنتی کے ذریعہ دعوت ناموں کی فہرست دیتا ہے
+   رائے اور حالیہ واقعہ کا ٹائم اسٹیمپ۔ مددگار کی حمایت کی جاتی ہے
+   [`scripts/preview-feedback-log.mjs`] (../../scripts/preview-feedback-log.mjs) ،
+   لہذا وہی ورک فلو مقامی طور پر یا CI میں چلا سکتا ہے۔ ڈائجسٹ ٹیمپلیٹ میں استعمال کریں
+   [`docs/examples/docs_preview_feedback_digest.md`] (../../../examples/docs_preview_feedback_digest.md)
+   جب لہر کی بازیافت کو شائع کرتے ہو۔
+2. ٹیلی میٹری ڈیش بورڈز کو `DOCS_RELEASE_TAG` کے ساتھ لیبل لگائیں تاکہ لہر کے لئے استعمال کیا جاسکے
+   چوٹیوں کو دعوت نامے کے ساتھ منسلک کیا جاسکتا ہے۔
+3. تصدیق کرنے کے لئے تعینات کے بعد `npm run probe:portal -- --expect-release=<tag>` چلائیں
+   کہ پیش نظارہ ماحول صحیح ریلیز میٹا ڈیٹا کا اعلان کرتا ہے۔
+4. رن بک ٹیمپلیٹ میں کسی بھی واقعات کو ریکارڈ کریں اور انہیں کوہورٹ سے جوڑیں۔
 
-## Feedback y cierre
+## رائے اور بندش1. مشترکہ ڈی او سی یا ایشو بورڈ میں رائے شامل کریں۔ ٹیگ آئٹمز کے ساتھ
+   `docs-preview/<wave>` آسانی سے مشورہ کرنے کے لئے روڈ میپ مالکان کے لئے۔
+2. لہر کی رپورٹ کو آباد کرنے کے لئے پیش نظارہ لاگر کے خلاصہ آؤٹ پٹ کا استعمال کریں ، پھر خلاصہ کریں
+   `status.md` میں ہم آہنگی (شرکاء ، اہم نتائج ، منصوبہ بند اصلاحات) اور
+   `roadmap.md` کو اپ ڈیٹ کریں اگر سنگ میل DOCS-SORA تبدیل کریں۔
+3. آف بورڈنگ مراحل پر عمل کریں
+   [`reviewer-onboarding`](./reviewer-onboarding.md): Revokes access, archives requests, and
+   شرکا کا شکریہ۔
+4. نمونے کو تازہ دم کرکے اگلی لہر کی تیاری کریں ، چیکس گیٹس کو دوبارہ چلائیں اور
+   نئی تاریخوں کے ساتھ دعوت نامے کے سانچے کو اپ ڈیٹ کرنا۔
 
-1. Agrega feedback en un doc compartido o tablero de issues. Etiqueta items con
-   `docs-preview/<wave>` para que los owners del roadmap los consulten facilmente.
-2. Usa la salida summary del preview logger para poblar el reporte de la ola, luego resume
-   la cohorte en `status.md` (participantes, hallazgos principales, fixes planeados) y
-   actualiza `roadmap.md` si el hito DOCS-SORA cambio.
-3. Sigue los pasos de offboarding de
-   [`reviewer-onboarding`](./reviewer-onboarding.md): revoca acceso, archiva solicitudes y
-   agradece a los participantes.
-4. Prepara la siguiente ola refrescando artefactos, re-ejecutando los gates de checksum y
-   actualizando la plantilla de invitacion con nuevas fechas.
-
-Aplicar este playbook de forma consistente mantiene el programa de preview auditable y
-le da a Docs/DevRel una forma repetible de escalar invitaciones a medida que el portal se
-acerca a GA.
+اس پلے بوک کا اطلاق مستقل طور پر پیش نظارہ پروگرام کے قابل اظہار اور برقرار رکھتا ہے
+پورٹل کے بڑھنے کے ساتھ ساتھ دعوت ناموں کو بڑھانے کا ایک قابل تکرار طریقہ دستاویزات/ڈیوریل دیتا ہے۔
+جی اے کے قریب

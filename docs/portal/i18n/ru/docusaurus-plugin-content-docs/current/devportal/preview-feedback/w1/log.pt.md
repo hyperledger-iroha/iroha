@@ -4,86 +4,86 @@ direction: ltr
 source: docs/portal/docs/devportal/preview-feedback/w1/log.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: preview-feedback-w1-log
-title: Log de feedback e telemetria W1
-sidebar_label: Log W1
-description: Roster agregado, checkpoints de telemetria e notas de reviewers para a primeira onda de preview de parceiros.
+идентификатор: предварительный просмотр-обратная связь-w1-log
+Название: Журнал обратной связи и телеметрии W1
+Sidebar_label: Журнал W1
+описание: Совокупный список, контрольно-пропускные пункты телеметрии и заметки рецензентов для первого просмотра посылок.
 ---
 
-Este log mantem o roster de convites, checkpoints de telemetria e feedback de reviewers para o
-**preview de parceiros W1** que acompanha as tarefas de aceitacao em
-[`preview-feedback/w1/plan.md`](./plan.md) e a entrada do tracker da onda em
-[`../../preview-invite-tracker.md`](../../preview-invite-tracker.md). Atualize quando um convite for enviado,
-um snapshot de telemetria for registrado ou um item de feedback for triado para que reviewers de governanca possam
-reproduzir as evidencias sem perseguir tickets externos.
+Есть журнал регистрации или список участников, контрольные точки телеметрии и отзывы рецензентов для
+**предварительный просмотр посылок W1**, сопровождающий их в качестве оплаты за проезд
+[`preview-feedback/w1/plan.md`](./plan.md) и вход в трекер да онда их
+[`../../preview-invite-tracker.md`](../../preview-invite-tracker.md). Atualize quando um convite для отправки,
+снимок телеметрии для регистрации или отзыв для тройки, которая отвечает за контроль над поссамскими рецензентами
+воспроизвести в качестве доказательства, что билеты могут быть использованы экстернос.
 
-## Roster da coorte
+## Список сотрудников
 
-| Partner ID | Ticket de solicitacao | NDA recebido | Convite enviado (UTC) | Ack/primeiro login (UTC) | Status | Notas |
+| Идентификатор партнера | Билет на допрос | Получение соглашения о неразглашении | Подтвердите отправку (UTC) | Подтвержденный/примейро вход (UTC) | Статус | Заметки |
 | --- | --- | --- | --- | --- | --- | --- |
-| partner-w1-01 | `DOCS-SORA-Preview-REQ-P01` | OK 2025-04-03 | 2025-04-12 15:00 | 2025-04-12 15:11 | Concluido 2025-04-26 | sorafs-op-01; focado em evidencia de paridade dos docs do orchestrator. |
-| partner-w1-02 | `DOCS-SORA-Preview-REQ-P02` | OK 2025-04-03 | 2025-04-12 15:03 | 2025-04-12 15:15 | Concluido 2025-04-26 | sorafs-op-02; validou cross-links Norito/telemetria. |
-| partner-w1-03 | `DOCS-SORA-Preview-REQ-P03` | OK 2025-04-04 | 2025-04-12 15:06 | 2025-04-12 15:18 | Concluido 2025-04-26 | sorafs-op-03; executou drills de failover multi-source. |
-| partner-w1-04 | `DOCS-SORA-Preview-REQ-P04` | OK 2025-04-04 | 2025-04-12 15:09 | 2025-04-12 15:21 | Concluido 2025-04-26 | torii-int-01; revisao do cookbook Torii `/v1/pipeline` + Try it. |
-| partner-w1-05 | `DOCS-SORA-Preview-REQ-P05` | OK 2025-04-05 | 2025-04-12 15:12 | 2025-04-12 15:23 | Concluido 2025-04-26 | torii-int-02; acompanhou a atualizacao do screenshot Try it (docs-preview/w1 #2). |
-| partner-w1-06 | `DOCS-SORA-Preview-REQ-P06` | OK 2025-04-05 | 2025-04-12 15:15 | 2025-04-12 15:26 | Concluido 2025-04-26 | sdk-partner-01; feedback de cookbooks JS/Swift + sanity checks do ISO bridge. |
-| partner-w1-07 | `DOCS-SORA-Preview-REQ-P07` | OK 2025-04-11 | 2025-04-12 15:18 | 2025-04-12 15:29 | Concluido 2025-04-26 | sdk-partner-02; compliance aprovado 2025-04-11, focado em notas de Connect/telemetria. |
-| partner-w1-08 | `DOCS-SORA-Preview-REQ-P08` | OK 2025-04-11 | 2025-04-12 15:21 | 2025-04-12 15:33 | Concluido 2025-04-26 | gateway-ops-01; auditou o guia ops do gateway + fluxo anonimo do proxy Try it. |
+| партнер-w1-01 | `DOCS-SORA-Preview-REQ-P01` | ОК 03.04.2025 | 2025-04-12 15:00 | 2025-04-12 15:11 | Заключение 26 апреля 2025 г. | сорафс-оп-01; Focado em Evidencia de Paridade dos docs do Orchestrator. |
+| партнер-w1-02 | `DOCS-SORA-Preview-REQ-P02` | ОК 03.04.2025 | 2025-04-12 15:03 | 2025-04-12 15:15 | Заключение 26 апреля 2025 г. | сорафс-оп-02; действительные перекрестные ссылки Norito/telemetria. |
+| партнер-w1-03 | `DOCS-SORA-Preview-REQ-P03` | ОК 04.04.2025 | 2025-04-12 15:06 | 2025-04-12 15:18 | Заключение 26 апреля 2025 г. | сорафс-оп-03; выполнить упражнения по аварийному переключению с несколькими источниками. |
+| партнер-w1-04 | `DOCS-SORA-Preview-REQ-P04` | ОК 04.04.2025 | 2025-04-12 15:09 | 2025-04-12 15:21 | Заключение 26 апреля 2025 г. | тории-int-01; revisao do кулинарная книга Torii `/v1/pipeline` + Попробуйте. |
+| партнер-w1-05 | `DOCS-SORA-Preview-REQ-P05` | ОК 05.04.2025 | 2025-04-12 15:12 | 2025-04-12 15:23 | Заключение 26 апреля 2025 г. | тории-int-02; acompanhou a atualizacao do скриншот Попробуйте (docs-preview/w1 #2). |
+| партнер-w1-06 | `DOCS-SORA-Preview-REQ-P06` | ОК 05.04.2025 | 2025-04-12 15:15 | 2025-04-12 15:26 | Заключение 26 апреля 2025 г. | SDK-партнер-01; обратная связь с кулинарными книгами JS/Swift + проверки работоспособности делают мост ISO. |
+| партнер-w1-07 | `DOCS-SORA-Preview-REQ-P07` | ОК 11.04.2025 | 2025-04-12 15:18 | 2025-04-12 15:29 | Заключение 26 апреля 2025 г. | SDK-партнер-02; Соответствие утверждено 11 апреля 2025 г., отправлено в примечания к подключению/телеметрии. |
+| партнер-w1-08 | `DOCS-SORA-Preview-REQ-P08` | ОК 11.04.2025 | 2025-04-12 15:21 | 12.04.2025 15:33 | Заключение 26 апреля 2025 г. | шлюз-опс-01; Auditou или Guia Ops Do Gateway + Fluxo Anonimo Do Proxy Попробуйте. |
 
-Preencha os timestamps de **Convite enviado** e **Ack** assim que o email de saida for emitido.
-Ancore os horarios no cronograma UTC definido no plano W1.
+Введите временные метки **Отправки** и **Подтверждения**, указав электронное письмо для отправки.
+Ancore os horarios no cronograma UTC Определенный план W1.
 
-## Checkpoints de telemetria
-
-| Timestamp (UTC) | Dashboards / probes | Responsavel | Resultado | Artefato |
+## Контрольно-пропускные пункты телеметрии| Временная метка (UTC) | Панели мониторинга/зонды | Ответственный | Результат | Артефато |
 | --- | --- | --- | --- | --- |
-| 2025-04-06 18:05 | `docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals` | Docs/DevRel + Ops | Tudo verde | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250406` |
-| 2025-04-06 18:20 | Transcript de `npm run manage:tryit-proxy -- --stage preview-w1` | Ops | Staged | `artifacts/docs_preview/W1/preview-2025-04-12/tryit/OPS-TRYIT-147.log` |
-| 2025-04-12 14:45 | Dashboards acima + `probe:portal` | Docs/DevRel + Ops | Snapshot pre-invite, sem regressao | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250412` |
-| 2025-04-19 17:55 | Dashboards acima + diff de latencia do proxy Try it | Docs/DevRel lead | Checkpoint de meio aprovado (0 alertas; latencia Try it p95=410 ms) | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250419` |
-| 2025-04-26 16:25 | Dashboards acima + probe de saida | Docs/DevRel + Governance liaison | Snapshot de saida, zero alertas pendentes | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250426` |
+| 2025-04-06 18:05 | `docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals` | Документы/DevRel + Ops | Тудо-верде | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250406` |
+| 2025-04-06 18:20 | Расшифровка `npm run manage:tryit-proxy -- --stage preview-w1` | Операции | Постановочный | `artifacts/docs_preview/W1/preview-2025-04-12/tryit/OPS-TRYIT-147.log` |
+| 2025-04-12 14:45 | Панели приборов acima + `probe:portal` | Документы/DevRel + Ops | Предварительное приглашение на моментальный снимок, возврат | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250412` |
+| 2025-04-19 17:55 | Панели управления acima + разница в задержке до прокси Попробуйте | Руководитель отдела документации и разработки | Подтверждено контрольно-пропускное устройство (0 оповещений; задержка Попробуйте p95=410 мс) | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250419` |
+| 2025-04-26 16:25 | Панели управления acima + зонд де Саида | Документы/DevRel + связь с управлением | Снимок экрана, ноль предупреждений | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250426` |
 
-As amostras diarias de office hours (2025-04-13 -> 2025-04-25) estao agrupadas como exports NDJSON + PNG em
-`artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/` com nomes de arquivo
-`docs-preview-integrity-<date>.json` e screenshots correspondentes.
+В качестве дневников рабочего времени (13 апреля 2025 г. -> 25 апреля 2025 г.) estao agrupadas como экспортирует NDJSON + PNG em
+`artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/` под архивным именем
+`docs-preview-integrity-<date>.json` и скриншоты корреспондентам.
 
-## Log de feedback e issues
+## Журнал отзывов и проблем
 
-Use esta tabela para resumir achados enviados por reviewers. Vincule cada entrada ao ticket GitHub/discuss
-mais o formulario estruturado capturado via
+Используйте эту таблицу для резюме, отправленного рецензентам. Vincule cada entrada ao Ticket GitHub/обсудить
+Mais o Formulario estruturado capturado через
 [`docs/examples/docs_preview_feedback_form.md`](../../../../../examples/docs_preview_feedback_form.md).
 
-| Referencia | Severidade | Responsavel | Status | Notas |
+| Референция | Северидаде | Ответственный | Статус | Заметки |
 | --- | --- | --- | --- | --- |
-| `docs-preview/w1 #1` | Low | Docs-core-02 | Resolvido 2025-04-18 | Esclareceu o wording de nav do Try it + ancora de sidebar (`docs/source/sorafs/tryit.md` atualizado com novo label). |
-| `docs-preview/w1 #2` | Low | Docs-core-03 | Resolvido 2025-04-19 | Screenshot do Try it + legenda atualizados conforme pedido; artefato `artifacts/docs_preview/W1/preview-2025-04-12/feedback/partner-w1-05/screenshot-diff.png`. |
-| - | Info | Docs/DevRel lead | Fechado | Comentarios restantes foram apenas Q&A; capturados no formulario de feedback de cada parceiro sob `artifacts/docs_preview/W1/preview-2025-04-12/feedback/`. |
+| `docs-preview/w1 #1` | Низкий | Документы-core-02 | Резольвидо 18 апреля 2025 г. | Укажите формулировку навигации «Попробуйте» + значок боковой панели (`docs/source/sorafs/tryit.md`, настроенный как новая метка). |
+| `docs-preview/w1 #2` | Низкий | Документы-core-03 | Резольвидо 19 апреля 2025 г. | Снимок экрана. Попробуйте + легенда atualizados conforme pedido; артефато `artifacts/docs_preview/W1/preview-2025-04-12/feedback/partner-w1-05/screenshot-diff.png`. |
+| - | Информация | Руководитель отдела документации и разработки | Фечадо | Комментарии до конца: вопросы и ответы; не захвачены формулы обратной связи для каждой посылки `artifacts/docs_preview/W1/preview-2025-04-12/feedback/`. |
 
-## Acompanhamento de knowledge check e surveys
+## Сопровождение проверки знаний и опросов
 
-1. Registre as notas do quiz (meta >=90%) para cada reviewer; anexe o CSV exportado ao lado dos artefatos de convite.
-2. Colete as respostas qualitativas do survey capturadas no template de feedback e espelhe em
+1. Зарегистрируйтесь как примечание к викторине (мета >=90%) для каждого рецензента; приложение или экспорт CSV или файлы изображений.
+2. Соберите качественные ответы на опросы, запишите их без шаблона обратной связи и отправьте им сообщение.
    `artifacts/docs_preview/W1/preview-2025-04-12/surveys/`.
-3. Agende chamadas de remediation para quem estiver abaixo do limite e registre aqui.
+3. План действий по исправлению ситуации, чтобы установить ограничение и зарегистрировать его.
 
-Todos os oito reviewers marcaram >=94% no knowledge check (CSV:
-`artifacts/docs_preview/W1/preview-2025-04-12/feedback/w1-quiz-scores.csv`). Nenhuma chamada de remediation
-foi necessaria; exports de survey para cada parceiro vivem em
+Все рецензенты отмечают >=94% без проверки знаний (CSV:
+`artifacts/docs_preview/W1/preview-2025-04-12/feedback/w1-quiz-scores.csv`). Ненхума чамада де исправление
+foi necessaria; экспорт де-исследований для каждого груза в живых
 `artifacts/docs_preview/W1/preview-2025-04-12/surveys/<partner-id>/summary.json`.
 
-## Inventario de artefatos
+## Изобретение артефато
 
-- Bundle preview descriptor/checksum: `artifacts/docs_preview/W1/preview-2025-04-12/descriptor.json`
-- Resumo de probe + link-check: `artifacts/docs_preview/W1/preview-2025-04-12/preflight-summary.json`
-- Log de mudanca do proxy Try it: `artifacts/docs_preview/W1/preview-2025-04-12/tryit/OPS-TRYIT-147.log`
-- Exports de telemetria: `artifacts/docs_preview/W1/preview-2025-04-12/grafana/<date>/`
-- Bundle diario de telemetria de office hours: `artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/`
-- Exports de feedback + survey: colocar pastas por reviewer em
+- Дескриптор/контрольная сумма предварительного просмотра пакета: `artifacts/docs_preview/W1/preview-2025-04-12/descriptor.json`.
+- Резюме зонда + проверка связи: `artifacts/docs_preview/W1/preview-2025-04-12/preflight-summary.json`
+- Журнал действий через прокси. Попробуйте: `artifacts/docs_preview/W1/preview-2025-04-12/tryit/OPS-TRYIT-147.log`.
+- Экспорт телеметрии: `artifacts/docs_preview/W1/preview-2025-04-12/grafana/<date>/`
+- Пакет телеметрии рабочего времени: `artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/`.
+- Экспорт отзывов + опрос: цветные пасты для рецензента.
   `artifacts/docs_preview/W1/preview-2025-04-12/feedback/<partner-id>/`
-- CSV e resumo do knowledge check: `artifacts/docs_preview/W1/preview-2025-04-12/feedback/w1-quiz-scores.csv`
+- CSV-файл и резюме для проверки знаний: `artifacts/docs_preview/W1/preview-2025-04-12/feedback/w1-quiz-scores.csv`
 
-Mantenha o inventario sincronizado com o issue do tracker. Anexe hashes ao copiar artefatos para o ticket de governanca
-para que auditores verifiquem os arquivos sem acesso de shell.
+Подготовьте или синхронизируйте изобретение с трекером. Приложение хэширует и копирует артефакты для правительственного билета
+для того, чтобы аудиторы проверили архивы с доступом к оболочке.

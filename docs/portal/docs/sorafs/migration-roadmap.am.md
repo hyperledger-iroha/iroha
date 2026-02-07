@@ -8,44 +8,45 @@ source_hash: 84fdf4ef66efbbf7adef9cfaf41be0817ac656bec010c0a816d1f5a5310f1875
 source_last_modified: "2026-01-05T09:28:11.885227+00:00"
 translation_last_reviewed: 2026-02-07
 title: "SoraFS Migration Roadmap"
+translator: machine-google-reviewed
 ---
 
-> Adapted from [`docs/source/sorafs/migration_roadmap.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/migration_roadmap.md).
+> ከ[`docs/source/sorafs/migration_roadmap.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/migration_roadmap.md) የተወሰደ።
 
-# SoraFS Migration Roadmap (SF-1)
+# SoraFS የስደት ፍኖተ ካርታ (SF-1)
 
-This document operationalises the migration guidance captured in
-`docs/source/sorafs_architecture_rfc.md`. It expands the SF-1 deliverables into
-execution-ready milestones, gating criteria, and owner checklists so storage,
-artifact hosting to SoraFS-backed publication.
+ይህ ሰነድ የተያዘውን የስደት መመሪያ ተግባራዊ ያደርጋል
+`docs/source/sorafs_architecture_rfc.md`. የ SF-1 መላኪያዎችን ወደ ውስጥ ያሰፋዋል።
+ለአፈፃፀም ዝግጁ የሆኑ ደረጃዎች፣ የመግቢያ መስፈርቶች እና የባለቤት ማረጋገጫ ዝርዝሮች ስለዚህ ማከማቻ፣
+ለI18NT0000003X የሚደገፍ ሕትመትን ማስተናገድ።
 
-The roadmap is intentionally deterministic: every milestone names the required
-artifacts, command invocations, and attestation steps so downstream pipelines
-produce identical outputs and governance retains an auditable trail.
+የፍኖተ ካርታው ሆን ተብሎ የሚወሰን ነው፡ እያንዳንዱ ምዕራፍ የሚፈለገውን ይሰይማል
+ቅርሶች፣ የትዕዛዝ ጥሪዎች እና የማረጋገጫ ደረጃዎች የታችኛው የቧንቧ መስመሮች
+ተመሳሳይ ውጤት ያስገኛል እና አስተዳደር ኦዲት የሚቻለውን መንገድ ይይዛል።
 
-## Milestone Overview
+## የድል ምዕራፍ አጠቃላይ እይታ
 
-| Milestone | Window | Primary Goals | Must Ship | Owners |
-|-----------|--------|---------------|-----------|--------|
-| **M1 – Deterministic Enforcement** | Weeks 7–12 | Enforce signed fixtures and stage alias proofs while pipelines adopt expectation flags. | Nightly fixture verification, council-signed manifests, alias registry staging entries. | Storage, Governance, SDKs |
+| ወሳኝ ምዕራፍ | መስኮት | ዋና ግቦች | መርከብ አለበት | ባለቤቶች |
+|--------|--------|------------|-----------|--------|
+| **M1 - ቆራጥ ተፈጻሚነት** | ሳምንታት 7-12 | የቧንቧ መስመሮች የሚጠበቁ ባንዲራዎችን ሲይዙ የተፈረሙ እቃዎችን እና የመድረክ ተለዋጭ ማረጋገጫዎችን ያስፈጽሙ። | የምሽት ዝግጅት ማረጋገጫ፣ በምክር ቤት የተፈረመ መግለጫዎች፣ በመዝገብ ስም የተመዘገቡ ግቤቶች። | ማከማቻ፣ አስተዳደር፣ ኤስዲኬዎች |
 
-Milestone status is tracked in `docs/source/sorafs/migration_ledger.md`. All
-changes to this roadmap MUST update the ledger to keep governance and release
-engineering in sync.
+የወሳኝ ደረጃ ሁኔታ በ`docs/source/sorafs/migration_ledger.md` ውስጥ ተከታትሏል። ሁሉም
+በዚህ ፍኖተ ካርታ ላይ የተደረጉ ለውጦች አስተዳደርን ለማስቀጠል እና ለመልቀቅ መጽሃፉን ማዘመን አለባቸው
+ምህንድስና በማመሳሰል.
 
-## Workstreams
+## የስራ ፍሰት
 
-### 2. Deterministic Pinning Adoption
+### 2. ቆራጥ የመሰካት ጉዲፈቻ
 
-| Step | Milestone | Description | Owner(s) | Output |
-|------|-----------|-------------|----------|--------|
-| Fixture rehearsals | M0 | Weekly dry-runs comparing local chunk digests against `fixtures/sorafs_chunker`. Publish report under `docs/source/sorafs/reports/`. | Storage Providers | `determinism-<date>.md` with pass/fail matrix. |
-| Enforce signatures | M1 | `ci/check_sorafs_fixtures.sh` + `.github/workflows/sorafs-fixtures-nightly.yml` fail if signatures or manifests drift. Development overrides require governance waiver attached to PR. | Tooling WG | CI log, waiver ticket link (if applicable). |
-| Expectation flags | M1 | Pipelines call `sorafs_manifest_stub` with explicit expectations to pin outputs: | Docs CI | Updated scripts referencing expectation flags (see command block below). |
-| Registry-first pinning | M2 | `sorafs pin propose` and `sorafs pin approve` wrap manifest submissions; CLI defaults to `--require-registry`. | Governance Ops | Registry CLI audit log, telemetry for failed proposals. |
-| Observability parity | M3 | Prometheus/Grafana dashboards alert when chunk inventories diverge from registry manifests; alerts wired to ops on-call. | Observability | Dashboard link, alert rule IDs, GameDay results. |
+| ደረጃ | ወሳኝ ምዕራፍ | መግለጫ | ባለቤት(ዎች) | ውፅዓት |
+|-------------|------------|----------|--------|
+| ቋሚ ልምምዶች | M0 | በየሳምንቱ የሚደረጉ የደረቅ ሩጫዎች የአካባቢን ቁርጥራጭ ምግቦችን ከ`fixtures/sorafs_chunker` ጋር በማነፃፀር። በ I18NI0000012X ስር ሪፖርት ያትሙ። | ማከማቻ አቅራቢዎች | `determinism-<date>.md` ማለፊያ/መክሸፍ ማትሪክስ። |
+| ፊርማዎችን ያስፈጽሙ | M1 | ፊርማ ወይም መንሸራተትን ካሳየ `ci/check_sorafs_fixtures.sh` + `.github/workflows/sorafs-fixtures-nightly.yml` አይሳካም። ልማትን መሻር ከPR ጋር የተያያዘ የአስተዳደር መሻርን ይጠይቃል። | Tooling WG | የ CI ሎግ ፣ የትኬት ማቋረጫ አገናኝ (የሚመለከተው ከሆነ)። |
+| የሚጠበቁ ባንዲራዎች | M1 | የቧንቧ መስመሮች ወደ `sorafs_manifest_stub` ይደውላሉ ውፅዓቶችን ለመሰካት በግልፅ ይጠበቃል፡ | ሰነዶች CI | የሚጠበቁ ባንዲራዎችን የሚያመለክቱ የተዘመኑ ስክሪፕቶች (ከዚህ በታች ያለውን የትእዛዝ እገዳ ይመልከቱ)። |
+| መዝገብ ቤት-የመጀመሪያ መሰካት | M2 | `sorafs pin propose` እና `sorafs pin approve` ጥቅል አንጸባራቂ ማቅረቢያዎች; CLI ለ `--require-registry` ነባሪ ነው። | አስተዳደር Ops | የመመዝገቢያ CLI ኦዲት መዝገብ፣ ላልተሳካላቸው ፕሮፖዛል ቴሌሜትሪ። |
+| የታዛቢነት እኩልነት | M3 | Prometheus/Grafana ዳሽቦርዶች ቸንክ ኢንቬንቶሪዎች ከመዝገቡ ሲገለጡ ማንቂያዎች; በጥሪ ላይ ለኦፕስ የተገናኙ ማንቂያዎች። | ታዛቢነት | ዳሽቦርድ አገናኝ፣ የማንቂያ ደንብ መታወቂያዎች፣ የGameday ውጤቶች። |
 
-#### Canonical publishing command
+#### ቀኖናዊ ሕትመት ትእዛዝ
 
 ```bash
 cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
@@ -59,50 +60,50 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
   --dag-codec=0x71
 ```
 
-Replace the digest, size, and CID values with the expected references recorded in
-the migration ledger entry for the artifact.
+የምግብ መፍጫውን ፣ መጠኑን እና የ CID እሴቶችን በተመዘገቡት በሚጠበቁ ማጣቀሻዎች ይተኩ
+የፍልሰት ደብተር መግቢያ ለቅርስ.
 
-### 3. Alias Transition & Communications
+### 3. ተለዋጭ ስም ሽግግር እና ግንኙነት
 
-| Step | Milestone | Description | Owner(s) | Output |
-|------|-----------|-------------|----------|--------|
-| Alias proofs in staging | M1 | Register alias claims in the Pin Registry staging environment and attach Merkle proofs to manifests (`--alias`). | Governance, Docs | Proof bundle stored next to manifest + ledger comment with alias name. |
-| Proof enforcement | M2 | Gateways reject manifests without fresh `Sora-Proof` headers; CI gains `sorafs alias verify` step to fetch proofs. | Networking | Gateway config patch + CI output capturing verification success. |
+| ደረጃ | ወሳኝ ምዕራፍ | መግለጫ | ባለቤት(ዎች) | ውጤት |
+|-------------|------------|----------|--------|
+| በመድረክ ላይ ተለዋጭ ማስረጃዎች | M1 | በፒን ሬጅስትሪ ስቴጅንግ አካባቢ የቅፅል መጠይቆችን ይመዝገቡ እና የመርክል ማረጋገጫዎችን ከማኒፌክት (`--alias`) ጋር ያያይዙ። | አስተዳደር, ሰነዶች | የማረጋገጫ ቅርቅብ ከማንፀባረቂያው ቀጥሎ ተከማችቷል + የሒሳብ መዝገብ ከተለዋጭ ስም ጋር። |
+| የማስረጃ ማስፈጸሚያ | M2 | ጌትዌይስ ያለ ትኩስ `Sora-Proof` ራስጌዎች መገለጫዎችን ውድቅ ያደርጋል። CI ማረጋገጫዎችን ለማምጣት `sorafs alias verify` ደረጃን አግኝቷል። | አውታረ መረብ | የጌትዌይ ማዋቀር patch + CI ውፅዓት የማረጋገጫ ስኬትን ይይዛል። |
 
-### 4. Communication & Audit
+### 4. ኮሙኒኬሽን እና ኦዲት
 
-- **Ledger discipline:** every state change (fixture drift, registry submission,
-  alias activation) must append a dated note to
+- ** የመመዝገቢያ ዲሲፕሊን: *** እያንዳንዱ የግዛት ለውጥ (ቋሚ ተንሸራታች ፣ የመመዝገቢያ ግቤት ፣
+  ተለዋጭ ስም ማግበር) የተጻፈበት ማስታወሻ በ
   `docs/source/sorafs/migration_ledger.md`.
-- **Governance minutes:** council sessions approving pin registry changes or
-  alias policies must reference both this roadmap and the ledger.
-- **External comms:** DevRel publishes status updates at each milestone (blog +
-  changelog excerpt) highlighting deterministic guarantees and alias timelines.
+- ** የአስተዳደር ደቂቃዎች: *** የምክር ቤት ስብሰባዎች የፒን መዝገብ ለውጦችን ማጽደቅ ወይም
+  ተለዋጭ ፖሊሲዎች ሁለቱንም ይህንን የመንገድ ካርታ እና የሂሳብ ደብተር ማጣቀስ አለባቸው።
+- **ውጫዊ comms:** DevRel በእያንዳንዱ ምዕራፍ ላይ የሁኔታ ዝመናዎችን ያትማል (ብሎግ +
+  changelog ተቀንጭቦ) ቆራጥ ዋስትናዎችን እና ቅጽል የጊዜ መስመሮችን በማድመቅ።
 
-## Dependencies & Risks
+## ጥገኛ እና ስጋቶች
 
-| Dependency | Impact | Mitigation |
-|------------|--------|------------|
-| Pin Registry contract availability | Blocks M2 pin-first rollout. | Stage contract ahead of M2 with replay tests; maintain envelope fallback until regression-free. |
-| Council signing keys | Required for manifest envelopes and registry approvals. | Signing ceremony documented in `docs/source/sorafs/signing_ceremony.md`; rotate keys with overlap and ledger note. |
-| SDK release cadence | Clients must honour alias proofs before M3. | Align SDK release windows with milestone gates; add migration checklists to release templates. |
+| ጥገኛ | ተጽዕኖ | ቅነሳ |
+|--------|--------|-----------|
+| የፒን መዝገብ ቤት ውል መኖር | M2 ፒን-የመጀመሪያ መልቀቅን ያግዳል። | የመድረክ ኮንትራት ከ M2 በፊት ከድጋሚ ሙከራዎች ጋር; ከድጋሜ ነፃ እስኪሆን ድረስ የኤንቨሎፕ ውድቀትን ይጠብቁ። |
+| የምክር ቤት ፊርማ ቁልፎች | ለማንፀባረቅ ኤንቨሎፕ እና የመመዝገቢያ ማፅደቂያዎች ያስፈልጋል። | በ I18NI0000024X ውስጥ የተመዘገበ የፊርማ ሥነ ሥርዓት; ቁልፎችን በተደራራቢ እና በደብዳቤ ማስታወሻ ያሽከርክሩ። |
+| የኤስዲኬ ልቀት ማረጋገጫ | ደንበኞች ከM3 በፊት የቅፅል ማረጋገጫዎችን ማክበር አለባቸው። | የኤስዲኬ መልቀቂያ መስኮቶችን ከወሳኝ በሮች ጋር አሰልፍ ፤ አብነቶችን ለመልቀቅ የፍልሰት ማረጋገጫ ዝርዝሮችን ያክሉ። |
 
-Residual risks and mitigations are mirrored in `docs/source/sorafs_architecture_rfc.md`
-and should be cross-referenced when adjustments are made.
+ቀሪ ስጋቶች እና ቅነሳዎች በI18NI0000025X ውስጥ ተንጸባርቀዋል
+እና ማስተካከያ በሚደረግበት ጊዜ ተሻጋሪ መሆን አለበት.
 
-## Exit Criteria Checklist
+## ከመመዘኛዎች ማረጋገጫ ዝርዝር ውጣ
 
-| Milestone | Criteria |
-|-----------|----------|
-| M1 | - Nightly fixture job green for seven consecutive days. <br /> - Staging alias proofs verified in CI. <br /> - Governance ratifies expectation flag policy. |
+| ወሳኝ ምዕራፍ | መስፈርት |
+|-------------|
+| M1 | - ለሰባት ተከታታይ ቀናት የሌሊት የቤት ዕቃዎች አረንጓዴ ሥራ። <br /> - በCI ውስጥ የተረጋገጡ ተለዋጭ ማረጋገጫዎች። <br /> - አስተዳደር የሚጠበቀውን ባንዲራ ፖሊሲ ያጸድቃል። |
 
-## Change Management
+## ለውጥ አስተዳደር
 
-1. Propose adjustments via PR updating this file **and**
+1. ይህንን ፋይል በማዘመን በPR በኩል ማስተካከያዎችን ያቅርቡ ** እና ***
    `docs/source/sorafs/migration_ledger.md`.
-2. Link supporting governance minutes and CI evidence in the PR description.
-3. On merge, notify storage + DevRel mailing list with summary and expected
-   operator actions.
+2. በPR መግለጫ ውስጥ ደጋፊ የአስተዳደር ደቂቃዎችን እና የCI ማስረጃዎችን ያገናኙ።
+3. ሲዋሃዱ፣ ማከማቻ + DevRel የደብዳቤ መላኪያ ዝርዝርን ከማጠቃለያ እና ከሚጠበቀው ጋር ያሳውቁ
+   ኦፕሬተር ድርጊቶች.
 
-Following this procedure ensures the SoraFS rollout remains deterministic,
-auditable, and transparent across teams participating in the Nexus launch.
+ይህንን አሰራር በመከተል የSoraFS ልቀት ቆራጥ ሆኖ ይቆያል፣
+በNexus ጅምር ላይ በሚሳተፉ ቡድኖች ሁሉ ኦዲት ሊደረግ የሚችል እና ግልጽ ነው።

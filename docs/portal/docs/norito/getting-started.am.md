@@ -7,38 +7,39 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 8e153602cfb465bd5f65bab0cf97c44604bba982a7a7f1edc8d5af8fd67a9e29
 source_last_modified: "2026-01-22T16:26:46.504508+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Norito Getting Started
+# Norito መጀመር
 
-This quick guide shows the minimal workflow for compiling a Kotodama contract,
-inspecting the generated Norito bytecode, running it locally, and deploying it
-to an Iroha node.
+ይህ ፈጣን መመሪያ የKotodama ውል ለማጠናቀር አነስተኛውን የስራ ሂደት ያሳያል፣
+የመነጨውን I18NT0000006X ባይት ኮድ በመፈተሽ፣ በአገር ውስጥ ማስኬድ እና ማሰማራት
+ወደ Iroha መስቀለኛ መንገድ።
 
-## Prerequisites
+## ቅድመ ሁኔታዎች
 
-1. Install the Rust toolchain (1.76 or newer) and check out this repository.
-2. Build or download the supporting binaries:
-   - `koto_compile` – Kotodama compiler that emits IVM/Norito bytecode
-   - `ivm_run` and `ivm_tool` – local execution and inspection utilities
-   - `iroha_cli` – used for contract deployment via Torii
+1. የ Rust Toolchain (1.76 ወይም አዲስ) ይጫኑ እና ይህን ማከማቻ ይመልከቱ።
+2. የሚደግፉ ሁለትዮሾችን ይገንቡ ወይም ያውርዱ፡
+   - `koto_compile` - Kotodama ባይትኮድ የሚያወጣው IVM/Norito
+   - `ivm_run` እና `ivm_tool` - የአካባቢ ማስፈጸሚያ እና የፍተሻ መገልገያዎች
+   - `iroha_cli` - በ Torii በኩል ውል ለማሰማራት ያገለግላል
 
-   The repository Makefile expects these binaries on `PATH`. You can either
-   download prebuilt artifacts or build them from source. If you compile the
-   toolchain locally, point the Makefile helpers at the binaries:
+   የማጠራቀሚያው Makefile እነዚህን ሁለትዮሾች በ`PATH` ላይ ይጠብቃል። አንተም ትችላለህ
+   አስቀድመው የተገነቡ ቅርሶችን ያውርዱ ወይም ከምንጩ ይገንቧቸው። እርስዎ ካጠናቀሩ
+   የመሳሪያ ሰንሰለት በአገር ውስጥ፣ የ Makefile ረዳቶችን በሁለትዮሽዎቹ ላይ ያመልክቱ፡
 
    ```sh
    KOTO=./target/debug/koto_compile IVM=./target/debug/ivm_run make examples-run
    ```
 
-3. Ensure an Iroha node is running when you reach the deployment step. The
-   examples below assume Torii is reachable at the URL configured in your
-   `iroha_cli` profile (`~/.config/iroha/cli.toml`).
+3. የማሰማራቱ ደረጃ ላይ ሲደርሱ የI18NT0000014X መስቀለኛ መንገድ እየሰራ መሆኑን ያረጋግጡ። የ
+   ከዚህ በታች ያሉት ምሳሌዎች Torii በእርስዎ ውስጥ በተዋቀረው ዩአርኤል ሊደረስ ይችላል ብለው ያስባሉ
+   `iroha_cli` መገለጫ (`~/.config/iroha/cli.toml`)።
 
-## 1. Compile a Kotodama contract
+## 1. የ Kotodama ውል ማጠናቀር
 
-The repository ships a minimal “hello world” contract in
-`examples/hello/hello.ko`. Compile it to Norito/IVM bytecode (`.to`):
+ማከማቻው አነስተኛውን የ"ሄሎ አለም" ውል ይልካል።
+`examples/hello/hello.ko`. ወደ Norito/IVM ባይትኮድ (`.to`) አጠናቅሩት፡-
 
 ```sh
 mkdir -p target/examples
@@ -48,42 +49,42 @@ koto_compile examples/hello/hello.ko \
   -o target/examples/hello.to
 ```
 
-Key flags:
+ቁልፍ ባንዲራዎች፡-
 
-- `--abi 1` locks the contract to ABI version 1 (the only supported version at
-  the time of writing).
-- `--max-cycles 0` requests unbounded execution; set a positive number to bound
-  cycle padding for zero-knowledge proofs.
+- `--abi 1` ውሉን ወደ ABI ስሪት 1 ይቆልፋል ( ብቸኛው የሚደገፍ ስሪት በ ላይ
+  የጽሑፍ ጊዜ)።
+- `--max-cycles 0` ያልተገደበ አፈፃፀም ይጠይቃል; ለማሰር አዎንታዊ ቁጥር ያዘጋጁ
+  ለዜሮ-እውቀት ማረጋገጫዎች ዑደት ንጣፍ.
 
-## 2. Inspect the Norito artifact (optional)
+## 2. የNorito አርቲፊክስን መርምር (አማራጭ)
 
-Use `ivm_tool` to verify the header and embedded metadata:
+ራስጌውን እና የተካተተውን ሜታዳታ ለማረጋገጥ `ivm_tool` ይጠቀሙ፡-
 
 ```sh
 ivm_tool inspect target/examples/hello.to
 ```
 
-You should see the ABI version, enabled feature flags, and the exported entry
-points. This is a quick sanity check before deployment.
+የ ABI ስሪትን፣ የነቁ የባህሪ ባንዲራዎችን እና ወደ ውጭ የተላከውን ግቤት ማየት አለብህ
+ነጥቦች. ይህ ከመሰማራቱ በፊት ፈጣን የንፅህና ማረጋገጫ ነው።
 
-## 3. Run the contract locally
+## 3. ውሉን በአገር ውስጥ ያካሂዱ
 
-Execute the bytecode with `ivm_run` to confirm behaviour without touching a
-node:
+ባህሪን ለማረጋገጥ ባይትኮዱን በ`ivm_run` ያስፈጽሙ
+መስቀለኛ መንገድ
 
 ```sh
 ivm_run target/examples/hello.to --args '{}'
 ```
 
-The `hello` example logs a greeting and issues a `SET_ACCOUNT_DETAIL` syscall.
-Running locally is useful while iterating on contract logic before publishing
-it on-chain.
+የ`hello` ምሳሌ ሰላምታ ይመዘግባል እና `SET_ACCOUNT_DETAIL` syscall ያወጣል።
+ከማተምዎ በፊት በኮንትራት አመክንዮ ላይ እየደጋገሙ በአገር ውስጥ መሮጥ ጠቃሚ ነው።
+በሰንሰለት ላይ ነው ።
 
-## 4. Deploy via `iroha_cli`
+## 4. በ `iroha_cli` ማሰማራት
 
-When you are satisfied with the contract, deploy it to a node using the CLI.
-Provide an authority account, its signing key, and either a `.to` file or
-Base64 payload:
+በውሉ ሲረኩ CLI ን በመጠቀም ወደ መስቀለኛ መንገድ ያሰማሩት።
+የባለስልጣን መለያ፣ የመፈረሚያ ቁልፉ እና ወይ `.to` ፋይል ወይም
+ቤዝ64 ጭነት፡-
 
 ```sh
 iroha_cli app contracts deploy \
@@ -92,37 +93,37 @@ iroha_cli app contracts deploy \
   --code-file target/examples/hello.to
 ```
 
-The command submits a Norito manifest + bytecode bundle over Torii and prints
-the resulting transaction status. Once the transaction is committed, the code
-hash shown in the response can be used to retrieve manifests or list instances:
+ትዕዛዙ Norito አንጸባራቂ + ባይትኮድ ጥቅል በTorii ላይ ያቀርባል እና ያትማል።
+የተገኘው የግብይት ሁኔታ. ግብይቱ ከተፈጸመ በኋላ, ኮዱ
+በምላሹ ላይ የሚታየው hash መግለጫዎችን ለማውጣት ወይም ምሳሌዎችን ለመዘርዘር ሊያገለግል ይችላል፡-
 
 ```sh
 iroha_cli app contracts manifest get --code-hash 0x<hash>
 iroha_cli app contracts instances --namespace apps --table
 ```
 
-## 5. Run against Torii
+## 5. ከ Torii ጋር ሩጡ
 
-With the bytecode registered, you can invoke it by submitting an instruction
-that references the stored code (e.g., through `iroha_cli ledger transaction submit`
-or your application client). Ensure the account permissions allow the desired
-syscalls (`set_account_detail`, `transfer_asset`, etc.).
+በባይቴኮድ የተመዘገበ፣ መመሪያ በማስገባት ሊጠሩት ይችላሉ።
+የተቀመጠውን ኮድ የሚያመለክት (ለምሳሌ በ`iroha_cli ledger transaction submit`
+ወይም የእርስዎ መተግበሪያ ደንበኛ)። የመለያ ፈቃዶች የሚፈለገውን እንደሚፈቅዱ ያረጋግጡ
+ሲስካልስ (`set_account_detail`፣ `transfer_asset`፣ ወዘተ)።
 
-## Tips & troubleshooting
+## ጠቃሚ ምክሮች እና መላ ፍለጋ
 
-- Use `make examples-run` to compile and execute the provided examples in one
-  shot. Override `KOTO`/`IVM` environment variables if the binaries are not on
+- የቀረቡትን ምሳሌዎች በአንድ ላይ ለማሰባሰብ እና ለማስፈጸም `make examples-run` ይጠቀሙ
+  ተኩስ ሁለትዮሽዎቹ ከሌሉ `KOTO`/`IVM` የአካባቢ ተለዋዋጮችን ይሽሩ
   `PATH`.
-- If `koto_compile` rejects the ABI version, verify that the compiler and node
-  both target ABI v1 (run `koto_compile --abi` without arguments to list
-  support).
-- The CLI accepts either hex or Base64 signing keys. For testing, you can use
-  keys emitted by `iroha_cli tools crypto keypair`.
-- When debugging Norito payloads, the `ivm_tool disassemble` subcommand helps
-  correlate instructions with Kotodama source.
+- `koto_compile` የኤቢአይ ሥሪቱን ውድቅ ካደረገ፣ አጠናቃሪው እና መስቀለኛ መንገዱን ያረጋግጡ።
+  ሁለቱም ኢላማ ABI v1 (ለመዘርዘር ያለ ክርክሮች `koto_compile --abi` ያሂዱ
+  ድጋፍ)።
+- CLI ሄክስ ወይም Base64 የመፈረሚያ ቁልፎችን ይቀበላል። ለሙከራ, መጠቀም ይችላሉ
+  በ I18NI0000055X የወጡ ቁልፎች።
+- የI18NT0000011X ክፍያ ጭነቶችን ሲያርሙ የ`ivm_tool disassemble` ንዑስ ትዕዛዝ ይረዳል
+  መመሪያዎችን ከ I18NT0000003X ምንጭ ጋር ያዛምዱ።
 
-This flow mirrors the steps used in CI and the integration tests. For a deeper
-dive into Kotodama grammar, syscall mappings, and Norito internals, see:
+ይህ ፍሰት በCI ውስጥ ጥቅም ላይ የሚውሉትን ደረጃዎች እና የውህደት ሙከራዎችን ያንጸባርቃል። ለበለጠ
+ወደ Kotodama ሰዋሰው፣ syscall mappings እና Norito ውስጠ ገብተው ይመልከቱ፡
 
 - `docs/source/kotodama_grammar.md`
 - `docs/source/kotodama_examples.md`

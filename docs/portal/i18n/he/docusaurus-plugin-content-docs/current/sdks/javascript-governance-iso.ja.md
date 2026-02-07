@@ -4,46 +4,48 @@ direction: rtl
 source: docs/portal/docs/sdks/javascript-governance-iso.ja.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: Governance & ISO bridge examples
-description: Drive advanced Torii workflows with `@iroha/iroha-js`.
+כותרת: ממשל ודוגמאות לגשר ISO
+תיאור: כונן זרימות עבודה מתקדמות של Torii עם `@iroha/iroha-js`.
 slug: /sdks/javascript/governance-iso-examples
 ---
 
-This field guide expands on the quickstart by demonstrating governance and
-ISO&nbsp;20022 bridge flows with `@iroha/iroha-js`. The snippets reuse the same
-runtime helpers that ship with `ToriiClient`, so you can copy them directly into
-CLI tooling, CI harnesses, or long-running services.
+מדריך שטח זה מרחיב את ההתחלה המהירה על ידי הדגמת ממשל ו
+גשר ISO 20022 זורם עם `@iroha/iroha-js`. הקטעים עושים בו שימוש חוזר
+עוזרי זמן ריצה הנשלחים עם `ToriiClient`, כך שתוכל להעתיק אותם ישירות לתוך
+כלי CLI, רתמות CI או שירותים ארוכי טווח.
 
-Additional resources:
+משאבים נוספים:
 
-- `javascript/iroha_js/recipes/governance.mjs` — runnable end-to-end script for
-  proposals, ballots, and council rotations.
-- `javascript/iroha_js/recipes/iso_bridge.mjs` — CLI helper for submitting
-  pacs.008/pacs.009 payloads and polling deterministic status.
-- `docs/source/finance/settlement_iso_mapping.md` — canonical ISO field mapping.
+- `javascript/iroha_js/recipes/governance.mjs` - סקריפט מקצה לקצה שניתן להרצה עבור
+  הצעות, פתקי הצבעה וסיבובי מועצה.
+- `javascript/iroha_js/recipes/iso_bridge.mjs` - עוזר CLI להגשה
+  pacs.008/pacs.009 מטענים ומצב דטרמיניסטי של סקרים.
+- `docs/source/finance/settlement_iso_mapping.md` — מיפוי שדות ISO קנוני.
 
-## Running the bundled recipes
+## הפעלת המתכונים המצורפים
 
-These examples depend on the scripts in `javascript/iroha_js/recipes/`. Run
-`npm install && npm run build:native` beforehand so the generated bindings are
-available.
+דוגמאות אלו תלויות בסקריפטים ב-`javascript/iroha_js/recipes/`. רוץ
+`npm install && npm run build:native` מראש, כך שהקשרים שנוצרו
+זמין.
 
-### Governance helper walkthrough
+### הדרכה לעוזר ממשל
 
-Configure the following environment variables before invoking
+הגדר את משתני הסביבה הבאים לפני ההפעלה
 `recipes/governance.mjs`:
 
-- `TORII_URL` — Torii endpoint.
-- `AUTHORITY` / `PRIVATE_KEY_HEX` — signer account and key (hex). Keep keys in a
-  secure secret store.
-- `CHAIN_ID` — optional network identifier.
-- `GOV_SUBMIT=1` — push the generated transactions to Torii.
-- `GOV_FETCH=1` — fetch proposals/locks after submission.
-- `GOV_PROPOSAL_ID`, `GOV_REFERENDUM_ID`, `GOV_LOCKS_ID` — optional lookups used
-  when `GOV_FETCH=1`.
+- `TORII_URL` — נקודת קצה Torii.
+- `AUTHORITY` / `PRIVATE_KEY_HEX` - חשבון חותם ומפתח (hex). שמור מפתחות בתוך א
+  חנות סודית מאובטחת.
+- `CHAIN_ID` - מזהה רשת אופציונלי.
+- `GOV_SUBMIT=1` - דחוף את העסקאות שנוצרו ל-Torii.
+- `GOV_FETCH=1` - אחזר הצעות/נעילות לאחר ההגשה.
+- `GOV_PROPOSAL_ID`, `GOV_REFERENDUM_ID`, `GOV_LOCKS_ID` - נעשה שימוש בחיפושים אופציונליים
+  כאשר `GOV_FETCH=1`.
 
 ```bash
 npm run build:native
@@ -62,30 +64,30 @@ GOV_PROPOSAL_ID=calc.v1 \
 node javascript/iroha_js/recipes/governance.mjs
 ```
 
-Hashes are logged for every step, and Torii responses are surfaced when
-`GOV_SUBMIT=1` so CI jobs can fail fast on submission errors.
+גיבוב נרשם עבור כל שלב, ותגובות Torii מופיעות כאשר
+`GOV_SUBMIT=1` כך שעבודות CI יכולות להיכשל במהירות על שגיאות הגשה.
 
-### ISO bridge helper
+### עוזר גשר ISO
 
-`recipes/iso_bridge.mjs` submits either a pacs.008 or pacs.009 message and polls
-the ISO bridge until the status settles. Configure it with:
+`recipes/iso_bridge.mjs` שולח הודעה וסקרים pacs.008 או pacs.009
+גשר ה-ISO עד שהמצב ייקבע. הגדר את זה עם:
 
-- `TORII_URL` — Torii endpoint exposing the ISO bridge APIs.
-- `ISO_MESSAGE_KIND` — `pacs.008` (default) or `pacs.009`. The helper uses the
-  matching sample builder (`buildSamplePacs008Message` / `buildSamplePacs009Message`)
-  when you do not supply your own XML.
-- `ISO_MESSAGE_SUFFIX` — optional suffix appended to the sample payload IDs to
-  keep repeated rehearsals unique (defaults to the current epoch seconds in hex).
-- `ISO_CONTENT_TYPE` — override the `Content-Type` header for submissions
-  (for example `application/pacs009+xml`); ignored when you only poll an
-  existing message id.
-- `ISO_MESSAGE_ID` — skip submission altogether and only poll the supplied
-  identifier via `waitForIsoMessageStatus`.
-- `ISO_POLL_ATTEMPTS` / `ISO_POLL_INTERVAL_MS` — tune the wait strategy for
-  noisy or slow bridge deployments.
-- `ISO_RESOLVE_ON_ACCEPTED=1` — exit as soon as Torii returns `Accepted`,
-  even if the transaction hash is still pending (handy during bridge maintenance
-  when the ledger commit is delayed).
+- `TORII_URL` — נקודת קצה Torii חושפת את ממשקי API של גשר ISO.
+- `ISO_MESSAGE_KIND` — `pacs.008` (ברירת מחדל) או `pacs.009`. העוזר משתמש ב-
+  בונה מדגם תואם (`buildSamplePacs008Message` / `buildSamplePacs009Message`)
+  כאשר אינך מספק XML משלך.
+- `ISO_MESSAGE_SUFFIX` - סיומת אופציונלית שצורפה למזהי המטען לדוגמה ל
+  שמור על חזרות חוזרות ונשנות ייחודיות (ברירת מחדל היא שניות העידן הנוכחיות בהקסדה).
+- `ISO_CONTENT_TYPE` - עוקף את הכותרת `Content-Type` להגשות
+  (לדוגמה `application/pacs009+xml`); התעלמו כאשר אתה רק משאל an
+  מזהה הודעה קיימת.
+- `ISO_MESSAGE_ID` - דלג על ההגשה לגמרי וסקר רק את התוכן שסופק
+  מזהה באמצעות `waitForIsoMessageStatus`.
+- `ISO_POLL_ATTEMPTS` / `ISO_POLL_INTERVAL_MS` - כוונן את אסטרטגיית ההמתנה עבור
+  פריסת גשרים רועשת או איטית.
+- `ISO_RESOLVE_ON_ACCEPTED=1` — צא ברגע ש-Torii מחזיר את `Accepted`,
+  גם אם ה-hash של העסקה עדיין בהמתנה (שימושי במהלך תחזוקת הגשר
+  כאשר ביצוע הפנקס מתעכב).
 
 ```bash
 # Submit a pacs.009 message and wait for completion.
@@ -101,25 +103,23 @@ ISO_MESSAGE_ID=iso-demo-1 \
 node javascript/iroha_js/recipes/iso_bridge.mjs
 ```
 
-Both scripts exit with status code `1` if Torii never reports a terminal
-transition, making them suitable for CI gate jobs.
+שני הסקריפטים יוצאים עם קוד סטטוס `1` אם Torii אף פעם לא מדווח על מסוף
+מעבר, מה שהופך אותם מתאימים לעבודות שער CI.
 
-### ISO alias helper
+### עוזר כינוי ISO`recipes/iso_alias.mjs` מכוון לנקודות הקצה הכינוי של ISO כך שהחזרות יכולות לכסות
+חיפושי גיבוב של אלמנטים מעוורים וחיפושי כינוי מבלי לכתוב כלי עבודה מותאמים אישית. זה
+שיחות `ToriiClient.evaluateAliasVoprf` בתוספת `resolveAlias` / `resolveAliasByIndex`
+ומדפיס את הקצה האחורי, התקציר, כריכת החשבון, המקור והאינדקס הדטרמיניסטי
+הוחזר על ידי Torii.
 
-`recipes/iso_alias.mjs` targets the ISO alias endpoints so rehearsals can cover
-blinded-element hashing and alias lookups without writing bespoke tooling. It
-calls `ToriiClient.evaluateAliasVoprf` plus `resolveAlias` / `resolveAliasByIndex`
-and prints the backend, digest, account binding, source, and deterministic index
-returned by Torii.
+משתני סביבה:
 
-Environment variables:
-
-- `TORII_URL` — Torii endpoint exposing the alias helpers.
-- `ISO_VOPRF_INPUT` — hex-encoded blinded element (defaults to `deadbeef`).
-- `ISO_SKIP_VOPRF=1` — skip the VOPRF call when only testing lookups.
-- `ISO_ALIAS_LABEL` — literal alias to resolve (e.g., IBAN-style strings).
-- `ISO_ALIAS_INDEX` — decimal or `0x`-prefixed index passed to `resolveAliasByIndex`.
-- `TORII_AUTH_TOKEN` / `TORII_API_TOKEN` — optional headers for secured Torii deployments.
+- `TORII_URL` — נקודת קצה Torii חושפת את עוזרי הכינוי.
+- `ISO_VOPRF_INPUT` - אלמנט מעוור מקודד משושה (ברירת המחדל היא `deadbeef`).
+- `ISO_SKIP_VOPRF=1` - דלג על שיחת VOPRF כאשר רק בודקים חיפושים.
+- `ISO_ALIAS_LABEL` - כינוי מילולי לפתרון (לדוגמה, מחרוזות בסגנון IBAN).
+- `ISO_ALIAS_INDEX` - אינדקס עשרוני או `0x` עם קידומת מועבר ל-`resolveAliasByIndex`.
+- `TORII_AUTH_TOKEN` / `TORII_API_TOKEN` - כותרות אופציונליות לפריסות Torii מאובטחות.
 
 ```bash
 # Evaluate a blinded element and resolve an alias literal + deterministic index.
@@ -136,13 +136,13 @@ ISO_ALIAS_LABEL="iso:demo:alpha" \
 node javascript/iroha_js/recipes/iso_alias.mjs
 ```
 
-The helper mirrors Torii’s behaviour: it surfaces 404s when aliases are missing
-and treats runtime-disabled errors as soft skips so CI flows can tolerate bridge
-maintenance windows.
+העוזר משקף את ההתנהגות של Torii: הוא מציג 404s כאשר כינויים חסרים
+ומתייחס לשגיאות מושבתות בזמן ריצה כדילוגים רכים כך שזרימות CI יכולות לסבול גשר
+חלונות תחזוקה.
 
-## Governance workflows
+## זרימות עבודה של ממשל
 
-### Inspect contract instances and proposals
+### בדוק מקרים והצעות חוזה
 
 ```ts
 import { ToriiClient } from "@iroha/iroha-js";
@@ -166,10 +166,10 @@ const proposal = await torii.getGovernanceProposal("proposal-001", {
 console.log(proposal?.kind, proposal?.status);
 ```
 
-### Submit proposals and ballots
+### הגשת הצעות ופתקי הצבעה
 
-Use an `AbortController` when you need to cancel or time-bound governance submissions—the SDK
-accepts an optional `{ signal }` object for every POST helper shown below.
+השתמש ב-`AbortController` כאשר אתה צריך לבטל הגשות ניהול מוגבלות בזמן - ה-SDK
+מקבל אובייקט `{ signal }` אופציונלי עבור כל עוזר POST המוצג להלן.
 
 ```ts
 const authority = "ih58...";
@@ -216,7 +216,7 @@ await torii.governanceSubmitZkBallot({
 }, { signal: writeController.signal });
 ```
 
-### Council VRF and enactment
+### VRF וחקיקה של המועצה
 
 ```ts
 const validatorPk = Buffer.alloc(48, 0xdd);
@@ -261,9 +261,9 @@ const enactDraft = await torii.governanceEnactProposalTyped({
 console.log("enact tx count", enactDraft.tx_instructions.length);
 ```
 
-## ISO&nbsp;20022 bridge recipes
+## מתכוני גשר ISO 20022
 
-### Build pacs.008 / pacs.009 payloads
+### בניית עומסי pacs.008 / pacs.009
 
 ```ts
 import { buildPacs008Message } from "@iroha/iroha-js";
@@ -282,11 +282,11 @@ const settlement = buildPacs008Message({
 });
 ```
 
-All identifiers (BIC, LEI, IBAN, ISO amount) are validated before XML is
-generated. Swap `buildPacs008Message` for `buildPacs009Message` to emit PvP
-funding payloads.
+כל המזהים (BIC, LEI, IBAN, כמות ISO) מאומתים לפני ה-XML
+נוצר. החלף את `buildPacs008Message` עבור `buildPacs009Message` כדי לפלוט PvP
+מטעני מימון.
 
-### Submit and poll ISO messages
+### שלח וסקר הודעות ISO
 
 ```ts
 import { ToriiClient } from "@iroha/iroha-js";
@@ -325,17 +325,17 @@ await torii.submitIsoMessage(
 );
 ```
 
-Both `resolveOnAccepted` and `resolveOnAcceptedWithoutTransaction` are valid; use either flag
-to treat `Accepted` statuses (without a transaction hash) as terminal when orchestrating polls.
+גם `resolveOnAccepted` וגם `resolveOnAcceptedWithoutTransaction` תקפים; השתמש בשני הדגלים
+להתייחס לסטטוסים של `Accepted` (ללא גיבוב עסקה) כאל מסוף בעת תזמור סקרים.
 
-The helpers throw `IsoMessageTimeoutError` if the bridge never reports a
-terminal state. Use the lower-level `submitIsoPacs008` / `submitIsoPacs009`
-calls when you need to orchestrate custom polling logic; `getIsoMessageStatus`
-exposes a single-shot lookup.
+העוזרים זורקים `IsoMessageTimeoutError` אם הגשר אף פעם לא מדווח על א
+מצב טרמינלי. השתמש ב-`submitIsoPacs008` / `submitIsoPacs009` ברמה נמוכה יותר
+שיחות כאשר אתה צריך לתזמר היגיון סקרים מותאם אישית; `getIsoMessageStatus`
+חושף בדיקת צילום בודדת.
 
-### Related surfaces
+### משטחים קשורים
 
-- `torii.getSorafsPorWeeklyReport("2026-W05")` fetches the ISO-week PoR bundle
-  referenced in the roadmap and can reuse the wait helpers for alerts.
-- `resolveAlias` / `resolveAliasByIndex` expose ISO bridge alias bindings so
-  reconciliation tools can prove account ownership before issuing a payment.
+- `torii.getSorafsPorWeeklyReport("2026-W05")` מביא את חבילת ISO-week PoR
+  מוזכר במפת הדרכים ויכול לעשות שימוש חוזר בעוזרי ההמתנה להתראות.
+- `resolveAlias` / `resolveAliasByIndex` חושפים כריכות כינויים של גשר ISO כך
+  כלי התאמה יכולים להוכיח בעלות על חשבון לפני הוצאת תשלום.

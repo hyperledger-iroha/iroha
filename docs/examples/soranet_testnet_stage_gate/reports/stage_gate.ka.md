@@ -7,11 +7,12 @@ generator: scripts/sync_docs_i18n.py
 source_hash: dc187842c8750a2932fa93f3eea0db063b3dc2d6399a56a9eda93cbab9a98ca4
 source_last_modified: "2025-12-29T18:16:35.093951+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Stage-gate summary (T0 → T1)
+# სცენა-კარის შეჯამება (T0 → T1)
 
-- Metrics: pass ( >= 0.95 circuit success, PoW p95 2.6s, latency p95 181ms )
-- PQ mix held at 0.55/0.30/0.15; no unexpected categories
-- Drills: NRT brownout (3m12s restore), AMS downgrade (2m25s restore)
-- Attachments: guard rotation log, exit bond manifest, signed drill bundle
+- მეტრიკა: უღელტეხილი (>= 0,95 მიკროსქემის წარმატება, PoW p95 2,6s, შეყოვნება p95 181ms)
+- PQ mix გაიმართა 0.55/0.30/0.15; არ არის მოულოდნელი კატეგორიები
+- სავარჯიშოები: NRT გაფუჭება (3m12s აღდგენა), AMS downgrade (2m25s აღდგენა)
+- დანართები: დაცვის როტაციის ჟურნალი, გასასვლელი ბონდის მანიფესტი, ხელმოწერილი საბურღი პაკეტი

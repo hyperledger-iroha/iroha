@@ -7,48 +7,49 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 1b453559c05401edc11894e585c8d5ca4b678d4667c1cef0415582e1f7de8246
 source_last_modified: "2025-12-29T18:16:35.087502+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Economic Analysis - 2025-10 -> 2025-11 Shadow Run
+# የኢኮኖሚ ትንተና - 2025-10 -> 2025-11 የጥላ ሩጫ
 
-Source artefact: `docs/examples/soranet_incentive_shadow_run.json` (signature +
-public key in the same directory). The simulation replayed 60 epochs per relay
-with the reward engine pinned to `RewardConfig` recorded in
+የምንጭ አርቴፊክት፡ I18NI0000001X (ፊርማ +
+በተመሳሳይ ማውጫ ውስጥ የህዝብ ቁልፍ)። ማስመሰያው በአንድ ቅብብል 60 ኢፖክዎችን በድጋሚ ተጫውቷል።
+በ I18NI0000002X ከተሰካ የሽልማት ሞተር ጋር
 `reward_config.json`.
 
-## Distribution Summary
+## የስርጭት ማጠቃለያ
 
-- **Total payouts:** 5,160 XOR over 360 rewarded epochs.
-- **Fairness envelope:** Gini coefficient 0.121; top relay share 23.26%
-  (well below the 30% governance guardrail).
-- **Availability:** fleet average 96.97%, all relays remained above 94%.
-- **Bandwidth:** fleet average 91.20%, with the lowest performer at 87.23%
-  during planned maintenance; penalties were applied automatically.
-- **Compliance noise:** 9 warning epochs and 3 suspensions were observed and
-  translated into payout reductions; no relay exceeded the 12-warning cap.
-- **Operational hygiene:** no metrics snapshots were skipped due to missing
-  config, bonds, or duplicates; no calculator errors were emitted.
+- ** ጠቅላላ ክፍያዎች:** 5,160 XOR ከ360 በላይ የተሸለሙ ዘመናት።
+- ** የፍትሃዊነት ኤንቨሎፕ: ** ጊኒ ኮፊሸን 0.121; ከፍተኛ ቅብብል 23.26%
+  (ከ30% የአስተዳደር ጥበቃ በታች)።
+- **ተገኝነት፡** መርከቦች አማካኝ 96.97%፣ ሁሉም ቅብብሎሽ ከ94% በላይ ቀርቷል።
+- ** ባንድ ስፋት:** መርከቦች አማካኝ 91.20%፣ ዝቅተኛው አፈጻጸም ያለው 87.23%
+  በእቅድ ጥገና ወቅት; ቅጣቶች በራስ-ሰር ተተግብረዋል.
+- ** የታዛዥነት ጫጫታ: *** 9 የማስጠንቀቂያ ዘመናት እና 3 እገዳዎች ተስተውለዋል እና
+  ወደ ክፍያ ቅነሳዎች መተርጎም; ምንም ቅብብል ከ12-ማስጠንቀቂያ ካፕ በላይ አልፏል።
+- **የስራ ማስኬጃ ንጽህና፡** ምንም ሜትሪክስ ቅጽበታዊ ገጽ እይታዎች በመጥፋታቸው አልተዘለሉም።
+  ማዋቀር፣ ቦንዶች ወይም ብዜቶች; ምንም የሂሳብ ማሽን ስህተቶች አልተለቀቁም።
 
-## Observations
+## ምልከታዎች
 
-- Suspensions correspond to epochs where relays entered maintenance mode. The
-  payout engine emitted zero payouts for those epochs while preserving the
-  audit trail in the shadow-run JSON.
-- Warning penalties shaved 2% off the affected payouts; the resulting
-  distribution still converges thanks to the uptime/bandwidth weights (650/350
-  per mille).
-- Bandwidth variance tracks the anonymised guard heatmap. The lowest performer
-  (`6666...6666`) retained 620 XOR across the window, above the 0.6x floor.
-- Latency-sensitive alerts (`SoranetRelayLatencySpike`) remained below warning
-  thresholds throughout the window; correlated dashboards are captured under
+- እገዳዎች ቅብብሎሽ ወደ ጥገና ሁነታ ከገባባቸው ዘመናት ጋር ይዛመዳል። የ
+  የክፍያ ሞተር ለእነዚያ ኢፖክዎች ዜሮ ክፍያዎችን አስከትሏል ፣
+  በጥላ የሚተዳደር JSON ውስጥ የኦዲት ዱካ።
+- የማስጠንቀቂያ ቅጣቶች ከተጎዱት ክፍያዎች 2% ተላጨ; የተገኘው
+  ለትርፍ ሰዓት/ባንድ ስፋት ክብደት (650/350) ስርጭቱ አሁንም ይሰበሰባል
+  በአንድ ሚሊ).
+- የመተላለፊያ ይዘት ልዩነት ማንነቱ ያልተገለፀውን የጥበቃ ካርታ ይከታተላል። ዝቅተኛው አፈፃፀም
+  (`6666...6666`) 620 XOR በመስኮት በኩል፣ ከ0.6x ወለል በላይ ተይዟል።
+- የቆይታ ጊዜ-sensitive ማንቂያዎች (`SoranetRelayLatencySpike`) ከማስጠንቀቂያ በታች ቀርተዋል
+  በመስኮቱ ውስጥ ያሉ ደረጃዎች; ተያያዥነት ያላቸው ዳሽቦርዶች የተያዙት ስር ነው።
   `dashboards/grafana/soranet_incentives.json`.
 
-## Recommended Actions Before GA
+## ከጂኤ በፊት የሚመከሩ እርምጃዎች
 
-1. Keep running monthly shadow replays and update the artefact set and this
-   analysis if the fleet composition changes.
-2. Gate automatic payouts on the Grafana alert suite referenced in the roadmap
-   (`dashboards/alerts/soranet_incentives_rules.yml`); copy screenshots into the
-   governance minutes when seeking renewal.
-3. Re-run the economic stress test if base reward, uptime/bandwidth weights, or
-   the compliance penalty changes by >=10%.
+1. ወርሃዊ የጥላ ድግግሞሾችን መሮጥዎን ይቀጥሉ እና የጥበብ ስራውን እና ይህንን ያዘምኑ
+   የመርከቦቹ ቅንብር ከተቀየረ ትንታኔ.
+2. በፍኖተ ካርታው ላይ በተጠቀሰው Grafana ማንቂያ ስብስብ ላይ በር አውቶማቲክ ክፍያዎች
+   (`dashboards/alerts/soranet_incentives_rules.yml`); ቅጽበታዊ ገጽ እይታዎችን ወደ ውስጥ ይቅዱ
+   እድሳት ሲፈልጉ የአስተዳደር ደቂቃዎች.
+3. የመሠረት ሽልማት፣ የሰአት/ባንድዊድ ክብደት፣ ወይም ከሆነ የኢኮኖሚ ጭንቀት ፈተናውን እንደገና አሂድ
+   የማክበር ቅጣቱ በ>=10% ይቀየራል።

@@ -4,28 +4,30 @@ direction: rtl
 source: docs/portal/docs/norito/examples/nft-flow.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
 slug: /norito/examples/nft-flow
-title: Cunhar, transferir e queimar um NFT
-description: Percorre o ciclo de vida de um NFT do inicio ao fim: cunhagem para o dono, transferencia, marcacao de metadados e queima.
-source: crates/ivm/docs/examples/12_nft_flow.ko
+כותרת: Cunhar, transferir e queimar um NFT
+תיאור: Percorre o ciclo de vida de um NFT do inicio ao fim: cunhagem para o dono, transferencia, marcacao de metadados e queima.
+מקור: crates/ivm/docs/examples/12_nft_flow.ko
 ---
 
 Percorre o ciclo de vida de um NFT do inicio ao fim: cunhagem para o dono, transferencia, marcacao de metadados e queima.
 
 ## Roteiro do livro razao
 
-- Garanta que a definicao do NFT (por exemplo `n0#wonderland`) exista junto com as contas de dono/destinatario usadas no trecho (`ih58...`, `ih58...`).
-- Invoque o entrypoint `nft_issue_and_transfer` para cunhar o NFT, transferi-lo de Alice para Bob e anexar um sinal de metadados que descreva a emissao.
-- Inspecione o estado do livro razao de NFT com `iroha_cli ledger nfts list --account <id>` ou os equivalentes do SDK para verificar a transferencia, depois confirme que o ativo e removido quando a instrucao de queima roda.
+- Garanta que a definicao do NFT (לדוגמה `n0#wonderland`) exista junto com as contas de dono/destinatario usadas no trecho (`ih58...`, `ih58...`).
+- הזמנת נקודת כניסה `nft_issue_and_transfer` ל-NFT, העברה של אליס למען בוב והוספה לסירוגין של המטאדים לסירוגין.
+- Inspecione o estado do livro razao de NFT com `iroha_cli ledger nfts list --account <id>` או os equivalentes do SDK para verificar a transferencia, depois confirme que o ativo e removido quando a instrucao de queima roda.
 
 ## Guias de SDK relacionados
 
-- [Quickstart do SDK Rust](/sdks/rust)
-- [Quickstart do SDK Python](/sdks/python)
-- [Quickstart do SDK JavaScript](/sdks/javascript)
+- [התחלה מהירה ל-SDK Rust](/sdks/rust)
+- [התחלה מהירה ל-SDK Python](/sdks/python)
+- [התחלה מהירה ל-SDK JavaScript](/sdks/javascript)
 
 [Baixe a fonte Kotodama](/norito-snippets/nft-flow.ko)
 

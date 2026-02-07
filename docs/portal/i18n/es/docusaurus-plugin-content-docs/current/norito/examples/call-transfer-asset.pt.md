@@ -4,28 +4,30 @@ direction: ltr
 source: docs/portal/docs/norito/examples/call-transfer-asset.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
 slug: /norito/examples/call-transfer-asset
-title: Invocar transferencia do host a partir de Kotodama
-description: Mostra como um entrypoint Kotodama pode chamar a instrucao do host `transfer_asset` com validacao inline de metadados.
-source: crates/ivm/docs/examples/08_call_transfer_asset.ko
+título: Invocar transferencia do host a partir de Kotodama
+descripción: Mostra como un punto de entrada Kotodama puede marcar las instrucciones del host `transfer_asset` con validación en línea de metadados.
+fuente: crates/ivm/docs/examples/08_call_transfer_asset.ko
 ---
 
-Mostra como um entrypoint Kotodama pode chamar a instrucao do host `transfer_asset` com validacao inline de metadados.
+Mostra como un punto de entrada Kotodama puede seguir las instrucciones del host `transfer_asset` con validación de metadados en línea.
 
 ## Roteiro do livro razao
 
-- Financie a autoridade do contrato (por exemplo `ih58...`) com o ativo que ela transferira e conceda a autoridade o papel `CanTransfer` ou permissao equivalente.
-- Chame o entrypoint `call_transfer_asset` para transferir 5 unidades da conta do contrato para `ih58...`, refletindo como a automacao on-chain pode envolver chamadas do host.
-- Verifique saldos via `FindAccountAssets` ou `iroha_cli ledger assets list --account ih58...` e inspecione eventos para confirmar que o guard de metadados registrou o contexto da transferencia.
+- Financie a autoridade do contrato (por ejemplo `ih58...`) con o activo que ela transferira e conceda a autoridade o papel `CanTransfer` o permiso equivalente.
+- Chame o Entrypoint `call_transfer_asset` para transferir 5 unidades del contacto del contrato para `ih58...`, reflejando como un automático en cadena que puede involucrar chamadas do host.
+- Verifique saldos vía `FindAccountAssets` o `iroha_cli ledger assets list --account ih58...` e inspeccione eventos para confirmar que o guard de metadados registrou o contexto da transferencia.
 
-## Guias de SDK relacionados
+## Guías de SDK relacionadas
 
-- [Quickstart do SDK Rust](/sdks/rust)
-- [Quickstart do SDK Python](/sdks/python)
-- [Quickstart do SDK JavaScript](/sdks/javascript)
+- [Inicio rápido de SDK Rust](/sdks/rust)
+- [Inicio rápido del SDK Python](/sdks/python)
+- [Inicio rápido del SDK JavaScript](/sdks/javascript)
 
 [Baixe a fonte Kotodama](/norito-snippets/call-transfer-asset.ko)
 

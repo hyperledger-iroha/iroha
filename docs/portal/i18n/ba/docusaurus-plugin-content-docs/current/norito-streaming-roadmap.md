@@ -5,12 +5,14 @@ source: docs/portal/docs/norito-streaming-roadmap.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: Norito Streaming Roadmap
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-The following backlog captures the near-term work items the Streaming Working
-Group tracks for Norito audio/video delivery. Values are updated alongside
-`status.md` and shared here for portal consumers who prefer a machine-friendly
-view.
+Түбәндәге артта ҡала яҡын арала эш әйберҙәре стриминг эше .
+Төркөм тректары өсөн I18NT00000000000X аудио/видео тапшырыу. Ҡиммәттәр менән бер рәттән яңыртыла
+I18NI000000002X һәм бында порталь ҡулланыусылар өсөн бүлешкән, улар машина-дуҫ өҫтөнлөк бирә
+күренеш.
 
 ```json
 [

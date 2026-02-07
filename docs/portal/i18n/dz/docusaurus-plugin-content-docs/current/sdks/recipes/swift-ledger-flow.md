@@ -7,27 +7,29 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: Swift ledger flow recipe
 description: Use IrohaSwift to mint and transfer assets with the default dev network.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-import SampleDownload from '@site/src/components/SampleDownload';
+filight Sample load འདི་ '@site/src/ཆ་ཤས་/ཆ་ཤས་/དཔེ་ཚད་ཕབ་ལེན་';
 
-> IrohaSwift’s encoder currently exposes mint/transfer helpers; asset-definition
-> registration still happens through the CLI. Run the CLI command in step 1 once
-> before executing the Swift sample.
+> IrohaSwift’s incoder གིས་ ད་ལྟོ་ mint/transfer གྲོགས་རམ་པ་ཚུ་ ཕྱིར་བཏོན་འབདཝ་ཨིན། རྒྱུ་ནོར་ངེས་ཚད།
+> ཐོ་བཀོད་འདི་ད་ལྟོ་ཡང་ CLI བརྒྱུད་དེ་འབྱུང་དོ་ཡོདཔ་ཨིན། རིམ་པ་༡ པའི་ནང་ལུ་སི་ཨེལ་ཨའི་བརྡ་བཀོད་འདི་གཡོག་བཀོལ།
+> སུའིཕཊི་དཔེ་ཚད་ལག་ལེན་འཐབ་པའི་ཧེ་མ།
 
-<SampleDownload
-  href="/sdk-recipes/swift/Sources/LedgerFlow/main.swift"
-  filename="Sources/LedgerFlow/main.swift"
-  description="Download the async/await example so you can open it in Xcode or paste it into your Swift package."
-/>
+<དཔེ་ཚད་ཕབ་ལེན་འབད།
+  href="/sdk-ལེན་/མགྱོགས་མྱུར་/འབྱུང་ཁུངས།
+  filen="འབྱུང་ཁུངས་/ལེ་ཇར་ཕོལོ་/མའེན་.ཨིསི་ཝིཕཊ།"
+  secont="ཨ་སིན་ཀ་/བསྒུག་སྡོད་པའི་དཔེ་འདི་ཕབ་ལེན་འབད་དེ་ ཁྱོད་ཀྱིས་ ཨེགསི་ཀོཌི་ནང་ཁ་ཕྱེ་ནི་དང་ ཡང་ན་ ཁྱོད་རའི་སུའིཕཊི་ཐུམ་སྒྲིལ་ནང་ལུ་སྦྱར་ཚུགས།"
+།/>།
 
-## 1. Register the asset (CLI)
+## ༡ རྒྱུ་ནོར་(CLI)ཐོ་བཀོད་འབད།
 
 ```bash
 iroha --config defaults/client.toml asset definition register --id coffee#wonderland
 ```
 
-## 2. Prepare credentials
+## 2. ངོ་སྤྲོད་ཀྱི་ངོ་བོ།
 
 ```bash
 # raw 32-byte Ed25519 key in hex (use `iroha_cli tools crypto private-key export --raw` if needed)
@@ -36,15 +38,13 @@ export ADMIN_ACCOUNT="ih58..."
 export RECEIVER_ACCOUNT="ih58..."
 ```
 
-## 3. Add IrohaSwift to your package
+## 3. ཁྱོད་ཀྱི་ཐུམ་སྒྲིལ་ལུ་ IrohaSwift ཁ་སྐོང་རྐྱབས།
 
-```swift title="Package.swift"
-.package(name: "IrohaSwift", path: "../../IrohaSwift")
-```
+I18NF0000002X
 
-or use the Git URL (`https://github.com/hyperledger/iroha-swift`) in Xcode.
+ཡང་ན་ ཨེགསི་ཀོཌི་ནང་ གིཊི་ཡུ་ཨར་ཨེལ་ (I18NI0000005X) ལག་ལེན་འཐབ།
 
-## 4. Example program
+## 4. དཔེར་བརྗོད།
 
 ```swift title="Sources/LedgerFlow/main.swift"
 import Foundation
@@ -109,11 +109,11 @@ struct LedgerFlow {
 }
 ```
 
-Build with `swift build -c release` and run using `swift run LedgerFlow`.
+I18NI000000006X དང་ཅིག་ཁར་བཟོ་སྟེ་ I18NI000000007X ལག་ལེན་འཐབ་སྟེ་ གཡོག་བཀོལ།
 
-## 5. Verify parity
+## 5. ཆ་སྙོམས་བདེན་པ།
 
-- Inspect the transactions through `iroha --config defaults/client.toml transaction get --hash <hash>`.
-- Compare holdings with `iroha --config defaults/client.toml asset list filter '{"id":"coffee#wonderland##<account>"}'`.
-- Combine this recipe with the Rust/Python/JavaScript ones to confirm every SDK
-  produces the same hashes for the demo flow.
+- ཚོང་འབྲེལ་ཚུ་ I18NI0000008X བརྒྱུད་དེ་ བརྟག་ཞིབ་འབད།
+- I18NI0000009X དང་ཅིག་ཁར་ བདག་དབང་ཚུ་ ག་བསྡུར་འབད།
+- འདི་བཟོ་ཐངས་འདི་ རཱསི་/པི་ཐོན་/ཇ་བ་ཨིསི་ཀིརིཔ་ཚུ་དང་གཅིག་ཁར་ མཉམ་བསྡོམས་འབད་དེ་ ཨེསི་ཌི་ཀེ་རེ་རེ་ ངེས་གཏན་བཟོ་ནི་ལུ་ ངེས་གཏན་བཟོ་ནི་ལུ་ཨིན།
+  བརྡ་སྟོན།

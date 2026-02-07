@@ -4,45 +4,43 @@ direction: ltr
 source: docs/portal/docs/reference/norito-codec.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Reference du codec Norito
+# Referencia del códec Norito
 
-Norito est la couche de serialisation canonique d'Iroha. Chaque message on-wire, payload sur disque et API inter-composants utilise Norito afin que les nuds s'accordent sur des octets identiques meme lorsqu'ils tournent sur du materiel different. Cette page resume les elements cles et renvoie vers la specification complete dans `norito.md`.
+Norito es el sofá de serialización canónica de Iroha. Cada mensaje en línea, carga útil en disco y API entre componentes utilizan Norito para que los nuds se ajusten a los octetos idénticos memes cuando giran en material diferente. Esta página resume los elementos y el envío según la especificación completa en `norito.md`.
 
-## Disposition de base
+## Disposición de base
 
-| Composant | Objectif | Source |
+| Componente | Objetivo | Fuente |
 | --- | --- | --- |
-| **Header** | Encapsule les payloads avec magic/version/schema hash, CRC64, longueur et tag de compression; v1 exige `VERSION_MINOR = 0x00` et valide les flags d'en-tete contre le masque supporte (par defaut `0x00`). | `norito::header` - voir `norito.md` ("Header & Flags", racine du depot) |
-| **Payload nu** | Encodage deterministe des valeurs utilise pour le hashing/comparaison. Le transport on-wire utilise toujours un header; les octets nus sont internes uniquement. | `norito::codec::{Encode, Decode}` |
-| **Compression** | Zstd optionnel (et acceleration GPU experimentale) selectionne via l'octet de compression du header. | `norito.md`, "Compression negotiation" |
+| **Encabezado** | Encapsule las cargas útiles con magic/version/schema hash, CRC64, longitud y etiqueta de compresión; v1 exige `VERSION_MINOR = 0x00` y valida las banderas de tu dispositivo contra la máscara compatible (por defecto `0x00`). | `norito::header` - ver `norito.md` ("Encabezado y banderas", racine du depot) |
+| **Carga útil nu** | La codificación determina los valores que se utilizan para el hash/comparación. El transporte por cable utiliza siempre un encabezado; les octetos nus sont internos únicos. | `norito::codec::{Encode, Decode}` |
+| **Compresión** | Selección de opciones estándar (y aceleración experimental de GPU) a través del octeto de compresión del encabezado. | `norito.md`, "Negociación de compresión" |El registro de indicadores de diseño (estructura empaquetada, secuencia empaquetada, conjunto de bits de campo, longitudes compactas) se encuentra en `norito::header::flags`. La v1 utiliza por defecto las banderas `0x00` pero acepta las banderas explícitas en la máscara de soporte; Los bits inconnus sont rechazados. `norito::header::Flags` se conserva para la inspección interna y las versiones futuras.
 
-Le registre des flags de layout (packed-struct, packed-seq, field bitset, compact lengths) vit dans `norito::header::flags`. La v1 utilise par defaut les flags `0x00` mais accepte des flags explicites dans le masque supporte; les bits inconnus sont rejetes. `norito::header::Flags` est conserve pour l'inspection interne et les versions futures.
+## Soporte de derivaciones
 
-## Support des derives
+`norito_derive` contiene archivos derivados `Encode`, `Decode`, `IntoSchema` y los ayudantes JSON. Convenciones cles:
 
-`norito_derive` fournit les derives `Encode`, `Decode`, `IntoSchema` et les helpers JSON. Conventions cles:
+- Los derivados generent des chemins AoS et envasados; v1 utiliza el diseño AoS por defecto (flags `0x00`) pero si las banderas en-tete optan por las variantes empaquetadas. La implementación se encuentra en `crates/norito_derive/src/derive_struct.rs`.
+- Las funciones que afectan el diseño (`packed-struct`, `packed-seq`, `compact-len`) se activan a través de las banderas de la computadora y deben codificarse/decodificarse de manera coherente entre pares.
+- Los ayudantes JSON (`norito::json`) proporcionan un JSON determinado junto con Norito para las API públicas. Utilice `norito::json::{to_json_pretty, from_json}` - jamais `serde_json`.
 
-- Les derives generent des chemins AoS et packed; v1 utilise le layout AoS par defaut (flags `0x00`) sauf si les flags d'en-tete optent pour des variantes packed. L'implementation se trouve dans `crates/norito_derive/src/derive_struct.rs`.
-- Les fonctionnalites qui affectent le layout (`packed-struct`, `packed-seq`, `compact-len`) sont opt-in via les flags d'en-tete et doivent etre encodees/decodees de maniere coherente entre pairs.
-- Les helpers JSON (`norito::json`) fournissent un JSON deterministe adosse a Norito pour les API publiques. Utilisez `norito::json::{to_json_pretty, from_json}` - jamais `serde_json`.
+## Multicodec y tablas de identificadores
 
-## Multicodec et tables d'identifiants
+Norito conserva sus afectaciones multicódec en `norito::multicodec`. La tabla de referencia (hashes, tipos de elementos, descriptores de carga útil) se mantiene en `multicodec.md` en la ubicación del depósito. Lorsqu'un nouvel identifiant est ajoute:1. Mettez al día `norito::multicodec::registry`.
+2. Extienda la mesa en `multicodec.md`.
+3. Regenere los enlaces posteriores (Python/Java) en el mapa.
 
-Norito conserve ses affectations multicodec dans `norito::multicodec`. La table de reference (hashes, types de cles, descripteurs de payload) est maintenue dans `multicodec.md` a la racine du depot. Lorsqu'un nouvel identifiant est ajoute:
+## Regenerar los documentos y accesorios
 
-1. Mettez a jour `norito::multicodec::registry`.
-2. Etendez la table dans `multicodec.md`.
-3. Regenerez les bindings downstream (Python/Java) s'ils consomment la map.
+Con el portail qui heberge actuellement un curriculum vitae en prosa, utilice las fuentes Markdown como fuente de verdad:
 
-## Regenerer les docs et fixtures
+- **Especificación**: `norito.md`
+- **Tabla multicódec**: `multicodec.md`
+- **Puntos de referencia**: `crates/norito/benches/`
+- **Pruebas de oro**: `crates/norito/tests/`
 
-Avec le portail qui heberge actuellement un resume en prose, utilisez les sources Markdown amont comme source de verite:
-
-- **Spec**: `norito.md`
-- **Table multicodec**: `multicodec.md`
-- **Benchmarks**: `crates/norito/benches/`
-- **Golden tests**: `crates/norito/tests/`
-
-Quand l'automatisation Docusaurus sera en ligne, le portail sera mis a jour via un script de sync (suivi dans `docs/portal/scripts/`) qui extrait les donnees depuis ces fichiers. D'ici la, gardez cette page alignee manuellement a chaque changement de spec.
+Cuando la automatización Docusaurus será en línea, el portal será un día a través de un script de sincronización (suivi dans `docs/portal/scripts/`) que extrae los datos después de estos archivos. D'ici la, gardez esta página alineada manualmente a cada cambio de especificación.

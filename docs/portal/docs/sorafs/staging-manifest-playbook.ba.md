@@ -11,18 +11,19 @@ id: staging-manifest-playbook
 title: Staging Manifest Playbook
 sidebar_label: Staging Manifest Playbook
 description: Checklist for enabling the Parliament-ratified chunker profile on staging Torii deployments.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
-:::
+:::иҫкәртергә канонлы сығанаҡ
+::: 1990 й.
 
-## Overview
+## Обзор
 
-This playbook walks through enabling the Parliament-ratified chunker profile on a staging Torii deployment before promoting the change to production. It assumes the SoraFS governance charter has been ratified and the canonical fixtures are available in the repository.
+Был playbook аша йөрөп мөмкинлек бирә Парламент-ратифицированный chunker профиле стажировка I18NT00000000004X таратыу алдынан үҙгәрештәрҙе пропагандалау етештереүгә булышлыҡ итеү. Ул SoraFS идара итеү уставын ратификацияланған тип фаразлай һәм канон ҡорамалдары һаҡлағыста бар.
 
-## 1. Prerequisites
+## 1. Алдан шарттар
 
-1. Sync the canonical fixtures and signatures:
+1. Каноник ҡоролмаларын һәм ҡултамғаларын синхронлаштырыу:
 
    ```bash
    cargo xtask sorafs-fetch-fixture \
@@ -31,8 +32,8 @@ This playbook walks through enabling the Parliament-ratified chunker profile on 
    ci/check_sorafs_fixtures.sh
    ```
 
-2. Prepare the admission envelope directory that Torii will read at startup (example path): `/var/lib/iroha/admission/sorafs`.
-3. Ensure the Torii config enables the discovery cache and admission enforcement:
+2. Ҡабул итеү конверт каталогы әҙерләй, тип I18NT000000005X стартапта уҡый (миҫал юл): `/var/lib/iroha/admission/sorafs`.
+3. I18NT000000006X конфигын тәьмин итеү асыш кэш һәм ҡабул итеү органдарына мөмкинлек бирә:
 
    ```toml
    [torii.sorafs.discovery]
@@ -48,45 +49,45 @@ This playbook walks through enabling the Parliament-ratified chunker profile on 
    [torii.sorafs.gateway]
    enforce_admission = true
    enforce_capabilities = true
-   ```
+   ``` X
 
-## 2. Publish Admission Envelopes
+## 2. Баҫма ҡабул итеү конверттары
 
-1. Copy the approved provider admission envelopes into the directory referenced by `torii.sorafs.discovery.admission.envelopes_dir`:
+1. Copy раҫланған провайдер ҡабул итеү конверттары каталогҡа һылтанма I18NI0000000017X:
 
    ```bash
    install -m 0644 fixtures/sorafs_manifest/provider_admission/*.json \
      /var/lib/iroha/admission/sorafs/
    ```
 
-2. Restart Torii (or send a SIGHUP if you wrapped the loader with on-the-fly reload).
-3. Tail the logs for admission messages:
+.
+3. Ҡабул итеү тураһында хәбәрҙәр өсөн журналдарҙы ҡойроҡ:
 
    ```bash
    torii | grep "loaded provider admission envelope"
    ```
 
-## 3. Validate Discovery Propagation
+## 3. Асыш итеүҙе раҫлаусы таралыу
 
-1. Post the signed provider advert payload (Norito bytes) produced by your
-   provider pipeline:
+1. Ҡул ҡуйылған провайдер реклама файҙалы йөк (I18NT00000000001X байт) һеҙҙең етештереү
+   провайдер торбаһы:
 
    ```bash
    curl -sS -X POST --data-binary @provider_advert.to \
      http://staging-torii:8080/v1/sorafs/provider/advert
    ```
 
-2. Query the discovery endpoint and confirm the advert appears with canonical aliases:
+2. Асыу ос нөктәһен һорап, рекламаның канонлы псевдонимдар менән барлыҡҡа килгәнен раҫлау:
 
    ```bash
    curl -sS http://staging-torii:8080/v1/sorafs/providers | jq .
    ```
 
-   Ensure `profile_aliases` includes `"sorafs.sf1@1.0.0"` as the first entry.
+   `profile_aliases` XI18NI000000019X тәүге яҙма булараҡ үҙ эсенә ала.
 
-## 4. Exercise Manifest & Plan Endpoints
+## 4. Күнекмәләр манифест & план остары .
 
-1. Fetch the manifest metadata (requires a stream token if admission is enforced):
+.
 
    ```bash
    sorafs-fetch \
@@ -97,25 +98,25 @@ This playbook walks through enabling the Parliament-ratified chunker profile on 
      --json-out=reports/staging_manifest.json
    ```
 
-2. Inspect the JSON output and verify:
-   - `chunk_profile_handle` is `sorafs.sf1@1.0.0`.
-   - `manifest_digest_hex` matches the determinism report.
-   - `chunk_digests_blake3` align with the regenerated fixtures.
+2. JSON сығышын тикшерергә һәм раҫлау:
+   - `chunk_profile_handle` — `sorafs.sf1@1.0.0`.
+   - `manifest_digest_hex` детерминизм тураһында отчетҡа тап килә.
+   - `chunk_digests_blake3` регенерацияланған ҡорамалдар менән тура килә.
 
-## 5. Telemetry Checks
+## 5. Телеметрия тикшерә
 
-- Confirm Prometheus exposes the new profile metrics:
+- I18NT000000000X раҫлау яңы профиль метрикаларын фашлай:
 
   ```bash
   curl -sS http://staging-torii:8080/metrics | grep torii_sorafs_chunk_range_requests_total
   ```
 
-- Dashboards should show the staging provider under the expected alias and keep brownout counters at zero while the profile is active.
+- Приборҙар таҡталары көтөлгән псевдоним аҫтында стажировка провайдерын күрһәтергә һәм нулдә браунут иҫәпләүселәрен һаҡларға тейеш, ә профиль әүҙем.
 
-## 6. Rollout Readiness
+## 6.
 
-1. Capture a short report with the URLs, manifest ID, and telemetry snapshot.
-2. Share the report in the Nexus rollout channel alongside the planned production activation window.
-3. Proceed to the production checklist (Section 4 in `chunker_registry_rollout_checklist.md`) once stakeholders sign off.
+1. Ҡыҫҡаса отчет менән URL-адрестар, асыҡ идентификатор һәм телеметрия снимоктарын төшөрөп.
+.
+.
 
-Keeping this playbook updated ensures every chunker/admission rollout follows the same deterministic steps across staging and production.
+Был playbook-ты яңыртыу һәр өлөш/ҡабул итеүҙе таратыуҙы тәьмин итә, сәхнәләштереү һәм етештереү буйынса бер үк детерминистик аҙымдарҙы эҙләй.

@@ -11,62 +11,63 @@ id: developer-sdk-index
 title: SoraFS SDK Guides
 sidebar_label: SDK Guides
 description: Language-specific snippets for integrating SoraFS artefacts.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
+:::དྲན་ཐོའི་འབྱུང་ཁུངས།
 :::
 
-Use this hub to track the per-language helpers that ship with the SoraFS toolchain.
-For Rust-specific snippets jump to [Rust SDK snippets](./developer-sdk-rust.md).
+I18NT0000000X ལག་ཆས་རྒྱུན་རིམ་དང་གཅིག་ཁར་ སྐྱེལ་འདྲེན་འབད་མི་ སྐད་ཡིག་རེ་ལུ་ གྲོགས་རམ་འབད་མི་ཚུ་ བརྟག་ཞིབ་འབད་ནི་ལུ་ ལྟེ་བ་འདི་ལག་ལེན་འཐབ།
+རཱསི་-དམིགས་བསལ་གྱི་ ཆ་ཤས་ཚུ་གི་དོན་ལུ་ [Rust SDK snippets](I18NU0000004X) ལུ་མཆོངམ་ཨིན།
 
-## Language helpers
+## སྐད་ཡིག་རོགས་སྐྱོར་པ།
 
-- **Python** — `sorafs_multi_fetch_local` (local orchestrator smoke tests) and
-  `sorafs_gateway_fetch` (gateway E2E exercises) now accept an optional
-  `telemetry_region` plus a `transport_policy` override
-  (`"soranet-first"`, `"soranet-strict"`, or `"direct-only"`), mirroring the CLI
-  rollout knobs. When a local QUIC proxy spins up,
-  `sorafs_gateway_fetch` returns the browser manifest under
-  `local_proxy_manifest` so tests can hand the trust bundle to browser adapters.
-- **JavaScript** — `sorafsMultiFetchLocal` mirrors the Python helper, returning
-  payload bytes and receipt summaries, while `sorafsGatewayFetch` exercises
-  Torii gateways, threads local proxy manifests, and exposes the same
-  telemetry/transport overrides as the CLI.
-- **Rust** — services can embed the scheduler directly via
-  `sorafs_car::multi_fetch`; see the [Rust SDK snippets](./developer-sdk-rust.md)
-  reference for proof-stream helpers and orchestrator integration.
-- **Android** — `HttpClientTransport.sorafsGatewayFetch(…)` reuses the Torii HTTP
-  executor and honours `GatewayFetchOptions`. Combine it with
-  `ClientConfig.Builder#setSorafsGatewayUri` and the PQ upload hint
-  (`setWriteModeHint(WriteModeHint.UPLOAD_PQ_ONLY)`) when uploads must stick to
-  PQ-only paths.
+- **པའེ་ཐོན་** — `sorafs_multi_fetch_local` (ས་གནས་ཀྱི་རོལ་དབྱངས་ཚོགས་པ་དུ་བ་བརྟག་དཔྱད།) དང་།
+  I18NI0000000007X (gateway E2E སྦྱོང་བརྡར) ད་ལྟོ་གདམ་ཁ་ཅན་ངོས་ལེན་འབདཝ་ཨིན།
+  I18NI0000008X དང་ `transport_policy` གིས་ བཀག་ཆ་འབད་ཡོདཔ་ཨིན།
+  (I18NI0000000010X, `"soranet-strict"`, ཡང་ན་ I18NI000000012X,
+  བསྐོར་བའི་མཛུབ་མོ་། ས་གནས་ཀྱི་ QUIC པོརོ་སི་ ཅིག་འཕྱུར་བའི་སྐབས།
+  I18NI0000000013X འོག་ལུ་བརྡ་འཚོལ་གསལ་སྟོན་འདི་ འོག་ལུ་སླར་ལོག་འབདཝ་ཨིན།
+  I18NI0000000014X གིས་ བརྟག་དཔྱད་འདི་གིས་ བློ་གཏད་བཱན་ཌལ་འདི་ བརྡ་འཚོལ་མཐུན་སྒྲིག་འབད་མི་ཚུ་ལུ་ བྱིན་ཚུགས།
+- **JavaScript*** — I18NI000000015X གིས་ པའི་ཐོན་གྲོགས་རམ་པ་ ལོག་འོང་།
+  པེ་ལོཌ་བཱའིཊི་དང་ འབྱོར་འཛིན་གྱི་ བཅུད་བསྡུས་ཚུ་ཨིནམ་ད་ `sorafsGatewayFetch` ལུས་སྦྱོང་།
+  Torii གི་སྒོ་སྒྲིག་ཚུ་, ཐགསཔ་ཚུ་ ཉེ་གནས་པོརོ་སི་ གསལ་སྟོན་འབདཝ་ཨིནམ་དང་ དེ་གཅིག་སྦེ་ ཕྱིར་བཏོན་འབདཝ་ཨིན།
+  telemetry/སྐྱེལ་འདྲེན་འདི་ CLI བཟུམ་སྦེ་ བརྡ་སྟོནམ་ཨིན།
+- **Rust** — ཞབས་ཏོག་ཚུ་གིས་ ལས་རིམ་བཟོ་མི་འདི་ ཐད་ཀར་དུ་ བཙུགས་ཚུགས།
+  `sorafs_car::multi_fetch`; བལྟ། [Rust SDK snippets](I18NU0000005X)
+  བདེན་དཔང་དང་ སྙན་ཆའི་སྡེ་ཚན་གཅིག་སྒྲིལ་གྱི་དོན་ལུ་ གཞི་བསྟུན་འབད་ནི།
+- **ཨེན་ཌོརཌི་** — `HttpClientTransport.sorafsGatewayFetch(…)` གིས་ Torii ཨེཆ་ཊི་ཊི་པི་ ལོག་ལག་ལེན་འཐབ་ཨིན།
+  བཀོལ་སྤྱོད་པ་དང་གཟེངས་བསྟོད་ `GatewayFetchOptions`. དེ་དང་གཅིག་ཁར་མཉམ་བསྡོམས་འབད།
+  `ClientConfig.Builder#setSorafsGatewayUri` དང་ PQ སྐྱེལ་བཙུགས་ཀྱི་བརྡ་སྟོན།
+  (`setWriteModeHint(WriteModeHint.UPLOAD_PQ_ONLY)`) སྐྱེལ་བཙུགས་ཚུ་ ལུ་བཙུགས་དགོཔ་ད་ལུ།
+  PQ-རྐྱངམ་གཅིག།
 
-## Scoreboard and policy knobs
+## སྐུགས་དང་སྲིད་བྱུས་ཀྱི་མཐའ།
 
-Both the Python (`sorafs_multi_fetch_local`) and JavaScript
-(`sorafsMultiFetchLocal`) helpers expose the telemetry-aware scheduler scoreboard
-used by the CLI:
+པའི་ཐོན་ (I18NI0000022X) དང་ ཇ་བ་ཨིསི་ཀིརིཔཊི་གཉིས་ཆ་ར།
+(`sorafsMultiFetchLocal`) གྲོགས་རམ་པ་ཚུ་གིས་ ཊེ་ལི་མི་ཊི་རི་ཌི་ ལས་འཆར་བཟོ་མི་ སྐུགས་ཐོབ་ཐངས་འདི་ གསལ་སྟོན་འབདཝ་ཨིན།
+CLI གིས་ལག་ལེན་འཐབ་ཡོདཔ།
 
-- Production binaries enable the scoreboard by default; set `use_scoreboard=True`
-  (or provide `telemetry` entries) when replaying fixtures so the helper derives
-  weighted provider ordering from advert metadata and recent telemetry snapshots.
-- Set `return_scoreboard=True` to receive the computed weights alongside chunk
-  receipts so CI logs can capture diagnostics.
-- Use `deny_providers` or `boost_providers` arrays to reject peers or add a
-  `priority_delta` when the scheduler selects providers.
-- Keep the default `"soranet-first"` posture unless staging a downgrade; supply
-  `"direct-only"` only when a compliance region must avoid relays or when
-  rehearsing the SNNet-5a fallback, and reserve `"soranet-strict"` for PQ-only
-  pilots with governance approval.
-- Gateway helpers also expose `scoreboardOutPath` and `scoreboardNowUnixSecs`.
-  Set `scoreboardOutPath` to persist the computed scoreboard (mirrors the CLI
-  `--scoreboard-out` flag) so `cargo xtask sorafs-adoption-check` can validate
-  SDK artefacts, and use `scoreboardNowUnixSecs` when fixtures need a stable
-  `assume_now` value for reproducible metadata. In the JavaScript helper you
-  can additionally set `scoreboardTelemetryLabel`/`scoreboardAllowImplicitMetadata`;
-  when the label is omitted it derives `region:<telemetryRegion>` (falling back
-  to `sdk:js`). The Python helper automatically emits `telemetry_source="sdk:python"`
-  whenever it persists a scoreboard and keeps implicit metadata disabled.
+- ཐོན་སྐྱེད་གཉིས་ལྡན་ཚུ་གིས་ སྔོན་སྒྲིག་ཐོག་ལས་ སྐུགས་ཤོག་འདི་ ལྕོགས་ཅན་བཟོཝ་ཨིན། set `use_scoreboard=True`
+  (ཡང་ན་ `telemetry` ཐོ་བཀོད་ཚུ་) བདེ་སྒྲིག་ཚུ་ལོག་སྟེ་རྩེད་པའི་སྐབས་ གྲོགས་རམ་པ་ཐོན་པའི་སྐབས་)
+  ལྗིད་ཚད་ཅན་གྱི་བྱིན་མི་ ཁྱབ་བསྒྲགས་མེ་ཊ་ཌེ་ཊ་དང་ འཕྲལ་གྱི་ ཊེ་ལི་མི་ཊི་པར་ལེན་ཚུ་ལས་ གོ་རིམ་སྒྲིག་ནི།
+- ཆུང་ཆུང་དང་གཅིག་ཁར་ རྩིས་འཕྲུལ་གྱི་ལྗིད་ཚད་ཚུ་ཐོབ་ནིའི་དོན་ལུ་ `return_scoreboard=True` གཞི་སྒྲིག་འབད།
+  receipts དེ་འབདཝ་ལས་ CI དྲན་ཐོ་ཚུ་གིས་ བརྟག་དཔྱད་ཚུ་ བཟུང་ཚུགས།
+- མཉམ་རོགས་ཚུ་ ངོས་ལེན་མ་འབད་བར་ ཡང་ན་ ཁ་སྐོང་བརྐྱབ་ནིའི་དོན་ལུ་ `deny_providers` ཡང་ན་ I18NI0000028X ཨེ་རེ་ཚུ་ལག་ལེན་འཐབ།
+  ལས་འཆར་བཟོ་མི་གིས་ བྱིན་མི་ཚུ་སེལ་འཐུ་འབད་བའི་སྐབས་ `priority_delta` ཨིན།
+- སྔོན་སྒྲིག་ `"soranet-first"` གི་གནས་སྟངས་འདི་ མར་ཕབ་མ་འབད་ཚུན་ཚོད་ བཞག་དགོ། བཀྲམ་སྤེལ་
+  `"direct-only"` གིས་ བསྟར་སྤྱོད་ལུང་ཕྱོགས་ཅིག་གིས་ རི་ལེ་ཚུ་སྤང་དགོཔ་ད་ ཡང་ན་ ག་དུས་ལས་ འཛེམ་དགོཔ་ཨིན།
+  ཨེསི་ཨེན་ནེཊི་-༥ཨེ་ ཕོལཀ་ བསྐྱར་སྦྱོང་འབད་ཞིནམ་ལས་ པི་ཀིའུ་-རྐྱངམ་ཅིག་གི་དོན་ལུ་ `"soranet-strict"` འདི་ བཀག་བཞག་དགོ།
+  གཞུང་སྐྱོང་གནང་བ་ཡོད་པའི་མཁའ་འགྲུལ་ཚུ།
+- གཱེཊ་ཝེ་གྲོགས་རམ་པ་ཚུ་གིས་ཡང་ I18NI000000033X དང་ I18NI000000034X གསལ་སྟོན་འབད་ཡོདཔ་ཨིན།
+  རྩིས་སྟོན་གྱི་སྐུགས་ཤོག་འདི་ རྟག་བརྟན་བཟོ་ནིའི་དོན་ལུ་ `scoreboardOutPath` གཞི་སྒྲིག་འབད།
+  `--scoreboard-out` དར་) དེ་ལས་ I18NI000000037X གིས་ བདེན་དཔྱད་འབད་ཚུགས།
+  SDK ཅ་རྙིང་ཚུ་, དང་ བདེ་སྒྲིག་ཚུ་ བརྟན་ཏོག་ཏོ་དགོ་པའི་སྐབས་ `scoreboardNowUnixSecs` ལག་ལེན་འཐབ།
+  བསྐྱར་བཟོ་འབད་བཏུབ་པའི་མེ་ཊ་ཌེ་ཊ་གི་དོན་ལུ་ `assume_now` གནས་གོང་། ཇ་བ་ཨིསི་ཀིརིཔཊི་གི་གྲོགས་རམ་ནང་།
+  ཁ་སྐོང་ལུ་ `scoreboardTelemetryLabel`/`scoreboardAllowImplicitMetadata` གཞི་སྒྲིག་འབད་ཚུགས།
+  ཁ་ཡིག་འདི་བཏོན་པའི་སྐབས་ `region:<telemetryRegion>` ལས་ཐོན་ཡོདཔ་ཨིན།
+  ལས་ I18NI0000043X). པའི་ཐོན་གྲོགས་རམ་པ་དེ་གིས་ རང་བཞིན་གྱིས་ `telemetry_source="sdk:python"` བཏོནམ་ཨིན།
+  ག་དེམ་ཅིག་སྦེ་ དེ་ གནས་ཏེ་ སྐུགས་བཀོད་སྒྲིག་འབད་དེ་ མངོན་གསལ་ཅན་གྱི་ མེ་ཊ་ཌེ་ཊ་ ལྕོགས་མིན་བཟོཝ་ཨིན།
 
 ```python
 result = sorafs_multi_fetch_local(

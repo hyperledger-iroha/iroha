@@ -4,66 +4,66 @@ direction: rtl
 source: docs/portal/docs/nexus/nexus-routed-trace-audit-2026q1.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: nexus-routed-trace-audit-2026q1
-title: Отчет аудита routed-trace за Q1 2026 (B1)
-description: Зеркало `docs/source/nexus_routed_trace_audit_report_2026q1.md`, охватывающее итоги квартальных репетиций телеметрии.
+ID: گٹھ جوڑ-روٹڈ ٹریس-آڈٹ -2026Q1
+عنوان: Q1 2026 (B1) کے لئے روٹ ٹریس آڈٹ رپورٹ
+تفصیل: آئینہ `docs/source/nexus_routed_trace_audit_report_2026q1.md` ، سہ ماہی ٹیلی میٹری ریہرسل کے نتائج کا احاطہ کرتے ہوئے۔
 ---
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-:::note Канонический источник
-Эта страница отражает `docs/source/nexus_routed_trace_audit_report_2026q1.md`. Держите обе копии синхронизированными, пока не готовы остальные переводы.
+::: نوٹ کینونیکل ماخذ
+یہ صفحہ `docs/source/nexus_routed_trace_audit_report_2026q1.md` کی عکاسی کرتا ہے۔ دونوں کاپیاں ہم آہنگ رکھیں جب تک کہ باقی ترجمے تیار نہ ہوں۔
 :::
 
-# Отчет аудита Routed-Trace за Q1 2026 (B1)
+# Q1 2026 (B1) کے لئے روٹ ٹریس آڈٹ رپورٹ
 
-Пункт roadmap **B1 - Routed-Trace Audits & Telemetry Baseline** требует квартального обзора программы routed-trace Nexus. Этот отчет фиксирует окно аудита Q1 2026 (январь-март), чтобы совет по управлению мог утвердить телеметрийную готовность перед репетициями запуска Q2.
+روڈ میپ آئٹم ** B1-روٹ ٹریس آڈٹ اور ٹیلی میٹری بیس لائن ** کے لئے روٹ ٹریس پروگرام Nexus کا سہ ماہی جائزہ لینے کی ضرورت ہے۔ اس رپورٹ میں Q1 2026 آڈٹ ونڈو (جنوری مارچ) کو اپنی گرفت میں لے لیا گیا ہے تاکہ مینجمنٹ بورڈ Q2 لانچ ریہرسل سے قبل ٹیلی میٹری کی تیاری کو منظور کر سکے۔
 
-## Область и таймлайн
+## ایریا اور ٹائم لائن
 
-| Trace ID | Окно (UTC) | Цель |
-|----------|--------------|-----------|
-| `TRACE-LANE-ROUTING` | 2026-02-17 09:00-09:45 | Проверить гистограммы допуска в lane, gossip очередей и поток алертов перед включением multi-lane. |
-| `TRACE-TELEMETRY-BRIDGE` | 2026-02-24 10:00-10:45 | Валидировать OTLP replay, паритет diff bot и прием телеметрии SDK до вех AND4/AND7. |
-| `TRACE-CONFIG-DELTA` | 2026-03-01 12:00-12:30 | Подтвердить governance-одобренные deltas `iroha_config` и готовность к rollback перед срезом RC1. |
+| ٹریس ID | ونڈو (UTC) | مقصد |
+| ---------- | -------------- | ---------- |
+| `TRACE-LANE-ROUTING` | 2026-02-17 09: 00-09: 45 | ملٹی لین کو چالو کرنے سے پہلے لین میں داخلہ ہسٹگرامس ، گپ شپ قطاریں ، اور الرٹ فلو چیک کریں۔ |
+| `TRACE-TELEMETRY-BRIDGE` | 2026-02-24 10: 00-10: 45 | OTLP ری پلے ، مختلف BOT برابری اور SDK ٹیلی میٹری کا استقبال اور 4/and7 سنگ میل تک کی توثیق کریں۔ |
+| `TRACE-CONFIG-DELTA` | 2026-03-01 12: 00-12: 30 | RC1 کاٹنے سے پہلے رول بیک کے لئے گورننس سے منظور شدہ ڈیلٹا `iroha_config` اور رول بیک کے لئے تیاری کی تصدیق کریں۔ |
 
-Каждая репетиция проходила на прод-подобной топологии с включенной routed-trace инструментализацией (телеметрия `nexus.audit.outcome` + счетчики Prometheus), загруженными правилами Alertmanager и экспортом доказательств в `docs/examples/`.
+ہر ریہرسل روٹ ٹریس انسٹرومنٹ (`nexus.audit.outcome` ٹیلی میٹری + Prometheus کاؤنٹرز) کے ساتھ پروڈکشن نما ٹوپولوجی پر ہوتی ہے ، جس میں لوڈ ، الرٹ مینجر قواعد اور `docs/examples/` پر ثبوت کی برآمد ہوتی ہے۔
 
-## Методология
+## طریقہ کار
 
-1. **Сбор телеметрии.** Все узлы эмитировали структурированное событие `nexus.audit.outcome` и сопутствующие метрики (`nexus_audit_outcome_total*`). Хелпер `scripts/telemetry/check_nexus_audit_outcome.py` отслеживал JSON-лог, валидировал статус события и архивировал payload в `docs/examples/nexus_audit_outcomes/`. [scripts/telemetry/check_nexus_audit_outcome.py:1]
-2. **Проверка алертов.** `dashboards/alerts/nexus_audit_rules.yml` и его тестовый harness обеспечили стабильность порогов шума и шаблонов payload. CI запускает `dashboards/alerts/tests/nexus_audit_rules.test.yml` при каждом изменении; те же правила вручную прогонялись в каждом окне.
-3. **Съемка дашбордов.** Операторы экспортировали панели routed-trace из `dashboards/grafana/soranet_sn16_handshake.json` (здоровье handshake) и обзорные дашборды телеметрии, чтобы связать здоровье очередей с результатами аудита.
-4. **Заметки ревьюеров.** Секретарь по управлению записал инициалы ревьюеров, решение и тикеты по mitigations в [Nexus transition notes](./nexus-transition-notes) и трекер конфигурационных дельт (`docs/source/project_tracker/nexus_config_deltas/2026Q1.md`).
+1. ** ٹیلی میٹری کا مجموعہ۔ ** تمام نوڈس نے ساختی واقعہ `nexus.audit.outcome` اور اس سے وابستہ میٹرکس (`nexus_audit_outcome_total*`) کو خارج کردیا۔ `scripts/telemetry/check_nexus_audit_outcome.py` مددگار نے JSON لاگ کی نگرانی کی ، ایونٹ کی حیثیت کی توثیق کی اور `docs/examples/nexus_audit_outcomes/` میں پے لوڈ کو محفوظ کیا۔ .
+2. ** انتباہات کی جانچ پڑتال۔ CI ہر تبدیلی پر `dashboards/alerts/tests/nexus_audit_rules.test.yml` چلاتا ہے۔ ہر ونڈو میں ایک ہی اصول دستی طور پر چلائے گئے تھے۔
+3. ** ڈیش بورڈ پر قبضہ کریں۔
+4. ** جائزہ نگاروں کے نوٹ۔
 
-## Результаты
+## نتائج| ٹریس ID | خلاصہ | ثبوت | نوٹ |
+| ---------- | --------- | ---------- | ------- |
+| `TRACE-LANE-ROUTING` | پاس | فائر/بازیافت الرٹس (اندرونی لنک) کے اسکرین شاٹس + ری پلے `dashboards/alerts/tests/soranet_lane_rules.test.yml` ؛ ٹیلی میٹری کے فرق [Nexus منتقلی نوٹ] (./nexus-transition-notes#quarterly-routed-trace-audit-schedule) میں طے کیے گئے ہیں۔ | P95 وصول قطار 612 ایم ایس (ہدف <= 750 ایم ایس) رہا۔ مزید کارروائی کی ضرورت نہیں ہے۔ |
+| `TRACE-TELEMETRY-BRIDGE` | پاس | محفوظ شدہ پے لوڈ `docs/examples/nexus_audit_outcomes/TRACE-TELEMETRY-BRIDGE-20260224T101732Z-pass.json` پلس OTLP ری پلے ہیش `status.md` میں ریکارڈ کیا گیا۔ | ایس ڈی کے ریڈیکشن نمکیات نے مورچا بیس لائن سے مماثل کیا۔ ڈف بوٹ نے زیرو ڈیلٹا کی اطلاع دی۔ |
+| `TRACE-CONFIG-DELTA` | پاس (تخفیف بند) | گورننس ٹریکر ریکارڈ (`docs/source/project_tracker/nexus_config_deltas/2026Q1.md`) + TLS پروفائل مینی فیسٹ (`artifacts/nexus/tls_profile_rollout_2026q2/tls_profile_manifest.json`) + ٹیلی میٹری پیک مینی فیسٹ (`artifacts/nexus/rehearsals/2026q1/telemetry_manifest.json`)۔ | Q2 دوبارہ ٹی ایل ایس سے منظور شدہ پروفائل کو ہٹا دیا اور تصدیق کی کہ کوئی اسٹراگلر موجود نہیں ہے۔ ٹیلی میٹری مینی فیسٹ سلاٹ رینج 912-936 اور ورک لوڈ بیج `NEXUS-REH-2026Q2` کو ٹھیک کرتی ہے۔ |
 
-| Trace ID | Итог | Доказательства | Примечания |
-|----------|---------|----------|-------|
-| `TRACE-LANE-ROUTING` | Pass | Скриншоты fire/recover алертов (внутренняя ссылка) + replay `dashboards/alerts/tests/soranet_lane_rules.test.yml`; телеметрийные дифы зафиксированы в [Nexus transition notes](./nexus-transition-notes#quarterly-routed-trace-audit-schedule). | P95 приема очереди остался 612 ms (цель <=750 ms). Дальнейших действий не требуется. |
-| `TRACE-TELEMETRY-BRIDGE` | Pass | Архивированный payload `docs/examples/nexus_audit_outcomes/TRACE-TELEMETRY-BRIDGE-20260224T101732Z-pass.json` плюс OTLP replay hash, записанный в `status.md`. | SDK redaction salts совпали с Rust baseline; diff bot сообщил ноль дельт. |
-| `TRACE-CONFIG-DELTA` | Pass (mitigation closed) | Запись governance-трекера (`docs/source/project_tracker/nexus_config_deltas/2026Q1.md`) + TLS profile manifest (`artifacts/nexus/tls_profile_rollout_2026q2/tls_profile_manifest.json`) + telemetry pack manifest (`artifacts/nexus/rehearsals/2026q1/telemetry_manifest.json`). | Q2 rerun захешировал одобренный TLS профиль и подтвердил отсутствие отстающих; telemetry manifest фиксирует диапазон слотов 912-936 и workload seed `NEXUS-REH-2026Q2`. |
+ونڈوز کے اندر کم از کم ایک ایونٹ `nexus.audit.outcome` تیار کیا ، جس نے مطمئن گارڈ ریلس الرٹ مینجر (`NexusAuditOutcomeFailure` پوری سہ ماہی میں سبز رہا)۔
 
-Все traces выдали хотя бы одно событие `nexus.audit.outcome` в рамках окон, что удовлетворило guardrails Alertmanager (`NexusAuditOutcomeFailure` оставался зеленым весь квартал).
+## فالو اپ
 
-## Follow-ups
+- TLS ہیش `1fa0bd5974a78d680de68e744eab837e4328668d6aab8de1489c3fc3b5a0dbeb` کے ساتھ اپ ڈیٹ شدہ روٹ ٹریس ایڈیشن ؛ تخفیف `NEXUS-421` منتقلی کے نوٹوں میں بند ہے۔
+- Android and4/and7 چیکوں کے لئے برابری کے ثبوت کو مستحکم کرنے کے لئے آرکائیو میں خام OTLP ری پلے اور Torii مختلف نمونے شامل کرنا جاری رکھیں۔
+- اس بات کو یقینی بنائیں کہ آئندہ `TRACE-MULTILANE-CANARY` ریہرسل ایک ہی ٹیلی میٹری مددگار استعمال کریں تاکہ Q2 سائن آف ثابت شدہ ورک فلو پر انحصار کرے۔
 
-- Дополнение routed-trace обновлено TLS хэшем `1fa0bd5974a78d680de68e744eab837e4328668d6aab8de1489c3fc3b5a0dbeb`; mitigation `NEXUS-421` закрыт в transition notes.
-- Продолжать прикладывать сырые OTLP replays и артефакты Torii diff в архив, чтобы усилить паритетные доказательства для проверок Android AND4/AND7.
-- Убедиться, что предстоящие репетиции `TRACE-MULTILANE-CANARY` используют тот же телеметрийный helper, чтобы Q2 sign-off опирался на проверенный workflow.
+## آرٹیکٹیکٹ انڈیکس
 
-## Индекс артефактов
+| اثاثہ | مقام |
+| ------- | ------------ |
+| ٹیلی میٹری کی توثیق کرنے والا | `scripts/telemetry/check_nexus_audit_outcome.py` |
+| الرٹ قواعد اور ٹیسٹ | `dashboards/alerts/nexus_audit_rules.yml` ، `dashboards/alerts/tests/nexus_audit_rules.test.yml` |
+| مثال کے طور پر پے لوڈ | `docs/examples/nexus_audit_outcomes/TRACE-TELEMETRY-BRIDGE-20260224T101732Z-pass.json` |
+| کنفگ ڈیلٹا ٹریکر | `docs/source/project_tracker/nexus_config_deltas/2026Q1.md` |
+| روٹ ٹریس گراف اور نوٹ | [Nexus منتقلی نوٹس] (./nexus-transition-notes) |
 
-| Asset | Локация |
-|-------|----------|
-| Валидатор телеметрии | `scripts/telemetry/check_nexus_audit_outcome.py` |
-| Правила и тесты алертов | `dashboards/alerts/nexus_audit_rules.yml`, `dashboards/alerts/tests/nexus_audit_rules.test.yml` |
-| Пример outcome payload | `docs/examples/nexus_audit_outcomes/TRACE-TELEMETRY-BRIDGE-20260224T101732Z-pass.json` |
-| Трекер конфиг-дельт | `docs/source/project_tracker/nexus_config_deltas/2026Q1.md` |
-| График и заметки routed-trace | [Nexus transition notes](./nexus-transition-notes) |
-
-Этот отчет, артефакты выше и экспорты алертов/телеметрии должны быть приложены к журналу решений governance, чтобы закрыть B1 за квартал.
+یہ رپورٹ ، مذکورہ بالا نمونے ، اور الرٹ/ٹیلی میٹری برآمدات کو گورننس کے فیصلے کے ساتھ منسلک کیا جانا چاہئے تاکہ سہ ماہی کے لئے B1 بند کردیں۔

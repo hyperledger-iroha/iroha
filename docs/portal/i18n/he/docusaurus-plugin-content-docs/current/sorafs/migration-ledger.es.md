@@ -4,15 +4,17 @@ direction: rtl
 source: docs/portal/docs/sorafs/migration-ledger.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: Libro mayor de migración de SoraFS
-description: Registro canónico de cambios que rastrea cada hito de migración, responsables y seguimientos requeridos.
+כותרת: Libro Mayor de migración de SoraFS
+תיאור: Registro Canónico de Cambios que Rastrea Cada Hito de Migración, Responsables y Seguimientos Requeridos.
 ---
 
 > Adaptado de [`docs/source/sorafs/migration_ledger.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/migration_ledger.md).
 
-# Libro mayor de migración de SoraFS
+# ראש עיריית ליברו דה מיגרציון דה SoraFS
 
-Este documento no aplica a la primera release. No hay migraciones pendientes; se mantiene reservado para futuras actualizaciones.
+Este documento no aplica a la primera release. אין חציר migraciones pendientes; se mantiene reservado para futuras actualizaciones.

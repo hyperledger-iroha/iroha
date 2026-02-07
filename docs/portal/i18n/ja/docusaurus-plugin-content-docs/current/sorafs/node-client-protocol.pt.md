@@ -4,145 +4,145 @@ direction: ltr
 source: docs/portal/docs/sorafs/node-client-protocol.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Protocolo de no <-> cliente da SoraFS
+# SoraFS の <-> クライアントのプロトコル
 
-Este guia resume a definicao canonica do protocolo em
-[`docs/source/sorafs_node_client_protocol.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs_node_client_protocol.md).
-Use a especificacao upstream para layouts Norito em nivel de byte e changelogs;
-a copia do portal mantem os destaques operacionais perto do restante dos runbooks
-SoraFS.
+エステギアはプロトコルの定義を再開します
+[`docs/source/sorafs_node_client_protocol.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs_node_client_protocol.md)。
+特定のアップストリーム パラ レイアウト Norito バイト変更ログを使用します。
+ポータル マンテム os デスタケス オペレーション レポートのコピー、Dos Runbook
+SoraFS。
 
-## Adverts de provedor e validacao
+## 証明された広告と検証
 
-Provedores SoraFS disseminam payloads `ProviderAdvertV1` (veja
-`crates/sorafs_manifest::provider_advert`) assinados pelo operador governado. Os
-adverts fixam os metadados de descoberta e os guardrails que o orquestrador
-multi-source aplica em runtime.
+Provedores SoraFS 配布ペイロード `ProviderAdvertV1` (veja
+`crates/sorafs_manifest::provider_advert`) アッシナドス ペロ オペラドール ガバナド。オス
+広告 fixam os メタダドス デ デスコベルタ e os ガードレール ケ オ オルケストラドール
+マルチソースの aplica em ランタイム。
 
-- **Vigencia** - `issued_at < expires_at <= issued_at + 86,400 s`. Provedores
-  devem renovar a cada 12 horas.
-- **TLVs de capacidade** - a lista TLV anuncia recursos de transporte (Torii,
-  QUIC+Noise, relays SoraNet, extensoes de fornecedor). Codigos desconhecidos
-  podem ser ignorados quando `allow_unknown_capabilities = true`, seguindo a
-  orientacao GREASE.
-- **Hints de QoS** - tier de `availability` (Hot/Warm/Cold), latencia maxima de
-  recuperacao, limite de concorrencia e budget de stream opcional. QoS deve
-  alinhar com a telemetria observada e e auditada na admissao.
-- **Endpoints e rendezvous topics** - URLs de servico concretas com metadados
-  TLS/ALPN mais os topics de descoberta aos quais os clientes devem se inscrever
-  ao construir guard sets.
-- **Politica de diversidade de caminho** - `min_guard_weight`, caps de fan-out de
-  AS/pool e `provider_failure_threshold` tornam possiveis fetches deterministas
-  multi-peer.
+- **ビゲンシア** - `issued_at < expires_at <= issued_at + 86,400 s`。プロヴェドール
+  devem renovar a cada 12 horas。
+- **TLV 容量** - 輸送時の TLV 通知リスト (Torii,
+  QUIC+Noise、リレー SoraNet、拡張機能)。コディゴス・デスコンヘシドス
+  podem ser ignorados quando `allow_unknown_capabilities = true`、セギンド
+  オリエンタカオグリース。
+- **QoS のヒント** - `availability` 層 (ホット/ウォーム/コールド)、最大遅延
+  回復、コンコルレンシアの制限、およびストリームの予算の制限。 QoSの開発
+  アリンハルはテレメトリアを観察し、監査を承認します。
+- **エンドポイントとランデブー トピック** - メタデータに関するサービスの URL
+  TLS/ALPN は、OS トピックを説明し、OS クライアントを開発し、セキュリティを強化します。
+  青コンストライアガードセット。
+- **カミーニョの多様な政治** - `min_guard_weight`、ファンアウトのキャップ
+  AS/プール `provider_failure_threshold` トルナムは確定的なフェッチを取得します
+  マルチピア。
 - **Identificadores de perfil** - provedores devem expor o handle canonico (ex.
-  `sorafs.sf1@1.0.0`); `profile_aliases` opcionais ajudam clientes antigos a migrar.
+  `sorafs.sf1@1.0.0`); `profile_aliases` 移民のクライアントであるアンティゴスを選択します。
 
-Regras de validacao rejeitam stake zero, listas vazias de capabilities/endpoints/topics,
-vigencias fora de ordem ou targets de QoS ausentes. Admission envelopes comparam
-os corpos do advert e da proposta (`compare_core_fields`) antes de disseminar
-atualizacoes.
+ステークゼロを確認し、機能/エンドポイント/トピックのリストを確認し、
+必要に応じて QoS をターゲットにします。入学封筒の比較
+os corpos do advert e da proposta (`compare_core_fields`) セミナー前
+アトゥアリザコ。
 
-### Extensoes de range fetch
+### 範囲フェッチの拡張
 
-Provedores com range incluem os seguintes metadados:
+Provedores com の範囲には、メタデータが含まれています:
 
-| Campo | Proposito |
-|-------|-----------|
-| `CapabilityType::ChunkRangeFetch` | Declara `max_chunk_span`, `min_granularity` e flags de alinhamento/prova. |
-| `StreamBudgetV1` | Envelope opcional de concorrencia/throughput (`max_in_flight`, `max_bytes_per_sec`, `burst` opcional). Requer capacidade de range. |
-| `TransportHintV1` | Preferencias de transporte ordenadas (ex. `torii_http_range`, `quic_stream`, `soranet_relay`). Prioridades sao `0-15` e duplicados sao rejeitados. |
+|カンポ |プロポジト |
+|------|-----------|
+| `CapabilityType::ChunkRangeFetch` | `max_chunk_span`、`min_granularity` のフラグをアリンハメント/プロバに宣言します。 |
+| `StreamBudgetV1` |コンコルレンシア/スループットのオプションのエンベロープ (`max_in_flight`、`max_bytes_per_sec`、`burst` オプション)。範囲内の容量を要求してください。 |
+| `TransportHintV1` |交通機関の優先順位 (例: `torii_http_range`、`quic_stream`、`soranet_relay`)。 SAO `0-15` と重複する優先順位。 |
 
-Suporte de tooling:
+ツールのサポート:
 
-- Pipelines de provider advert devem validar capacidade de range, stream budget e
-  transport hints antes de emitir payloads deterministas para auditorias.
-- `cargo xtask sorafs-admission-fixtures` agrupa adverts multi-source canonicos
-  junto com downgrade fixtures em `fixtures/sorafs_manifest/provider_admission/`.
-- Adverts com range que omitem `stream_budget` ou `transport_hints` sao rejeitados
-  pelos loaders CLI/SDK antes do agendamento, mantendo o harness multi-source
-  alinhado com as expectativas de admissao do Torii.
+- プロバイダーの広告開発のパイプライン、範囲、ストリーム予算などの容量を検証
+  トランスポートヒントは、ペイロードを送信する前に、聴覚的に決定します。
+- `cargo xtask sorafs-admission-fixtures` agrupa がマルチソースの canonicos を広告します
+  junto com ダウングレード フィクスチャ em `fixtures/sorafs_manifest/provider_admission/`。
+- 広告の範囲を省略 `stream_budget` ou `transport_hints` sao rejeitados
+  ペロスローダー CLI/SDK は、アジェンダメントを実行し、マルチソースを活用するために管理します
+  alinhado com は Torii を期待しています。
 
-## Endpoints de range do gateway
+## ゲートウェイの範囲内のエンドポイント
 
-Gateways aceitam requisicoes HTTP deterministas que espelham os metadados do
-advert.
+ゲートウェイは、メタデータの HTTP 決定を要求します
+広告。
 
 ### `GET /v1/sorafs/storage/car/{manifest_id}`
 
-| Requisito | Detalhes |
-|-----------|----------|
-| **Headers** | `Range` (janela unica alinhada aos offsets de chunk), `dag-scope: block`, `X-SoraFS-Chunker`, `X-SoraFS-Nonce` opcional e `X-SoraFS-Stream-Token` base64 obrigatorio. |
-| **Respostas** | `206` com `Content-Type: application/vnd.ipld.car`, `Content-Range` descrevendo a janela servida, metadados `X-Sora-Chunk-Range` e headers de chunker/token ecoados. |
-| **Falhas** | `416` para ranges desalinhados, `401` para tokens ausentes/invalidos, `429` quando budgets de stream/bytes sao excedidos. |
+|レクシト |デタルヘス |
+|----------|----------|
+| **ヘッダー** | `Range` (チャンクのジャネラ ユニカ アリンハダ AOS オフセット)、`dag-scope: block`、`X-SoraFS-Chunker`、`X-SoraFS-Nonce` オプション、`X-SoraFS-Stream-Token` Base64 義務。 |
+| **レスポスタ** | `206` com `Content-Type: application/vnd.ipld.car`、`Content-Range` は、ジャネラ サービス、メタデータ `X-Sora-Chunk-Range` チャンカー/トークン エコードのヘッダーを記述します。 |
+| **ファルハス** | `416` はサリンハドスの範囲、`401` はトークンの有効/無効、`429` はストリーム/バイトの超過予算です。 |
 
 ### `GET /v1/sorafs/storage/chunk/{manifest_id}/{digest}`
 
-Fetch de chunk unico com os mesmos headers mais o digest determinista do chunk.
-Util para retries ou downloads forenses quando slices de CAR sao desnecessarios.
+チャンクを取得して、ユニコ コムのメスモス ヘッダーを取得し、チャンクをダイジェストで決定します。
+再試行して、必要な CAR のスライスをダウンロードするまで使用します。
 
-## Workflow do orquestrador multi-source
+## orquestrador マルチソースを実行するワークフロー
 
-Quando o fetch multi-source SF-6 esta habilitado (CLI Rust via `sorafs_fetch`,
-SDKs via `sorafs_orchestrator`):
+マルチソース SF-6 を取得できるようになりました (`sorafs_fetch` 経由の CLI Rust、
+`sorafs_orchestrator` 経由の SDK):1. **Coletar entradas** - チャンクの解読、プクサー OS
+   最近の広告、オプション、テレメトリ スナップショットの通過
+   (`--telemetry-json` または `TelemetrySnapshot`)。
+2. **スコアボードの作成** - `Orchestrator::build_scoreboard` アヴァリア
+   エレギビリダーデとレジェイソン・ラゾエス登録。 `sorafs_fetch --scoreboard-out`
+   JSON を永続化します。
+3. **アジェンダ チャンク** - `fetch_with_scoreboard` (ou `--plan`) 復元リスト
+   範囲、ストリームの予算、再試行/ピアの上限 (`--retry-budget`、`--max-peers`)
+   必要なマニフェストを使用してストリーム トークンを発行します。
+4. **Verificar recibos** - `chunk_receipts` および `provider_reports` を含むと述べています。
+   CLI 永続化 `provider_reports`、`chunk_receipts` e を実行します。
+   `ineligible_providers` パラ証拠バンドル。
 
-1. **Coletar entradas** - decodificar o plano de chunks do manifest, puxar os
-   adverts mais recentes e, opcionalmente, passar um telemetry snapshot
-   (`--telemetry-json` ou `TelemetrySnapshot`).
-2. **Construir o scoreboard** - `Orchestrator::build_scoreboard` avalia a
-   elegibilidade e registra razoes de rejeicao; `sorafs_fetch --scoreboard-out`
-   persiste o JSON.
-3. **Agendar chunks** - `fetch_with_scoreboard` (ou `--plan`) reforca restricoes
-   de range, budgets de stream, caps de retry/peer (`--retry-budget`, `--max-peers`)
-   e emite um stream token com escopo de manifest para cada requisicao.
-4. **Verificar recibos** - as saidas incluem `chunk_receipts` e `provider_reports`;
-   sumarios do CLI persistem `provider_reports`, `chunk_receipts` e
-   `ineligible_providers` para evidence bundles.
+オペラドール/SDK との共通のエラー:
 
-Erros comuns apresentados a operadores/SDKs:
-
-| Erro | Descricao |
+|エラー |説明 |
 |------|-----------|
-| `no providers were supplied` | Nenhuma entrada elegivel apos o filtro. |
-| `no compatible providers available for chunk {index}` | Mismatch de range ou budget para um chunk especifico. |
-| `retry budget exhausted after {attempts}` | Aumente `--retry-budget` ou remova peers com falha. |
-| `no healthy providers remaining` | Todos os provedores foram desabilitados apos falhas repetidas. |
-| `streaming observer failed` | O writer CAR downstream abortou. |
-| `orchestrator invariant violated` | Capture manifest, scoreboard, telemetry snapshot e CLI JSON para triage. |
+| `no providers were supplied` |ネンフマ・エントラダ・エレギベル・アポス・オ・フィルトロ。 |
+| `no compatible providers available for chunk {index}` |予算の範囲とチャンクの特定が不一致です。 |
+| `retry budget exhausted after {attempts}` | `--retry-budget` を削除してピア com falha を削除してください。 |
+| `no healthy providers remaining` | Todos os provedores foram desabilitados apos falhas repetitidas。 |
+| `streaming observer failed` |おおライターCAR下流中止。 |
+| `orchestrator invariant violated` |マニフェスト、スコアボード、テレメトリ スナップショット、CLI JSON のトリアージをキャプチャします。 |
 
-## Telemetria e evidencias
+## テレメトリアと証拠
 
-- Metricas emitidas pelo orquestrador:  
-  `sorafs_orchestrator_active_fetches`, `sorafs_orchestrator_fetch_duration_ms`,
-  `sorafs_orchestrator_retries_total`, `sorafs_orchestrator_provider_failures_total`
-  (tagueadas por manifest/region/provider). Defina `telemetry_region` na config
-  ou via flags de CLI para particionar dashboards por frota.
-- Sumarios de fetch no CLI/SDK incluem scoreboard JSON persistido, chunk receipts
-  e provider reports que devem ir nos rollout bundles para gates SF-6/SF-7.
-- Gateway handlers expoem `telemetry::sorafs.fetch.lifecycle|retry|provider_failure|error`
-  para que dashboards SRE correlacionem decisoes do orquestrador com o comportamento
-  do servidor.
+- メトリカス・エミティダス・ペロ・オルケストラドール:  
+  `sorafs_orchestrator_active_fetches`、`sorafs_orchestrator_fetch_duration_ms`、
+  `sorafs_orchestrator_retries_total`、`sorafs_orchestrator_provider_failures_total`
+  (マニフェスト/リージョン/プロバイダーのタグ)。 Defina `telemetry_region` 構成
+  CLI のフラグを使用して、特定のダッシュボードを表示します。
+- スコアボード JSON 永続化、チャンク受信を含む CLI/SDK を取得しないマリオ
+  プロバイダーは、SF-6/SF-7 のゲートに関する開発バンドルの IR NOS ロールアウト バンドルを報告します。
+- ゲートウェイ ハンドラーは `telemetry::sorafs.fetch.lifecycle|retry|provider_failure|error` を表示します
+  ダッシュボードの SRE 相関性を決定し、Orquestrador com o comportamento を実行します
+  奉仕をします。
 
-## Helpers de CLI e REST
+## CLI および REST のヘルパー
 
-- `iroha app sorafs pin list|show`, `alias list` e `replication list` envolvem os
-  endpoints REST do pin-registry e imprimem Norito JSON bruto com blocos de
-  attestation para evidencias de auditoria.
-- `iroha app sorafs storage pin` e `torii /v1/sorafs/pin/register` aceitam manifests
-  Norito ou JSON com alias proofs e successors opcionais; proofs malformados
-  geram `400`, proofs stale retornam `503` com `Warning: 110`, e proofs expirados
-  retornam `412`.
-- Endpoints REST (`/v1/sorafs/pin`, `/v1/sorafs/aliases`, `/v1/sorafs/replication`)
-  incluem estruturas de attestation para que clientes verifiquem dados contra os
-  ultimos headers de bloco antes de agir.
+- `iroha app sorafs pin list|show`、`alias list`、`replication list` は OS に関与します
+  エンドポイント REST do pin-registry e imprimem Norito JSON ブルート コム ブロック
+  聴覚的証拠の証明。
+- `iroha app sorafs storage pin` e `torii /v1/sorafs/pin/register` アセチタムマニフェスト
+  Norito ou JSON com エイリアス証明と後継オプション。マルフォルマドの証拠
+  geram `400`、証明が古い retornam `503` com `Warning: 110`、e 証明 expirados
+  レトルナム`412`。
+- エンドポイント REST (`/v1/sorafs/pin`、`/v1/sorafs/aliases`、`/v1/sorafs/replication`)
+  顧客の検証に必要な証明書を含める
+  究極のヘッダーデブロコアンテスデアジール。
 
-## Referencias
+## 参考資料
 
-- Spec canonica:
+- 仕様カノニカ:
   [`docs/source/sorafs_node_client_protocol.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs_node_client_protocol.md)
-- Tipos Norito: `crates/sorafs_manifest/src/{provider_advert,provider_admission}.rs`
-- Helpers de CLI: `crates/iroha_cli/src/commands/sorafs.rs`,
+- ティポス Norito: `crates/sorafs_manifest/src/{provider_advert,provider_admission}.rs`
+- CLI ヘルパー: `crates/iroha_cli/src/commands/sorafs.rs`、
   `crates/sorafs_car/src/bin/sorafs_fetch.rs`
-- Crate do orquestrador: `crates/sorafs_orchestrator`
-- Pack de dashboards: `dashboards/grafana/sorafs_fetch_observability.json`
+- オルケストラドールの箱: `crates/sorafs_orchestrator`
+- ダッシュボードのパック: `dashboards/grafana/sorafs_fetch_observability.json`

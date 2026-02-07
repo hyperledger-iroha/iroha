@@ -4,28 +4,30 @@ direction: ltr
 source: docs/portal/docs/soranet/pq-ratchet-runbook.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: pq-ratchet-runbook
-title: Simulacro PQ Ratchet do SoraNet
+identificación: pq-ratchet-runbook
+título: Simulacro PQ Ratchet de SoraNet
 sidebar_label: Runbook de PQ Ratchet
-description: Passos de ensaio on-call para promover ou rebaixar a politica de anonimato PQ em estagios com validacao deterministica de telemetria.
+descripción: Pasos de ensayo de guardia para promover o rebajar una política de anonimato PQ en estaciones con validación determinística de telemetría.
 ---
 
-:::note Fonte canonica
-Esta pagina espelha `docs/source/soranet/pq_ratchet_runbook.md`. Mantenha ambas as copias sincronizadas.
+:::nota Fuente canónica
+Esta página espelha `docs/source/soranet/pq_ratchet_runbook.md`. Mantenha ambas como copias sincronizadas.
 :::
 
-## Proposito
+## propuesta
 
-Este runbook guia a sequencia do simulacro para a politica de anonimato post-quantum (PQ) em estagios do SoraNet. Operadores ensaiam promocao (Stage A -> Stage B -> Stage C) e a despromocao controlada de volta a Stage B/A quando a oferta de PQ cai. O simulacro valida hooks de telemetria (`sorafs_orchestrator_policy_events_total`, `sorafs_orchestrator_brownouts_total`, `sorafs_orchestrator_pq_ratio_*`) e coleta artefatos para o log de rehearsal de incidentes.
+Este runbook guía una secuencia de simulacro para una política de anonimato post-cuántico (PQ) en estaciones de SoraNet. Los operadores ensaiam promocao (Etapa A -> Etapa B -> Etapa C) y un despromocao controlado de volta a Etapa B/A cuando a oferta de PQ cai. El simulacro valida ganchos de telemetría (`sorafs_orchestrator_policy_events_total`, `sorafs_orchestrator_brownouts_total`, `sorafs_orchestrator_pq_ratio_*`) y coleta artefatos para el registro de ensayo de incidentes.
 
-## Prerequisitos
+##Requisitos previos
 
-- Ultimo binario `sorafs_orchestrator` com capability-weighting (commit igual ou posterior ao reference do drill mostrado em `docs/source/soranet/reports/pq_ratchet_validation.md`).
-- Acesso ao stack Prometheus/Grafana que serve `dashboards/grafana/soranet_pq_ratchet.json`.
-- Snapshot nominal do guard directory. Busque e valide uma copia antes do simulacro:
+- Último binario `sorafs_orchestrator` con ponderación de capacidad (compromiso igual o posterior a la referencia del taladro mostrado en `docs/source/soranet/reports/pq_ratchet_validation.md`).
+- Acceso a la pila Prometheus/Grafana que sirve a `dashboards/grafana/soranet_pq_ratchet.json`.
+- Instantánea nominal del directorio de protección. Busque y valide una copia antes del simulacro:
 
 ```bash
 sorafs_cli guard-directory fetch \
@@ -34,9 +36,9 @@ sorafs_cli guard-directory fetch \
   --expected-directory-hash <directory-hash-hex>
 ```
 
-Se o source directory publicar apenas JSON, re-encode para Norito binary com `soranet-directory build` antes de rodar os helpers de rotacao.
+Si el directorio fuente se publica solo en JSON, vuelva a codificar el binario Norito con `soranet-directory build` antes de rodar los ayudantes de rotación.
 
-- Capture metadata e pre-stage artefatos de rotacao do issuer com o CLI:
+- Capture metadatos y artefactos de rotación previos a la etapa del emisor con CLI:
 
 ```bash
 soranet-directory inspect \
@@ -45,69 +47,65 @@ soranet-directory rotate \
   --snapshot ./artefacts/guard_directory_pre_drill.norito \
   --out ./artefacts/guard_directory_post_drill.norito \
   --keys-out ./artefacts/guard_issuer_rotation --overwrite
-```
+```- Janela de mudanca aprobó pelos times on call de networking e observability.
 
-- Janela de mudanca aprovada pelos times on-call de networking e observability.
+## Pasos de promoción
 
-## Passos de promocao
+1. **Auditoría de etapa**
 
-1. **Stage audit**
-
-   Registre o stage inicial:
+   Registro o etapa inicial:
 
    ```bash
    sorafs_cli config get --config orchestrator.json sorafs.anonymity_policy
    ```
 
-   Espere `anon-guard-pq` antes da promocao.
+   Espere `anon-guard-pq` antes de la promoción.
 
-2. **Promova para Stage B (Majority PQ)**
+2. **Promova para Etapa B (PQ Mayoritaria)**
 
    ```bash
    sorafs_cli config set --config orchestrator.json \
      sorafs.anonymity_policy anon-majority-pq
    ```
 
-   - Aguarde >=5 minutos para manifests serem atualizados.
-   - No Grafana (dashboard `SoraNet PQ Ratchet Drill`) confirme que o painel "Policy Events" mostra `outcome=met` para `stage=anon-majority-pq`.
-   - Capture um screenshot ou JSON do painel e anexe ao log de incidentes.
+   - Aguarde >=5 minutos para manifiestos serem atualizados.
+   - No Grafana (panel de control `SoraNet PQ Ratchet Drill`) confirma que el panel "Eventos de política" muestra `outcome=met` para `stage=anon-majority-pq`.
+   - Capture una captura de pantalla o JSON desde el panel y el anexo al registro de incidentes.
 
-3. **Promova para Stage C (Strict PQ)**
+3. **Promova para Etapa C (PQ estricto)**
 
    ```bash
    sorafs_cli config set --config orchestrator.json \
      sorafs.anonymity_policy anon-strict-pq
    ```
 
-   - Verifique que os histogramas `sorafs_orchestrator_pq_ratio_*` tendem a 1.0.
-   - Confirme que o contador de brownout permanece plano; caso contrario, siga os passos de despromocao.
+   - Verifique que los histogramas `sorafs_orchestrator_pq_ratio_*` tengan la versión 1.0.
+   - Confirme que el contador de apagón permanece plano; caso contrario, siga los pasos de despromocao.
 
-## Despromocao / brownout drill
+## Despromocao / simulacro de apagón
 
 1. **Induza uma escassez sintetica de PQ**
 
-   Desative relays PQ no ambiente playground reduzindo o guard directory a entradas classicas apenas, depois recarregue o cache do orchestrator:
+   Relés desativos PQ no ambiente patio de recreo reduzindo o guard directorio a entradas clásicas apenas, depois recarregue o cache do Orchestrator:
 
    ```bash
    sorafs_cli guard-cache prune --config orchestrator.json --keep-classical-only
    ```
 
-2. **Observe a telemetria de brownout**
+2. **Observar una telemetría de caída de tensión**
 
-   - Dashboard: o painel "Brownout Rate" sobe acima de 0.
-   - PromQL: `sum(rate(sorafs_orchestrator_brownouts_total{region="$region"}[5m]))`
-   - `sorafs_fetch` deve reportar `anonymity_outcome="brownout"` com `anonymity_reason="missing_majority_pq"`.
+   - Panel de control: el panel "Tasa de apagones" es superior a 0.
+   -PromQL: `sum(rate(sorafs_orchestrator_brownouts_total{region="$region"}[5m]))`
+   - `sorafs_fetch` deve reportar `anonymity_outcome="brownout"` con `anonymity_reason="missing_majority_pq"`.
 
-3. **Despromova para Stage B / Stage A**
+3. **Despromova para Etapa B / Etapa A**
 
    ```bash
    sorafs_cli config set --config orchestrator.json \
      sorafs.anonymity_policy anon-majority-pq
-   ```
+   ```Se a oferta de PQ aún por insuficiente, despromova para `anon-guard-pq`. El simulacro termina cuando los contadores de apagón se estabilizan y las promociones pueden ser reaplicadas.
 
-   Se a oferta de PQ ainda for insuficiente, despromova para `anon-guard-pq`. O simulacro termina quando os contadores de brownout estabilizam e as promocoes podem ser reaplicadas.
-
-4. **Restaure o guard directory**
+4. **Restauración del directorio de guardia**
 
    ```bash
    sorafs_cli guard-directory import \
@@ -115,14 +113,14 @@ soranet-directory rotate \
      --input ./artefacts/guard_directory_pre_drill.json
    ```
 
-## Telemetria e artefatos
+## Telemetría y artefactos
 
-- **Dashboard:** `dashboards/grafana/soranet_pq_ratchet.json`
-- **Alertas Prometheus:** garanta que o alerta de brownout de `sorafs_orchestrator_policy_events_total` fique abaixo do SLO configurado (&lt;5% em qualquer janela de 10 minutos).
-- **Incident log:** anexe trechos de telemetria e notas do operador em `docs/examples/soranet_pq_ratchet_fire_drill.log`.
-- **Captura assinada:** use `cargo xtask soranet-rollout-capture` para copiar o drill log e o scoreboard para `artifacts/soranet_pq_rollout/<timestamp>/`, calcular digests BLAKE3 e produzir um `rollout_capture.json` assinado.
+- **Panel de control:** `dashboards/grafana/soranet_pq_ratchet.json`
+- **Alertas Prometheus:** garantía de que o alerta de apagón de `sorafs_orchestrator_policy_events_total` fique abaixo do SLO configurado (&lt;5% em qualquer janela de 10 minutos).
+- **Registro de incidentes:** anexe trechos de telemetria e notas do operador em `docs/examples/soranet_pq_ratchet_fire_drill.log`.
+- **Captura assinada:** use `cargo xtask soranet-rollout-capture` para copiar el registro de perforación y el marcador para `artifacts/soranet_pq_rollout/<timestamp>/`, calcular resúmenes BLAKE3 y producir un `rollout_capture.json` assinado.
 
-Exemplo:
+Ejemplo:
 
 ```
 cargo xtask soranet-rollout-capture \
@@ -134,11 +132,11 @@ cargo xtask soranet-rollout-capture \
   --label "drill-2026-02-21"
 ```
 
-Anexe os metadata gerados e a assinatura ao pacote de governance.
+Anexo de los metadatos generados y la assinatura del paquete de gobernanza.
 
-## Rollback
+## Revertir
 
-Se o simulacro revelar escassez real de PQ, permanece em Stage A, notifique o Networking TL e anexe as metricas coletadas junto com os diffs do guard directory ao incident tracker. Use o export do guard directory capturado anteriormente para restaurar o servico normal.
+Si el simulacro revela escassez real de PQ, permanece en la Etapa A, notifique o Networking TL y anexe como métricas recopiladas junto con las diferencias del directorio de guardia y el rastreador de incidentes. Utilice o exporte el directorio guardado capturado anteriormente para restaurar el servicio normal.
 
 :::tip Cobertura de regressao
 `cargo test -p sorafs_orchestrator pq_ratchet_fire_drill_records_metrics` fornece a validacao sintetica que sustenta este simulacro.

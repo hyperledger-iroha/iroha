@@ -4,41 +4,43 @@ direction: rtl
 source: docs/portal/docs/devportal/preview-feedback/w2/summary.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: preview-feedback-w2-summary
-title: Resume feedback et statut W2
-sidebar_label: Resume W2
-description: Digest en direct pour la vague de preview communautaire (W2).
+المعرف: ملخص المعاينة W2
+العنوان: تعليقات السيرة الذاتية والقانون W2
+Sidebar_label: استئناف W2
+الوصف: ملخص مباشر من أجل معاينة التواصل الغامض (W2).
 ---
 
-| Element | Details |
+| العنصر | التفاصيل |
 | --- | --- |
-| Vague | W2 - Reviewers communautaires |
-| Fenetre d'invitation | 2025-06-15 -> 2025-06-29 |
-| Tag d'artefact | `preview-2025-06-15` |
-| Issue tracker | `DOCS-SORA-Preview-W2` |
-| Participants | comm-vol-01...comm-vol-08 |
+| غامضة | W2 - المراجعون المجتمعيون |
+| نافذة الدعوة | 15-06-2025 -> 29-06-2025 |
+| علامة قطعة أثرية | `preview-2025-06-15` |
+| تعقب القضية | `DOCS-SORA-Preview-W2` |
+| المشاركون | كوم-المجلد-01...كوم-المجلد-08 |
 
-## Points saillants
+## النقاط الشراعية
 
-1. **Governance et tooling** - La politique d'intake communautaire approuvee a l'unanimite le 2025-05-20; le template de demande mis a jour avec champs motivation/fuseau horaire est dans `docs/examples/docs_preview_request_template.md`.
-2. **Preflight et preuves** - Le changement du proxy Try it `OPS-TRYIT-188` execute le 2025-06-09, dashboards Grafana captures, et les outputs descriptor/checksum/probe de `preview-2025-06-15` archives sous `artifacts/docs_preview/W2/`.
-3. **Vague d'invitations** - Huit reviewers communautaires invites le 2025-06-15, avec accuses enregistres dans la table d'invitation du tracker; tous ont termine la verification checksum avant navigation.
-4. **Feedback** - `docs-preview/w2 #1` (wording de tooltip) et `#2` (ordre de sidebar de localisation) ont ete saisis le 2025-06-18 et resolus d'ici 2025-06-21 (Docs-core-04/05); aucun incident pendant la vague.
+1. **الحوكمة والأدوات** - تمت الموافقة على سياسة المدخول المجتمعي بالإجماع في 2025-05-20; قالب الطلب في اليوم مع التحفيز/التشغيل السريع موجود في `docs/examples/docs_preview_request_template.md`.
+2. **الاختبار المبدئي والاختبارات** - تغيير الوكيل جرب `OPS-TRYIT-188` تنفيذ لو 2025-06-09، لوحات المعلومات Grafana يلتقط، واصف المخرجات/المجموع الاختباري/مسبار `preview-2025-06-15` أرشيفات `artifacts/docs_preview/W2/`.
+3. **الدعوات الغامضة** - يدعو Huit reviewers communautaires le 2025-06-15، avec يتهم enregistres dans la table d'invitation du Tracker؛ يجب أن ننهي المجموع الاختباري للتحقق قبل التنقل.
+4. **التعليقات** - `docs-preview/w2 #1` (صياغة تلميح الأداة) و`#2` (ترتيب الشريط الجانبي للترجمة) تم إرسالها إلى 2025-06-18 وقرار ici 2025-06-21 (Docs-core-04/05); حادثة aucun قلادة لا غامضة.
 
-## Actions
+## الإجراءات
 
-| ID | Description | Responsable | Statut |
+| معرف | الوصف | مسؤول | النظام الأساسي |
 | --- | --- | --- | --- |
-| W2-A1 | Traiter `docs-preview/w2 #1` (wording de tooltip). | Docs-core-04 | Termine 2025-06-21 |
-| W2-A2 | Traiter `docs-preview/w2 #2` (sidebar de localisation). | Docs-core-05 | Termine 2025-06-21 |
-| W2-A3 | Archiver les preuves de sortie + mettre a jour roadmap/status. | Docs/DevRel lead | Termine 2025-06-29 |
+| W2-A1 | Traiter `docs-preview/w2 #1` (صياغة تلميح الأداة). | مستندات-core-04 | تيرمين 2025-06-21 |
+| W2-A2 | Traiter `docs-preview/w2 #2` (الشريط الجانبي للترجمة). | مستندات-core-05 | تيرمين 2025-06-21 |
+| W2-A3 | أرشفة إجراءات الفرز + متابعة خريطة الطريق/الحالة يوميًا. | مستندات/DevRel الرصاص | تيرمين 2025-06-29 |
 
-## Resume de sortie (2025-06-29)
+## استئناف الطلعة (29-06-2025)
 
-- Les huit reviewers communautaires ont confirme la fin et l'acces preview a ete revoque; accuses enregistres dans le log d'invitation du tracker.
-- Les snapshots finaux de telemetrie (`docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals`) sont restes verts; logs et transcripts du proxy Try it attaches a `DOCS-SORA-Preview-W2`.
-- Bundle de preuves (descriptor, checksum log, probe output, link report, screenshots Grafana, accuses d'invitation) archive sous `artifacts/docs_preview/W2/preview-2025-06-15/`.
-- Le log de checkpoints W2 du tracker a ete mis a jour jusqu'a la sortie, garantissant un enregistrement auditable avant le demarrage de la planification W3.
+- يؤكد مراجعو Huit communautaires على النهاية ومعاينة الوصول ثم يتم إلغاؤها؛ يتهم enregistres dans le log d'invitation du Tracker.
+- اللقطات النهائية للقياس عن بعد (`docs.preview.integrity`، `TryItProxyErrors`، `DocsPortal/GatewayRefusals`) هي في الاتجاه الصحيح؛ سجلات ونصوص الوكيل حاول إرفاق `DOCS-SORA-Preview-W2`.
+- حزمة Preuves (واصف، سجل المجموع الاختباري، إخراج التحقيق، تقرير الارتباط، لقطات الشاشة Grafana، اتهامات الدعوة) أرشيف Sous `artifacts/docs_preview/W2/preview-2025-06-15/`.
+- سجل نقاط التفتيش W2 الذي تقوم بتتبعه حتى الآن، مما يضمن تسجيلًا قابلاً للتدقيق قبل البدء في التخطيط W3.

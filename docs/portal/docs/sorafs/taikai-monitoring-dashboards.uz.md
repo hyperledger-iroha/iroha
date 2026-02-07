@@ -9,96 +9,97 @@ source_last_modified: "2025-12-29T18:16:35.205443+00:00"
 translation_last_reviewed: 2026-02-07
 title: Taikai Monitoring Dashboards
 description: Portal summary of the viewer/cache Grafana boards that back SN13-C evidence
+translator: machine-google-reviewed
 ---
 
-Taikai routing-manifest (TRM) readiness hinges on two Grafana boards and their
-companion alerts. This page mirrors the highlights from
+Taikai marshrutlash-manifesti (TRM) tayyorligi ikkita Grafana platalariga va ularning
+yordamchi ogohlantirishlar. Ushbu sahifada eng muhim voqealar aks ettirilgan
 `dashboards/grafana/taikai_viewer.json`, `dashboards/grafana/taikai_cache.json`,
-and `dashboards/alerts/taikai_viewer_rules.yml` so reviewers can follow along
-without cloning the repository.
+va `dashboards/alerts/taikai_viewer_rules.yml`, shuning uchun sharhlovchilar kuzatib borishlari mumkin
+omborni klonlashsiz.
 
-## Viewer dashboard (`taikai_viewer.json`)
+## Ko'rish paneli (`taikai_viewer.json`)
 
-- **Live edge & latency:** Panels visualise the p95/p99 latency histograms
-  (`taikai_ingest_segment_latency_ms`, `taikai_ingest_live_edge_drift_ms`) per
-  cluster/stream. Watch for p99 > 900 ms or drift > 1.5 s (triggers the
-  `TaikaiLiveEdgeDrift` alert).
-- **Segment errors:** Breaks out `taikai_ingest_segment_errors_total{reason}` to
-  expose decode failures, lineage replay attempts, or manifest mismatches.
-  Attach screenshots to SN13-C incidents whenever this panel rises above the
-  “warning” band.
-- **Viewer & CEK health:** Panels sourced from `taikai_viewer_*` metrics track
-  CEK rotation age, PQ guard mix, rebuffer counts, and alert roll-ups. The CEK
-  panel enforces the rotation SLA that governance reviews before approving new
-  aliases.
-- **Alias telemetry snapshot:** The `/status → telemetry.taikai_alias_rotations`
-  table sits directly on the board so operators can confirm manifest digests
-  before attaching governance evidence.
+- **Jonli chekka va kechikish:** Panellar p95/p99 kechikish gistogrammalarini ingl.
+  (`taikai_ingest_segment_latency_ms`, `taikai_ingest_live_edge_drift_ms`) boshiga
+  klaster/oqim. p99 >900ms yoki drift >1,5s uchun tomosha qiling (
+  `TaikaiLiveEdgeDrift` ogohlantirish).
+- **Segment xatolari:** `taikai_ingest_segment_errors_total{reason}` ni buzadi
+  dekodlashda xatoliklarni, naslni takrorlash urinishlarini yoki aniq nomuvofiqliklarni ko'rsatish.
+  Bu panel yuqoriga ko'tarilganda, SN13-C hodisalariga skrinshotlarni biriktiring
+  "ogohlantirish" bandi.
+- **Tomoshabin va CEK salomatligi:** Panellar `taikai_viewer_*` metrika trekidan olingan
+  CEK aylanish yoshi, PQ qo'riqchisi aralashmasi, rebufer soni va ogohlantirish roliklari. CEK
+  panel boshqaruv yangisini tasdiqlashdan oldin ko'rib chiqadigan aylanish SLAni amalga oshiradi
+  taxalluslar.
+- **Taxallus telemetriya surati:** `/status → telemetry.taikai_alias_rotations`
+  Jadval to'g'ridan-to'g'ri doskada joylashgan bo'lib, operatorlar manifest dayjestlarini tasdiqlashlari mumkin
+  boshqaruv dalillarini ilova qilishdan oldin.
 
-## Cache dashboard (`taikai_cache.json`)
+## Kesh asboblar paneli (`taikai_cache.json`)
 
-- **Tier pressure:** Panels chart `sorafs_taikai_cache_{hot,warm,cold}_occupancy`
-  and `sorafs_taikai_cache_promotions_total`. Use these to see whether a TRM
-  rotation is overloading specific tiers.
-- **QoS denials:** `sorafs_taikai_qos_denied_total` surfaces when cache pressure
-  forces throttling; annotate the drill log whenever the rate departs from zero.
-- **Egress utilisation:** Helps confirm that SoraFS exits keep up with Taikai
-  viewers when CMAF windows rotate.
+- **Daraj bosimi:** Panellar diagrammasi `sorafs_taikai_cache_{hot,warm,cold}_occupancy`
+  va `sorafs_taikai_cache_promotions_total`. TRM mavjudligini bilish uchun ulardan foydalaning
+  aylanish muayyan darajalarni haddan tashqari yuklaydi.
+- **QoS rad etishlari:** kesh bosimida `sorafs_taikai_qos_denied_total` yuzalar
+  kuchlarni bostirish; stavka noldan chiqqanda matkap jurnaliga izoh bering.
+- **Egressdan foydalanish:** SoraFS chiqishlari Taikai bilan mos kelishini tasdiqlashga yordam beradi
+  CMAF oynalari aylanganda tomoshabinlar.
 
-## Alerts & evidence capture
+## Ogohlantirishlar va dalillarni olish
 
-- Paging rules live in `dashboards/alerts/taikai_viewer_rules.yml` and map one
-  to one with the panels above (`TaikaiLiveEdgeDrift`, `TaikaiIngestFailure`,
-  `TaikaiCekRotationLag`, proof-health warnings). Ensure every production
-  cluster wires these into Alertmanager.
-- Snapshots/screenshots captured during drills must be stored in
-  `artifacts/sorafs_taikai/drills/<YYYYMMDD>/` alongside the spool files and
-  `/status` JSON. Use `scripts/telemetry/log_sorafs_drill.sh --scenario taikai-anchor`
-  to append the execution to the shared drill log.
-- When dashboards change, include the SHA-256 digest of the JSON file inside the
-  portal PR description so auditors can match the managed Grafana folder to the
-  repo version.
+- Peyjing qoidalari `dashboards/alerts/taikai_viewer_rules.yml` da ishlaydi va birinchi xaritada
+  yuqoridagi panelli biriga (`TaikaiLiveEdgeDrift`, `TaikaiIngestFailure`,
+  `TaikaiCekRotationLag`, sog'liqni saqlash bo'yicha ogohlantirishlar). Har bir ishlab chiqarishni ta'minlash
+  klaster ularni Alertmanagerga ulaydi.
+- Mashqlar paytida olingan suratlar/skrinshotlar saqlanishi kerak
+  `artifacts/sorafs_taikai/drills/<YYYYMMDD>/` spool fayllari bilan birga va
+  `/status` JSON. `scripts/telemetry/log_sorafs_drill.sh --scenario taikai-anchor` dan foydalaning
+  ijroni umumiy matkap jurnaliga qo'shish uchun.
+- Boshqaruv paneli o'zgarganda, JSON faylining SHA-256 dayjestini ichiga kiriting
+  auditorlar boshqariladigan Grafana jildiga mos kelishi uchun portalning PR tavsifi
+  repo versiyasi.
 
-## Evidence bundle checklist
+## Dalillar to'plamining nazorat ro'yxati
 
-SN13-C reviews expect every drill or incident to ship the same artefacts listed
-in the Taikai anchor runbook. Capture them in the order below so the bundle is
-ready for governance review:
+SN13-C sharhlari har bir mashq yoki hodisa ro'yxatdagi bir xil artefaktlarni yuborishini kutadi
+Taikai anchor runbookda. To'plam bo'lishi uchun ularni quyidagi tartibda oling
+boshqaruvni tekshirishga tayyor:
 
-1. Copy the most recent `taikai-anchor-request-*.json`,
-   `taikai-trm-state-*.json`, and `taikai-lineage-*.json` files from
-   `config.da_ingest.manifest_store_dir/taikai/`. These spool artefacts prove
-   which routing manifest (TRM) and lineage window were active. The helper
+1. Eng oxirgi `taikai-anchor-request-*.json` nusxasini oling,
+   `taikai-trm-state-*.json` va `taikai-lineage-*.json` fayllari
+   `config.da_ingest.manifest_store_dir/taikai/`. Bu g'altakning artefaktlari isbotlaydi
+   qaysi marshrutlash manifest (TRM) va nasl oynasi faol edi. Yordamchi
    `cargo xtask taikai-anchor-bundle --spool <dir> --copy-dir <out> --out <out>/anchor_bundle.json [--signing-key <ed25519>]`
-   will copy the spool files, emit hashes, and optionally sign the summary.
-2. Record `/v1/status` output filtered to
-   `.telemetry.taikai_alias_rotations[]` and store it next to the spool files.
-   Reviewers compare the reported `manifest_digest_hex` and window bounds with
-   the copied spool state.
-3. Export Prometheus snapshots for the metrics listed above and take screenshots
-   of the viewer/cache dashboards with the relevant cluster/stream filters in
-   view. Drop the raw JSON/CSV and the screenshots into the artefact folder.
-4. Include Alertmanager incident IDs (if any) that reference the rules from
-   `dashboards/alerts/taikai_viewer_rules.yml` and note whether they auto-closed
-   once the condition cleared.
+   spool fayllarni nusxalaydi, xeshlarni chiqaradi va ixtiyoriy ravishda xulosaga imzo chekadi.
+2. Filtrlangan `/v1/status` chiqishini yozib oling
+   `.telemetry.taikai_alias_rotations[]` va uni spool fayllari yonida saqlang.
+   Sharhlovchilar xabar qilingan `manifest_digest_hex` va oyna chegaralarini solishtiradilar
+   nusxalangan spool holati.
+3. Yuqorida sanab o‘tilgan ko‘rsatkichlar uchun Prometheus snapshotlarini eksport qiling va skrinshot oling
+   tegishli klaster/oqim filtrlari bilan tomoshabin/kesh boshqaruv paneli
+   ko'rish. Xom JSON/CSV va skrinshotlarni artefakt jildiga tashlang.
+4. Qoidalarga havola qiluvchi Alertmanager hodisa identifikatorlarini (agar mavjud bo'lsa) qo'shing
+   `dashboards/alerts/taikai_viewer_rules.yml` va ular avtomatik yopilgan-yopilmaganligiga e'tibor bering
+   vaziyat tozalangandan keyin.
 
-Store everything under `artifacts/sorafs_taikai/drills/<YYYYMMDD>/` so drill
-audits and SN13-C governance reviews can fetch a single archive.
+`artifacts/sorafs_taikai/drills/<YYYYMMDD>/` ostida hamma narsani saqlang, shuning uchun matkap
+audit va SN13-C boshqaruv sharhlari bitta arxivni olishi mumkin.
 
-## Drill cadence & logging
+## Burg'ulash kadansi va ro'yxatga olish
 
-- Run the Taikai anchor drill on the first Tuesday of every month at 15:00 UTC.
-  The schedule keeps evidence fresh ahead of the SN13 governance sync.
-- After capturing the artefacts above, append the execution to the shared ledger
-  with `scripts/telemetry/log_sorafs_drill.sh --scenario taikai-anchor`. The
-  helper emits the JSON entry required by `docs/source/sorafs/runbooks-index.md`.
-- Link the archived artefacts in the runbook index entry and escalate any failed
-  alerts or dashboard regressions within 48 hours via the Media Platform WG/SRE
-  channel.
-- Keep the drill summary screenshot set (latency, drift, errors, CEK rotation,
-  cache pressure) alongside the spool bundle so operators can show exactly how
-  the dashboards behaved during the rehearsal.
+- Har oyning birinchi seshanba kuni soat 15:00 UTC da Taikai ankraj matkapini bajaring.
+  Jadval SN13 boshqaruv sinxronlashidan oldin dalillarni yangilab turadi.
+- Yuqoridagi artefaktlarni qo'lga kiritgandan so'ng, ijroni umumiy daftarga qo'shing
+  `scripts/telemetry/log_sorafs_drill.sh --scenario taikai-anchor` bilan. The
+  yordamchi `docs/source/sorafs/runbooks-index.md` tomonidan talab qilinadigan JSON yozuvini chiqaradi.
+- Runbook indeksidagi arxivlangan artefaktlarni bog'lang va har qanday muvaffaqiyatsizlikni oshiring
+  Media Platformasi WG/SRE orqali 48 soat ichida ogohlantirishlar yoki asboblar panelidagi regressiyalar
+  kanal.
+- Mashqlar sarhisobi skrinshotini saqlang (kechikish, drift, xatolar, CEK aylanishi,
+  kesh bosimi) spool to'plami bilan birga, operatorlar qanday qilib aniq ko'rsatishi mumkin
+  asboblar paneli mashq paytida o'zini tutdi.
 
-Refer back to the [Taikai Anchor Runbook](./taikai-anchor-runbook.md) for the
-full Sev 1 procedure and evidence checklist. This page only captures the
-dashboard-specific guidance that SN13-C requires before leaving 🈺.
+Buning uchun [Taikai Anchor Runbook](./taikai-anchor-runbook.md) ga qayting.
+To'liq Sev1 protsedurasi va dalillarni tekshirish ro'yxati. Bu sahifa faqat suratga oladi
+SN13-C chiqishdan oldin talab qiladigan asboblar paneliga xos ko'rsatmalar 🈺.

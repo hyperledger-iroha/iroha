@@ -11,20 +11,21 @@ id: developer-cli
 title: SoraFS CLI Cookbook
 sidebar_label: CLI Cookbook
 description: Task-focused walkthrough of the consolidated `sorafs_cli` surface.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
+:::შენიშვნა კანონიკური წყარო
 :::
 
-The consolidated `sorafs_cli` surface (provided by the `sorafs_car` crate with
-the `cli` feature enabled) exposes every step required to prepare SoraFS
-artifacts. Use this cookbook to jump directly to common workflows; pair it with
-the manifest pipeline and orchestrator runbooks for operational context.
+კონსოლიდირებული `sorafs_cli` ზედაპირი (მოწოდებული `sorafs_car` ყუთით
+`cli` ფუნქცია ჩართულია) ასახავს SoraFS მოსამზადებლად საჭირო ყველა ნაბიჯს
+არტეფაქტები. გამოიყენეთ ეს კულინარიული წიგნი, რათა პირდაპირ გადახვიდეთ საერთო სამუშაო პროცესებზე; დააწყვილეთ იგი
+მანიფესტის მილსადენის და ორკესტრის წიგნები ოპერატიული კონტექსტისთვის.
 
-## Package payloads
+## პაკეტის დატვირთვები
 
-Use `car pack` to produce deterministic CAR archives and chunk plans. The
-command automatically selects the SF-1 chunker unless a handle is provided.
+გამოიყენეთ `car pack` დეტერმინისტული მანქანის არქივებისა და ნაწილაკების გეგმების შესაქმნელად. The
+ბრძანება ავტომატურად ირჩევს SF-1 ცუნკერს, თუ სახელური არ არის მოწოდებული.
 
 ```bash
 sorafs_cli car pack \
@@ -34,13 +35,13 @@ sorafs_cli car pack \
   --summary-out artifacts/video.car.json
 ```
 
-- Default chunker handle: `sorafs.sf1@1.0.0`.
-- Directory inputs are walked in lexicographic order so checksums stay stable
-  across platforms.
-- The JSON summary includes payload digests, per-chunk metadata, and the root
-  CID recognised by the registry and orchestrator.
+- ნაგულისხმევი ჭურჭლის სახელური: `sorafs.sf1@1.0.0`.
+- დირექტორიაში შეყვანები შესრულებულია ლექსიკოგრაფიული თანმიმდევრობით, რათა შემოწმებული ჯამები დარჩეს სტაბილური
+  პლატფორმების გასწვრივ.
+- JSON-ის შეჯამება მოიცავს დატვირთვის შეჯამებებს, თითო ნაწილზე მეტამონაცემებს და root-ს
+  CID აღიარებულია რეესტრისა და ორკესტრის მიერ.
 
-## Construct manifests
+## კონსტრუქციის მანიფესტი
 
 ```bash
 sorafs_cli manifest build \
@@ -52,15 +53,15 @@ sorafs_cli manifest build \
   --manifest-json-out artifacts/video.manifest.json
 ```
 
-- `--pin-*` options map directly to `PinPolicy` fields in
+- `--pin-*` პარამეტრების რუკა პირდაპირ `PinPolicy` ველებზე
   `sorafs_manifest::ManifestBuilder`.
-- Provide `--chunk-plan` when you want the CLI to recompute the SHA3 chunk
-  digest before submission; otherwise it reuses the digest embedded in the
-  summary.
-- The JSON output mirrors the Norito payload for straightforward diffs during
-  reviews.
+- მიაწოდეთ `--chunk-plan`, როდესაც გსურთ CLI-მ SHA3 ნაწილის ხელახლა გამოთვლა
+  დაიჯესტი წარდგენამდე; წინააღმდეგ შემთხვევაში ის ხელახლა იყენებს მასში ჩაშენებულ დაიჯესტს
+  შეჯამება.
+- JSON გამომავალი ასახავს Norito დატვირთვას პირდაპირი განსხვავებების დროს
+  მიმოხილვები.
 
-## Sign manifests without long-lived keys
+## ნიშანი ვლინდება დიდი ხნის გასაღებების გარეშე
 
 ```bash
 sorafs_cli manifest sign \
@@ -70,13 +71,13 @@ sorafs_cli manifest sign \
   --identity-token-env SIGSTORE_ID_TOKEN
 ```
 
-- Accepts inline tokens, environment variables, or file-based sources.
-- Adds provenance metadata (`token_source`, `token_hash_hex`, chunk digest)
-  without persisting the raw JWT unless `--include-token=true`.
-- Works well in CI: combine with GitHub Actions OIDC by setting
+- იღებს შიდა ნიშნებს, გარემოს ცვლადებს ან ფაილზე დაფუძნებულ წყაროებს.
+- ამატებს წარმოშობის მეტამონაცემებს (`token_source`, `token_hash_hex`, ნაწილის დაიჯესტი)
+  დაუმუშავებელი JWT-ის შენარჩუნების გარეშე, თუ `--include-token=true`.
+- კარგად მუშაობს CI-ში: დააკავშირეთ GitHub Actions OIDC პარამეტრით
   `--identity-token-provider=github-actions`.
 
-## Submit manifests to Torii
+## გაგზავნეთ მანიფესტები Torii-ზე
 
 ```bash
 sorafs_cli manifest submit \
@@ -91,13 +92,13 @@ sorafs_cli manifest submit \
   --summary-out artifacts/video.submit.json
 ```
 
-- Performs Norito decoding for alias proofs and verifies they match the
-  manifest digest before POSTing to Torii.
-- Recomputes the chunk SHA3 digest from the plan to prevent mismatch attacks.
-- Response summaries capture HTTP status, headers, and registry payloads for
-  later auditing.
+- ასრულებს Norito დეკოდირებას ალიასის მტკიცებულებებისთვის და ადასტურებს, რომ ისინი ემთხვევა
+  მანიფესტი დაიჯესტი Torii-ზე გამოქვეყნებამდე.
+- ხელახლა გამოთვლის SHA3 ნაწილს გეგმიდან, რათა თავიდან აიცილოს შეუსაბამობის შეტევები.
+- პასუხების შეჯამებები აღწერს HTTP სტატუსს, სათაურებს და რეესტრის დატვირთვას
+  მოგვიანებით აუდიტი.
 
-## Verify CAR contents and proofs
+## გადაამოწმეთ მანქანის შინაარსი და მტკიცებულებები
 
 ```bash
 sorafs_cli proof verify \
@@ -106,11 +107,11 @@ sorafs_cli proof verify \
   --summary-out artifacts/video.verify.json
 ```
 
-- Rebuilds the PoR tree and compares payload digests with the manifest summary.
-- Captures counts and identifiers required when submitting replication proofs
-  to governance.
+- აღადგენს PoR ხეს და ადარებს დატვირთვის შეჯამებას მანიფესტის შეჯამებასთან.
+- ასახავს რაოდენობას და იდენტიფიკატორებს, რომლებიც საჭიროა რეპლიკაციის მტკიცებულებების წარდგენისას
+  მმართველობისკენ.
 
-## Stream proof telemetry
+## ნაკადის საწინააღმდეგო ტელემეტრია
 
 ```bash
 sorafs_cli proof stream \
@@ -123,24 +124,24 @@ sorafs_cli proof stream \
   --governance-evidence-dir artifacts/video.proof_stream_evidence
 ```
 
-- Emits NDJSON items for each streamed proof (disable replay with
+- გამოსცემს NDJSON ელემენტებს თითოეული სტრიმინგირებული მტკიცებულებისთვის (გამორთეთ ხელახალი დაკვრა
   `--emit-events=false`).
-- Aggregates success/failure counts, latency histograms, and sampled failures in
-  the summary JSON so dashboards can plot outcomes without scraping logs.
-- Exits non-zero when the gateway reports failures or local PoR verification
-  (via `--por-root-hex`) rejects proofs. Adjust the thresholds with
-  `--max-failures` and `--max-verification-failures` for rehearsal runs.
-- Supports PoR today; PDP and PoTR reuse the same envelope once SF-13/SF-14
-  land.
-- `--governance-evidence-dir` writes the rendered summary, metadata (timestamp,
-  CLI version, gateway URL, manifest digest), and a copy of the manifest into
-  the supplied directory so governance packets can archive the proof-stream
-  evidence without replaying the run.
+- აერთიანებს წარმატებების/წარუმატებლობის რაოდენობას, ლატენტურ ჰისტოგრამებს და შერჩეულ წარუმატებლობებს
+  JSON-ის შეჯამება, რათა საინფორმაციო დაფებმა შეძლონ შედეგების დახატვა ჟურნალების ამოღების გარეშე.
+- გადის ნულიდან, როდესაც კარიბჭე იტყობინება წარუმატებლობის ან ადგილობრივი PoR დადასტურების შესახებ
+  (`--por-root-hex`-ის მეშვეობით) უარყოფს მტკიცებულებებს. დაარეგულირეთ ზღურბლები
+  `--max-failures` და `--max-verification-failures` რეპეტიციისთვის.
+- მხარს უჭერს PoR დღეს; PDP და PoTR ხელახლა იყენებენ ერთსა და იმავე კონვერტს ერთხელ SF-13/SF-14
+  მიწა.
+- `--governance-evidence-dir` წერს შეჯამებას, მეტამონაცემებს (დროის ნიშანს,
+  CLI ვერსია, კარიბჭის URL, manifest digest) და manifest-ის ასლი
+  მოწოდებული დირექტორია, რათა მმართველობის პაკეტებმა შეძლონ მტკიცებულების ნაკადის დაარქივება
+  მტკიცებულება გაშვების გამეორების გარეშე.
 
-## Additional references
+## დამატებითი მითითებები
 
-- `docs/source/sorafs_cli.md` — exhaustive flag documentation.
-- `docs/source/sorafs_proof_streaming.md` — proof telemetry schema and Grafana
-  dashboard template.
-- `docs/source/sorafs/manifest_pipeline.md` — deep dive on chunking, manifest
-  composition, and CAR handling.
+- `docs/source/sorafs_cli.md` — ამომწურავი დროშის დოკუმენტაცია.
+- `docs/source/sorafs_proof_streaming.md` — მტკიცებულების ტელემეტრიის სქემა და Grafana
+  დაფის შაბლონი.
+- `docs/source/sorafs/manifest_pipeline.md` — ღრმა ჩაყვინთვა ნატეხზე, მანიფესტი
+  შემადგენლობა და მანქანების მართვა.

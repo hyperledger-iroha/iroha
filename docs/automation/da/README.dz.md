@@ -7,62 +7,57 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 8757f0bf8699b532ece29437af953353526b3201b4b129ebec7d6bf5d224f038
 source_last_modified: "2025-12-29T18:16:35.061402+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-<!--
-  SPDX-License-Identifier: Apache-2.0
--->
+I18NH0000008X
 
-# Data-Availability Threat-Model Automation (DA-1)
+# གནད་སྡུད་ཐོབ་ཚུགས་ཚད་ ཉེན་ཁའི་-དཔེ་ཚད་ རང་འགུལ་ (DA-1)
 
-Roadmap item DA-1 and `status.md` call for a deterministic automation loop that
-produces the Norito PDP/PoTR threat-model summaries surfaced in
-`docs/source/da/threat_model.md` and the Docusaurus mirror. This directory
-captures the artefacts referenced by:
+རོ་ཊི་མེཔ་རྣམ་གྲངས་ DA-1 དང་ I18NI000000009X
+༢༠༡༠ ལུ་ཐོན་ཡོད་པའི་ I18NT000000001X PDP/PoTR ཉེན་ཁའི་དཔེ་སྟོན་གྱི་བཅུད་བསྡུས་ཚུ་བཏོནམ་ཨིན།
+I18NI000000010X དང་ Docusaurus མེ་ལོང་། སྣོད་ཐོ།
+གཞི་བསྟུན་འབད་ཡོད་པའི་ ཅ་རྙིང་ཚུ་ འཛིན་བཟུང་འབདཝ་ཨིན།
 
 - `cargo xtask da-threat-model-report [--out <path|->] [--seed <u64|0xhex>] [--config <path>]`
 - `.github/workflows/da-threat-model-nightly.yml`
-- `make docs-da-threat-model` (which runs `scripts/docs/render_da_threat_model_tables.py`)
+- `make docs-da-threat-model` (`scripts/docs/render_da_threat_model_tables.py` གཡོག་བཀོལ།)
 - `cargo xtask da-commitment-reconcile --receipt <path> --block <path> [--json-out <path|->]`
 - `cargo xtask da-privilege-audit --config <torii.toml> [--extra-path <path> ...] [--json-out <path|->]`
 
-## Flow
+## རྒྱུན
 
-1. **Generate the report**
-   ```bash
-   cargo xtask da-threat-model-report \
-     --config configs/da/threat_model.toml \
-     --out artifacts/da/threat_model_report.json
-   ```
-   The JSON summary records the simulated replication failure rate, chunker
-   thresholds, and any policy violations detected by the PDP/PoTR harness in
+1.*སྙན་ཞུ་འདི་བསྡུ་སྒྲིག་འབད།**།
+   I18NF0000004X
+   JSON བཅུད་བསྡུས་འདི་གིས་ དཔེ་སྟོན་འབད་ཡོད་པའི་འདྲ་བཤུས་འདྲ་བཤུས་འཐུས་ཤོར་ཚད་ ཅར་ཀར་འདི་ཐོ་བཀོད་འབདཝ་ཨིན།
+   ཚད་གཞི་དང་ PDP/PoTR གིས་ བརྟག་དཔྱད་འབད་མི་ སྲིད་བྱུས་འགལ་འཛོལ་ཚུ་ ནང་ 2 ནང་
    `integration_tests/src/da/pdp_potr.rs`.
-2. **Render the Markdown tables**
+2. **དང་རྟགས་ཐིག་ཁྲམ་ཚུ་** བཏོན་གཏང་།
    ```bash
    make docs-da-threat-model
    ```
-   This runs `scripts/docs/render_da_threat_model_tables.py` to rewrite
-   `docs/source/da/threat_model.md` and `docs/portal/docs/da/threat-model.md`.
-3. **Archive the artefact** by copying the JSON report (and optional CLI log) to
-   `docs/automation/da/reports/<timestamp>-threat_model_report.json`. When
-   governance decisions rely on a specific run, include the git commit hash and
-   simulator seed in a sibling `<timestamp>-metadata.md`.
+   འདི་གིས་ `scripts/docs/render_da_threat_model_tables.py` ལོག་སྟེ་འབྲི་ནི་ལུ་ གཡོག་བཀོལཝ་ཨིན།
+   `docs/source/da/threat_model.md` དང་ I18NI000000200.
+3. ** JSON སྙན་ཞུ་ (དང་གདམ་ཁ་ཅན་གྱི་ CLI དྲན་ཐོ་) ལུ་འདྲ་བཤུས་རྐྱབ་སྟེ་ ཅ་རྙིང་** འདི་ སྒྲོམ་ནང་བཟོ།
+   `docs/automation/da/reports/<timestamp>-threat_model_report.json`. ནམ
+   གཞུང་སྐྱོང་གྲོས་ཐག་ཚུ་ དམིགས་བསལ་གྱི་ རྒྱུག་འགྲན་ལུ་ བརྟེན་ཏེ་ཡོདཔ་ད་ དེ་ཡང་ གིཊ་ཁས་བླངས་ཧེ་ཤི་དང་ དེ་ལས་ ཚུདཔ་ཨིན་པས།
+   སྤུན་ཆ་ `<timestamp>-metadata.md`.
 
-## Evidence Expectations
+## སྒྲུབ་བྱེད་ཀྱི་རེ་བ།
 
-- JSON files should remain <100 KiB so they can live in git. Larger execution
-  traces belong in external storage—reference their signed hash in the metadata
-  note if needed.
-- Each archived file must list the seed, config path, and simulator version so
-  reruns can be reproduced exactly when auditing DA release gates.
-- Link back to the archived file from `status.md` or the roadmap entry whenever
-  the DA-1 acceptance criteria advance, ensuring reviewers can verify the
-  baseline without rerunning the harness.
+- JSON ཡིག་སྣོད་ཚུ་ <100 KiB ལུས་དགོཔ་ལས་ དེ་ཚུ་ གིཊ་ནང་སྡོད་ཚུགས། བཀོལ་སྤྱོད་ཆེ་བ།
+  རྗེས་འཇུག་ཚུ་ ཕྱིའི་གསོག་འཇོག་ནང་ཚུདཔ་—མེ་ཊ་ཌེ་ཊ་ནང་ ཁོང་གི་མིང་རྟགས་བཀོད་ཡོད་པའི་ ཧེ་ཤི་ གཞི་བསྟུན་འབདཝ་ཨིན།
+  དགོ་པ་ཅིན་ དྲན་འཛིན་འབད།
+- ཡིག་མཛོད་འབད་ཡོད་པའི་ཡིག་སྣོད་རེ་རེ་གིས་ སོན་དང་ རིམ་སྒྲིག་འགྲུལ་ལམ་ དེ་ལས་ ཚོད་བརྟག་ཐོན་རིམ་ཚུ་ ཐོ་བཀོད་འབད་དགོཔ་ཨིན།
+  DA བཏོན་གཏང་ནིའི་སྒོ་ཚུ་ རྩིས་ཞིབ་འབད་བའི་སྐབས་ བསྐྱར་ལོག་ཚུ་ ངེས་བདེན་སྦེ་ བསྐྱར་བཟོ་འབད་ཚུགས།
+- `status.md` ཡང་ན་ ལམ་གྱི་ས་ཁྲ་བཙུགས་པའི་སྐབས་ ཡིག་མཛོད་ཡིག་སྣོད་ལུ་ལོག་འཐུ།
+  འདོན་སྤེལ།: ༢༠༡༡/༠༤/༢༠ རིག་པ།(༡) བསྐྱར་ཞིབ་འབད་མི་ཚུ་གིས་ བདེན་དཔྱད་འབད་ཚུགསཔ་བཟོ་ནི།
+  གཞི་རྟེན་ལའིན་ ཧར་ནིསི་འདི་ ལོག་མ་བཏོནམ་ཨིན།
 
-## Commitment Reconciliation (Sequencer Omission)
+## ཁས་བླངས་མཐུན་སྒྲིག (རིམ་པ་བརྟག་དཔྱད།)
 
-Use `cargo xtask da-commitment-reconcile` to compare DA ingest receipts against
-DA commitment records, catching sequencer omission or tampering:
+DA བཙུགས་པའི་ཐོབ་ཐངས་ཚུ་ ག་བསྡུར་རྐྱབ་ནིའི་དོན་ལུ་ `cargo xtask da-commitment-reconcile` ལག་ལེན་འཐབ།
+DA ཁས་བླངས་ཐོ་བཀོད་དང་ གོ་རིམ་བཟོ་བའི་ བཏོན་གཏང་ ཡང་ན་ བརྡབ་གསིག་འབད་ནི།
 
 ```bash
 cargo xtask da-commitment-reconcile \
@@ -71,19 +66,19 @@ cargo xtask da-commitment-reconcile \
   --json-out artifacts/da/commitment_reconciliation.json
 ```
 
-- Accepts receipts in Norito or JSON form and commitments from
-  `SignedBlockWire`, `.norito`, or JSON bundles.
-- Fails when any ticket is missing from the block log or when hashes diverge;
-  `--allow-unexpected` ignores block-only tickets when you intentionally scope
-  the receipt set.
-- Attach the emitted JSON to governance packets/Alertmanager for omission
-  alerts; defaults to `artifacts/da/commitment_reconciliation.json`.
+- Norito ཡང་ན་ JSON འབྲི་ཤོག་ནང་ ཐོབ་མི་ཚུ་ ངོས་ལེན་འབདཝ་ཨིན།
+  `SignedBlockWire`, `.norito`, ཡང་ན་ JSON བུནཌལ།
+- བཀག་ཆ་དྲན་ཐོ་ལས་ ཊིཀཊ་གང་རུང་ཅིག་ མ་ཐོབ་པའི་སྐབས་ ཡང་ན་ ཧེ་ཤེ་ཚུ་ ཁ་སྟོར་འགྱོ་བའི་སྐབས་ འཐུས་ཤོར་འགྱོཝ་ཨིན།
+  I18NI000000027X ཁྱོད་ཀྱིས་ ཤེས་བཞིན་དུ་ ཁྱབ་ཁོངས་འབད་བའི་སྐབས་ བཀག་ཆ་འབད་ཡོད་པའི་ ཊིཀཊ་ཚུ་ སྣང་མེད་བཞགཔ་ཨིན།
+  བྱུང་འཛིན་ཆ་ཚན་འདི།
+- བཏོན་ཡོད་པའི་ JSON འདི་ གཞུང་སྐྱོང་ཐུམ་སྒྲིལ་ཚུ་/བཏོན་བཏང་ནིའི་དོན་ལུ་ ཨེ་ལར་ཊི་མཱན་ཇར་ལུ་ མཉམ་སྦྲགས་འབད།
+  ཉེན་བརྡ་; སྔོན་སྒྲིག་ཚུ་ `artifacts/da/commitment_reconciliation.json` ལུ།
 
-## Privilege Audit (Quarterly Access Review)
+## སྒེར་དོན་རྩིས་ཞིབ་ (ཟླ་བའི་ཟླ་བ་འཛུལ་སྤྱོད་བསྐྱར་ཞིབ།)
 
-Use `cargo xtask da-privilege-audit` to scan the DA manifest/replay directories
-(plus optional extra paths) for missing, non-directory, or world-writable
-entries:
+ཌི་ཨེ་ གསལ་སྟོན་/བསྐྱར་རྩེད་སྣོད་ཐོ་ཚུ་ པར་ལེན་འབད་ནི་ལུ་ `cargo xtask da-privilege-audit` ལག་ལེན་འཐབ།
+(གདམ་ཁ་ཅན་གྱི་འགྲུལ་ལམ་ཁ་སྐོང་) མེད་མི་དང་ སྣོད་ཐོ་མེན་མི་ ཡང་ན་ འཛམ་གླིང་འབྲི་བཏུབ་པའི་དོན་ལུ་ཨིན།
+འཛུལ་ཞུགས་:
 
 ```bash
 cargo xtask da-privilege-audit \
@@ -92,9 +87,9 @@ cargo xtask da-privilege-audit \
   --json-out artifacts/da/privilege_audit.json
 ```
 
-- Reads the DA ingest paths from the provided Torii config and inspects Unix
-  permissions where available.
-- Flags missing/not-a-directory/world-writable paths and returns a non-zero exit
-  code when issues are present.
-- Sign and attach the JSON bundle (`artifacts/da/privilege_audit.json` by
-  default) to quarterly access-review packets and dashboards.
+- བྱིན་ཡོད་པའི་ I18NT000000003X ལས་ ཌི་ཨེ་གི་ ཟངས་འགྲུལ་ལམ་ཚུ་ལྷག་ཞིནམ་ལས་ ཡུ་ནིགསི་ཞིབ་དཔྱད་འབདཝ་ཨིན།
+  ཡོད་སའི་གནང་བ།
+- ཕྲེང་བ་ཚུ་མེདཔ་/སྣོད་ཐོ་ཅིག་མེན་/འཛམ་གླིང་འབྲི་བཏུབ་པའི་འགྲུལ་ལམ་ཚུ་ཨིནམ་དང་ ཀླད་ཀོར་མེན་པའི་ཕྱིར་ཐོན་ཅིག་སླར་ལོག་འབདཝ་ཨིན།
+  གནད་དོན་ཚུ་ཡོད་པའི་སྐབས་ གསང་ཐབས།
+- JSON བང་རིམ་ (`artifacts/da/privilege_audit.json` by by by by
+  freecont) ལས་ ཟླཝ་གསུམ་གྱི་འཛུལ་སྤྱོད་-བསྐྱར་ཞིབ་ཐུམ་སྒྲིལ་ཚུ་དང་ བཀྲམ་སྟོན་བཀོད་སྒྲིག་ཚུ།

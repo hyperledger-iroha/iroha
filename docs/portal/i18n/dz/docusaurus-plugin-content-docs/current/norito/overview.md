@@ -4,61 +4,63 @@ direction: ltr
 source: docs/portal/docs/norito/overview.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Norito Overview
+# I18NT00000000 སྤྱིར་བཏང་ལྟ་ཚུལ།
 
-Norito is the binary serialization layer used across Iroha: it defines how data
-structures are encoded on the wire, persisted on disk, and exchanged between
-contracts and hosts. Every crate in the workspace relies on Norito instead of
-`serde` so peers on different hardware produce identical bytes.
+Norito འདི་ Iroha ནང་ལུ་ལག་ལེན་འཐབ་མི་ གཉིས་ལྡན་རིམ་སྒྲིག་བང་རིམ་ཨིན།: འདི་གིས་ གནད་སྡུད་ག་དེ་སྦེ་ངེས་འཛིན་འབདཝ་ཨིན།
+བཀོད་རིས་ཚུ་ གློག་ཐག་གུ་བཀོད་ཞིནམ་ལས་ ཌིཀསི་གུ་གནས་ཏེ་ བར་ན་བརྗེ་སོར་འབདཝ་ཨིན།
+གན་རྒྱ་ཚུ་དང་ ཧོསིཊི་ཚུ། ལཱ་གི་ས་སྒོ་ནང་ལུ་ཡོད་པའི་ ཀེརེཊ་རེ་རེ་ལུ་ དེ་གི་ཚབ་ལུ་ I18NT0000002X ལུ་རག་ལསཔ་ཨིན།
+I18NI000000011 དེ་འབདཝ་ལས་ མཐུན་རྐྱེན་སོ་སོ་ཚུ་གུ་ཡོད་པའི་ མཉམ་རོགས་ཀྱིས་ བཱའིཊ་གཅིག་མཚུངས་སྦེ་བཏོནམ་ཨིན།
 
-This overview summarises the core pieces and links to the canonical references.
+འ་ནི་སྤྱིར་བཏང་གིས་ གཞི་རྩའི་ཆ་ཤས་ཚུ་ བཅུད་བསྡུ་སྟེ་ ཁྲིམས་ལུགས་གཞི་བསྟུན་ཚུ་ལུ་ འབྲེལ་མཐུད་འབདཝ་ཨིན།
 
-## Architecture at a glance
+## མིག་མཐོང་།
 
-- **Header + payload** – Each Norito message begins with a feature-negotiation
-  header (flags, checksum) followed by the bare payload. Packed layouts and
-  compression are negotiated via header bits.
-- **Deterministic encoding** – `norito::codec::{Encode, Decode}` implement the
-  bare encoding. The same layout is reused when wrapping payloads in headers so
-  hashing and signing remain deterministic.
-- **Schema + derives** – `norito_derive` generates `Encode`, `Decode`, and
-  `IntoSchema` implementations. Packed structs/sequences are enabled by default
-  and documented in `norito.md`.
-- **Multicodec registry** – Identifiers for hashes, key types, and payload
-  descriptors live in `norito::multicodec`. The authoritative table is
-  maintained in `multicodec.md`.
+- **མགོ་ཡིག་ + པེ་ལོཌ་** – Norito འཕྲིན་དོན་རེ་རེ་བཞིན་ ཁྱད་རྣམ་-གྲོས་བསྟུན་ལས་འགོ་བཙུགསཔ་ཨིན།
+  མགོ་ཡིག་ (ཕེག་, ཅེག་སམ་) དེ་གི་ཤུལ་ལས་ པེ་ལོཌ་ བེ་ལཱསི་ བཏོནམ་ཨིན། བཀོད་སྒྲིག་འབད་ཡོད་པའི་སྒྲིག་བཀོད་ཚུ་དང་།
+  བསྡམ་བཞག་ཚུ་ མགོ་ཡིག་བིཊི་ཚུ་བརྒྱུད་དེ་ གྲོས་བསྟུན་འབད་ཡོདཔ་ཨིན།
+- **གཏན་འབེབས་ཀྱི་ཨེན་ཀོ་ཌིང་** – I18NI000000012X ལག་ལེན་འཐབ་ཡོདཔ།
+  bare ཨིན་ཀོ་ཌིང་། བཀོད་སྒྲིག་ཅོག་འཐདཔ་འདི་ མགོ་ཡིག་ཚུ་ནང་ པེ་ལོཌི་ཚུ་ བཀབ་པའི་སྐབས་ ལོག་སྟེ་ལག་ལེན་འཐབ་ཨིན།
+  hashing དང་ མཚན་རྟགས་བཀོད་ནི་འདི་ གཏན་འབེབས་ཅིག་ཨིན།
+- **Schema + འབྱུང་ཁུངས་** – `norito_derive` གིས་ I18NI000000014X, `Decode`, དང་།
+  I18NI00000001 ལག་ལེན། ཐུམ་སྒྲིལ་འབད་ཡོད་པའི་བཀོད་སྒྲིག་/རིམ་པ་ཚུ་ སྔོན་སྒྲིག་གིས་ ལྕོགས་ཅན་བཟོ་ཡོདཔ་ཨིན།
+  དང་ I18NI000000017X ནང་ཡིག་ཐོག་ལུ་བཀོད་ཡོད།
+- **Multicode ཐོ་བཀོད་** – ཧ་ཤེསི་དང་ ལྡེ་མིག་དབྱེ་བ་ དེ་ལས་ པེ་ལོཌི་ཚུ་གི་དོན་ལུ་ ངོས་འཛིན་པ་ཚུ།
+  འགྲེལ་བཤད་ཚུ་ `norito::multicodec` ནང་ལུ་སྡོད་དོ་ཡོདཔ་ཨིན། དབང་སྤྲོད་ཐིག་ཁྲམ་འདི་ནི།
+  བདག་འཛིན་ `multicodec.md` ནང་།
 
-## Tooling
+## ལག་ཆས།
 
-| Task | Command / API | Notes |
+| ལས་ཀ་ | བརྡ་བཀོད་ / ཨེ་པི་ཨའི་ | དྲན་ཐོ། |
 | --- | --- | --- |
-| Inspect header/sections | `ivm_tool inspect <file>.to` | Shows ABI version, flags, and entrypoints. |
-| Encode/decode in Rust | `norito::codec::{Encode, Decode}` | Implemented for all core data-model types. |
-| JSON interop | `norito::json::{to_json_pretty, from_json}` | Deterministic JSON backed by Norito values. |
-| Generate docs/specs | `norito.md`, `multicodec.md` | Source-of-truth documentation in the repo root. |
+| བརྟག་ཞིབ་མགོ་ཡིག་/དབྱེ་ཚན་ | `ivm_tool inspect <file>.to` | ཨེ་བི་ཨའི་ཐོན་རིམ་དང་ དར་དར་ཚུ་ དེ་ལས་ འཛུལ་སྒོ་ཚུ་སྟོནམ་ཨིན། |
+| རཱསི་ནང་ ཨིན་ཀོཌི་/ཌི་ཀོཌི་ | I18NI0000021X | གནད་སྡུད་-དཔེ་ཚད་དབྱེ་བ་ཆ་མཉམ་གྱི་དོན་ལུ་ ལག་ལེན་འཐབ་ཡོདཔ། |
+| JSON interop | I18NI0000022X | གཏན་འབེབས་བཟོ་མི་ JSON གིས་ Norito གནས་གོང་ཚུ་གིས་རྒྱབ་སྐྱོར་འབད་ཡོདཔ། |
+| docs/specs | `norito.md`, `multicodec.md` | repo root ནང་བདེན་པའི་ཡིག་ཆ། |
 
-## Development workflow
+## གོང་འཕེལ་གྱི་ལཱ་གི་རྒྱུན་ལམ།
 
-1. **Add derives** – Prefer `#[derive(Encode, Decode, IntoSchema)]` for new data
-   structures. Avoid hand-written serializers unless absolutely necessary.
-2. **Validate packed layouts** – Use `cargo test -p norito` (and the packed
-   feature matrix in `scripts/run_norito_feature_matrix.sh`) to ensure new
-   layouts remain stable.
-3. **Regenerate docs** – When the encoding changes, update `norito.md` and the
-   multicodec table, then refresh the portal pages (`/reference/norito-codec`
-   and this overview).
-4. **Keep tests Norito-first** – Integration tests should use the Norito JSON
-   helpers instead of `serde_json` so they exercise the same paths as production.
+1. **Add derives** – གནད་སྡུད་གསརཔ་གི་དོན་ལུ་ I18NI0000025X དགའ་གདམ་འབད།
+   བཀོད་རིས་ཚུ། ལགཔ་གིས་བྲིས་མི་ རིམ་སྒྲིག་ཚུ་ ངེས་པར་དུ་དགོཔ་མ་གཏོགས་ སྤང་དགོ།
+2. ** ཐུམ་སྒྲིལ་འབད་ཡོད་པའི་སྒྲིག་བཀོད་ཚུ་** – I18NI000000026X ལག་ལེན་འཐབ།
+   གསརཔ་ངེས་གཏན་བཟོ་ནིའི་དོན་ལུ་ `scripts/run_norito_feature_matrix.sh`)
+   བཀོད་སྒྲིག་ཚུ་ བརྟན་ཏོག་ཏོ་སྦེ་ལུསཔ་ཨིན།
+3. **བསྐྱར་འབྱུང་ཡིག་ཆ་ཚུ་** – ཨིན་ཀོ་ཌིང་འདི་བསྒྱུར་བཅོས་འགྱོཝ་ད་ `norito.md` དང་
+   སྣ་མང་ཀོ་ཌེག་ཐིག་ཁྲམ་, དེ་ལས་ དྲྭ་ཐོག་ཤོག་ལེབ་ཚུ་ (I18NI0000029X གསར་བསྐྲུན་འབདཝ་ཨིན།
+   དང་ བརྗོད་གཞི་འདི་).
+4. **Keep བརྟག་དཔྱད་ I18NT0000005-first** – མཉམ་བསྡོམས་བརྟག་དཔྱད་ཚུ་གིས་ I18NT000000006X JSON ལག་ལེན་འཐབ་དགོ།
+   I18NI000000030X གི་ཚབ་ལུ་ གྲོགས་རམ་པ་ཚུ་ བཟོ་བསྐྲུན་དང་འདྲ་བའི་ ལམ་ཚུ་ ལག་ལེན་འཐབ་ཨིན།
 
-## Quick links
+## མགྱོགས་པའི་འབྲེལ་མཐུད།
 
-- Specification: [`norito.md`](https://github.com/hyperledger-iroha/iroha/blob/master/norito.md)
-- Multicodec assignments: [`multicodec.md`](https://github.com/hyperledger-iroha/iroha/blob/master/multicodec.md)
-- Feature matrix script: `scripts/run_norito_feature_matrix.sh`
-- Packed-layout examples: `crates/norito/tests/`
+- གསལ་བཀོད་: [`norito.md`](I18NU0000009X)
+- མལ་ཊི་ཀོ་ཌེག་ལས་འགན་: [`multicodec.md`](https://github.com/hyperledger-iroha/iroha/blob/master/multicodec.md)
+- ཁྱད་རྣམ་མེ་ཊིགསི་ཡིག་གཟུགས་: `scripts/run_norito_feature_matrix.sh`
+- ཐུམ་སྒྲིལ་-བཀོད་སྒྲིག་དཔེ་ཚུ་: `crates/norito/tests/`
 
-Pair this overview with the quickstart guide (`/norito/getting-started`) for a
-hands-on walkthrough of compiling and running bytecode that uses Norito
-payloads.
+མགྱོགས་འགོ་བཙུགས་ལམ་སྟོན་པ་ (`/norito/getting-started`) དང་གཅིག་ཁར་ བལྟབ་འདི་ཆ་སྒྲིག་འབད།
+I18NT0000007X ལག་ལེན་འཐབ་མི་ བཱའིཊི་ཀོཌ་དང་ བཱའིཊི་ཀོཌ་གི་ ལག་ཐོག་ཁ་པར་གྱི་ ལམ་སྟོན།
+པེ་ལོཌ་ཚུ།

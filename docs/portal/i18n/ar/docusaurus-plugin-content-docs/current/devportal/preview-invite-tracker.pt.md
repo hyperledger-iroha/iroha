@@ -4,121 +4,121 @@ direction: rtl
 source: docs/portal/docs/devportal/preview-invite-tracker.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Tracker de convites do preview
+# يقوم Tracker de convites بالمعاينة
 
-Este tracker registra cada onda de preview do portal de docs para que owners de DOCS-SORA e revisores de governanca vejam qual coorte esta ativa, quem aprovou os convites e quais artefatos ainda precisam de atencao. Atualize-o sempre que convites forem enviados, revogados ou adiados para que a trilha de auditoria permaneca no repositorio.
+يقوم هذا المتعقب بتسجيل كل معاينة لبوابة المستندات لمالكي DOCS-SORA ومراجعي الإدارة الذين يشرفون على هذه المهمة، حتى يوافقوا على الدعوة وأي شيء مصنوع من أجل دقة المتابعة. قم بالتحديث دائمًا للدعوة إلى المرسلين أو المنسحبين أو الإضافيين حتى تتمكن من الاستمتاع بثلاثة مستمعين دائمين في المستودع.
 
-## Status das ondas
+## حالة داس أونداس
 
-| Onda | Coorte | Issue de acompanhamento | Aprovador(es) | Status | Janela alvo | Notas |
+| اوندا | كورتي | إصدار المرافقة | أبروفادور(ع) | الحالة | جانيلا ألفو | نوتاس |
 | --- | --- | --- | --- | --- | --- | --- |
-| **W0 - Core maintainers** | Maintainers de Docs + SDK validando o fluxo de checksum | `DOCS-SORA-Preview-W0` (GitHub/ops tracker) | Lead Docs/DevRel + Portal TL | Concluido | Q2 2025 semanas 1-2 | Convites enviados 2025-03-25, telemetria ficou verde, resumo de saida publicado 2025-04-08. |
-| **W1 - Partners** | Operadores SoraFS, integradores Torii sob NDA | `DOCS-SORA-Preview-W1` | Lead Docs/DevRel + liaison de governanca | Concluido | Q2 2025 semana 3 | Convites 2025-04-12 -> 2025-04-26 com os oito partners confirmados; evidencia capturada em [`preview-feedback/w1/log.md`](./preview-feedback/w1/log.md) e resumo de saida em [`preview-feedback/w1/summary.md`](./preview-feedback/w1/summary.md). |
-| **W2 - Comunidade** | Waitlist comunitaria curada (<=25 por vez) | `DOCS-SORA-Preview-W2` | Lead Docs/DevRel + community manager | Concluido | Q3 2025 semana 1 (tentativo) | Convites 2025-06-15 -> 2025-06-29 com telemetria verde o periodo todo; evidencia + achados em [`preview-feedback/w2/summary.md`](./preview-feedback/w2/summary.md). |
-| **W3 - Coortes beta** | Beta de financas/observabilidade + partner SDK + advocate do ecossistema | `DOCS-SORA-Preview-W3` | Lead Docs/DevRel + liaison de governanca | Concluido | Q1 2026 semana 8 | Convites 2026-02-18 -> 2026-02-28; resumo + dados do portal gerados via onda `preview-20260218` (ver [`preview-feedback/w3/summary.md`](./preview-feedback/w3/summary.md)). |
+| **W0 - المشرفون الأساسيون** | مشرفو المستندات + SDK التحقق من تدفق المجموع الاختباري | `DOCS-SORA-Preview-W0` (متعقب GitHub/ops) | مستندات الرصاص/DevRel + Portal TL | الخلاصة | الربع الثاني 2025 الفصول 1-2 | يدعو المرسلين 2025-03-25, القياس عن بعد Ficou Verde, ملخص سعيد منشور 2025-04-08. |
+| **W1 - الشركاء** | المشغلون SoraFS، المتكاملون Torii sob NDA | `DOCS-SORA-Preview-W1` | Lead Docs/DevRel + liaison de Governmentanca | الخلاصة | الربع الثاني 2025 سيمانا 3 | تمت الدعوة في 12-04-2025 -> 26-04-2025 مع شركاء os oito المؤكدين؛ تم التقاط الأدلة في [`preview-feedback/w1/log.md`](./preview-feedback/w1/log.md) واستكمل القصة في [`preview-feedback/w1/summary.md`](./preview-feedback/w1/summary.md). |
+| **W2 - الجماعة** | قائمة الانتظار الخاصة بـ comunitaria curada (<= 25 يومًا) | `DOCS-SORA-Preview-W2` | يؤدي Docs/DevRel + مدير المجتمع | الخلاصة | Q3 2025 semana 1 (tentativo) | يدعو 15-06-2025 -> 29-06-2025 com القياس عن بعد الأخضر أو ​​الفترة كلها؛ الأدلة + achados em [`preview-feedback/w2/summary.md`](./preview-feedback/w2/summary.md). |
+| **W3 - نسخة تجريبية من Cortes** | بيتا للتمويل/المراقبة + شريك SDK + المدافع عن النظام البيئي | `DOCS-SORA-Preview-W3` | Lead Docs/DevRel + liaison de Governmentanca | الخلاصة | Q1 2026 سيمانا 8 | يدعو 2026-02-18 -> 2026-02-28; ملخص + بيانات لبوابة gerados عبر onda `preview-20260218` (الإصدار [`preview-feedback/w3/summary.md`](./preview-feedback/w3/summary.md)). |
 
-> Nota: vincule cada issue do tracker aos tickets de solicitacao de preview e arquive-os no projeto `docs-portal-preview` para que as aprovacoes continuem descobriveis.
+> ملاحظة: كل إصدار لتتبع طلبات المعاينة وطلبات المعاينة وتسجيل المشروع `docs-portal-preview` حتى تتمكن من مواصلة الاكتشاف.
 
-## Tarefas ativas (W0)
+## تارفاس أتيفاس (W0)
 
-- Artefatos de preflight atualizados (execucao GitHub Actions `docs-portal-preview` 2025-03-24, descriptor verificado via `scripts/preview_verify.sh` com tag `preview-2025-03-24`).
-- Baselines de telemetria capturados (`docs.preview.integrity`, snapshot dos dashboards `TryItProxyErrors` salvo na issue W0).
-- Texto de outreach travado usando [`docs/examples/docs_preview_invite_template.md`](../../../examples/docs_preview_invite_template.md) com tag preview `preview-2025-03-24`.
-- Solicitacoes de entrada registradas para os primeiros cinco maintainers (tickets `DOCS-SORA-Preview-REQ-01` ... `-05`).
-- Cinco primeiros convites enviados 2025-03-25 10:00-10:20 UTC apos sete dias consecutivos de telemetria verde; acuses guardados em `DOCS-SORA-Preview-W0`.
-- Monitoramento de telemetria + office hours do host (check-ins diarios ate 2025-03-31; log de checkpoints abaixo).
-- Feedback de meio de onda / issues coletadas e tagueadas `docs-preview/w0` (ver [W0 digest](./preview-feedback/w0/summary.md)).
-- Resumo da onda publicado + confirmacoes de saida (bundle de saida datado 2025-04-08; ver [W0 digest](./preview-feedback/w0/summary.md)).
-- Onda beta W3 acompanhada; futuras ondas agendadas conforme revisao de governanca.
+- تم تحديث الاختبار المبدئي (تنفيذ GitHub Actions `docs-portal-preview` 2025-03-24، تم التحقق من الواصف عبر `scripts/preview_verify.sh` com tag `preview-2025-03-24`).
+- خطوط الأساس للقياس عن بعد (`docs.preview.integrity`، لقطة من لوحات المعلومات `TryItProxyErrors` تطلق في الإصدار W0).
+- نص عملية التوعية المستخدمة [`docs/examples/docs_preview_invite_template.md`](../../../examples/docs_preview_invite_template.md) مع معاينة علامة `preview-2025-03-24`.
+- طلبات تسجيل الدخول للمشرفين الخمسة الأوائل (التذاكر `DOCS-SORA-Preview-REQ-01` ... `-05`).
+- خمس رسائل أولية للرسل في 2025-03-25 10:00-10:20 بالتوقيت العالمي المنسق بعد تعيين أيام متتالية من القياس عن بعد الأخضر؛ يتهم الحراس في `DOCS-SORA-Preview-W0`.
+- مراقبة القياس عن بعد + ساعات العمل المضيفة (تسجيلات الوصول اليومية 2025-03-31؛ سجل نقاط التفتيش abixo).
+- تعليقات على meio de onda / القضايا coletadas e tagueadas `docs-preview/w0` (الإصدار [W0 Digest](./preview-feedback/w0/summary.md)).
+- ملخص المنشور + تأكيدات السعادة (حزمة بيانات الصيد 2025-04-08؛ الإصدار [W0 Digest](./preview-feedback/w0/summary.md)).
+- أوندا بيتا W3 المصاحبة؛ أجندات المستقبل المتوافقة مع مراجعة الحوكمة.
 
-## Resumo da onda W1 partners
+## Resumo da onda شركاء W1
 
-- Aprovacoes legais e de governanca. Addendum de partners assinado 2025-04-05; aprovacoes enviadas para `DOCS-SORA-Preview-W1`.
-- Telemetria + Try it staging. Ticket de mudanca `OPS-TRYIT-147` executado 2025-04-06 com snapshots Grafana de `docs.preview.integrity`, `TryItProxyErrors`, e `DocsPortal/GatewayRefusals` arquivados.
-- Preparacao de artefato + checksum. Bundle `preview-2025-04-12` verificado; logs de descriptor/checksum/probe salvos em `artifacts/docs_preview/W1/preview-2025-04-12/`.
-- Roster de convites + envio. Oito solicitacoes de partners (`DOCS-SORA-Preview-REQ-P01...P08`) aprovadas; convites enviados 2025-04-12 15:00-15:21 UTC com acuses registrados por revisor.
-- Instrumentacao de feedback. Office hours diarias + checkpoints de telemetria registrados; ver [`preview-feedback/w1/summary.md`](./preview-feedback/w1/summary.md) para o digest.
-- Roster final / log de saida. [`preview-feedback/w1/log.md`](./preview-feedback/w1/log.md) registra timestamps de convite/ack, evidencia de telemetria, exports de quiz e ponteiros de artefatos em 2025-04-26 para que a governanca possa reproduzir a onda.
+- الموافقة القانونية والحوكمة. ملحق شركاء القتل 2025-04-05; تمت الموافقة على إرسالها إلى `DOCS-SORA-Preview-W1`.
+- القياس عن بعد + جربه التدريج. تذكرة مودانكا `OPS-TRYIT-147` تم تنفيذها في 06/04/2025 مع لقطات Grafana من `docs.preview.integrity`، `TryItProxyErrors`، ومحفوظات `DocsPortal/GatewayRefusals`.
+- تحضير التحف + المجموع الاختباري. تم التحقق من الحزمة `preview-2025-04-12`؛ سجلات الواصف/المجموع الاختباري/مسبار التحقيق في `artifacts/docs_preview/W1/preview-2025-04-12/`.
+- Roster de convites + envio. الموافقة على طلبات الشركاء (`DOCS-SORA-Preview-REQ-P01...P08`)؛ convites enviados 2025-04-12 15:00-15:21 UTC com يتهم المسجلين من قبل المراجع.
+- أداة ردود الفعل. مذكرات ساعات العمل + نقاط التفتيش الخاصة بسجلات القياس عن بعد؛ الإصدار [`preview-feedback/w1/summary.md`](./preview-feedback/w1/summary.md) للملخص.
+- القائمة النهائية / سجل صيدا. [`preview-feedback/w1/log.md`](./preview-feedback/w1/log.md) يقوم بتسجيل الطوابع الزمنية للتحويل/الإرسال وأدلة القياس عن بعد وتصدير الاختبارات والرسائل الفنية في 26-04-2025 حتى تتمكن الإدارة من إعادة إنتاجها.
 
-## Log de convites - W0 core maintainers
+## سجل المكالمات - المشرفون الأساسيون على W0
 
-| ID de revisor | Papel | Ticket de solicitacao | Convite enviado (UTC) | Saida esperada (UTC) | Status | Notas |
+| معرف المراجع | بابيل | تذكرة التماس | كونفيت إنفيادو (UTC) | صيدا اسبيرادا (UTC) | الحالة | نوتاس |
 | --- | --- | --- | --- | --- | --- | --- |
-| docs-core-01 | Portal maintainer | `DOCS-SORA-Preview-REQ-01` | 2025-03-25 10:05 | 2025-04-08 10:00 | Ativo | Confirmou verificacao de checksum; foco em revisao de nav/sidebar. |
-| sdk-rust-01 | Rust SDK lead | `DOCS-SORA-Preview-REQ-02` | 2025-03-25 10:08 | 2025-04-08 10:00 | Ativo | Testando receitas de SDK + quickstarts de Norito. |
-| sdk-js-01 | JS SDK maintainer | `DOCS-SORA-Preview-REQ-03` | 2025-03-25 10:12 | 2025-04-08 10:00 | Ativo | Validando console Try it + fluxos ISO. |
-| sorafs-ops-01 | SoraFS operator liaison | `DOCS-SORA-Preview-REQ-04` | 2025-03-25 10:15 | 2025-04-08 10:00 | Ativo | Auditando runbooks SoraFS + docs de orquestracao. |
-| observability-01 | Observability TL | `DOCS-SORA-Preview-REQ-05` | 2025-03-25 10:18 | 2025-04-08 10:00 | Ativo | Revisando apendices de telemetria/incidentes; responsavel pela cobertura de Alertmanager. |
+| مستندات-الأساسية-01 | حارس البوابة | `DOCS-SORA-Preview-REQ-01` | 2025-03-25 10:05 | 2025-04-08 10:00 | أتيفو | تأكيد التحقق من المجموع الاختباري؛ قم بالتركيز على مراجعة التنقل/الشريط الجانبي. |
+| SDK-الصدأ-01 | الرصاص SDK الصدأ | `DOCS-SORA-Preview-REQ-02` | 2025-03-25 10:08 | 2025-04-08 10:00 | أتيفو | اختبر إيصالات SDK + Quickstarts لـ Norito. |
+| SDK-js-01 | مشرف JS SDK | `DOCS-SORA-Preview-REQ-03` | 2025-03-25 10:12 | 2025-04-08 10:00 | أتيفو | وحدة التحكم Validando جربها + Fluxos ISO. |
+| sorafs-ops-01 | SoraFS اتصال المشغل | `DOCS-SORA-Preview-REQ-04` | 2025-03-25 10:15 | 2025-04-08 10:00 | أتيفو | Auditando runbooks SoraFS + docs de orquestracao. |
+| إمكانية الملاحظة-01 | إمكانية الملاحظة TL | `DOCS-SORA-Preview-REQ-05` | 2025-03-25 10:18 | 2025-04-08 10:00 | أتيفو | مراجعة ملحقات القياس عن بعد/الحوادث؛ استجابة من خلال مدير التنبيهات. |
 
-Todos os convites referenciam o mesmo artefato `docs-portal-preview` (execucao 2025-03-24, tag `preview-2025-03-24`) e o log de verificacao capturado em `DOCS-SORA-Preview-W0`. Qualquer adicao/pausa deve ser registrada tanto na tabela acima quanto na issue do tracker antes de passar para a proxima onda.
+جميع الطلبات تشير إلى نفس الرقم `docs-portal-preview` (يتم تنفيذه في 24-03-2025، العلامة `preview-2025-03-24`) ويتم تسجيل سجل التحقق في `DOCS-SORA-Preview-W0`. يجب أن يتم تسجيل أي وقت/إيقاف مؤقت في نفس الوقت على اللوحة نفسها أثناء إصدار التتبع قبل المرور إلى مكان آخر.
 
-## Log de checkpoints - W0
+## سجل نقاط التفتيش - W0
 
-| Data (UTC) | Atividade | Notas |
+| البيانات (التوقيت العالمي) | أتيفيداد | نوتاس |
 | --- | --- | --- |
-| 2025-03-26 | Revisao de telemetria baseline + office hours | `docs.preview.integrity` + `TryItProxyErrors` ficaram verdes; office hours confirmaram verificacao de checksum concluida. |
-| 2025-03-27 | Digest de feedback intermediario publicado | Resumo capturado em [`preview-feedback/w0/summary.md`](./preview-feedback/w0/summary.md); dois issues de nav menores tagueados como `docs-preview/w0`, sem incidentes. |
-| 2025-03-31 | Checagem de telemetria da ultima semana | Ultimas office hours pre-exit; revisores confirmaram tarefas restantes em andamento, sem alertas. |
-| 2025-04-08 | Resumo de saida + encerramento de convites | Reviews completas confirmadas, acesso temporario revogado, achados arquivados em [`preview-feedback/w0/summary.md`](./preview-feedback/w0/summary.md#exit-summary-2025-04-08); tracker atualizado antes de preparar W1. |
+| 2025-03-26 | مراجعة خط الأساس للقياس عن بعد + ساعات العمل | `docs.preview.integrity` + `TryItProxyErrors` فيكارام فيرديس؛ تأكيد ساعات العمل: التحقق من صحة المجموع الاختباري. |
+| 2025-03-27 | ملخص التعليقات التي نشرها الوسيط | تم التقاط الصورة على [`preview-feedback/w0/summary.md`](./preview-feedback/w0/summary.md); هناك مشكلات أقل للتنقل مثل `docs-preview/w0`، دون أي حوادث. |
+| 2025-03-31 | فحص القياس عن بعد في الأسبوع الأخير | ساعات عمل Ultimas قبل الخروج؛ تؤكد المراجعات التغييرات التي تم إجراؤها بشكل مستمر، بدون تنبيهات. |
+| 2025-04-08 | ملخص صيدا + استكمال المكالمات | تم تأكيد المراجعات بالكامل، وتم تجديد الوصول المؤقت، وتم حفظها في [`preview-feedback/w0/summary.md`](./preview-feedback/w0/summary.md#exit-summary-2025-04-08)؛ تم تحديث Tracker قبل الإعداد W1. |
 
-## Log de convites - W1 partners
+## سجل المكالمات - شركاء W1
 
-| ID de revisor | Papel | Ticket de solicitacao | Convite enviado (UTC) | Saida esperada (UTC) | Status | Notas |
+| معرف المراجع | بابيل | تذكرة التماس | كونفيت إنفيادو (UTC) | صيدا اسبيرادا (UTC) | الحالة | نوتاس |
 | --- | --- | --- | --- | --- | --- | --- |
-| sorafs-op-01 | SoraFS operator (EU) | `DOCS-SORA-Preview-REQ-P01` | 2025-04-12 15:00 | 2025-04-26 15:00 | Concluido | Entregou feedback de ops do orquestrador 2025-04-20; ack de saida 15:05 UTC. |
-| sorafs-op-02 | SoraFS operator (JP) | `DOCS-SORA-Preview-REQ-P02` | 2025-04-12 15:03 | 2025-04-26 15:00 | Concluido | Comentarios de rollout registrados em `docs-preview/w1`; ack 15:10 UTC. |
-| sorafs-op-03 | SoraFS operator (US) | `DOCS-SORA-Preview-REQ-P03` | 2025-04-12 15:06 | 2025-04-26 15:00 | Concluido | Edicoes de dispute/blacklist registradas; ack 15:12 UTC. |
-| torii-int-01 | Torii integrator | `DOCS-SORA-Preview-REQ-P04` | 2025-04-12 15:09 | 2025-04-26 15:00 | Concluido | Walkthrough de Try it auth aceito; ack 15:14 UTC. |
-| torii-int-02 | Torii integrator | `DOCS-SORA-Preview-REQ-P05` | 2025-04-12 15:12 | 2025-04-26 15:00 | Concluido | Comentarios de RPC/OAuth registrados; ack 15:16 UTC. |
-| sdk-partner-01 | SDK partner (Swift) | `DOCS-SORA-Preview-REQ-P06` | 2025-04-12 15:15 | 2025-04-26 15:00 | Concluido | Feedback de integridade do preview mergeado; ack 15:18 UTC. |
-| sdk-partner-02 | SDK partner (Android) | `DOCS-SORA-Preview-REQ-P07` | 2025-04-12 15:18 | 2025-04-26 15:00 | Concluido | Revisao de telemetria/redaction feita; ack 15:22 UTC. |
-| gateway-ops-01 | Gateway operator | `DOCS-SORA-Preview-REQ-P08` | 2025-04-12 15:21 | 2025-04-26 15:00 | Concluido | Comentarios do runbook de DNS gateway registrados; ack 15:24 UTC. |
+| sorafs-op-01 | مشغل SoraFS (الاتحاد الأوروبي) | `DOCS-SORA-Preview-REQ-P01` | 2025-04-12 15:00 | 2025-04-26 15:00 | الخلاصة | أدخل تعليقاتك على عمليات orquestrador 2025-04-20; آك دي صيدا 15:05 بالتوقيت العالمي. |
+| sorafs-op-02 | عامل التشغيل SoraFS (JP) | `DOCS-SORA-Preview-REQ-P02` | 2025-04-12 15:03 | 2025-04-26 15:00 | الخلاصة | تعليقات الطرح المسجلة على `docs-preview/w1`; العودة 15:10 بالتوقيت العالمي. |
+| sorafs-op-03 | عامل التشغيل SoraFS (الولايات المتحدة) | `DOCS-SORA-Preview-REQ-P03` | 2025-04-12 15:06 | 2025-04-26 15:00 | الخلاصة | مجلدات النزاع/سجلات القائمة السوداء؛ العودة 15:12 بالتوقيت العالمي. |
+| توري-int-01 | متكامل Torii | `DOCS-SORA-Preview-REQ-P04` | 2025-04-12 15:09 | 2025-04-26 15:00 | الخلاصة | الإرشادات التفصيلية لـ Try it auth aceito; العودة 15:14 بالتوقيت العالمي. |
+| توري-int-02 | متكامل Torii | `DOCS-SORA-Preview-REQ-P05` | 2025-04-12 15:12 | 2025-04-26 15:00 | الخلاصة | تعليقات مسجلي RPC/OAuth؛ العودة 15:16 بالتوقيت العالمي. |
+| SDK-شريك-01 | شريك SDK (سويفت) | `DOCS-SORA-Preview-REQ-P06` | 2025-04-12 15:15 | 2025-04-26 15:00 | الخلاصة | ردود الفعل من التكامل للمعاينة المدمجة؛ العودة 15:18 بالتوقيت العالمي. |
+| SDK-شريك-02 | شريك SDK (أندرويد) | `DOCS-SORA-Preview-REQ-P07` | 2025-04-12 15:18 | 2025-04-26 15:00 | الخلاصة | مراجعة القياس عن بعد/التنقيح؛ العودة 15:22 بالتوقيت العالمي. |
+| بوابة-العمليات-01 | مشغل البوابة | `DOCS-SORA-Preview-REQ-P08` | 2025-04-12 15:21 | 2025-04-26 15:00 | الخلاصة | التعليقات الخاصة بسجلات بوابة DNS المسجلة؛ العودة 15:24 بالتوقيت العالمي. |
 
-## Log de checkpoints - W1
+## سجل نقاط التفتيش - W1
 
-| Data (UTC) | Atividade | Notas |
+| البيانات (التوقيت العالمي) | أتيفيداد | نوتاس |
 | --- | --- | --- |
-| 2025-04-12 | Envio de convites + verificacao de artefatos | Oito partners receberam email com descriptor/archive `preview-2025-04-12`; acuses registrados no tracker. |
-| 2025-04-13 | Revisao de telemetria baseline | `docs.preview.integrity`, `TryItProxyErrors`, e `DocsPortal/GatewayRefusals` verdes; office hours confirmaram verificacao de checksum concluida. |
-| 2025-04-18 | Office hours de meio de onda | `docs.preview.integrity` permaneceu verde; dois nits de docs tagueados `docs-preview/w1` (nav wording + screenshot Try it). |
-| 2025-04-22 | Checagem final de telemetria | Proxy + dashboards saudaveis; nenhuma issue nova, registrado no tracker antes da saida. |
-| 2025-04-26 | Resumo de saida + encerramento de convites | Todos os partners confirmaram review, convites revogados, evidencia arquivada em [`preview-feedback/w1/summary.md`](./preview-feedback/w1/summary.md#exit-summary-2025-04-26). |
+| 2025-04-12 | إرسال دعوات + التحقق من الأعمال الفنية | يتلقى شركاء Oito وصف البريد الإلكتروني/الأرشيف `preview-2025-04-12`؛ يتهم المسجلين بعدم وجود تعقب. |
+| 2025-04-13 | مراجعة خط الأساس للقياس عن بعد | `docs.preview.integrity`، `TryItProxyErrors`، و`DocsPortal/GatewayRefusals` الأخضر؛ تأكيد ساعات العمل: التحقق من صحة المجموع الاختباري. |
+| 2025-04-18 | ساعات العمل دي ميو دي اوندا | `docs.preview.integrity` دائم الخضرة؛ dois nits de docs tagueados `docs-preview/w1` (صيغة التنقل + لقطة الشاشة جربها). |
+| 2025-04-22 | Checagem النهائي للقياس عن بعد | الوكيل + لوحات المعلومات saudaveis؛ nenhuma إصدار nova، تسجيل لا تعقب قبل دا صيدا. |
+| 2025-04-26 | ملخص صيدا + استكمال المكالمات | يؤكد جميع الشركاء المراجعة، ويدعوون إلى المراجعة، والأدلة المؤرشفة في [`preview-feedback/w1/summary.md`](./preview-feedback/w1/summary.md#exit-summary-2025-04-26). |
 
-## Recap da coorte beta W3
+## خلاصة النسخة التجريبية W3- دعوة المرسلين في 18-02-2026 عبر التحقق من المجموع الاختباري + تسجيل المسجلين في نفس اليوم.
+- التعليقات المجمعة على `docs-preview/20260218` مع إصدار الحكم `DOCS-SORA-Preview-20260218`؛ الملخص + استئناف العمل عبر `npm run --prefix docs/portal preview:wave -- --wave preview-20260218`.
+- تم تجديد الوصول في 28/02/2026 بعد التحقق من القياس النهائي عن بعد؛ Tracker + لوحات تحديث البوابة لعلامة W3 كنتيجة نهائية.
 
-- Convites enviados 2026-02-18 com verificacao de checksum + acuses registrados no mesmo dia.
-- Feedback coletado em `docs-preview/20260218` com issue de governanca `DOCS-SORA-Preview-20260218`; digest + resumo gerados via `npm run --prefix docs/portal preview:wave -- --wave preview-20260218`.
-- Acesso revogado 2026-02-28 apos o check final de telemetria; tracker + tabelas do portal atualizadas para marcar W3 como concluido.
+## سجل الدعوة - مجتمع W2
 
-## Log de convites - W2 community
-
-| ID de revisor | Papel | Ticket de solicitacao | Convite enviado (UTC) | Saida esperada (UTC) | Status | Notas |
+| معرف المراجع | بابيل | تذكرة التماس | كونفيت إنفيادو (UTC) | صيدا اسبيرادا (UTC) | الحالة | نوتاس |
 | --- | --- | --- | --- | --- | --- | --- |
-| comm-vol-01 | Community reviewer (SDK) | `DOCS-SORA-Preview-REQ-C01` | 2025-06-15 16:00 | 2025-06-29 16:00 | Concluido | Ack 16:06 UTC; foco em quickstarts de SDK; saida confirmada 2025-06-29. |
-| comm-vol-02 | Community reviewer (Governance) | `REQ-C02` | 2025-06-15 16:03 | 2025-06-29 16:00 | Concluido | Revisao de governanca/SNS feita; saida confirmada 2025-06-29. |
-| comm-vol-03 | Community reviewer (Norito) | `REQ-C03` | 2025-06-15 16:06 | 2025-06-29 16:00 | Concluido | Feedback do walkthrough Norito registrado; ack 2025-06-29. |
-| comm-vol-04 | Community reviewer (SoraFS) | `REQ-C04` | 2025-06-15 16:09 | 2025-06-29 16:00 | Concluido | Revisao de runbooks SoraFS feita; ack 2025-06-29. |
-| comm-vol-05 | Community reviewer (Accessibility) | `REQ-C05` | 2025-06-15 16:12 | 2025-06-29 16:00 | Concluido | Notas de acessibilidade/UX compartilhadas; ack 2025-06-29. |
-| comm-vol-06 | Community reviewer (Localization) | `REQ-C06` | 2025-06-15 16:15 | 2025-06-29 16:00 | Concluido | Feedback de localizacao registrado; ack 2025-06-29. |
-| comm-vol-07 | Community reviewer (Mobile) | `REQ-C07` | 2025-06-15 16:18 | 2025-06-29 16:00 | Concluido | Checks de docs de SDK mobile entregues; ack 2025-06-29. |
-| comm-vol-08 | Community reviewer (Observability) | `REQ-C08` | 2025-06-15 16:21 | 2025-06-29 16:00 | Concluido | Revisao de apendice de observabilidade feita; ack 2025-06-29. |
+| بالاتصالات-المجلد-01 | مراجع المجتمع (SDK) | `DOCS-SORA-Preview-REQ-C01` | 2025-06-15 16:00 | 2025-06-29 16:00 | الخلاصة | وصولا 16:06 بالتوقيت العالمي؛ التركيز على Quickstarts لـ SDK؛ سعيدة مؤكدة 2025-06-29. |
+| بالاتصالات-المجلد-02 | المراجع المجتمعي (الحوكمة) | `REQ-C02` | 2025-06-15 16:03 | 2025-06-29 16:00 | الخلاصة | مراجعة الحكم/SNS feita؛ سعيدة مؤكدة 2025-06-29. |
+| بالاتصالات-المجلد-03 | مراجع المجتمع (Norito) | `REQ-C03` | 2025-06-15 16:06 | 2025-06-29 16:00 | الخلاصة | التعليقات قم بإجراء الإرشادات التفصيلية Norito للتسجيل؛ ACK2025-06-29. |
+| بالاتصالات-المجلد-04 | مراجع المجتمع (SoraFS) | `REQ-C04` | 2025-06-15 16:09 | 2025-06-29 16:00 | الخلاصة | مراجعة كتب التشغيل SoraFS جيدة؛ ACK2025-06-29. |
+| بالاتصالات-المجلد-05 | مراجع المجتمع (إمكانية الوصول) | `REQ-C05` | 2025-06-15 16:12 | 2025-06-29 16:00 | الخلاصة | ملاحظات إمكانية الوصول/مشاركة تجربة المستخدم؛ ACK2025-06-29. |
+| بالاتصالات-المجلد-06 | مراجع المجتمع (التعريب) | `REQ-C06` | 2025-06-15 16:15 | 2025-06-29 16:00 | الخلاصة | ردود الفعل من التسجيل المحلي. ACK2025-06-29. |
+| بالاتصالات-المجلد-07 | مراجع المجتمع (الجوال) | `REQ-C07` | 2025-06-15 16:18 | 2025-06-29 16:00 | الخلاصة | التحقق من مستندات إدخالات SDK على الأجهزة المحمولة؛ ACK2025-06-29. |
+| بالاتصالات-المجلد-08 | المراجع المجتمعي (قابلية الملاحظة) | `REQ-C08` | 2025-06-15 16:21 | 2025-06-29 16:00 | الخلاصة | مراجعة ملحق الملاحظة؛ ACK2025-06-29. |
 
-## Log de checkpoints - W2
+## سجل نقاط التفتيش - W2
 
-| Data (UTC) | Atividade | Notas |
+| البيانات (التوقيت العالمي) | أتيفيداد | نوتاس |
 | --- | --- | --- |
-| 2025-06-15 | Envio de convites + verificacao de artefatos | Descriptor/archive `preview-2025-06-15` compartilhado com 8 revisores; acuses guardados no tracker. |
-| 2025-06-16 | Revisao de telemetria baseline | `docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals` verdes; logs do proxy Try it mostram tokens comunitarios ativos. |
-| 2025-06-18 | Office hours e triage de issues | Duas sugestoes (`docs-preview/w2 #1` wording de tooltip, `#2` sidebar de localizacao) - ambas atribuidas a Docs. |
-| 2025-06-21 | Checagem de telemetria + fixes de docs | Docs resolveu `docs-preview/w2 #1/#2`; dashboards verdes, sem incidentes. |
-| 2025-06-24 | Office hours da ultima semana | Revisores confirmaram envios restantes; nenhum alerta. |
-| 2025-06-29 | Resumo de saida + encerramento de convites | Acks registrados, acesso de preview revogado, snapshots + artefatos arquivados (ver [`preview-feedback/w2/summary.md`](./preview-feedback/w2/summary.md#exit-summary-2025-06-29)). |
-| 2025-04-15 | Office hours e triage de issues | Duas sugestoes de documentacao registradas em `docs-preview/w1`; sem incidentes nem alertas. |
+| 2025-06-15 | إرسال دعوات + التحقق من الأعمال الفنية | الواصف/الأرشيف `preview-2025-06-15` compartilhado com 8 revisores; يتهم الحراس بعدم وجود تعقب. |
+| 2025-06-16 | مراجعة خط الأساس للقياس عن بعد | `docs.preview.integrity`، `TryItProxyErrors`، `DocsPortal/GatewayRefusals` الأخضر؛ سجلات تفعل الوكيل جربه Mostram الرموز comunitarios ativos. |
+| 2025-06-18 | ساعات العمل وفرز القضايا | Duas Sugestoes (`docs-preview/w2 #1` Wording de Tooltip, `#2` Sidebar de localizacao) - تعمل على إضافة ميزات إلى Docs. |
+| 2025-06-21 | فحص القياس عن بعد + إصلاحات المستندات | حل المستندات `docs-preview/w2 #1/#2`; لوحات المعلومات الخضراء، حوادث sem. |
+| 2025-06-24 | ساعات العمل في نهاية الأسبوع | Revisores أكدوارام Envios Restantes؛ تنبيه. |
+| 2025-06-29 | ملخص صيدا + استكمال المكالمات | يدعم المسجلين، والوصول إلى المعاينة المجددة، واللقطات + الأرشيفات الفنية (الإصدار [`preview-feedback/w2/summary.md`](./preview-feedback/w2/summary.md#exit-summary-2025-06-29)). |
+| 2025-04-15 | ساعات العمل وفرز القضايا | نقترح عليك المستندات المسجلة في `docs-preview/w1`؛ حوادث شبه تنبيهات. |
 
-## Hooks de reporting
+## خطافات التقارير
 
-- Toda quarta-feira, atualize a tabela acima e a issue de convites ativa com uma nota curta (convites enviados, revisores ativos, incidentes).
-- Quando uma onda encerrar, adicione o caminho do resumo de feedback (por exemplo, `docs/portal/docs/devportal/preview-feedback/w0/summary.md`) e linke a partir de `status.md`.
-- Se qualquer criterio de pausa do [preview invite flow](./preview-invite-flow.md) for acionado, adicione os passos de remediacao aqui antes de retomar os convites.
+- Toda quarta-feira، atualize a tabela acima e a Issue de convites ativa com uma nota curta (يدعو المرسلين، يراجع ativos، الحوادث).
+- عند الدخول مرة أخرى، قم بإضافة مسار استئناف التعليقات (على سبيل المثال، `docs/portal/docs/devportal/preview-feedback/w0/summary.md`) والربط من `status.md`.
+- إذا كان أي معيار للإيقاف المؤقت هو [معاينة تدفق الدعوة](./preview-invite-flow.md) للتنشيط، قم بإضافة خطوات الإصلاح قبل إعادة توجيه الدعوة.

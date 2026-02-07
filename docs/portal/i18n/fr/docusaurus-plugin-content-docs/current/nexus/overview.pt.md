@@ -4,57 +4,52 @@ direction: ltr
 source: docs/portal/docs/nexus/overview.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: nexus-overview
-title: Visao geral do Sora Nexus
-description: Resumo de alto nivel da arquitetura do Iroha 3 (Sora Nexus) com apontamentos para os docs canonicos do mono-repo.
+identifiant : aperçu du lien
+titre : Visa général de Sora Nexus
+description : Résumé de haut niveau de l'architecture du Iroha 3 (Sora Nexus) avec les ajouts pour les documents canoniques du mono-repo.
 ---
 
-Nexus (Iroha 3) estende Iroha 2 com execucao multi-lane, espacos de dados escopados por governanca e ferramentas compartilhadas em cada SDK. Esta pagina espelha o novo resumo `docs/source/nexus_overview.md` no mono-repo para que leitores do portal entendam rapidamente como as pecas da arquitetura se encaixam.
+Nexus (Iroha 3) est Iroha 2 pour l'exécution multivoie, des espaces de données protégés par la gouvernance et des outils partagés dans chaque SDK. Cette page affiche le nouveau résumé `docs/source/nexus_overview.md` pas de mono-repo pour que les lecteurs du portail entendent rapidement comment les pièces d'architecture sont encaixam.
 
 ## Linhas de release
 
 - **Iroha 2** - implantacoes auto-hospedadas para consorcios ou redes privadas.
-- **Iroha 3 / Sora Nexus** - a rede publica multi-lane onde operadores registram espacos de dados (DS) e herdam ferramentas compartilhadas de governanca, liquidacao e observabilidade.
-- Ambas as linhas compilam do mesmo workspace (IVM + toolchain Kotodama), entao correcoes de SDK, atualizacoes de ABI e fixtures Norito permanecem portaveis. Operadores baixam o bundle `iroha3-<version>-<os>.tar.zst` para entrar no Nexus; consulte `docs/source/sora_nexus_operator_onboarding.md` para o checklist em tela cheia.
+- **Iroha 3 / Sora Nexus** - un réseau public multi-voies où les opérateurs enregistrent des espaces de données (DS) et des ferraments partagés de gouvernance, de liquidation et d'observation.
+- Comprend les lignes de compilation de mon espace de travail (IVM + chaîne d'outils Kotodama), ainsi que les corrections du SDK, les mises à jour d'ABI et les appareils Norito, ports permanents. Les opérateurs utilisent le bundle `iroha3-<version>-<os>.tar.zst` pour entrer dans le numéro Nexus ; consultez `docs/source/sora_nexus_operator_onboarding.md` pour la liste de contrôle en tela cheia.
 
-## Blocos de construcao
-
-| Componente | Resumo | Pontos do portal |
+## Blocs de construction| Composants | CV | Pontos do portail |
 |-----------|---------|--------------|
-| Espaco de dados (DS) | Dominio de execucao/armazenamento definido pela governanca que possui uma ou mais lanes, declara conjuntos de validadores, classe de privacidade e politica de taxas + DA. | Veja [Nexus spec](./nexus-spec) para o esquema do manifesto. |
-| Lane | Shard deterministico de execucao; emite compromissos que o anel global NPoS ordena. As classes de lane incluem `default_public`, `public_custom`, `private_permissioned` e `hybrid_confidential`. | O [modelo de lane](./nexus-lane-model) captura geometria, prefixos de armazenamento e retencao. |
-| Plano de transicao | Identificadores placeholder, fases de roteamento e empacotamento de perfil duplo acompanham como implantacoes de lane unica evoluem para Nexus. | As [notas de transicao](./nexus-transition-notes) documentam cada fase de migracao. |
-| Space Directory | Contrato de registro que armazena manifestos + versoes de DS. Operadores reconciliam entradas do catalogo com este diretorio antes de entrar. | O rastreador de diffs de manifesto vive em `docs/source/project_tracker/nexus_config_deltas/`. |
-| Catalogo de lanes | A secao `[nexus]` de configuracao mapeia IDs de lane para aliases, politicas de roteamento e limiares de DA. `irohad --sora --config ... --trace-config` imprime o catalogo resolvido para auditorias. | Use `docs/source/sora_nexus_operator_onboarding.md` para o passo a passo de CLI. |
-| Roteador de liquidacao | Orquestrador de transferencia XOR que conecta lanes CBDC privadas com lanes de liquidez publicas. | `docs/source/cbdc_lane_playbook.md` detalha knobs de politica e gates de telemetria. |
-| Telemetria/SLOs | Dashboards + alertas em `dashboards/grafana/nexus_*.json` capturam altura de lanes, backlog de DA, latencia de liquidacao e profundidade da fila de governanca. | O [plano de remediacao de telemetria](./nexus-telemetry-remediation) detalha dashboards, alertas e evidencias de auditoria. |
+| Espace de données (DS) | Le Dominio de execucao/armazenamento a défini la gouvernance qui possède une ou plusieurs voies, déclare les conjuntos de validadores, classe de privacidade et politica de taxas + DA. | Voir [Nexus spec](./nexus-spec) pour l'esquema du manifeste. |
+| Voie | Shard déterministe de l'exécution ; émettre des compromissos que o anel global NPoS ordena. Les classes de voie comprennent `default_public`, `public_custom`, `private_permissioned` et `hybrid_confidential`. | Le [modelo de lane](./nexus-lane-model) capture la géométrie, les préfixes d'armement et de retenue. |
+| Plan de transition | Espace réservé aux identifiants, phases de rotation et d'emballage de double profil accompagnant les implants de voie d'évolution unique pour Nexus. | Comme [notes de transition](./nexus-transition-notes) documentent chaque phase de migration. |
+| Répertoire spatial | Contrato de registro que armazena manifestos + versoes de DS. Les opérateurs rapprochent les entrées du catalogue avec ce répertoire avant l'entrée. | Le rastreador des différences de manifeste vive em `docs/source/project_tracker/nexus_config_deltas/`. |
+| Catalogue des voies | Dans la section `[nexus]`, la configuration des identifiants de voie est effectuée pour les alias, les politiques de rotation et les limites de DA. `irohad --sora --config ... --trace-config` imprimer le catalogue résolu pour les auditoriums. | Utilisez `docs/source/sora_nexus_operator_onboarding.md` pour l'étape CLI. || Rotateur de liquidation | L'opérateur de transfert XOR connecte les voies CBDC privées aux voies de liquidation publiques. | `docs/source/cbdc_lane_playbook.md` détails des boutons politiques et des portes de télémétrie. |
+| Télémétrie/SLO | Les tableaux de bord + alertes sur `dashboards/grafana/nexus_*.json` capturent l'altitude des voies, l'arriéré de DA, la latence de liquidation et la profondeur du fil de gouvernance. | Le [plan de résolution de télémétrie](./nexus-telemetry-remediation) tableaux de bord détaillés, alertes et preuves de l'auditoire. |
 
-## Snapshot de rollout
+## Instantané du déploiement| Phase | Foco | Critères de dite |
+|-------|-------|--------------------|
+| N0 - Beta fechada | Registrar gerenciado pelo conselho (`.sora`), manuel d'intégration des opérateurs, catalogue des voies statiques. | Manifestes de DS assassinés + transferts de gouvernance ensaiados. |
+| N1 - Lancement public | Adiciona sufixos `.nexus`, leiloes, registraire libre-service, cabeamento de liquidacao XOR. | Tests de synchronisation du résolveur/passerelle, tableaux de bord de réconciliation de cobranca, exercices de litige sur la table. |
+| N2 - Expansão | Présentation de `.dao`, API de revenus, analyses, portail de litiges, cartes de pointage des stewards. | Artefatos de conformité versionados, boîte à outils du jury de politique en ligne, rapports de transparence du tesouro. |
+| Porte NX-12/13/14 | Moteur de conformité, tableaux de bord de télémétrie et documentation développés ensemble avant les pilotes avec les colis. | [Présentation Nexus](./nexus-overview) + [Opérations Nexus](./nexus-operations) publicados, tableaux de bord ligados, moteur de politique intégré. |
 
-| Fase | Foco | Criterios de saida |
-|-------|-------|---------------|
-| N0 - Beta fechada | Registrar gerenciado pelo conselho (`.sora`), onboarding manual de operadores, catalogo de lanes estatico. | Manifestos de DS assinados + handoffs de governanca ensaiados. |
-| N1 - Lancamento publico | Adiciona sufixos `.nexus`, leiloes, registrar self-service, cabeamento de liquidacao XOR. | Testes de sincronizacao de resolver/gateway, dashboards de reconciliacao de cobranca, exercicios de disputa em mesa. |
-| N2 - Expansao | Introduz `.dao`, APIs de revenda, analitica, portal de disputas, scorecards de stewards. | Artefatos de compliance versionados, toolkit de jury de politica online, relatorios de transparencia do tesouro. |
-| Gate NX-12/13/14 | Motor de compliance, dashboards de telemetria e documentacao devem sair juntos antes de pilotos com parceiros. | [Nexus overview](./nexus-overview) + [Nexus operations](./nexus-operations) publicados, dashboards ligados, motor de politica integrado. |
+## Responsabilités de l'opérateur1. **Hygiène de configuration** - le support `config/config.toml` est synchronisé avec le catalogue publié des voies et des espaces de données ; obtenir un dit `--trace-config` dans chaque ticket de sortie.
+2. **Rastreamento de manifestos** - concilier les entrées du catalogue avec le bundle le plus récent du Space Directory avant d'entrer ou d'actualiser nos.
+3. **Cobertura de telemetria** - expose les tableaux de bord `nexus_lanes.json`, `nexus_settlement.json` et les tableaux de bord associés au SDK ; Connectez les alertes à PagerDuty et effectuez des révisions trimestrielles conformes au plan de résolution de télémétrie.
+4. **Rapport d'incidents** - inscrit sur la matrice de gravité des [opérations Nexus](./nexus-operations) et entre les RCA dans cinq jours.
+5. **Prontidao de gouvernance** - participe aux votes du conseil Nexus qui ont un impact sur vos voies et ensaie les instructions de restauration trimestrielle (rastrées via `docs/source/project_tracker/nexus_config_deltas/`).
 
-## Responsabilidades do operador
+## Voir aussi
 
-1. **Higiene de configuracao** - mantenha `config/config.toml` sincronizado com o catalogo publicado de lanes e dataspaces; arquive a saida `--trace-config` em cada ticket de release.
-2. **Rastreamento de manifestos** - reconcilie entradas do catalogo com o bundle mais recente do Space Directory antes de entrar ou atualizar nos.
-3. **Cobertura de telemetria** - exponha os dashboards `nexus_lanes.json`, `nexus_settlement.json` e os dashboards de SDK relacionados; conecte alertas ao PagerDuty e rode revisoes trimestrais conforme o plano de remediacao de telemetria.
-4. **Relato de incidentes** - siga a matriz de severidade em [Nexus operations](./nexus-operations) e entregue RCAs em ate cinco dias uteis.
-5. **Prontidao de governanca** - participe de votos do conselho Nexus que impactam suas lanes e ensaie instrucoes de rollback trimestralmente (rastreadas via `docs/source/project_tracker/nexus_config_deltas/`).
-
-## Veja tambem
-
-- Visao canonica: `docs/source/nexus_overview.md`
-- Especificacao detalhada: [./nexus-spec](./nexus-spec)
-- Geometria de lanes: [./nexus-lane-model](./nexus-lane-model)
-- Plano de transicao: [./nexus-transition-notes](./nexus-transition-notes)
-- Plano de remediacao de telemetria: [./nexus-telemetry-remediation](./nexus-telemetry-remediation)
-- Runbook de operacoes: [./nexus-operations](./nexus-operations)
-- Guia de onboarding de operadores: `docs/source/sora_nexus_operator_onboarding.md`
+- Visa canonique : `docs/source/nexus_overview.md`
+- Spécification détaillée : [./nexus-spec](./nexus-spec)
+- Géométrie des voies : [./nexus-lane-model](./nexus-lane-model)
+- Plan de transition : [./nexus-transition-notes](./nexus-transition-notes)
+- Plan de résolution de télémétrie : [./nexus-telemetry-remediation](./nexus-telemetry-remediation)
+- Runbook des opérations : [./nexus-operations](./nexus-operations)
+- Guide d'intégration des opérateurs : `docs/source/sora_nexus_operator_onboarding.md`

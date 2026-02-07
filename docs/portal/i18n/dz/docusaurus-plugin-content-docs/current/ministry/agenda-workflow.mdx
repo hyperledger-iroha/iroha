@@ -6,83 +6,75 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: Agenda Council Workflow
 description: Validate proposals, deduplicate fingerprints, and publish deterministic sortition output for the citizen agenda council (MINFO-2).
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-import CodeBlock from '@theme/CodeBlock';
-import sortitionSummary from '@site/docs/examples/ministry/agenda_sortition_summary_example.json';
+ནང་འདྲེན་ཀོཌ་བཱལཀ་ལས་ '@theme/CodeBlock';
+ནང་འདྲེན་དབྱེ་ཚིག '@site/docs/Plessery / ལྷན་ཁག་/གྲོས་གཞི་_བཅུད་བསྡུས་_བཅུད་བསྡུས་_ཨེགསི་པེལེན.ཇི་སོན་' ལས་ སམ་མཱར།;
 
-const summary = sortitionSummary;
+canst བཅུད་བསྡུས་ = དབྱེ་འབྱེད་ཀྱི་བཅུད་དོན་;
 
-function SortitionSummaryTable({rows}) {
-  return (
-    <table>
-      <thead>
-        <tr>
-          <th>Slot</th>
-          <th>Member</th>
-          <th>Role</th>
-          <th>Org</th>
-          <th>Weight</th>
-          <th>Entropy (truncated)</th>
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map((row, index) => (
-          <tr key={`${row.member_id}-${row.draw_position}`}>
-            <td>{index + 1}</td>
-            <td><code>{row.member_id}</code></td>
-            <td>{row.role}</td>
-            <td>{row.organization}</td>
-            <td>{row.weight}</td>
-            <td><code>{row.draw_entropy_hex.slice(0, 16)}…</code></td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
-  );
-}
+ལས་འགན་ SontitionSumaryTable({གྲལ་ཐིག་}) {
+  ལོག་པ (
+    ༥ 
+          5
+          ཚོགས་མི་།
+          །
+          ཨོར་ག།
+          ལྗིད་ཚད་།
+          ཨེནཊོཔི་ (བཤུབ་བཏང་)།
+         དང་།
+        {rows.map(((གྲལ་ཐིག་, ཟུར་ཐོ་) => (
+          
+            {ཟུར་ཐོ་ + ༡}།
+            {row.member_id}
+            {row.role}།
+            {གྱལ་རིམ་ནང་གསེས་}།
+            {རྙིང་མ། ལྗིད་ཚད་}།
+            {row.draw_entropy_hex.slie(0, 16)}...
+           .
+    
+  ;
+} # .
 
-## Overview
+## སྤྱི་མཐོང་།
 
-Roadmap item **MINFO-2** requires a deterministic path from proposal linting to
-public sortition evidence so anyone can confirm how a case reached the agenda
-council. This page wires the previously landed CLI helpers directly into the
-developer portal so proposers, auditors, and platform teams can follow the same
-checklist without spelunking the mono-repo.
+ལམ་སྟོན་རྣམ་གྲངས་ **MINFO-2** གྲོས་འཆར་གྱི་ནང་ཐིག་ལས་ གཏན་འབེབས་འགྲུལ་ལམ་ཅིག་དགོཔ་ཨིན།
+མི་མང་དབྱེ་འབྱེད་ཀྱི་སྒྲུབ་བྱེད་དེ་གིས་ རྩོད་གཞི་འདི་ ག་དེ་སྦེ་ གྲོས་གཞི་ལུ་ལྷོད་ཡོདཔ་ཨིན་ན་ ངེས་གཏན་བཟོ་ཚུགས།
+ཚོགས་སྡེ། ཤོག་ལེབ་འདི་གིས་ ཧེ་མ་ལས་ སི་ཨེལ་ཨའི་ གྲོགས་རམ་པ་ཚུ་ ཐད་ཀར་དུ་ ༡ ལུ་ཐོབ་ཡོད་པའི་ སི་ཨེལ་ཨའི་ གྲོགས་རམ་ཚུ་ གློག་ཐག་འབདཝ་ཨིན།
+གོང་འཕེལ་གཏང་མི་ དྲྭ་ཚིགས་དེ་གིས་ རྩིས་ཞིབ་པ་དང་ སྟེགས་བུ་སྡེ་ཚན་ཚུ་གིས་ དེ་བཟུམ་མའི་ རྗེས་སུ་འབྲང་ཚུགས།
+མོ་ནོ་-རི་པོ་མ་སླབ་པར་ བརྟག་ཞིབ་ཐོ་ཡིག་།
 
-The workflow covers three repeatable steps:
+ལཱ་གི་རྒྱུན་རིམ་འདི་གིས་ བསྐྱར་ལོག་འབད་བཏུབ་པའི་གོམ་པ་གསུམ་ཁྱབ་སྟེ་ཡོདཔ་ཨིན།1. ས་གནས་ནང་ `AgendaProposalV1` གླ་ཆ་ཚུ་ བདེན་དཔྱད་འབད་ཞིནམ་ལས་ འདྲ་མཚུངས་ཀྱི་ཧེ་ཤེ་གཉིས་ ཆ་མེད་གཏང་ནི།
+   ཕུལ་མི་འདི་ བར་མཚམས་བང་རིམ་ལུ་མ་ལྷོད་པའི་ཧེ་མ།
+༢ གྲོས་འཆར་འདི་དང་གཅིག་ཁར་ འདྲ་བཤུས་ཐོ་བཀོད་འབད་དེ་ གྲོས་འཆར་འདི་ ཚོགས་སྡེའི་ལས་བྱེདཔ་ཚུ་གིས་ འབད་ཚུགས།
+   ཧེ་མའི་གནད་དོན་ཚུ་ གཏན་འབེབས་མེདཔ་མེདཔ་ཨིན།
+3. དབྱེ་སེལ་གྱི་གྲོགས་རམ་པ་ གཡོག་བཀོལ་ཞིནམ་ལས་ Merkle གི་བདེན་ཁུངས་བང་རིམ་འདི་བཟུང་ཞིནམ་ལས་ ཁ་ཐོག་ལུ།
+   མི་སེར་ཚུ་གིས་ རི་མོ་འདི་ ལོག་རྩེད་ཚུགས་ནི་གི་དོན་ལུ་ དྲྭ་ཐོག་ནང་ལུ་ གདམ་ཁ་རྐྱབ་ཡོདཔ་ཨིན།
 
-1. Validate `AgendaProposalV1` payloads locally and reject duplicate hashes
-   before the submission reaches the moderation queue.
-2. Publish duplicate-registry hits alongside the proposal so council staff can
-   trace earlier cases without losing determinism.
-3. Run the sortition helper, capture the Merkle proof bundle, and surface the
-   selected roster inside the portal so citizens can replay the draw.
+གྲོགས་རམ་འབད་མི་ཆ་མཉམ་ `cargo xtask ministry-agenda` ནང་སྡོད་དོ་ཡོདཔ་ཨིན། the Norito ལས་འཆར་འདི་ ༡ ཨིན།
+ཡིག་ཐོག་ལུ་བཀོད་ཡོདཔ། `docs/source/ministry/agenda_council_proposal.md`.
 
-All helpers live in `cargo xtask ministry-agenda`; the Norito schema is
-documented under `docs/source/ministry/agenda_council_proposal.md`.
+## 1. ས་གནས་ནང་ གྲོས་འཆར་ཚུ་ བདེན་དཔྱད་འབད་ནི།
 
-## 1. Validate proposals locally
+སྒྲུབ་བྱེད་དགོ་པའི་ JSON པེ་ལོསི་དང་ བདེན་ཁུངས་བཀལ་ནིའི་དོན་ལུ་ སི་ཨེལ་ཨའི་ལག་ལེན་འཐབ།
+བཟའ་ཚང་དང་ རིང་ཚད་ སྐད་ཡིག་རྟགས་ ཕུལ་མི་འབྲེལ་བ་) ཡོད། ཚིག༌ཕྲད
+བདེན་དཔྱད་འབད་མི་བགོ་བཤའ་ཨང་རྟགས་འདི་ Torii ingecient འགྲུལ་ལམ་དང་གཅིག་ཁར་ཨིནམ་ལས་ དེ་འབདཝ་ལས་ གྲོས་འཆར་འདི་བརྒྱུད་དེ་འགྱོཝ་ཨིན།
+འདི་ཁར་ དྲྭ་ཚིགས་བརྒྱུད་དེ་ སྐྱེལ་བཙུགས་འབད་བའི་སྐབས་ཡང་ འགྱོ་འོང་།
 
-Use the CLI to lint JSON payloads and assert that required evidence (hash
-families, digest lengths, language tag, submitter contact) is present. The
-validator shares code with the Torii ingestion path, so a proposal that passes
-here will also pass when uploaded through the portal.
+{cargo xtask ལྷན་ཁག་-གྲོས་གཞི་བདེན་དཔྱད་འབད་ \\ ཨིན།
+  --གྲོས་འཆར་ཡིག་ཆ་/དཔེར་ན/ལྷན་ཁག་/གྲོས་གཞི་_རྒྱབ་སྐྱོར་འབད་ནི་_ཨེགསི་པེལེ.ཇི་སོན་ \\
+  -- ཐོ་བཀོད་ཡིག་ཆ་/དཔེར་ན་/ལྷན་ཁག་/གྲོས་གཞི་།
 
-<CodeBlock language="bash">{`cargo xtask ministry-agenda validate \\
-  --proposal docs/examples/ministry/agenda_proposal_example.json \\
-  --registry docs/examples/ministry/agenda_duplicate_registry.json`}</CodeBlock>
+- ལོ་རྒྱུས་ཀྱི་གླ་ཆ་ཚུ་ བརྟག་དཔྱད་འབད་བའི་སྐབས་ `--allow-registry-conflicts` ཁ་སྐོང་འབད། གསརཔ་
+  མཛུབ་མོ་གི་པར་འདི་ཧེ་མ་ལས་ཡོད་པའི་སྐབས་ལུ་ ཞུ་ཡིག་ཚུ་ མགྱོགས་དྲགས་སྦེ་ འཐུས་ཤོར་འབྱུང་དགོ།
+- དཔེ་སྣོད་ཐོ་གིས་ གཞི་བསྟུན་གྲོས་འཆར་དང་ཐོ་བཀོད་ཚུ་ གཏངམ་ཨིནམ་ལས་ ཨེསི་ཌི་ཀེ་ཚུ་གིས་ འབད་ཚུགས།
+  རྩ་སྒྲིག་འདི་ ཧརཌི་ཀོ་ཌིང་སྒེར་གྱི་ འབབ་ཁུངས་ཚུ་མེད་པར་ ཆ་འཇོག་འབད།
 
-- Add `--allow-registry-conflicts` when triaging historical payloads; new
-  submissions should fail fast when a fingerprint already exists.
-- The examples directory ships the reference proposal and registry so SDKs can
-  adopt the format without hard-coding private payloads.
-
-## 2. Publish duplicate-registry context
-
-Every accepted proposal includes the registry digest that was consulted before
-ingest. Capture the SoraFS CID or Torii manifest path for that registry and add
-it to your submission metadata so council reviewers can verify the same JSON.
+## 2. འདྲ་བཤུས་སྐབས་དོན་པར་སྐྲུན།ངོས་ལེན་འབད་ཡོད་པའི་ གྲོས་འཆར་རེ་རེ་ནང་ སྤྱི་ལོ་༢༠༠༨ ཀྱི་ཧེ་མ་ གྲོས་བསྟུན་འབད་མི་ ཐོ་བཀོད་ཀྱི་ བཞུ་བཅོས་ཚུ་ཡང་ ཚུདཔ་ཨིན་པས།
+ཟ་བ། ཐོ་བཀོད་དེ་གི་དོན་ལུ་ I18NT000000001X CID ཡང་ན་ I18NT0000004X གསལ་སྟོན་འགྲུལ་ལམ་འདི་ ཐོ་བཀོད་དེ་དང་ ཁ་སྐོང་བརྐྱབ།
+ཁྱོད་ཀྱི་ཕུལ་བའི་གནས་སྡུད་ལུ་ ཚོགས་སྡེ་བསྐྱར་ཞིབ་འབད་མི་ཚུ་གིས་ JSON ཅོག་འཐདཔ་བདེན་དཔྱད་འབད་ཚུགས།
 
 ```json title="Duplicate registry (excerpt)"
 {
@@ -97,81 +89,65 @@ it to your submission metadata so council reviewers can verify the same JSON.
 }
 ```
 
-When the CLI reports a collision, the portal shows the linked proposal IDs so
-operators can merge or reject resubmissions deterministically.
+སི་ཨེལ་ཨའི་གིས་ ཁ་ཐུག་རྐྱབ་པའི་སྙན་ཞུ་འབད་བའི་སྐབས་ དྲྭ་ཚིགས་འདི་གིས་ འབྲེལ་མཐུད་འབད་ཡོད་པའི་ གྲོས་འཆར་ཨའི་ཌི་ཚུ་སྟོནམ་ཨིན།
+བཀོལ་སྤྱོད་པ་ཚུ་གིས་ ལོག་བཙུགས་ཚུ་ མཉམ་བསྡོམས་ཡང་ན་ ངོས་ལེན་མ་འབད་བར་ གཏན་འབེབས་བཟོ་ཚུགས།
 
-## 3. Run and publish the sortition summary
+## 3. དབྱེ་སེལ་བཅུད་བསྡུས་འདི་གཡོག་བཀོལ་ཞིནམ་ལས་དཔར་བསྐྲུན་འབད།
 
-Once a docket is ready, run the deterministic sortition helper. It consumes the
-roster JSON, seed, and target slot count, then emits a Merkle-proof-backed
-summary. The summary JSON is what the portal renders in the **Council draw**
-panel.
+ཡིག་ཆ་ཅིག་གྲ་སྒྲིག་འབད་ཚརཝ་ད་ གཏན་འབེབས་དབྱེ་སེལ་གྱི་གྲོགས་རམ་འདི་གཡོག་བཀོལ། འདི་གིས་ ཟ་སྤྱོད་འབདཝ་ཨིན།
+roster JSON དང་ སོན་དང་ དམིགས་གཏད་ཀྱི་ གྱངས་ཁ་ ཚུ་གིས་ Merkle-proouf-backded ཅིག་བཏོནམ་ཨིན།
+བཅུད༌བསྡུ། བཅུད་བསྡུས་ JSON འདི་ **Council རི་མོ་* ནང་ དྲྭ་ཚིགས་འདི་གིས་ ག་ཅི་སྟོན་དོ་ཡོདཔ་ཨིན་ན་ཨིན།
+པེ་ནཱལ་.
 
-<CodeBlock language="bash">{`cargo xtask ministry-agenda sortition \\
-  --roster docs/examples/ministry/agenda_council_roster.json \\
-  --slots 3 \\
+{cargo xtask ལས་ཁུངས-ཨེང་གེན་དབྱེ་སེལ་ \\
+  --རོ་སི་ཊར་ཌོཀ་/དཔེ་/ལྷན་ཁག་/ཨེ་སིན་ཌ་_ཀོན་སིལ་_རོ་སི་ཊར་.ཇི་སོན་ \\
+  --slots ༣ \\།
   --seed 0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef \\
-  --output artifacts/ministry/sortition/2026-03-12.json`}</CodeBlock>
+  --ཨའུཊ་པུཊི་ཅ་རྙིང་/ལྷན་ཁག་/དབྱེ་ཞིབ།/༢༠༢༦-༠༣-༡༢.json`
 
-Store the resulting JSON on SoraFS (or alongside the signed agenda packet) and
-link the CID in the proposal tracker. The developer portal consumes the same
-JSON structure; the example below renders the bundled
+གྲུབ་འབྲས་ཐོན་མི་ JSON འདི་ I18NT000000002X གུ་ གསོག་འཇོག་འབད་ (ཡང་ན་ མཚན་རྟགས་བཀོད་ཡོད་པའི་ གྲོས་གཞི་ཐུམ་སྒྲིལ་) དང་།
+གྲོས་འཆར་འཚོལ་ཞིབ་ནང་ སི་ཨའི་ཌི་འདི་ འབྲེལ་མཐུད་འབད། གོང་འཕེལ་གཏང་མི་དྲྭ་ཚིགས་འདི་གིས་ ཅོག་འཐདཔ་སྦེ་ བཀོལ་སྤྱོད་འབདཝ་ཨིན།
+JSON གཞི་བཀོད་; འོག་གི་དཔེ་འདི་གིས་ བཱན་ཌར་འདི་བཏོནམ་ཨིན།
 `agenda_sortition_summary_example.json`.
 
-### Example council draw
+### དཔེར་བཀུར་ཚོགས་པ།༥ 
+      
+      དྭངས། དང་།
+    
+      ཨཱལ་གོ་རིཐ་།
+      {སུམ་མ་རི་.ཨཱལ་གོ་རི་ཐམ་}།
+    
+      འཇུ་བྱེད་ (BLAKE3)།
+      {summary.roster_digest.blake3_hex}
+    
+      རོ་སི་ཊར་ ཟས་བཅུད་ (SHA-256)
+      {summary.roster_digest.sh256_hex}
+    
+      ས་བོན་ །
+      {བསྡོམས་.སེཌ་_ཧེགསི་}
+    
+      ས་མོ།
+      {སུམ་མ་རི་.སལོཊསི}།
+    
+      འོས་པའི་ཚོགས་ །
+      {summary.ifible_ འཐུས་མི་}།
+    
+      ཚོང་འབྲེལ་རྩ་བ།
+      {summary.merkle_root_hex}
+     .
 
-<table>
-  <thead>
-    <tr>
-      <th>Field</th>
-      <th>Value</th>
-    </tr>
-  </thead>
-  <tbody>
-    <tr>
-      <td>Algorithm</td>
-      <td><code>{summary.algorithm}</code></td>
-    </tr>
-    <tr>
-      <td>Roster digest (BLAKE3)</td>
-      <td><code>{summary.roster_digest.blake3_hex}</code></td>
-    </tr>
-    <tr>
-      <td>Roster digest (SHA-256)</td>
-      <td><code>{summary.roster_digest.sha256_hex}</code></td>
-    </tr>
-    <tr>
-      <td>Seed</td>
-      <td><code>{summary.seed_hex}</code></td>
-    </tr>
-    <tr>
-      <td>Slots</td>
-      <td>{summary.slots}</td>
-    </tr>
-    <tr>
-      <td>Eligible members</td>
-      <td>{summary.eligible_members}</td>
-    </tr>
-    <tr>
-      <td>Merkle root</td>
-      <td><code>{summary.merkle_root_hex}</code></td>
-    </tr>
-  </tbody>
-</table>
 
-<SortitionSummaryTable rows={summary.selected} />
 
-Each selected member includes:
 
-- `draw_entropy_hex` (32 BLAKE3 bytes) so anyone can recompute the RNG output.
-- `eligible_index` and `original_index` so auditors can prove that opt-outs were
-  honored.
-- A Merkle proof covering the roster leaf; reproducing the tree confirms the
-  roster published inside the packet matches the draw.
+སེལ་འཐུ་འབད་ཡོད་པའི་འཐུས་མི་རེ་རེ་གིས་ :
 
-### Decision log
+- I18NI0000000013X (32 BLAKE3 bytes) དེ་འབདཝ་ལས་ ག་ར་གིས་ RNG ཐོན་འབྲས་འདི་ ལོག་རྩིས་སྟོན་ཚུགས།
+- I18NI0000000014X དང་ `original_index` དེ་འབདཝ་ལས་ རྩིས་ཞིབ་པ་ཚུ་གིས་ གདམ་ཁ་ཚུ་ ཕྱིར་ཐོན་འབད་ཡོདཔ་སྦེ་ བདེན་ཁུངས་བསྐྱལ་ཚུགས།
+  གཟེངས་བསྟོད་ཕུལ་ཡོདཔ།
+- རོ་ཊར་གྱི་འདབ་མ་འདི་བཀབ་མི་ མེར་ཀལ་བདེན་ཁུངས་ཅིག། ཤིང་འདི་བསྐྱར་བཟོ་འབད་མི་འདི་གིས་ ངེས་གཏན་བཟོཝ་ཨིན།
+  ཐུམ་སྒྲིལ་མཐུན་སྒྲིག་ནང་ལུ་ roster དཔར་བསྐྲུན་འབད་ཡོདཔ།
 
-When the council votes on a proposal, attach the decision memo and the
-sortition summary CID to the governance action (Torii `/v1/gov/*` entry). Portal
-pages link the memo, the vote tally, and the JSON shown above so every action
-contains the full evidence chain required by **MINFO-2**.
+### ཐག་གཅོད།གྲོས་འཆར་ཅིག་གི་ཐོག་ལུ་ ཚོགས་སྡེ་གིས་ ཚོགས་རྒྱན་བཙུགས་པའི་སྐབས་ གྲོས་ཐག་བཅད་ནིའི་དྲན་ཤེས་དང་ ༡ ལུ་ མཉམ་སྦྲགས་འབད།
+གཞུང་སྐྱོང་བྱ་བ་ (Torii I18NI0000016X ཐོ་བཀོད་) ལུ་དབྱེ་སེལ་གྱི་བཅུད་བསྡུས་སི་ཨའི་ཌི་། སྙན་ཐོ།
+ཤོག་ལེབ་ཚུ་གིས་ བརྗེད་ཐོ་དང་ ཚོགས་རྒྱན་ཚུ་ དེ་ལས་ གོང་ལས་སྟོན་ཡོད་མི་ JSON ཚུ་ འབྲེལ་མཐུད་འབདཝ་ཨིན།
+**MINFO-2** གིས་དགོ་པའི་སྒྲུབ་བྱེད་ཀྱི་རིམ་པ་ཆ་ཚང་ཡོདཔ་ཨིན།

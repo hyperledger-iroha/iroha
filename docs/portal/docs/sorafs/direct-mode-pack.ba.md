@@ -11,60 +11,61 @@ id: direct-mode-pack
 title: SoraFS Direct-Mode Fallback Pack (SNNet-5a)
 sidebar_label: Direct-Mode Fallback Pack
 description: Required configuration, compliance checks, and rollout steps when operating SoraFS in direct Torii/QUIC mode during the SNNet-5a transition.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
-:::
+:::иҫкәртергә канонлы сығанаҡ
+::: 1990 й.
 
-SoraNet circuits remain the default transport for SoraFS, but roadmap item **SNNet-5a** requires a regulated fallback so operators can keep deterministic read-access while the anonymity rollout completes. This pack captures the CLI / SDK knobs, configuration profiles, compliance tests, and deployment checklist needed to run SoraFS in direct Torii/QUIC mode without touching the privacy transports.
+SoraNet схемалары SoraFS өсөн ғәҙәттәге транспорт булып ҡала, әммә юл картаһы әйбере **SNNet-5a** көйләнгән fallback талап итә, шуға күрә операторҙар детерминистик уҡыу-ҡулланыуҙы һаҡлай ала, ә анонимлыҡ таратыу тамамлана. Был пакет CLI / SDK ручкаларын тота, конфигурация профилдәре, үтәү һынауҙары, һәм таратыу тикшерелгән исемлек кәрәк I18NT00000000003X туранан-тура I18NT00000000005X/QUIC режимында, хосуси транспорттарға ҡағылмай.
 
-The fallback applies to staging and regulated production environments until SNNet-5 through SNNet-9 clear their readiness gates. Keep the artefacts below alongside the usual SoraFS deployment collateral so operators can swap between anonymous and direct modes on demand.
+1990 йылдарҙа был йүнәлештәге эштәрҙең иң мөһимдәренең береһе булып SNNet-5-кә тиклем SNNet-9 аша үҙҙәренең әҙерлек ҡапҡаларын таҙарта. Ғәҙәти I18NT000000004X таратыу залогы менән бер рәттән түбәндә артефакттар тотоғоҙ, шуға күрә операторҙар ихтыяж буйынса аноним һәм туранан-тура режимдар араһында алмаштыра ала.
 
-## 1. CLI & SDK Flags
+## 1. CLI & SDK флагтар
 
-- `sorafs_cli fetch --transport-policy=direct-only …` disables relay scheduling and enforces Torii/QUIC transports. CLI help now lists `direct-only` as an accepted value.
-- SDKs must set `OrchestratorConfig::with_transport_policy(TransportPolicy::DirectOnly)` whenever they expose a “direct mode” toggle. The generated bindings in `iroha::ClientOptions` and `iroha_android` forward the same enum.
-- Gateway harnesses (`sorafs_fetch`, Python bindings) can parse the direct-only toggle via the shared Norito JSON helpers so automation receives identical behaviour.
+- `sorafs_cli fetch --transport-policy=direct-only …` өҙөү реле планлаштырыу һәм үтәү I18NT00000000000006X/QUIC транспорт. CLI ярҙам хәҙер исемлеге I18NI000000000018X ҡабул итеү ҡиммәте булараҡ.
+- SDKs тейеш ҡуйырға I18NI0000000019X ҡасан улар фашлау “туранан-тура режим” переключать. `iroha::ClientOptions` һәм I18NI0000000021X-та генерацияланған бәйләүҙәр шул уҡ enum-да.
+- Ҡапҡа йүгәндәре (`sorafs_fetch`, Python бәйләүҙәре) туранан-тура ғына анализлай ала аша дөйөм I18NT00000000000X JSON ярҙамсылары шулай автоматлаштырыу бер үк тәртип ала.
 
-Document the flag in partner-facing runbooks and wire feature toggles through `iroha_config` rather than environment variables.
+Документ флаг партнер-йөҙөндә runbooks һәм сым функцияһы аша `iroha_config` түгел, ә тирә-яҡ мөхит үҙгәртеүселәре.
 
-## 2. Gateway Policy Profiles
+## 2. Ҡапҡа сәйәсәте профилдәре
 
-Use Norito JSON to persist deterministic orchestrator configuration. The example profile in `docs/examples/sorafs_direct_mode_policy.json` encodes:
+Ҡулланыу I18NT000000001X JSON һаҡлау өсөн детерминистик оркестр конфигурацияһы. Миҫал профиле I18NI000000024X-та кодлай:
 
-- `transport_policy: "direct_only"` — reject providers that only advertise SoraNet relay transports.
-- `max_providers: 2` — cap direct peers to the most reliable Torii/QUIC endpoints. Adjust based on regional compliance allowances.
-- `telemetry_region: "regulated-eu"` — label emitted metrics so telemetry dashboards and audits distinguish fallback runs.
-- Conservative retry budgets (`retry_budget: 2`, `provider_failure_threshold: 3`) to avoid masking misconfigured gateways.
+- `transport_policy: "direct_only"` — SoraNet реле транспорттарын рекламалаусы провайдерҙарҙы кире ҡаға.
+- `max_providers: 2` — иң ышаныслы I18NT000000007X/QUIC ос нөктәләренә туранан-тура тиҫтерҙәре ҡапҡас. Төбәктәрҙе үтәү пособиеларына нигеҙләнгән көйләү.
+- I18NI000000027X — ярлыҡ метрикалар сығара, шуға күрә телеметрия таҡталары һәм аудиттар айыра fallback йүгерә.
+- Консерватив ҡайтанан тыйылған бюджеттар (`retry_budget: 2`, I18NI000000029X X) йәшерелмәгән шлюздарҙы маскировкалау өсөн.
 
-Load the JSON through `sorafs_cli fetch --config` (automation) or the SDK bindings (`config_from_json`) before exposing the policy to operators. Persist the scoreboard output (`persist_path`) for audit trails.
+JSON тейәп аша I18NI000000030000 (автоматизация) йәки SDK бәйләүҙәре (I18NI000000031X) сәйәсәтте операторҙарға фашлау алдынан. Аудит юлдары өсөн табло сығышы (I18NI000000032X) Персик.
 
-Gateway-side enforcement knobs are captured in `docs/examples/sorafs_gateway_direct_mode.toml`. The template mirrors the output from `iroha app sorafs gateway direct-mode enable`, disabling envelope/admission checks, wiring rate-limit defaults, and populating the `direct_mode` table with plan-derived hostnames and manifest digests. Replace the placeholder values with your rollout plan before committing the snippet to configuration management.
+Ҡапҡа яғында үтәү ручкалары I18NI000000033X-та төшөрөлгән. Ҡалып көҙгө `iroha app sorafs gateway direct-mode enable`, өҙөү конверт/ҡабул итеү тикшерелгән, проводка ставкаһы-сиктәре ғәҙәттәгесә, һәм I18NI000000035X таблицаһы менән пландан алынған хост-исемдәре һәм асыҡ disistes. Һеҙҙең менән алмаштырыу планы менән алмаштырыу планы ролл-аут өҙөктәр ҡылғансы, конфигурация менән идара итеү.
 
-## 3. Compliance Test Suite
+## 3. Ҡабул итеү һынау люкс
 
-Direct-mode readiness now includes coverage in both the orchestrator and CLI crates:
+Тура режимда әҙерлек хәҙер оркестрҙа ла, CLI йәшниктәрендә лә яҡтыртыуҙы үҙ эсенә ала:
 
-- `direct_only_policy_rejects_soranet_only_providers` guarantees that `TransportPolicy::DirectOnly` fails fast when every candidate advert only supports SoraNet relays.【crates/sorafs_orchestrator/src/lib.rs:7238】
-- `direct_only_policy_prefers_direct_transports_when_available` ensures Torii/QUIC transports are used when present and that SoraNet relays are excluded from the session.【crates/sorafs_orchestrator/src/lib.rs:7285】
-- `direct_mode_policy_example_is_valid` parses `docs/examples/sorafs_direct_mode_policy.json` to ensure documentation stays aligned with the helper utilities.【crates/sorafs_orchestrator/src/lib.rs:7509】【docs/examples/sorafs_direct_mode_policy.json:1】
-- `fetch_command_respects_direct_transports` exercises `sorafs_cli fetch --transport-policy=direct-only` against a mocked Torii gateway, providing a smoke test for regulated environments that pin direct transports.【crates/sorafs_car/tests/sorafs_cli.rs:2733】
-- `scripts/sorafs_direct_mode_smoke.sh` wraps the same command with the policy JSON and scoreboard persistence for rollout automation.
+- I18NI0000000036X гарантия бирә, I18NI0000000037X тиҙ уңышһыҙлыҡҡа осрай, ҡасан һәр кандидат реклама SoraNet эстафеталары ғына ярҙам итә.
+- I18NI000000038X тәьмин итә I18NT0000000000008X/QUIC транспорттары ҡулланыла, ҡасан бар һәм был SoraNet реле сессиянан сығарыла.
+- I18NI0000000039X анализ I18NI000000040X документтарҙы тәьмин итеү өсөн ярҙамсы коммуналь хеҙмәттәр менән тура килтерелгән.
+- I18NI0000000041X күнекмәләр I18NI000000042 X ҡаршы мыҫҡыллы I18NT000000000000000X шлюз, туранан-тура транспортлаусы көйләнгән мөхиттәр өсөн төтөн һынауын тәьмин итеү.【кейт/сорафс_тест/сорафс_cli.s:2733】
+- `scripts/sorafs_direct_mode_smoke.sh` JSON һәм табло ныҡышмалылыҡ менән бер үк команданы автоматлаштырыу өсөн ролде уратып ала.
 
-Run the focused suite before publishing updates:
+Яңыртыуҙарҙы баҫтырып сығарыр алдынан йүнәлтелгән люксты эшләгеҙ:
 
 ```bash
 cargo test -p sorafs_orchestrator direct_only_policy
 cargo test -p sorafs_car --features cli fetch_command_respects_direct_transports
 ```
 
-If workspace compilation fails because of upstream changes, record the blocking error in `status.md` and rerun once the dependency catches up.
+Әгәр ҙә эш урыны компиляцияһы өҫкө ағым үҙгәрештәре арҡаһында уңышһыҙлыҡҡа осраһа, I18NI000000044X-та блоклау хатаһын теркәй һәм бәйлелек ҡыуып етеүҙән һуң ҡабаттан эшләтеп ебәрегеҙ.
 
-## 4. Automated Smoke Runs
+## 4. Автоматлаштырылған төтөн йүгерә
 
-CLI coverage alone does not surface environment-specific regressions (e.g., gateway policy drift or manifest mismatches). A dedicated smoke helper lives in `scripts/sorafs_direct_mode_smoke.sh` and wraps `sorafs_cli fetch` with the direct-mode orchestrator policy, scoreboard persistence, and summary capture.
+CLI ҡаплау ғына түгел, тирә-яҡ мөхиткә хас регрессияларҙы (мәҫәлән, шлюз сәйәсәте дрейфы йәки тап килмәүен күрһәтә). `scripts/sorafs_direct_mode_smoke.sh`-та һәм I18NI000000046X-ты туранан-тура режимда оркестр сәйәсәте, табло ныҡышмалылығы һәм йыйнаҡ тотоуы менән уратып алған махсус төтөн ярҙамсыһы йәшәй.
 
-Example usage:
+Миҫал ҡулланыу:
 
 ```bash
 ./scripts/sorafs_direct_mode_smoke.sh \
@@ -72,57 +73,57 @@ Example usage:
   --provider name=gw-regulated,provider-id=001122...,base-url=https://gw.example/direct/,stream-token=BASE64
 ```
 
-- The script respects both CLI flags and key=value config files (see `docs/examples/sorafs_direct_mode_smoke.conf`). Populate the manifest digest and provider advert entries with production values before running.
-- `--policy` defaults to `docs/examples/sorafs_direct_mode_policy.json`, but any orchestrator JSON produced by `sorafs_orchestrator::bindings::config_to_json` can be supplied. The CLI accepts the policy via `--orchestrator-config=PATH`, enabling reproducible runs without hand-tuning flags.
-- When `sorafs_cli` is not on `PATH` the helper builds it from the
-  `sorafs_orchestrator` crate (release profile) so smoke runs exercise the
-  shipping direct-mode plumbing.
-- Outputs:
-  - Assembled payload (`--output`, defaults to `artifacts/sorafs_direct_mode/payload.bin`).
-  - Fetch summary (`--summary`, defaults alongside the payload) containing the telemetry region and provider reports used for rollout evidence.
-  - Scoreboard snapshot persisted to the path declared in the policy JSON (e.g., `fetch_state/direct_mode_scoreboard.json`). Archive this alongside the summary in change tickets.
-- Adoption gate automation: once the fetch completes the helper invokes `cargo xtask sorafs-adoption-check` using the persisted scoreboard and summary paths. The required quorum defaults to the number of providers supplied on the command line; override it with `--min-providers=<n>` when you need a larger sample. Adoption reports are written next to the summary (`--adoption-report=<path>` can set a custom location) and the helper passes `--require-direct-only` by default (matching the fallback) and `--require-telemetry` whenever you supply the matching CLI flag. Use `XTASK_SORAFS_ADOPTION_FLAGS` to forward additional xtask arguments (for example `--allow-single-source` during an approved downgrade so the gate both tolerates and enforces the fallback). Only skip the adoption gate with `--skip-adoption-check` when running local diagnostics; the roadmap requires every regulated direct-mode run to include the adoption report bundle.
+- Сценарий CLI флагтарын да, төймәгә лә хөрмәт итә=ҡиммәте конфигурация файлдарын (ҡара: `docs/examples/sorafs_direct_mode_smoke.conf`). Аппаратура асыҡ disist һәм провайдер реклама яҙмалары менән етештереү ҡиммәттәре эшләгәнсе.
+- `--policy` I18NI000000049X тиклем ғәҙәттәгесә, әммә I18NI000000050X тарафынан етештерелгән теләһә ниндәй оркестр JSON тәьмин итергә мөмкин. CLI ҡабул итә сәйәсәт аша I18NI000000051X, мөмкинлек бирә ҡабатланған йүгерә ҡул менән көйләү флагы.
+- Ҡасан I18NI000000052X I18NI000000053X-та ярҙамсы уны төҙөй.
+  I18NI000000054X йәшник (профиль сығарыу) шулай төтөн йүгерә күнекмәләр
+  ташыу туранан-тура режимында сантехника.
+- Сығыштар:
+  - Йыйылған файҙалы йөк (`--output`, `artifacts/sorafs_direct_mode/payload.bin` тиклем ғәҙәттәгесә).
+  - Фетч резюмеһы (`--summary`, файҙалы йөк менән бер рәттән ғәҙәттәгесә) телеметрия төбәге һәм провайдер отчеттары өсөн ҡулланылған дәлилдәр өсөн ҡулланыла.
+  - JSON сәйәсәтендә иғлан ителгән юлға (мәҫәлән, I18NI000000058X). Архив был менән бер рәттән резюме үҙгәрештәр билеттары.
+- Ҡапҡаларҙы ҡабул итеү автоматлаштырыу: бер тапҡыр фетч ярҙамсы ярҙамсы I18NI000000059X ҡулланыуҙы тамамлай, ныҡлы табло һәм йыйнаҡ юлдар ҡулланып. Кәрәкле кворум ғәҙәттәгесә команда юлында тәьмин ителгән провайдерҙар һаны; I18NI000000060X менән өҫтөнән өҫтөнән үтергә, ҡасан һеҙгә ҙурыраҡ өлгө кәрәк. Ҡабул итеү отчеттары резюме эргәһендә яҙылған (`--adoption-report=<path>` ҡулланыусылар урынын ҡуя ала) һәм ярҙамсы үткән I18NI0000000062X ғәҙәттәгесә (йәшелеште тап килтереп) һәм I18NI000000063X ҡасан һеҙ тап килгән CLI флагын тәьмин итә. Ҡулланыу I18NI00000000064X өҫтәмә xtask аргументтарын тапшырыу өсөн (мәҫәлән, I18NI000000065X раҫланған түбәнге ваҡытта, шуға күрә ҡапҡа ла түҙемле һәм үтәй fallback). Тик һикереп ҡабул итеү ҡапҡаһы менән I18NI0000000066X урындағы диагностика эшләгәндә; юл картаһы талап итә, һәр көйләнгән туранан-тура режим йүгерә, ҡабул итеү тураһында отчет өйөмөн үҙ эсенә ала.
 
-## 5. Rollout Checklist
+## 5.
 
-1. **Configuration freeze:** Store the direct-mode JSON profile in your `iroha_config` repository and record the hash in your change ticket.
-2. **Gateway audit:** Confirm Torii endpoints enforce TLS, capability TLVs, and audit logging prior to flipping direct mode. Publish the gateway policy profile to operators.
-3. **Compliance sign-off:** Share the updated playbook with compliance / regulatory reviewers and capture approvals for running outside the anonymity overlay.
-4. **Dry run:** Execute the compliance test suite plus a staging fetch against known-good Torii providers. Archive scoreboard outputs and CLI summaries.
-5. **Production cutover:** Announce the change window, flip `transport_policy` to `direct_only` (if you had opted into `soranet-first`), and monitor the direct-mode dashboards (`sorafs_fetch` latency, provider failure counters). Document the rollback plan so you can return to SoraNet-first once SNNet-4/5/5a/5b/6a/7/8/12/13 graduate in `roadmap.md:532`.
-6. **Post-change review:** Attach scoreboard snapshots, fetch summaries, and monitoring results to the change ticket. Update `status.md` with the effective date and any anomalies.
+1. **Конфигурация туңдырыу:** Һеҙҙең I18NI000000067X һаҡлағысында туранан-тура режимлы JSON профилен һаҡлау һәм үҙгәрештәр билетында хеш яҙырға.
+2. **Шлюз аудиты:** Раҫлау I18NT0000000010X ос нөктәләре TLS, мөмкинлектәре TLVs, һәм аудит логин туранан-тура режимды әйләндереп тиклем. Операторҙарға шлюз сәйәсәте профилен баҫтырып сығарығыҙ.
+3. **Тотолоу ҡул ҡуйыу-офф:** Яңыртылған плейбук менән уртаҡлашыу менән үтәү / норматив рецензенттар һәм раҫлауҙарҙы тотоп, анонимлыҡ өҫтөндә йүгерергә ҡаплау.
+4. **Ҡоро йүгерергә:** Ҡабул итеү һынау люксын башҡарыу плюс стажировка алыу ҡаршы билдәле-яҡшы I18NT000000011X провайдерҙары. Архив таблолы сығыштары һәм CLI резюмелары.
+5. **Прокважина:** үҙгәрештәр тәҙрәһен иғлан, I18NI000000068X X-ға әйләндереп I18NI00000000069X (әгәр һеҙ I18NI0000070X-ҡа һайланһағыҙ), һәм туранан-тура режиссер приборҙар таҡталарын күҙәтеү (I18NI0000071X лайтентлығы, провайдерлыҡ етешһеҙлектәре счетчиктары). Документ планын кире ҡайтарыу, шулай итеп, һеҙ ҡайтып була SoraNet-беренсе бер тапҡыр SNNet-4/5/5b/6a/7/12/13 сығарылыш `roadmap.md:532`.
+6. **Пост-үҙгәрештәр тикшерелгән:** Беркетергә табло снимоктар, резюме алыу, һәм мониторинг һөҙөмтәләре үҙгәрештәр билет. Яңыртыу `status.md` менән ғәмәлдәге дата һәм теләһә ниндәй аномалиялар.
 
-Keep the checklist alongside the `sorafs_node_ops` runbook so operators can rehearse the workflow before a live switchover. When SNNet-5 graduates to GA, retire the fallback after confirming parity in production telemetry.
+I18NI000000074X runbook менән бергә тикшерелгән исемлекте һаҡлау, шулай итеп, операторҙар репетициялай ала эш ағымы алдынан тере коммутатор. Ҡасан SNNet-5 сығарылыш уҡыусылары GA, пенсияға fallback раҫлауҙан һуң паритет етештереү телеметрияһы.
 
-## 6. Evidence & Adoption Gate Requirements
+## 6. Дәлилдәр һәм ҡабул итеү ҡапҡаһы талаптары
 
-Direct-mode captures still need to satisfy the SF-6c adoption gate. Bundle the
-scoreboard, summary, manifest envelope, and adoption report for every run so
-`cargo xtask sorafs-adoption-check` can validate the fallback posture. Missing
-fields force the gate to fail, so record the expected metadata in change
-tickets.
+Тура режимда тотоу һаман да ҡәнәғәтләндерергә кәрәк SF-6c ҡабул итеү ҡапҡаһы. Бундл
+табло, резюме, асыҡ конверт, һәм ҡабул итеү отчеты өсөн һәр йүгерә шулай
+`cargo xtask sorafs-adoption-check` раҫлай ала fallback поза. Юғалған
+ялан ҡапҡаны уңышһыҙлыҡҡа килтерергә мәжбүр итә, шуға күрә үҙгәрештәрҙә көтөлгән метамағлүмәттәрҙе теркәргә
+билеттар.
 
-- **Transport metadata:** `scoreboard.json` must declare
-  `transport_policy="direct_only"` (and flip `transport_policy_override=true`
-  when you forced the downgrade). Keep the paired anonymity policy fields
-  populated even when they inherit defaults so reviewers can see whether you
-  deviated from the staged anonymity plan.
-- **Provider counters:** Gateway-only sessions must persist `provider_count=0`
-  and populate `gateway_provider_count=<n>` with the number of Torii providers
-  used. Avoid hand-editing the JSON—the CLI/SDK already derives the counts and
-  the adoption gate rejects captures that omit the split.
-- **Manifest evidence:** When Torii gateways participate, pass the signed
-  `--gateway-manifest-envelope <path>` (or SDK equivalent) so
-  `gateway_manifest_provided` plus the `gateway_manifest_id`/`gateway_manifest_cid`
-  are recorded in `scoreboard.json`. Ensure `summary.json` carries the matching
-  `manifest_id`/`manifest_cid`; the adoption check fails if either file is
-  missing the pair.
-- **Telemetry expectations:** When telemetry accompanies the capture, run the
-  gate with `--require-telemetry` so the adoption report proves the metrics were
-  emitted. Air-gapped rehearsals can omit the flag, but CI and change tickets
-  should document the absence.
+- **Транспорт метамағлүмәттәре:** I18NI000000076X Е.
+  I18NI000000077X (һәм `transport_policy_override=true` flip
+  ҡасан һеҙ көсләп түбәнгә град). Парлы анонимлыҡ сәйәсәте өлкәләрен һаҡлағыҙ
+  популяциялар хатта улар ҡасан мираҫҡа ҡалдырған ғәҙәттәгесә, шулай рецензенттар күрә ала, һеҙ, һеҙ
+  сәхнәләштерелгән анонимлыҡ планынан тайпылған.
+- **Провайдер иҫәпләүселәр:** шлюз-тик сеанстары `provider_count=0` XX .
+  һәм `gateway_provider_count=<n>` халыҡ һаны I18NT000000012X провайдерҙары һаны менән
+  ҡулланылған. Ҡотолоу өсөн ҡул-мөхәррирләү JSON-CLI/SDK инде иҫәптәрҙе ала һәм
+  ҡабул итеү ҡапҡаһы кире ҡаға, был бүленеште төшөрөп ҡалдыра.
+- **Манифест дәлилдәре:** Ҡасан I18NT0000000013X шлюздар ҡатнаша, ҡул ҡуйылған тапшырырға
+  `--gateway-manifest-envelope <path>` (йәки SDK эквиваленты) шулай
+  `gateway_manifest_provided` плюс `gateway_manifest_id`/`gateway_manifest_cid`
+  I18NI000000085X-та теркәлгән. I18NI000000086ХХ тап килгәнен тәьмин итеү
+  `manifest_id`/I18NI000000088X X; ҡабул итеү тикшерергә уңышһыҙлыҡҡа осрай, әгәр ҙә йәки файл
+  парҙы һағынып.
+- **Телеметрия өмөттәре:** Телеметрия тотоуҙы оҙатып барғанда, йүгереүҙе .
+  Ҡапҡа менән I18NI0000000089X шулай итеп, ҡабул итеү отчеты иҫбатлай метрика
+  тип сығарған. Һауа-гапп репетициялары флаг төшөрөп ҡалдыра ала, әммә CI һәм билеттарҙы үҙгәртә .
+  юҡлығын документлаштырырға тейеш.
 
-Example:
+Миҫал:
 
 ```bash
 cargo xtask sorafs-adoption-check \
@@ -132,9 +133,7 @@ cargo xtask sorafs-adoption-check \
   --require-direct-only \
   --json-out artifacts/sorafs_direct_mode/adoption_report.json \
   --require-telemetry
-```
-
-Attach `adoption_report.json` alongside the scoreboard, summary, manifest
-envelope, and smoke log bundle. These artefacts mirror what the CI adoption job
-(`ci/check_sorafs_orchestrator_adoption.sh`) enforces and keep direct-mode
-downgrades auditable.
+```I18NI000000090X беркетергә табло менән бер рәттән, резюме, манифест
+конверт, һәм төтөн журналы өйөмө. Был артефакттар көҙгө нимә CI ҡабул итеү эше .
+(I18NI000000091X) туранан-тура режимды үтәй һәм һаҡлай
+аудитлы түбәнгә сыға.

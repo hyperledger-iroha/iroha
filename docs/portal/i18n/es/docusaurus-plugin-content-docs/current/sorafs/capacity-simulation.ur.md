@@ -4,20 +4,22 @@ direction: ltr
 source: docs/portal/docs/sorafs/capacity-simulation.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: capacity-simulation
-title: SoraFS کپیسٹی سمیولیشن رَن بُک
+id: simulación de capacidad
+título: SoraFS کپیسٹی سمیولیشن رَن بُک
 sidebar_label: کپیسٹی سمیولیشن رَن بُک
-description: reproducible fixtures، Prometheus exports، اور Grafana dashboards کے ساتھ SF-2c کپیسٹی مارکیٹ پلیس سمیولیشن ٹول کٹ چلانا۔
+descripción: accesorios reproducibles, exportaciones Prometheus, tableros de instrumentos Grafana کے ساتھ SF-2c کپیسٹی مارکیٹ پلیس سمیولیشن ٹول کٹ چلانا۔
 ---
 
-:::note ماخذِ مستند
+:::nota ماخذِ مستند
 یہ صفحہ `docs/source/sorafs/runbooks/sorafs_capacity_simulation.md` کی آئینہ دار ہے۔ جب تک پرانا Sphinx دستاویزی مجموعہ مکمل طور پر منتقل نہیں ہو جاتا دونوں نقول کو ہم آہنگ رکھیں۔
 :::
 
-یہ رن بُک وضاحت کرتی ہے کہ SF-2c کپیسٹی مارکیٹ پلیس سمیولیشن کِٹ کیسے چلائیں اور حاصل شدہ میٹرکس کیسے دیکھیں۔ یہ `docs/examples/sorafs_capacity_simulation/` میں موجود deterministic fixtures کے ذریعے quota مذاکرات، failover ہینڈلنگ اور slashing remediation کو end‑to‑end ویلیڈیٹ کرتی ہے۔ کپیسٹی payloads اب بھی `sorafs_manifest_stub capacity` استعمال کرتے ہیں؛ manifest/CAR پیکجنگ کے لیے `iroha app sorafs toolkit pack` استعمال کریں۔
+یہ رن بُک وضاحت کرتی ہے کہ SF-2c کپیسٹی مارکیٹ پلیس سمیولیشن کِٹ کیسے چلائیں اور حاصل شدہ میٹرکس کیسے دیکھیں۔ یہ `docs/examples/sorafs_capacity_simulation/` میں موجود accesorios deterministas کے ذریعے cuota مذاکرات، conmutación por error ہینڈلنگ اور remediación de corte کو de extremo a extremo y کرتی ہے۔ Cargas útiles کپیسٹی اب بھی `sorafs_manifest_stub capacity` استعمال کرتے ہیں؛ manifiesto/CAR پیکجنگ کے لیے `iroha app sorafs toolkit pack` استعمال کریں۔
 
 ## 1. CLI آرٹی فیکٹس تیار کریں
 
@@ -26,16 +28,14 @@ cd $REPO_ROOT/docs/examples/sorafs_capacity_simulation
 ./run_cli.sh ./artifacts
 ```
 
-`run_cli.sh`، `sorafs_manifest_stub capacity` کو لپیٹ کر Norito payloads، base64 blobs، Torii request bodies اور JSON summaries تیار کرتا ہے برائے:
+`run_cli.sh`, `sorafs_manifest_stub capacity` incluye cargas útiles Norito, blobs base64, cuerpos de solicitud Torii y resúmenes JSON. برائے:
 
-- quota مذاکرات والے منظرنامے میں شریک تین providers کی declarations۔
-- ایک replication order جو staged manifest کو providers میں تقسیم کرتا ہے۔
-- pre‑outage baseline، outage interval، اور failover recovery کے telemetry snapshots۔
-- simulated outage کے بعد slashing درخواست کرنے والا dispute payload۔
+- cuota مذاکرات والے منظرنامے میں شریک تین proveedores کی declaraciones۔
+- Orden de replicación, manifiesto por etapas y proveedores de datos.
+- línea base previa a la interrupción, intervalo de interrupción, recuperación de conmutación por error e instantáneas de telemetría
+- interrupción simulada کے بعد reducción درخواست کرنے والا carga útil de disputa۔تمام آرٹی فیکٹس `./artifacts` کے تحت جمع ہوتے ہیں (پہلے آرگومنٹ میں مختلف ڈائریکٹری دے کر اووررائیڈ کر سکتے ہیں)۔ انسانی سمجھ کے لیے `_summary.json` فائلیں دیکھیں۔
 
-تمام آرٹی فیکٹس `./artifacts` کے تحت جمع ہوتے ہیں (پہلے آرگومنٹ میں مختلف ڈائریکٹری دے کر اووررائیڈ کر سکتے ہیں)۔ انسانی سمجھ کے لیے `_summary.json` فائلیں دیکھیں۔
-
-## 2. نتائج جمع کریں اور metrics جاری کریں
+## 2. نتائج جمع کریں اور métricas جاری کریں
 
 ```bash
 ./analyze.py --artifacts ./artifacts
@@ -43,10 +43,10 @@ cd $REPO_ROOT/docs/examples/sorafs_capacity_simulation
 
 اینالائزر تیار کرتا ہے:
 
-- `capacity_simulation_report.json` - مجموعی allocations، failover deltas، اور dispute metadata۔
-- `capacity_simulation.prom` - Prometheus textfile metrics (`sorafs_simulation_*`) جو node-exporter textfile collector یا standalone scrape job کے لیے موزوں ہیں۔
+- `capacity_simulation_report.json`: asignación de asignaciones, deltas de conmutación por error y metadatos de disputa
+- `capacity_simulation.prom` - Métricas de archivos de texto Prometheus (`sorafs_simulation_*`) y recopilador de archivos de texto exportador de nodo y trabajo de raspado independiente کے لیے موزوں ہیں۔
 
-Prometheus scrape configuration کی مثال:
+Configuración de raspado Prometheus Este es el siguiente:
 
 ```yaml
 scrape_configs:
@@ -61,22 +61,20 @@ scrape_configs:
       format: ["prometheus"]
 ```
 
-textfile collector کو `capacity_simulation.prom` کی طرف پوائنٹ کریں (node-exporter استعمال کریں تو اسے `--collector.textfile.directory` والی ڈائریکٹری میں کاپی کریں)۔
+recopilador de archivos de texto کو `capacity_simulation.prom` کی طرف پوائنٹ کریں (exportador de nodos استعمال کریں تو اسے `--collector.textfile.directory` والی ڈائریکٹری میں کاپی کریں)۔
 
 ## 3. Grafana ڈیش بورڈ امپورٹ کریں
 
 1. Grafana میں `dashboards/grafana/sorafs_capacity_simulation.json` امپورٹ کریں۔
-2. `Prometheus` datasource ویری ایبل کو اوپر دیے گئے scrape target سے جوڑیں۔
+2. Fuente de datos `Prometheus` ویری ایبل کو اوپر دیے گئے scrape target سے جوڑیں۔
 3. پینلز چیک کریں:
-   - **Quota Allocation (GiB)** ہر provider کے committed/assigned balances دکھاتا ہے۔
-   - **Failover Trigger** outage metrics آنے پر *Failover Active* ہو جاتا ہے۔
-   - **Uptime Drop During Outage** provider `alpha` کے لیے فیصدی نقصان دکھاتا ہے۔
-   - **Requested Slash Percentage** dispute fixture سے نکلا remediation ratio دکھاتا ہے۔
+   - **Asignación de cuota (GiB)** ہر proveedor کے saldos comprometidos/asignados دکھاتا ہے۔
+   - **Disparador de conmutación por error** métricas de interrupción آنے پر *Failover Active* ہو جاتا ہے۔
+   - **Disminución del tiempo de actividad durante una interrupción** proveedor `alpha` کے لیے فیصدی نقصان دکھاتا ہے۔
+   - **Porcentaje de barra diagonal solicitada** accesorio de disputa سے نکلا índice de remediación دکھاتا ہے۔
 
-## 4. متوقع چیکس
+## 4. متوقع چیکس- `sorafs_simulation_quota_total_gib{scope="assigned"}` کی قدر `600` رہتی ہے جب تک total comprometido >=600 رہے۔
+- `sorafs_simulation_failover_triggered` قدر `1` دیتا ہے اور proveedor de reemplazo métrico میں `beta` نمایاں ہوتا ہے۔
+- `sorafs_simulation_slash_requested` proveedor `alpha` کے لیے `0.15` (barra del 15%) رپورٹ کرتا ہے۔
 
-- `sorafs_simulation_quota_total_gib{scope="assigned"}` کی قدر `600` رہتی ہے جب تک committed total >=600 رہے۔
-- `sorafs_simulation_failover_triggered` قدر `1` دیتا ہے اور replacement provider metric میں `beta` نمایاں ہوتا ہے۔
-- `sorafs_simulation_slash_requested` provider `alpha` کے لیے `0.15` (15% slash) رپورٹ کرتا ہے۔
-
-`cargo test -p sorafs_car --features cli --test capacity_simulation_toolkit` چلائیں تاکہ تصدیق ہو سکے کہ fixtures اب بھی CLI schema کے مطابق ہیں۔
+`cargo test -p sorafs_car --features cli --test capacity_simulation_toolkit` Configuración de accesorios y esquema CLI Configuración de configuración

@@ -4,18 +4,20 @@ direction: ltr
 source: docs/portal/docs/norito/examples/index.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: Exemples Norito
-description: Extraits Kotodama sélectionnés avec des parcours du registre.
-slug: /norito/examples
+título: Ejemplos Norito
+descripción: Extraits Kotodama seleccionados con los recorridos del registro.
+babosa: /norito/ejemplos
 ---
 
-Ces exemples reflètent les quickstarts des SDK et les parcours du registre. Chaque extrait regroupe une liste de vérification du registre et renvoie vers les guides Rust, Python et JavaScript afin que vous puissiez rejouer le même scénario de bout en bout.
+Estos ejemplos reflejan los inicios rápidos del SDK y los recorridos del registro. Cada vez que extraiga una lista de verificación de registro y envío a través de las guías Rust, Python y JavaScript, podrá reanudar el mismo escenario de combate en combate.
 
-- **[Squelette du point d'entrée Hajimari](./hajimari-entrypoint)** — Structure minimale de contrat Kotodama avec un seul point d'entrée public et un gestionnaire d'état.
+- **[Squelette du point d'entrée Hajimari](./hajimari-entrypoint)** — Estructura mínima de contrato Kotodama con un solo punto de entrada público y un gestor de estado.
 - **[Enregistrer un domaine et frapper des actifs](./register-and-mint)** — Démontre la création de domaines avec autorisations, l'enregistrement d'actifs et la frappe déterministe.
-- **[Invoquer le transfert hôte depuis Kotodama](./call-transfer-asset)** — Démontre comment un point d'entrée Kotodama peut appeler l'instruction hôte `transfer_asset` avec validation des métadonnées en ligne.
-- **[Transférer un actif entre comptes](./transfer-asset)** — Flux de transfert d'actifs simple qui reflète les quickstarts des SDK et les parcours du registre.
-- **[Frapper, transférer et brûler un NFT](./nft-flow)** — Parcourt le cycle de vie d'un NFT de bout en bout : frappe au propriétaire, transfert, ajout de métadonnées et destruction.
+- **[Invoquer le transfert hôte depuis Kotodama](./call-transfer-asset)** — Démontre comment un punto de entrada Kotodama puede apelar a la instrucción hôte `transfer_asset` con validación de los metadones en línea.
+- **[Transférer un actif entre comptes](./transfer-asset)** — Flujo de transferencia de activos simple que refleja los inicios rápidos del SDK y las rutas de registro.
+- **[Frapper, transférer et brûler un NFT](./nft-flow)** — Parcourt le Cycle de vie d'un NFT de bout en bout: frappe au propriétaire, transfert, ajout de métadonnées et destroy.

@@ -4,30 +4,32 @@ direction: rtl
 source: docs/portal/docs/norito/examples/register-and-mint.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-slug: /norito/examples/register-and-mint
-title: Enregistrer un domaine et frapper des actifs
-description: Démontre la création de domaines avec autorisations, l'enregistrement d'actifs et la frappe déterministe.
-source: crates/ivm/docs/examples/13_register_and_mint.ko
+سبيكة: /norito/examples/register-and-mint
+العنوان: تسجيل نطاق وتحرير الأنشطة
+الوصف: إنشاء النطاقات باستخدام التفويضات وتسجيل الأنشطة والإطار المحدد.
+المصدر: صناديق/ivm/docs/examples/13_register_and_mint.ko
 ---
 
-Démontre la création de domaines avec autorisations, l'enregistrement d'actifs et la frappe déterministe.
+قم ببدء إنشاء النطاقات باستخدام التفويضات وتسجيل الأنشطة والإطار المحدد.
 
-## Parcours du registre
+## باركور دو ريجيستري
 
-- Assurez-vous que le compte de destination (par exemple `ih58...`) existe, en reflétant la phase de mise en place dans chaque quickstart SDK.
-- Invoquez le point d'entrée `register_and_mint` pour créer la définition d'actif ROSE et frapper 250 unités pour Alice en une seule transaction.
-- Vérifiez les soldes via `client.request(FindAccountAssets)` ou `iroha_cli ledger assets list --account ih58...` pour confirmer que la frappe a réussi.
+- تأكد من وجود حساب الوجهة (على سبيل المثال `ih58...`)، بما يعكس مرحلة الإعداد في كل Quickstart SDK.
+- قم باستدعاء نقطة الإدخال `register_and_mint` لإنشاء تعريف نشط ROSE وقم بإعداد 250 وحدة لـ Alice في معاملة واحدة.
+- تحقق من المبيعات عبر `client.request(FindAccountAssets)` أو `iroha_cli ledger assets list --account ih58...` لتأكيد عملية الطحن.
 
-## Guides SDK associés
+## أدلة شركاء SDK
 
 - [Quickstart SDK Rust](/sdks/rust)
 - [Quickstart SDK Python](/sdks/python)
 - [Quickstart SDK JavaScript](/sdks/javascript)
 
-[Télécharger la source Kotodama](/norito-snippets/register-and-mint.ko)
+[تحميل المصدر Kotodama](/norito-snippets/register-and-mint.ko)
 
 ```text
 // Register a new asset and mint some to the specified account.

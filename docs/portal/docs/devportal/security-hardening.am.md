@@ -11,108 +11,109 @@ id: security-hardening
 title: Security hardening & pen-test checklist
 sidebar_label: Security hardening
 description: Harden the developer portal before exposing the Try it sandbox outside the lab.
+translator: machine-google-reviewed
 ---
 
-## Overview
+## አጠቃላይ እይታ
 
-Roadmap item **DOCS-1b** requires OAuth device-code login, strong content
-security policies, and repeatable penetration tests before the preview portal
-can run on non-lab networks. This appendix explains the threat model, the
-controls implemented in the repo, and the go-live checklist that gate reviews
-must execute.
+የመንገድ ካርታ ንጥል **DOCS-1b** የOAuth መሳሪያ-ኮድ መግቢያ፣ ጠንካራ ይዘት ያስፈልገዋል
+የደህንነት ፖሊሲዎች እና ከቅድመ-እይታ ፖርታል በፊት ተደጋጋሚ የመግባት ሙከራዎች
+የላብራቶሪ ባልሆኑ አውታረ መረቦች ላይ ሊሰራ ይችላል. ይህ አባሪ የአደጋውን ሞዴል ያብራራል፣ እ.ኤ.አ
+በሪፖ ውስጥ የተተገበሩ መቆጣጠሪያዎች እና ግምገማዎችን የሚከፍት የቀጥታ ስርጭት ማረጋገጫ ዝርዝር
+ማስፈጸም አለበት።
 
-- **Scope:** the Try it proxy, embedded Swagger/RapiDoc panels, and the custom
-  Try it console rendered by `docs/portal/src/components/TryItConsole.jsx`.
-- **Out-of-scope:** Torii itself (covered by Torii readiness reviews) and SoraFS
-  publishing (covered by DOCS-3/7).
+- ** ወሰን፡** ተኪውን ይሞክሩ፣ የተከተቱ Swagger/RapiDoc ፓነሎች እና ብጁ
+  በ`docs/portal/src/components/TryItConsole.jsx` የተሰራውን ኮንሶል ይሞክሩት።
+- ** ከወሰን ውጪ:** Torii ራሱ (በ Torii ዝግጁነት ግምገማዎች የተሸፈነ) እና SoraFS
+  ማተም (በ DOCS-3/7 የተሸፈነ)።
 
-## Threat model
+## አስጊ ሞዴል
 
-| Asset | Risk | Mitigation |
+| ንብረት | ስጋት | ቅነሳ |
 | --- | --- | --- |
-| Torii bearer tokens | Theft or reuse outside the docs sandbox | Device-code login (`DOCS_OAUTH_*`) mints short-lived tokens, the proxy redacts headers, and the console auto-expires cached credentials. |
-| Try it proxy | Abuse as an open relay or bypass of Torii rate limits | `scripts/tryit-proxy*.mjs` enforce origin allowlists, rate limiting, health probes, and explicit `X-TryIt-Auth` forwarding; no credentials are persisted. |
-| Portal runtime | Cross-site scripting or malicious embeds | `docusaurus.config.js` injects Content-Security-Policy, Trusted Types, and Permissions-Policy headers; inline scripts are restricted to the Docusaurus runtime. |
-| Observability data | Missing telemetry or tampering | `docs/portal/docs/devportal/observability.md` documents the probes/dashboards; `scripts/portal-probe.mjs` runs in CI before publishing. |
+| Torii ተሸካሚ ምልክቶች | ከሰነዶች ማጠሪያ ውጭ መስረቅ ወይም እንደገና መጠቀም | የመሣሪያ-ኮድ መግቢያ (`DOCS_OAUTH_*`) ደቂቃዎች ለአጭር ጊዜ የሚቆዩ ቶከኖች፣ ተኪው ራስጌዎችን ይቀይራል፣ እና ኮንሶሉ የተሸጎጡ ምስክርነቶችን በራስ-ሰር ያበቃል። |
+| ፕሮክሲ ይሞክሩት | አላግባብ መጠቀም እንደ ክፍት ቅብብል ወይም የTorii ተመን ገደቦችን ማለፍ | `scripts/tryit-proxy*.mjs` የመነሻ ፈቃዶችን ማስፈጸሚያ፣ ተመን መገደብ፣ የጤና መመርመሪያዎች እና ግልጽ I18NI0000013X ማስተላለፍ፤ ምንም ማረጋገጫዎች አልቆዩም። |
+| ፖርታል አሂድ ጊዜ | የጣቢያ አቋራጭ ስክሪፕት ወይም ተንኮል አዘል መክተቶች | `docusaurus.config.js` የይዘት-ደህንነት-ፖሊሲ፣ የታመኑ አይነቶች እና ፍቃዶች-የመመሪያ ራስጌዎችን ያስገባል። የውስጠ-መስመር ስክሪፕቶች ለI18NT00000000 የሩጫ ጊዜ የተገደቡ ናቸው። |
+| ታዛቢነት መረጃ | የጠፋ ቴሌሜትሪ ወይም መነካካት | `docs/portal/docs/devportal/observability.md` መመርመሪያዎች / ዳሽቦርዶች ሰነዶች; `scripts/portal-probe.mjs` ከመታተሙ በፊት በCI ውስጥ ይሰራል። |
 
-Adversaries include curious users viewing the public preview, malicious actors
-testing stolen links, and compromised browsers attempting to scrape stored
-credentials. All controls must work on commodity browsers without trusted
-networks.
+ተቃዋሚዎች የማወቅ ጉጉት ያላቸው ተጠቃሚዎች የወል ቅድመ እይታን፣ ተንኮል አዘል ተዋናዮችን ያካትታሉ
+የተሰረቁ አገናኞችን እና የተከማቹትን ለመቧጨር የሚሞክሩ አሳሾችን መሞከር
+ምስክርነቶች. ሁሉም መቆጣጠሪያዎች ያለ እምነት በሸቀጦች አሳሾች ላይ መስራት አለባቸው
+አውታረ መረቦች.
 
-## Required controls
+## የሚፈለጉ መቆጣጠሪያዎች
 
-1. **OAuth device-code login**
-   - Configure `DOCS_OAUTH_DEVICE_CODE_URL`, `DOCS_OAUTH_TOKEN_URL`,
-     `DOCS_OAUTH_CLIENT_ID`, and related knobs in the build environment.
-   - The Try it card renders a sign-in widget (`OAuthDeviceLogin.jsx`) that
-     fetches the device code, polls the token endpoint, and auto-clears tokens
-     once they expire. Manual Bearer overrides remain available for emergency
-     fallback.
-   - Builds now fail when the OAuth configuration is missing or when the
-     fallback TTLs drift outside the 300 s–900 s window mandated by DOCS-1b;
-     set `DOCS_OAUTH_ALLOW_INSECURE=1` only for disposable local previews.
-2. **Proxy guardrails**
-   - `scripts/tryit-proxy.mjs` enforces allowed origins, rate limits, request
-     size caps, and upstream timeouts while tagging traffic with
-     `X-TryIt-Client` and redacting tokens from logs.
-   - `scripts/tryit-proxy-probe.mjs` plus `docs/portal/docs/devportal/observability.md`
-     define the liveness probe and dashboard rules; run them before every
-     rollout.
-3. **CSP, Trusted Types, Permissions-Policy**
-   - `docusaurus.config.js` now exports deterministic security headers:
-     `Content-Security-Policy` (default-src self, strict connect/img/script
-     lists, Trusted Types requirements), `Permissions-Policy`, and
+1. ** OAuth መሳሪያ-የመግቢያ ኮድ መግባት**
+   - I18NI0000017X፣ `DOCS_OAUTH_TOKEN_URL` አዋቅር፣
+     `DOCS_OAUTH_CLIENT_ID` ፣ እና በግንባታ አካባቢ ውስጥ ያሉ ተዛማጅ ቁልፎች።
+   - ሞክሩት ካርዱ የመግቢያ ምግብር (`OAuthDeviceLogin.jsx`) ይሰጣል።
+     የመሳሪያውን ኮድ ያመጣል፣ የቶከን መጨረሻ ነጥብን ይመርጣል እና ቶከኖችን በራስ ሰር ያጸዳል።
+     ጊዜያቸው ካለቀ በኋላ። በእጅ ተሸካሚ መሻሮች ለአደጋ ጊዜ ይገኛሉ
+     ውድቀት.
+   የ OAuth ውቅር ሲጠፋ ወይም ሲጠፋ ግንቦች አሁን ይወድቃሉ
+     የመውደቅ ቲቲኤልዎች በDOCS-1b ከታዘዘው ከ300-900ዎቹ መስኮት ውጭ ይንጠባጠባሉ።
+     `DOCS_OAUTH_ALLOW_INSECURE=1` ሊጣሉ ለሚችሉ የአካባቢ ቅድመ እይታዎች ብቻ አዘጋጅ።
+2. ** የተኪ ጠባቂዎች ***
+   - `scripts/tryit-proxy.mjs` የተፈቀዱ መነሻዎችን ፣የታሪፍ ገደቦችን ፣ጥያቄን ያስፈጽማል
+     ለትራፊክ መለያ በሚሰጡበት ጊዜ የመጠን ካፕ፣ እና የወዲያው ጊዜ ማብቂያዎች
+     `X-TryIt-Client` እና የምዝግብ ማስታወሻዎችን ማስተካከል።
+   - `scripts/tryit-proxy-probe.mjs` ሲደመር I18NI0000025X
+     የህያውነት ምርመራ እና ዳሽቦርድ ደንቦችን ይግለጹ; ከሁሉም በፊት ያካሂዷቸው
+     መልቀቅ።
+3. ** CSP፣ የታመኑ ዓይነቶች፣ ፍቃዶች-መመሪያ**
+   - `docusaurus.config.js` አሁን የሚወስኑ የደህንነት ራስጌዎችን ወደ ውጭ ይልካል።
+     `Content-Security-Policy` (ነባሪ-src ራስን፣ ጥብቅ ግንኙነት/img/ስክሪፕት)
+     ዝርዝሮች፣ የታመኑ ዓይነቶች መስፈርቶች)፣ `Permissions-Policy`፣ እና
      `Referrer-Policy: no-referrer`.
-   - The CSP connect list whitelists the OAuth device-code and token endpoints
-     (HTTPS only unless `DOCS_SECURITY_ALLOW_INSECURE=1`) so device login works
-     without relaxing the sandbox for other origins.
-   - The headers are embedded directly in the generated HTML so static hosts do
-     not need extra configuration. Keep inline scripts limited to the
-     Docusaurus bootstrap.
-4. **Runbooks, observability, and rollback**
-   - `docs/portal/docs/devportal/observability.md` describes the probes and
-     dashboards that watch login failures, proxy response codes, and request
-     budgets.
-   - `docs/portal/docs/devportal/incident-runbooks.md` covers the escalation
-     path if the sandbox is abused; combine it with
-     `scripts/tryit-proxy-rollback.mjs` to flip endpoints safely.
+   - የCSP ማገናኛ ዝርዝሩ የOAuth መሳሪያ-ኮድ እና የቶከን የመጨረሻ ነጥቦችን ይዘረዝራል።
+     (ኤችቲቲፒኤስ ከI18NI0000030X በስተቀር) ስለዚህ የመሣሪያ መግቢያ ይሰራል
+     ማጠሪያውን ለሌላ አመጣጥ ሳያዝናኑ.
+   - ራስጌዎቹ በቀጥታ በተፈጠረው ኤችቲኤምኤል ውስጥ የተካተቱ ናቸው ስለዚህ የማይንቀሳቀሱ አስተናጋጆች ያደርጉታል።
+     ተጨማሪ ውቅር አያስፈልግም. የውስጠ-መስመር ስክሪፕቶችን ለ
+     Docusaurus ማስነሻ።
+4. ** Runbooks፣ ታዛቢነት እና መልሶ መመለስ**
+   - `docs/portal/docs/devportal/observability.md` መመርመሪያዎችን እና
+     የመግቢያ አለመሳካቶችን፣ የተኪ ምላሽ ኮዶችን እና ጥያቄን የሚመለከቱ ዳሽቦርዶች
+     በጀቶች.
+   - `docs/portal/docs/devportal/incident-runbooks.md` መጨመሩን ይሸፍናል
+     ማጠሪያው አላግባብ ከሆነ መንገድ; ጋር አዋህደው
+     የመጨረሻ ነጥቦችን በደህና ለመገልበጥ `scripts/tryit-proxy-rollback.mjs`።
 
-## Pen-test & release checklist
+## የብዕር ሙከራ እና የልቀት ማረጋገጫ ዝርዝር
 
-Complete this list for every preview promotion (attach results to the release
-ticket):
+ለእያንዳንዱ የቅድመ እይታ ማስተዋወቂያ ይህንን ዝርዝር ያጠናቅቁ (ውጤቶቹን ከልቀት ጋር አያይዘው)
+ትኬት፡-
 
-1. **Verify OAuth wiring**
-   - Run `npm run start` locally with the production `DOCS_OAUTH_*` exports.
-   - From a clean browser profile, open the Try it console and confirm the
-     device-code flow mints a token, counts down the lifetime, and clears the
-     field after expiry or sign-out.
-2. **Probe the proxy**
-   - `npm run tryit-proxy` against staging Torii, then execute
-     `npm run probe:tryit-proxy` with the configured sample path.
-   - Check logs for `authSource=override` entries and confirm rate limiting
-     increments counters when you exceed the window.
-3. **Confirm CSP/Trusted Types**
-   - `npm run build` and open `build/index.html`. Ensure the `<meta
-     http-equiv="Content-Security-Policy">` tag matches the expected directives
-     and that DevTools shows no CSP violations when loading the preview.
-   - Use `npm run probe:portal` (or curl) to fetch the deployed HTML; the probe
-     now fails when the `Content-Security-Policy`, `Permissions-Policy`, or
-     `Referrer-Policy` meta tags are missing or differ from the values declared
-     in `docusaurus.config.js`, so governance reviewers can rely on the exit
-     code instead of eyeballing curl output.
-4. **Review observability**
-   - Verify the Try it proxy dashboard is green (rate limits, error ratios,
-     health probe metrics).
-   - Run the incident drill in `docs/portal/docs/devportal/incident-runbooks.md`
-     if the host changed (new Netlify/SoraFS deployment).
-5. **Document the results**
-   - Attach screenshots/logs to the release ticket.
-   - Capture each finding in the remediation report template
-     ([`docs/examples/pentest_remediation_report_template.md`](../../../examples/pentest_remediation_report_template.md))
-     so owners, SLAs, and retest evidence are easy to audit later.
-   - Link back to this checklist so the DOCS-1b roadmap item stays auditable.
+1. ** OAuth ሽቦን ያረጋግጡ **
+   - `npm run start` በአገር ውስጥ በምርት I18NI0000035X ኤክስፖርት ያካሂዱ።
+   - ከንጹህ የአሳሽ መገለጫ, ይሞክሩት ኮንሶሉን ይክፈቱ እና ያረጋግጡ
+     የመሣሪያ-ኮድ ፍሰት ሚንት አንድ ማስመሰያ፣ የህይወት ዘመንን ይቆጥራል እና ያጸዳል።
+     ጊዜው ካለፈ በኋላ ወይም ዘግቶ ከወጣ በኋላ መስክ።
+2. ** ተኪውን መርምር ***
+   - `npm run tryit-proxy` ከመድረክ Torii እና ከዚያ ያስፈጽሙ
+     `npm run probe:tryit-proxy` ከተዋቀረው የናሙና መንገድ ጋር።
+   - ለI18NI0000038X ግቤቶች ምዝግብ ማስታወሻዎችን ያረጋግጡ እና የዋጋ መገደቡን ያረጋግጡ
+     መስኮቱን ሲያልፉ ቆጣሪዎችን ይጨምራል።
+3. ** CSP/የታመኑ አይነቶችን ያረጋግጡ**
+   - `npm run build` እና `build/index.html` ን ይክፈቱ። የ<ሜታውን ያረጋግጡ
+     http-equiv="Content-Security-Policy">` መለያ ከተጠበቀው መመሪያ ጋር ይዛመዳል
+     እና DevTools ቅድመ እይታውን ሲጭኑ ምንም የሲኤስፒ ጥሰቶችን አያሳይም።
+   - የተዘረጋውን ኤችቲኤምኤል ለማምጣት `npm run probe:portal` (ወይም curl) ይጠቀሙ; ምርመራው
+     `Content-Security-Policy`፣ I18NI0000043X፣ ወይም
+     `Referrer-Policy` ሜታ መለያዎች ጠፍተዋል ወይም ከተገለጹት እሴቶች ይለያያሉ።
+     በ `docusaurus.config.js` ውስጥ, ስለዚህ የአስተዳደር ገምጋሚዎች በመውጫው ላይ ሊተማመኑ ይችላሉ
+     ኮድ ከዓይን ኳስ ኩርባ ይልቅ።
+4. ** ታዛቢነትን ይገምግሙ ***
+   - ይሞክሩት ተኪ ዳሽቦርዱ አረንጓዴ መሆኑን ያረጋግጡ (የተመን ገደቦች፣ የስህተት ሬሾዎች፣
+     የጤና ምርመራ መለኪያዎች).
+   - የክስተቱን ቁፋሮ በ I18NI0000046X ውስጥ ያሂዱ
+     አስተናጋጁ ከተለወጠ (አዲስ Netlify/SoraFS ማሰማራት)።
+5. ** ውጤቱን ይመዝግቡ ***
+   - ቅጽበታዊ ገጽ እይታዎችን/ምዝግብ ማስታወሻዎችን ከመልቀቂያ ትኬት ጋር ያያይዙ።
+   - እያንዳንዱን ግኝት በማሻሻያ ሪፖርት አብነት ውስጥ ይያዙ
+     ([`docs/examples/pentest_remediation_report_template.md`](I18NU0000009X))
+     ስለዚህ ባለቤቶች፣ SLAs እና የድጋሚ ማስረጃዎች በኋላ ላይ ኦዲት ለማድረግ ቀላል ናቸው።
+   - የ DOCS-1b ፍኖተ ካርታ ንጥሉ ኦዲት ተደርጎ እንዲቆይ ከዚህ ዝርዝር ጋር ያገናኙ።
 
-If any step fails, halt the promotion, file a blocking issue, and note the
-remediation plan in `status.md`.
+ማንኛውም እርምጃ ካልተሳካ ማስተዋወቂያውን ያቁሙ፣ የማገድ ችግር ያስገቡ እና ማስታወሻውን ያስተውሉ
+የማሻሻያ እቅድ በ I18NI0000048X.

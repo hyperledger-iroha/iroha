@@ -4,54 +4,54 @@ direction: rtl
 source: docs/portal/docs/sorafs/reports/sf2c-capacity-soak.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Отчет о soak начисления емкости SF-2c
+# تخلص من نقع الفطريات SF-2c
 
-Дата: 2026-03-21
+التاريخ: 2026-03-21
 
 ## Область
 
-Этот отчет фиксирует детерминированные тесты soak начисления емкости SoraFS и выплат,
-запрошенные в дорожной карте SF-2c.
+هذا هو الحل الأمثل لتحديد اختبارات نقع الإفرازات SoraFS وتفعيلها،
+تم إغلاقه على البطاقة المتأخرة SF-2c.
 
-- **30-дневный multi-provider soak:** Запускается
-  `capacity_fee_ledger_30_day_soak_deterministic` в
+- ** نقع متعدد الموفر لمدة 30 يومًا:** انتهى
+  `capacity_fee_ledger_30_day_soak_deterministic` ف
   `crates/iroha_core/src/smartcontracts/isi/sorafs.rs`.
-  Harness создает пять providers, охватывает 30 окон settlement и
-  проверяет, что итоги ledger совпадают с независимо вычисленной эталонной
-  проекцией. Тест выводит Blake3 digest (`capacity_soak_digest=...`), чтобы CI
-  могла захватить и сравнить канонический snapshot.
-- **Штрафы за недопоставку:** Обеспечиваются
+  يشكل Harness مقدمي خدمات الحيوانات الأليفة، ويصل إلى 30 دقيقة من التسوية و
+  تأكد من أن هذا دفتر الأستاذ قد تمت الموافقة عليه بشكل لا لبس فيه
+  مشروع. تم اختبار Blake3 Digest (`capacity_soak_digest=...`)، وهو CI
+  يمكنك التقاط لقطة قانونية والتعرف عليها.
+- **نصائح لعدم السداد:** الالتزام
   `record_capacity_telemetry_penalises_persistent_under_delivery`
-  (тот же файл). Тест подтверждает, что пороги strikes, cooldowns, slashes
-  collateral и счетчики ledger остаются детерминированными.
+  (هذا هو الملف). يؤكد الاختبار أن الطرق الموضحة هي الضربات وفترات التهدئة والخطوط المائلة
+  يتضمن دفتر الأستاذ للضمانات والأوراق المالية تحديدًا.
 
-## Выполнение
+## الاختيار
 
-Запустите проверки soak локально:
+نقع المثبتات محليًا:
 
 ```bash
 cargo test -p iroha_core -- record_capacity_telemetry_penalises_persistent_under_delivery
 cargo test -p iroha_core -- capacity_fee_ledger_30_day_soak_deterministic
 ```
 
-Тесты завершаются меньше чем за секунду на стандартном ноутбуке и не требуют
-внешних fixtures.
+تنتهي الاختبارات لمدة ثانية على الكمبيوتر المحمول القياسي ولا تحتاج إلى ذلك
+تركيبات داخلية.
 
 ## Наблюдаемость
 
-Torii теперь показывает snapshots кредитов providers вместе с fee ledgers, чтобы
-dashboards могли gate по низким балансам и penalty strikes:
-
-- REST: `GET /v1/sorafs/capacity/state` возвращает записи `credit_ledger[*]`,
-  которые отражают поля ledger, проверенные в soak тесте. См.
+Torii يعرض لقطات سريعة لموفري الائتمان من خلال دفاتر الرسوم، لذلك
+يمكن أن تكون لوحات العدادات بوابة متوازنة وتوازن ضربات الجزاء:-الراحة: `GET /v1/sorafs/capacity/state` تم تسجيلها `credit_ledger[*]`,
+  التي يتم تسليمها إلى دفتر الأستاذ، والتي تم اختبارها في نقع الخصية. سم.
   `crates/iroha_torii/src/sorafs/registry.rs`.
-- Импорт Grafana: `dashboards/grafana/sorafs_capacity_penalties.json` строит
-  экспортированные счетчики strikes, суммы штрафов и залог collateral, чтобы
-  дежурная команда могла сравнивать baseline soak с живыми окружениями.
+- استيراد Grafana: `dashboards/grafana/sorafs_capacity_penalties.json` stroit
+  إضرابات التصدير، مبالغ كبيرة من المال والضمانات، لذلك
+  يمكن أن يتم تنفيذ الأمر الأخير من خلال نقع خط الأساس مع الكائنات الحية.
 
-## Дальнейшие шаги
+## Дальнейсие саги
 
-- Запланировать еженедельные gate-прогоны в CI для воспроизведения soak теста (smoke-tier).
-- Расширить панель Grafana целями scrape Torii после запуска экспортов telemetry в прод.
+- قم بتخطيط بوابات البوابة الإلكترونية في CI لتجديد نقع تيستا (طبقة الدخان).
+- قم بإعادة كتابة اللوحة Grafana celemscrape Torii بعد بدء تصدير القياس عن بعد في السوق.

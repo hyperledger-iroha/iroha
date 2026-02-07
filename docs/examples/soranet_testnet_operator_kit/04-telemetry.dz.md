@@ -7,59 +7,47 @@ generator: scripts/sync_docs_i18n.py
 source_hash: a947c289c13c15b09dfbbf28c23ae1539fd3e29ca3943fa8522c3eca32c28bf5
 source_last_modified: "2025-12-29T18:16:35.091070+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Telemetry Requirements
+# བརྒྱུད་འཕྲིན་དགོས་མཁོ།
 
-## Prometheus Targets
+## I18NT0000000X དམིགས་བསྡུར།
 
-Scrape the relay and orchestrator with the following labels:
+གཤམ་གསལ་གྱི་ཁ་ཡིག་ཚུ་དང་གཅིག་ཁར་ རི་ལེ་དང་ སྙན་ཆའི་སྡེ་ཚན་འདི་ བརྡུང་དགོ།
 
-```yaml
-- job_name: "soranet-relay"
-  static_configs:
-    - targets: ["relay-host:9898"]
-      labels:
-        region: "testnet-t0"
-        role: "relay"
-- job_name: "sorafs-orchestrator"
-  static_configs:
-    - targets: ["orchestrator-host:9797"]
-      labels:
-        region: "testnet-t0"
-        role: "orchestrator"
-```
+I18NF0000002X
 
-## Required Dashboards
+## དགོས་མཁོའི་ཌེཤ་བོརཌི་ཚུ།
 
-1. `dashboards/grafana/soranet_testnet_overview.json` *(to be published)* — load the JSON, import variables `region` and `relay_id`.
-2. `dashboards/grafana/soranet_privacy_metrics.json` *(existing SNNet-8 asset)* — ensure the privacy bucket panels render without gaps.
+1. I18NI000000004X *(དཔར་བསྐྲུན་འབད་དགོ)* — JSON མངོན་གསལ་འབད་ཞིནམ་ལས་ འགྱུར་ཅན་ཚུ་ I18NI0000000005X དང་ `relay_id` ནང་འདྲེན་འབད།
+2. I18NI0000000007X *(གནས་ཏེ་ཡོད་པའི་ SNNet-8 རྒྱུ་དངོས་)* — སྒེར་དོན་བཱ་ཀེཊི་པེ་ནཱལ་ཚུ་ བར་སྟོང་མེད་པར་ བཀྲམ་སྟོན་འབདཝ་ཨིན།
 
-## Alert Rules
+## ཉེན་བརྡའི་ལམ་ལུགས།
 
-Thresholds must match the playbook expectation:
+ཐེར་ཤོལཌི་ཚུ་ རྩེད་དེབ་ཀྱི་རེ་བ་དང་མཐུན་དགོ།
 
-- `soranet_privacy_circuit_events_total{kind="downgrade"}` increase > 0 over 10 minutes triggers `critical`.
-- `sorafs_orchestrator_policy_events_total{outcome="brownout"}` > 5 per 30 minutes triggers `warning`.
-- `up{job="soranet-relay"}` == 0 for 2 minutes triggers `critical`.
+- སྐར་མ་༡༠ ལས་ ༠ གིས་ I18NI000000008X ཡར་སེང་ > 0 གིས་ `critical` འགོ་བཙུགསཔ་ཨིན།
+- I18NI00000000010X > སྐར་མ་ ༣༠ ལ་ ༥ གིས་ I18NI000000011X འགོ་བཙུགས་ཡོད།
+- སྐར་མ་༢ གི་དོན་ལུ་ `up{job="soranet-relay"}` === ༠ གིས་ `critical`.
 
-Load your rules into Alertmanager with the `testnet-t0` receiver; validate with `amtool check-config`.
+ཁྱོད་ཀྱི་ལམ་ལུགས་ཚུ་ I18NI000000014X ལེན་མི་དང་གཅིག་ཁར་ དྲན་ཤེས་བཏོན་མི་ནང་ མངོན་གསལ་འབད། `amtool check-config` དང་ཅིག་ཁར་བདེན་དཔང་འབད།
 
-## Metrics Evaluation
+## མེ་རིམ་བརྟག་དཔྱད།
 
-Aggregate a 14-day snapshot and feed it to the SNNet-10 validator:
+ཉིནམ་༡༤ གི་པར་ཅིག་ བསྡུ་སྒྲིག་འབད་དེ་ ཨེསི་ཨེན་ནེཊི་-༡༠ བདེན་དཔྱད་འབད་མི་ལུ་ ལྟོ་བྱིན་དགོ།
 
 ```
 cargo xtask soranet-testnet-metrics --input 07-metrics-sample.json --out metrics-report.json
 ```
 
-- Replace the sample file with your exported snapshot when running against live data.
-- A `status = fail` result blocks promotion; resolve the highlighted check(s) before retrying.
+- གནད་སྡུད་ཐད་རི་བ་རི་ གཡོག་བཀོལ་བའི་སྐབས་ ཁྱོད་རའི་ཕྱིར་འདྲེན་འབད་ཡོད་པའི་པར་ལེན་དང་གཅིག་ཁར་ དཔེ་ཚད་ཡིག་སྣོད་འདི་ཚབ་བཙུགས།
+- A `status = fail` གྲུབ་འབྲས་བཀག་ཆ་ཚུ་ ཡར་འཕེལ་གཏང་ཡོདཔ། ལོག་འབད་རྩོལ་མ་བསྐྱེད་པའི་ཧེ་མ་ འོད་རྟགས་བཀལ་ཡོད་པའི་ཞིབ་དཔྱད་(ཚུ་)འདི་སེལ་འཐུ་འབད།
 
-## Reporting
+## སྙན་ཞུ།
 
-Every week upload:
+བདུན་ཕྲག་རེ་རེའི་ནང་།
 
-- Query snapshots (`.png` or `.pdf`) showing PQ ratio, circuit success rate, and PoW solve histogram.
-- Prometheus recording rule output for `soranet_privacy_throttles_per_minute`.
-- A brief narrative describing any alerts that fired and mitigation steps (include timestamps).
+- འདྲི་དཔྱད་ཀྱི་པར་ཚུ་ (`.png` ཡང་ན་ `.pdf`) གིས་ པི་ཀིའུ་ཆ་ཚད་སྟོན་མི་དང་ གློག་ལམ་མཐར་འཁྱོལ་ཚད་ དེ་ལས་ པོ་ཝ་གིས་ ཧིསི་ཊོ་གཱརམ་བསལ་ནི།
+- Prometheus `soranet_privacy_throttles_per_minute` གི་དོན་ལུ་ སྒྲ་བཟུང་ལམ་ལུགས་ཨའུཊི་པུཊི་།
+- ཉེན་བརྡ་དང་ མར་ཕབ་ཀྱི་གོམ་པ་ཚུ་ འགྲེལ་བཤད་རྐྱབ་མི་ ལོ་རྒྱུས་ཐུང་ཀུ་ཅིག་ ༼དུས་ཚོད་མཚོན་རྟགས་ཚུ་ ཚུདཔ་ཨིན།༽

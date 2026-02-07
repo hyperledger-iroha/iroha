@@ -4,52 +4,54 @@ direction: ltr
 source: docs/portal/docs/sorafs/chunker-registry-charter.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
 id: chunker-registry-charter
-title: SoraFS chunker registry charter
-sidebar_label: Chunker registry charter
-description: Chunker profile submissions اور approvals کے لیے governance charter۔
+título: Carta de registro do chunker SoraFS
+sidebar_label: Carta de registro do Chunker
+descrição: Envios de perfis Chunker e aprovações کے لیے estatuto de governança۔
 ---
 
-:::note مستند ماخذ
+:::nota مستند ماخذ
 :::
 
-# SoraFS chunker registry governance charter
+# Carta de governança de registro de chunker SoraFS
 
-> **Ratified:** 2025-10-29 by the Sora Parliament Infrastructure Panel (see
-> `docs/source/sorafs/council_minutes_2025-10-29.md`). کسی بھی ترمیم کے لیے باضابطہ governance ووٹ درکار ہے؛
-> implementation ٹیموں کو اس دستاویز کو اس وقت تک normative سمجھنا ہوگا جب تک کوئی نئی charter منظور نہ ہو۔
+> **Ratificado:** 2025-10-29 pelo Painel de Infraestrutura do Parlamento Sora (ver
+> `docs/source/sorafs/council_minutes_2025-10-29.md`). کسی بھی ترمیم کے لیے باضابطہ governança e ووٹ درکار ہے؛
+> implementação ٹیموں کو اس دستاویز کو اس وقت تک normativo سمجھنا ہوگا جب تک کوئی نئی charter منظور نہ ہو۔
 
-یہ charter SoraFS chunker registry کو evolve کرنے کے لیے process اور roles define کرتی ہے۔
-یہ [Chunker Profile Authoring Guide](./chunker-profile-authoring.md) کی تکمیل کرتی ہے اور یہ بیان کرتی ہے کہ نئے
-profiles کیسے propose، review، ratify اور بالآخر deprecate ہوتے ہیں۔
+یہ charter SoraFS chunker registro کو evoluir کرنے کے لیے processo اور funções definir کرتی ہے۔
+یہ [Guia de criação de perfil Chunker](./chunker-profile-authoring.md) کی تکمیل کرتی ہے اور یہ بیان کرتی ہے کہ نئے
+perfis کیسے propor, revisar, ratificar اور بالآخر obsoleto ہوتے ہیں۔
 
-## Scope
+## Escopo
 
-یہ charter `sorafs_manifest::chunker_registry` کی ہر entry پر لاگو ہے اور
-ہر اس tooling پر بھی جو registry استعمال کرتا ہے (manifest CLI, provider-advert CLI,
-SDKs). یہ alias اور handle invariants enforce کرتی ہے جنہیں
+یہ charter `sorafs_manifest::chunker_registry` کی ہر entrada پر لاگو ہے اور
+ہر اس ferramentas پر بھی جو registro استعمال کرتا ہے (CLI manifesto, CLI de anúncio de provedor,
+SDK). یہ alias اور lidar com invariantes impor کرتی ہے جنہیں
 `chunker_registry::ensure_charter_compliance()` چیک کرتا ہے:
 
-- Profile IDs مثبت integers ہوتے ہیں جو monotonic طور پر بڑھتے ہیں۔
-- Canonical handle `namespace.name@semver` **لازم** ہے کہ `profile_aliases` میں پہلی
-- Alias strings trim کی جاتی ہیں، unique ہوتی ہیں، اور دوسری entries کے canonical handles سے collide نہیں کرتیں۔
+- IDs de perfil مثبت inteiros ہوتے ہیں جو monotônico طور پر بڑھتے ہیں۔
+- Cabo canônico `namespace.name@semver` **لازم** ہے کہ `profile_aliases` میں پہلی
+- Corte de strings de alias کی جاتی ہیں، único ہوتی ہیں, اور دوسری entradas کے identificadores canônicos سے colidir نہیں کرتیں۔
 
-## Roles
+## Funções
 
-- **Author(s)** – proposal تیار کرتے ہیں، fixtures regenerate کرتے ہیں، اور determinism evidence جمع کرتے ہیں۔
-- **Tooling Working Group (TWG)** – published checklists کے ذریعے proposal validate کرتا ہے اور registry invariants برقرار رکھتا ہے۔
-- **Governance Council (GC)** – TWG report کا review کرتا ہے، proposal envelope پر sign کرتا ہے، اور publication/deprecation timelines approve کرتا ہے۔
-- **Storage Team** – registry implementation maintain کرتا ہے اور documentation updates publish کرتا ہے۔
+- **Autor(es)** – proposta تیار کرتے ہیں، fixtures regeneram کرتے ہیں, اور evidência de determinismo جمع کرتے ہیں۔
+- **Grupo de Trabalho de Ferramentas (TWG)** – listas de verificação publicadas کے ذریعے proposta validada کرتا ہے اور invariantes de registro برقرار رکھتا ہے۔
+- **Conselho de Governança (GC)** – Relatório do TWG کا revisão کرتا ہے، envelope da proposta پر assinar کرتا ہے، اور cronogramas de publicação/descontinuação aprovar کرتا ہے۔
+- **Equipe de armazenamento** – implementação de registro, manutenção کرتا ہے اور, atualizações de documentação, publicação کرتا ہے۔
 
-## Lifecycle workflow
+## Fluxo de trabalho do ciclo de vida
 
-1. **Proposal submission**
-   - Author authoring guide کی validation checklist چلاتا ہے اور
-     `docs/source/sorafs/proposals/` کے تحت `ChunkerProfileProposalV1` JSON بناتا ہے۔
-   - CLI output شامل کریں:
+1. **Envio de proposta**
+   - Guia de autoria do autor کی lista de verificação de validação چلاتا ہے اور
+     `docs/source/sorafs/proposals/` é definido como `ChunkerProfileProposalV1` JSON
+   - Saída CLI شامل کریں:
      ```bash
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
      cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
@@ -57,57 +59,55 @@ SDKs). یہ alias اور handle invariants enforce کرتی ہے جنہیں
      cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
        --chunker-profile=<handle> --json-out=-
      ```
-   - Fixtures، proposal، determinism report، اور registry updates پر مشتمل PR submit کریں۔
+   - Luminárias, proposta, relatório de determinismo, e atualizações de registro پر مشتمل PR enviar کریں۔
 
-2. **Tooling review (TWG)**
-   - Validation checklist دوبارہ چلائیں (fixtures, fuzz, manifest/PoR pipeline).
+2. **Revisão de ferramentas (TWG)**
+   - Lista de verificação de validação دوبارہ چلائیں (fixtures, fuzz, manifesto/pipeline PoR).
    - `cargo test -p sorafs_car --chunker-registry` چلائیں اور یقینی بنائیں کہ
-     `ensure_charter_compliance()` نئی entry کے ساتھ پاس ہو۔
-   - CLI behavior (`--list-profiles`, `--promote-profile`, streaming
-     `--json-out=-`) کی توثیق کریں کہ یہ updated aliases اور handles دکھاتا ہے۔
-   - Findings اور pass/fail status پر مشتمل مختصر رپورٹ تیار کریں۔
+     `ensure_charter_compliance()` entrada de entrada کے ساتھ پاس ہو۔
+   - Comportamento CLI (`--list-profiles`, `--promote-profile`, streaming
+     `--json-out=-`) کی توثیق کریں کہ یہ aliases atualizados اور identificadores دکھاتا ہے۔
+   - Descobertas e status de aprovação/reprovação پر مشتمل مختصر رپورٹ تیار یں۔
 
-3. **Council approval (GC)**
-   - TWG report اور proposal metadata کا review کریں۔
-   - Proposal digest (`blake3("sorafs-chunker-profile-v1" || bytes)`) پر sign کریں اور
-     signatures کو council envelope میں شامل کریں جو fixtures کے ساتھ رکھا جاتا ہے۔
-   - Vote outcome کو governance minutes میں ریکارڈ کریں۔
-
-4. **Publication**
+3. **Aprovação do Conselho (GC)**
+   - Relatório do TWG e metadados da proposta e revisão
+   - Resumo da proposta (`blake3("sorafs-chunker-profile-v1" || bytes)`) پر sinal کریں اور
+     assinaturas کو envelope do conselho میں شامل کریں جو luminárias کے ساتھ رکھا جاتا ہے۔
+   - Resultado da votação کو ata de governança میں ریکارڈ کریں۔4. **Publicação**
    - PR merge کریں، اور اپڈیٹ کریں:
-     - `sorafs_manifest::chunker_registry_data`.
-     - Documentation (`chunker_registry.md`, authoring/conformance guides).
-     - Fixtures اور determinism reports.
-   - Operators اور SDK teams کو نئے profile اور planned rollout کے بارے میں اطلاع دیں۔
+     -`sorafs_manifest::chunker_registry_data`.
+     - Documentação (`chunker_registry.md`, guias de autoria/conformidade).
+     - Luminárias e relatórios de determinismo.
+   - Operadores اور equipes SDK کو نئے perfil اور implementação planejada کے بارے میں اطلاع دیں۔
 
-5. **Deprecation / Sunset**
-   - جو proposals موجودہ profile کو replace کرتی ہیں ان میں dual-publish window
-     (grace periods) اور upgrade plan شامل ہونا چاہیے۔
-     اور migration ledger کو update کریں۔
+5. **Descontinuação/Descontinuação**
+   - جو propostas موجودہ perfil کو substituir کرتی ہیں ان میں janela de publicação dupla
+     (períodos de carência) اور plano de atualização شامل ہونا چاہیے۔
+     O registro de migração e a atualização do registro
 
-6. **Emergency changes**
-   - Removal یا hotfixes کے لیے council vote اور اکثریتی approval درکار ہے۔
-   - TWG کو risk mitigation steps document کرنے اور incident log update کرنے ہوں گے۔
+6. **Mudanças emergenciais**
+   - Remoção یا hotfixes کے لیے votação do conselho اور اکثریتی aprovação درکار ہے۔
+   - Documento de etapas de mitigação de risco do TWG کرنے اور atualização do log de incidentes کرنے ہوں گے۔
 
-## Tooling expectations
+## Expectativas de ferramentas
 
-- `sorafs_manifest_chunk_store` اور `sorafs_manifest_stub` expose کرتے ہیں:
-  - Registry inspection کے لیے `--list-profiles`.
-  - Profile promote کرتے وقت canonical metadata block بنانے کے لیے `--promote-profile=<handle>`.
-  - Reports کو stdout پر stream کرنے کے لیے `--json-out=-`، تاکہ reproducible review logs ممکن ہوں۔
-- `ensure_charter_compliance()` relevant binaries کے startup پر چلایا جاتا ہے
-  (`manifest_chunk_store`, `provider_advert_stub`). CI tests کو fail ہونا چاہیے اگر
-  نئی entries charter کی خلاف ورزی کریں۔
+- `sorafs_manifest_chunk_store` e `sorafs_manifest_stub` expor o seguinte:
+  - Inspeção de registro کے لیے `--list-profiles`.
+  - Promoção de perfil کرتے وقت bloco de metadados canônicos بنانے کے لیے `--promote-profile=<handle>`.
+  - Relatórios کو stdout پر stream کرنے کے لیے `--json-out=-`, تاکہ logs de revisão reproduzíveis ممکن ہوں۔
+- Binários relevantes `ensure_charter_compliance()` کے startup پر چلایا جاتا ہے
+  (`manifest_chunk_store`, `provider_advert_stub`). Testes de CI falham e falham
+  Carta de entradas کی خلاف ورزی کریں۔
 
-## Record keeping
+## Manutenção de registros
 
-- تمام determinism reports کو `docs/source/sorafs/reports/` میں محفوظ کریں۔
-- Chunker فیصلوں کا حوالہ دینے والی council minutes
+- Relatórios de determinismo تمام کو `docs/source/sorafs/reports/` میں محفوظ کریں۔
+- Chunker فیصلوں کا حوالہ دینے والی atas do conselho
   `docs/source/sorafs/migration_ledger.md` میں موجود ہیں۔
-- ہر بڑے registry change کے بعد `roadmap.md` اور `status.md` اپڈیٹ کریں۔
+- ہر بڑے alteração de registro کے بعد `roadmap.md` ou `status.md` اپڈیٹ کریں۔
 
-## References
+## Referências
 
-- Authoring guide: [Chunker Profile Authoring Guide](./chunker-profile-authoring.md)
-- Conformance checklist: `docs/source/sorafs/chunker_conformance.md`
-- Registry reference: [Chunker Profile Registry](./chunker-registry.md)
+- Guia de autoria: [Guia de autoria de perfil Chunker](./chunker-profile-authoring.md)
+Lista de verificação de conformidade: `docs/source/sorafs/chunker_conformance.md`
+- Referência do registro: [Registro de perfil do Chunker] (./chunker-registry.md)

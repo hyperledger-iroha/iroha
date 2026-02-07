@@ -4,42 +4,42 @@ direction: ltr
 source: docs/portal/docs/reference/publishing-checklist.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Lista de verificacion de publicacion
+# Lista de verificação de publicação
 
-Usa esta lista cada vez que actualices el portal de desarrolladores. Garantiza que el build de CI, el despliegue en GitHub Pages y las pruebas manuales de humo cubran cada seccion antes de que llegue un release o un hito del roadmap.
+Use esta lista sempre que atualizar o portal de desenvolvimento. Certifique-se de que a construção do CI, a aplicação nas páginas do GitHub e os manuais de humo revisem cada seção antes de lançar um lançamento ou um hit do roadmap.
 
-## 1. Validacion local
+## 1. Validação local
 
-- `npm run sync-openapi -- --version=current --latest` (agrega uno o mas flags `--mirror=<label>` cuando Torii OpenAPI cambie para un snapshot congelado).
-- `npm run build` - confirma que el copy del hero `Build on Iroha with confidence` sigue apareciendo en `build/index.html`.
-- `./docs/portal/scripts/preview_verify.sh --build-dir build` - verifica el manifiesto de checksums (agrega `--descriptor`/`--archive` al probar artefactos descargados de CI).
-- `npm run serve` - lanza el helper de preview con gating de checksum que verifica el manifiesto antes de llamar a `docusaurus serve`, para que los reviewers no naveguen un snapshot sin firma (el alias `serve:verified` sigue disponible para llamadas explicitas).
-- Revisa el markdown que tocaste via `npm run start` y el servidor de live reload.
+- `npm run sync-openapi -- --version=current --latest` (agregar um ou mais sinalizadores `--mirror=<label>` quando Torii OpenAPI mudar para um instantâneo congelado).
+- `npm run build` - confirma que a cópia do herói `Build on Iroha with confidence` segue aparecendo em `build/index.html`.
+- `./docs/portal/scripts/preview_verify.sh --build-dir build` - verifica a manifestação de checksums (agregar `--descriptor`/`--archive` ao teste de artefatos baixados de CI).
+- `npm run serve` - lança o auxiliar de visualização com controle de soma de verificação que verifica o manifesto antes de ligar para `docusaurus serve`, para que os revisores não naveguem um instantâneo sem firma (o alias `serve:verified` fica disponível para chamadas explícitas).
+- Revise o markdown que tocaste via `npm run start` e o servidor de recarregamento ao vivo.
 
-## 2. Chequeos de pull request
+## 2. Cheques de pull request
 
-- Verifica que el job `docs-portal-build` haya pasado en `.github/workflows/check-docs.yml`.
-- Confirma que `ci/check_docs_portal.sh` se haya ejecutado (los logs de CI muestran el hero smoke check).
-- Asegura que el workflow de preview subio un manifiesto (`build/checksums.sha256`) y que el script de verificacion de preview tuvo exito (los logs muestran la salida de `scripts/preview_verify.sh`).
-- Agrega la URL de preview publicada desde el entorno de GitHub Pages a la descripcion del PR.
+- Verifique se o trabalho `docs-portal-build` foi passado para `.github/workflows/check-docs.yml`.
+- Confirme que `ci/check_docs_portal.sh` foi executado (os logs de CI mostram o hero smoke check).
+- Certifique-se de que o fluxo de trabalho de visualização suba uma manifestação (`build/checksums.sha256`) e que o script de verificação de visualização seja encerrado (os logs exibem a saída de `scripts/preview_verify.sh`).
+- Agregar o URL da visualização publicada no ambiente do GitHub Pages à descrição do PR.
 
-## 3. Aprobacion por seccion
+## 3. Aprovação por seção
 
-| Seccion | Owner | Checklist |
-|---------|-------|-----------|
-| Homepage | DevRel | El hero renderiza, las tarjetas de quickstart enlazan a rutas validas, los botones CTA resuelven. |
-| Norito | Norito WG | Las guias de overview y getting-started referencian los flags mas recientes del CLI y la documentacion del esquema Norito. |
-| SoraFS | Storage Team | El quickstart se ejecuta hasta el final, los campos del reporte de manifest estan documentados, las instrucciones de simulacion de fetch verificadas. |
-| Guias SDK | Lideres SDK | Las guias de Rust/Python/JS compilan los ejemplos actuales y enlazan a repos vivos. |
-| Referencia | Docs/DevRel | El indice lista las specs mas recientes, la referencia del codec Norito coincide con `norito.md`. |
-| Artefacto de preview | Docs/DevRel | El artefacto `docs-portal-preview` esta adjunto al PR, los smoke checks pasan, el enlace se comparte con reviewers. |
-| Security & Try it sandbox | Docs/DevRel  Security | OAuth device-code login configurado (`DOCS_OAUTH_*`), checklist `security-hardening.md` ejecutado, encabezados CSP/Trusted Types verificados via `npm run build` o `npm run probe:portal`. |
+| Seção | Proprietário | Lista de verificação |
+|--------|-------|-----------|
+| Página inicial | DevRel | O herói renderiza, as tarjetas de início rápido enlaçam em rotas válidas, os botões CTA são resolvidos. |
+| Norito | Norito WG | As guias de visão geral e introdução referenciam os sinalizadores mais recentes da CLI e a documentação do esquema Norito. |
+| SoraFS | Equipe de armazenamento | O início rápido é executado até o final, os campos do relatório do manifesto estão documentados, as instruções de simulação de busca verificadas. |
+| Guias SDK | Líderes SDK | As guias de Rust/Python/JS compilam os exemplos atuais e os colocam em repositórios vivos. |
+| Referência | Documentos/DevRel | O índice lista as especificações mais recentes, a referência do codec Norito coincide com `norito.md`. |
+| Artefato de visualização | Documentos/DevRel | O artefato `docs-portal-preview` está adjunto ao PR, as verificações de fumaça passam, o link é comparado com revisores. |
+| Segurança e experimente sandbox | Documentos/DevRel Segurança | Login de código de dispositivo OAuth configurado (`DOCS_OAUTH_*`), checklist `security-hardening.md` executado, CSP/Trusted Types encabezados selecionados via `npm run build` ou `npm run probe:portal`. |
 
-Marca cada fila como parte de tu revision de PR, o anota tareas pendientes para que el seguimiento de estado siga siendo preciso.
+Marque cada fila como parte de sua revisão de PR, ou anota tarefas pendentes para que o acompanhamento de estado siga sendo preciso.
 
-## 4. Notas de lanzamiento
-
-- Incluye `https://docs.iroha.tech/` (o la URL del entorno proveniente del job de despliegue) en las notas de release y actualizaciones de estado.
-- Destaca cualquier seccion nueva o modificada para que los equipos downstream sepan donde volver a ejecutar sus propias pruebas de humo.
+## 4. Notas de lançamento- Inclua `https://docs.iroha.tech/` (ou a URL do ambiente proveniente do trabalho de despliegue) nas notas de lançamento e atualizações de estado.
+- Destaca qualquer seção nova ou modificada para que os equipamentos a jusante, onde voltarem a executar suas próprias experiências de humor.

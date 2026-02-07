@@ -7,22 +7,23 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 56951fb1e07d90ed062c24f6ef80b8e211b37be008becba9a1fdb16d522d5230
 source_last_modified: "2026-01-21T19:17:13.230513+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Comment Audit Notes
+# བསམ་འཆར།རྩིས་ཞིབ་དྲན་ཐོ།
 
-Checked the following IVM modules and confirmed their inline/docs comments match the current behaviour (no code edits required):
+འོག་གི་ I18NT0000000X མཐུད་ལམ་ཚུ་ཞིབ་དཔྱད་འབད་ཞིནམ་ལས་ ཁོང་གི་ནང་ཐིག་/ཡིག་ཆ་བསམ་བཀོད་ཚུ་ ད་ལྟོའི་སྤྱོད་ལམ་དང་མཐུན་སྒྲིག་འབད་ཡོདཔ་ཨིན་ (གསང་ཡིག་ཞུན་དག་དགོཔ་མེད།)
 
 - `crates/ivm/src/runtime.rs`
 
 - `crates/ivm/src/memory.rs`
 - `crates/ivm/src/register_file.rs`
-- `crates/ivm/src/registers.rs`
+- I18NI0000004X
 - `crates/ivm/src/decoder.rs`
 - `crates/ivm/src/core_host.rs`
 - `crates/ivm/src/ivm.rs`
-- `crates/ivm/src/vector.rs`
-- `crates/ivm/src/host.rs`
+- I18NI0000008X
+- I18NI0000009X
 - `crates/ivm_abi/src/syscalls.rs`
 - `crates/ivm/src/parallel.rs`
 - `crates/ivm/src/mock_wsv.rs`
@@ -39,4 +40,4 @@ Checked the following IVM modules and confirmed their inline/docs comments match
 - `crates/ivm_abi/src/pointer_abi.rs`
 - `crates/ivm/src/ivm_cache.rs`
 
-Remaining workspace crates still need a pass if further comment updates become necessary.
+བསམ་བཀོད་དུས་མཐུན་བཟོ་དགོཔ་འཐོན་པ་ཅིན་ ལཱ་གི་ས་སྒོ་ཀེརཊ་ཚུ་ ད་ལྟོ་ཡང་ ཆོག་ཐམ་དགོཔ་ཨིན།

@@ -4,42 +4,44 @@ direction: ltr
 source: docs/portal/docs/reference/publishing-checklist.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 # قائمة التحقق للنشر
 
-استخدم قائمة التحقق هذه كلما قمت بتحديث بوابة المطورين. تضمن ان بناء CI ونشر GitHub Pages واختبارات smoke اليدوية تغطي كل قسم قبل وصول اصدار او محطة طريق.
+Он был убит в 1980-х годах в Нью-Йорке. Создание в CI на GitHub Pages и дымовая загрузка на сайте GitHub. Это не так.
 
 ## 1. التحقق المحلي
 
 - `npm run sync-openapi -- --version=current --latest` (اضف علما او اكثر `--mirror=<label>` عندما يتغير Torii OpenAPI لاخذ لقطة مجمدة).
-- `npm run build` – تحقق من ان نص الـ hero `Build on Iroha with confidence` ما زال يظهر في `build/index.html`.
-- `./docs/portal/scripts/preview_verify.sh --build-dir build` – تحقق من بيان checksums (اضف `--descriptor`/`--archive` عند اختبار artefacts محملة من CI).
-- `npm run serve` – يشغل مساعد preview المحمي بالـ checksum الذي يتحقق من البيان قبل استدعاء `docusaurus serve`، حتى لا يتصفح المراجعون لقطة غير موقعة (يبقى alias `serve:verified` متاحا للاستدعاءات الصريحة).
-- راجع الـ markdown الذي لمسته عبر `npm run start` وخادم live reload.
+- `npm run build` – появляется в честь героя `Build on Iroha with confidence` в образе `build/index.html`.
+- `./docs/portal/scripts/preview_verify.sh --build-dir build` – используется для проверки контрольных сумм (`--descriptor`/`--archive` для обнаружения артефактов в CI).
+- `npm run serve` – предварительный просмотр محمي بالـ контрольной суммы, полученной в результате проверки. `docusaurus serve`, حتى لا يتصفح المراجعون لقطة غير موقعة (псевдоним `serve:verified`). للاستدعاءات الصريحة).
+- Запустите уценку в режиме реального времени `npm run start` и живую перезагрузку.
 
 ## 2. فحوصات طلب السحب
 
-- تحقق من نجاح مهمة `docs-portal-build` في `.github/workflows/check-docs.yml`.
-- تاكد من تشغيل `ci/check_docs_portal.sh` (سجلات CI تظهر hero smoke check).
-- تاكد ان سير عمل preview رفع بيانا (`build/checksums.sha256`) وان سكربت التحقق من preview نجح (تظهر السجلات خرج `scripts/preview_verify.sh`).
-- اضف عنوان URL للمعاينة المنشورة من بيئة GitHub Pages الى وصف PR.
+- Вы можете найти `docs-portal-build` или `.github/workflows/check-docs.yml`.
+- Добавлено в تشغيل `ci/check_docs_portal.sh` (проверка дыма героя CI تظهر).
+- Предыдущий предварительный просмотр رفع BONANA (`build/checksums.sha256`) и سكربت التحقق من Предварительный просмотр السجلات خرج `scripts/preview_verify.sh`).
+- Доступ к URL-адресу страницы на страницах GitHub для PR.
 
 ## 3. اعتماد الاقسام
 
 | القسم | المالك | قائمة التحقق |
 |---------|-------|-----------|
-| Homepage | DevRel | يظهر نص الـ hero، وبطاقات quickstart تربط بمسارات صالحة، وازرار CTA تعمل. |
-| Norito | Norito WG | ادلة overview و getting-started تشير الى اخر flags للـ CLI ووثائق مخطط Norito. |
-| SoraFS | Storage Team | يعمل quickstart حتى الاكتمال، وحقول تقرير manifest موثقة، وتعليمات محاكاة fetch متحققة. |
-| SDK guides | قادة SDK | ادلة Rust/Python/JS تقوم بترجمة الامثلة الحالية وتربط بمستودعات حية. |
-| Reference | Docs/DevRel | يسرد الفهرس احدث specs، ومرجع Norito codec يطابق `norito.md`. |
-| Preview artifact | Docs/DevRel | تم ارفاق artefact `docs-portal-preview` بالـ PR، واجتازت اختبارات smoke، وتمت مشاركة الرابط مع المراجعين. |
-| Security & Try it sandbox | Docs/DevRel · Security | تم تهيئة OAuth device-code login (`DOCS_OAUTH_*`)، وتنفيذ قائمة `security-hardening.md`، والتحقق من ترويسات CSP/Trusted Types عبر `npm run build` او `npm run probe:portal`. |
+| Домашняя страница | ДевРел | Создайте героя, создайте быстрый старт и нажмите кнопку CTA. |
+| Norito | Norito РГ | К обзору и началу работы относятся флаги CLI и код Norito. |
+| SoraFS | Команда хранения | В кратком руководстве, которое вы найдете в разделе "Управление", и в разделе "Манифест манифеста, нажмите кнопку "Добавить файл". |
+| Руководства по SDK | Создание SDK | Используйте Rust/Python/JS для создания и редактирования приложений. |
+| Ссылка | Документы/Разработчики | Ниже приведены характеристики кодека Norito и `norito.md`. |
+| Предварительный просмотр артефакта | Документы/Разработчики | تم ارفاق artefact `docs-portal-preview` بالـ PR, واجتازت اختبارات Smoke, وتمت مشاركة الرابط مع المراجعين. |
+| Безопасность и попробуйте в песочнице | Документы/DevRel · Безопасность | Для входа в систему по коду устройства OAuth (`DOCS_OAUTH_*`) и для `security-hardening.md`, а также для CSP/Trusted. Типы: `npm run build` и `npm run probe:portal`. |
 
-علّم كل صف كجزء من مراجعة PR، او دوّن اي مهام متابعة حتى يبقى تتبع الحالة دقيقا.
+Он выступил в роли пиарщика, а также в Нью-Йорке в рамках программы по связям с общественностью. Даша.
 
-## 4. ملاحظات الاصدار
+## 4. Дополнительная информация
 
-- ادرج `https://docs.iroha.tech/` (او عنوان بيئة النشر من مهمة النشر) في ملاحظات الاصدار وتحديثات الحالة.
-- اذكر اي اقسام جديدة او معدلة بوضوح حتى تعرف الفرق التابعة اين تعيد تشغيل اختبارات smoke الخاصة بها.
+- ادرج `https://docs.iroha.tech/` (необходимо установить флажок для проверки) в режиме реального времени. وتحديثات الحالة.
+- Он был убит в 1980-х годах в Нью-Йорке, где он провел время. تشغيل اختبارات курить الخاصة بها.

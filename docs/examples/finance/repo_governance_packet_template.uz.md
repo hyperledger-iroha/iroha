@@ -7,47 +7,48 @@ generator: scripts/sync_docs_i18n.py
 source_hash: cd018a94197722adfbb9d54bf02f1c486147078174ba4c81f32e9d93b8c3f6d5
 source_last_modified: "2026-01-22T16:26:46.473419+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Repo Governance Packet Template (Roadmap F1)
+# Repo boshqaruv paketi shabloni (Yo'l xaritasi F1)
 
-Use this template when preparing the artefact bundle required by roadmap item
-F1 (repo lifecycle documentation & tooling). The goal is to hand reviewers a
-single Markdown file that lists every input, hash, and evidence bundle so the
-governance council can replay the bytes referenced in the proposal.
+Yoʻl xaritasi elementi talab qiladigan artefaktlar toʻplamini tayyorlashda ushbu shablondan foydalaning
+F1 (repo hayotiy tsikli hujjatlari va asboblari). Maqsad - sharhlovchilarni topshirish a
+Har bir kirish, xesh va dalillar to'plamini ko'rsatadigan yagona Markdown fayli
+boshqaruv kengashi taklifda ko'rsatilgan baytlarni takrorlashi mumkin.
 
-> Copy the template into your own evidence directory (for example
-> `artifacts/finance/repo/2026-03-15/packet.md`), replace the placeholders, and
-> commit/upload it next to the hashed artefacts referenced below.
+> Shablonni o'zingizning dalillar katalogingizga nusxalang (masalan
+> `artifacts/finance/repo/2026-03-15/packet.md`), to'ldirgichlarni almashtiring va
+> uni quyida havola qilingan xeshlangan artefaktlar yonida bajaring/yuklang.
 
 ## 1. Metadata
 
-| Field | Value |
+| Maydon | Qiymat |
 |-------|-------|
-| Agreement/change identifier | `<repo-yyMMdd-XX>` |
-| Prepared by / date | `<desk lead> – 2026-03-15T10:00Z` |
-| Reviewed by | `<dual-control reviewer(s)>` |
-| Change type | `Initiation / Haircut update / Substitution matrix change / Margin policy` |
-| Custodian(s) | `<custodian id(s)>` |
-| Linked proposal / referendum | `<governance ticket id or GAR link>` |
-| Evidence directory | ``artifacts/finance/repo/<slug>/`` |
+| Kelishuv/identifikatorni o'zgartirish | `<repo-yyMMdd-XX>` |
+| Tayyorlangan / sana | `<desk lead> – 2026-03-15T10:00Z` |
+| Ko'rib chiqqan | `<dual-control reviewer(s)>` |
+| Turni o'zgartirish | `Initiation / Haircut update / Substitution matrix change / Margin policy` |
+| Vasiy(lar)i | `<custodian id(s)>` |
+| Bog'langan taklif / referendum | `<governance ticket id or GAR link>` |
+| Dalillar katalogi | ``artifacts/finance/repo/<slug>/`` |
 
-## 2. Instruction Payloads
+## 2. Yo'riqnomaning foydali yuklari
 
-Record the staged Norito instructions that desks signed off on via
-`iroha app repo ... --output`. Each entry should include the hash of the emitted
-file and a short description of the action that will be submitted once the vote
-passes.
+Stollar orqali imzolangan Norito bosqichli ko'rsatmalarini yozib oling.
+`iroha app repo ... --output`. Har bir yozuv emissiya qilingan xeshni o'z ichiga olishi kerak
+fayl va ovoz berishdan keyin taqdim etiladigan harakatning qisqacha tavsifi
+o'tadi.
 
-| Action | File | SHA-256 | Notes |
+| Harakat | Fayl | SHA-256 | Eslatmalar |
 |--------|------|---------|-------|
-| Initiate | `instructions/initiate.json` | `<sha256>` | Contains the cash/collateral legs approved by desk + counterparty. |
-| Margin call | `instructions/margin_call.json` | `<sha256>` | Captures cadence + participant id that triggered the call. |
-| Unwind | `instructions/unwind.json` | `<sha256>` | Proof of the reverse-leg once conditions are met. |
+| Boshlash | `instructions/initiate.json` | `<sha256>` | Stol + kontragent tomonidan tasdiqlangan naqd pul/garov oyoqlarini o'z ichiga oladi. |
+| Marja chaqiruvi | `instructions/margin_call.json` | `<sha256>` | Chaqiruvga sabab bo‘lgan kadans + ishtirokchi identifikatorini yozib oladi. |
+| Dam olish | `instructions/unwind.json` | `<sha256>` | Shartlar bajarilgandan keyin teskari oyoqning isboti. |
 
 ```bash
 # Example hash helper (repeat per instruction file)
@@ -55,28 +56,28 @@ sha256sum artifacts/finance/repo/<slug>/instructions/initiate.json \
   | tee artifacts/finance/repo/<slug>/hashes/initiate.sha256
 ```
 
-## 2.1 Custodian Acknowledgements (tri-party only)
+## 2.1 Vasiylik bildirishnomalari (faqat uch tomonli)
 
-Complete this section whenever a repo uses `--custodian`. The governance packet
-must include a signed acknowledgement from each custodian plus the hash of the
-file referenced in §2.8 of `docs/source/finance/repo_ops.md`.
+Repo `--custodian` dan foydalanganda ushbu bo'limni to'ldiring. Boshqaruv paketi
+har bir qo'riqchi tomonidan imzolangan tasdiqnoma va uning xeshini o'z ichiga olishi kerak
+`docs/source/finance/repo_ops.md` §2.8 da havola qilingan fayl.
 
-| Custodian | File | SHA-256 | Notes |
-|-----------|------|---------|-------|
-| `<ih58...>` | `custodian_ack_<custodian>.md` | `<sha256>` | Signed SLA covering custody window, routing account, and drill contact. |
+| Qo'riqchi | Fayl | SHA-256 | Eslatmalar |
+|----------|------|---------|-------|
+| `<ih58...>` | `custodian_ack_<custodian>.md` | `<sha256>` | Himoya oynasi, marshrutlash hisobi va burg'ulash kontaktlarini qamrab olgan imzolangan SLA. |
 
-> Store the acknowledgement next to the other evidence (`artifacts/finance/repo/<slug>/`)
-> so `scripts/repo_evidence_manifest.py` records the file in the same tree as
-> the staged instructions and config snippets. See
-> `docs/examples/finance/repo_custodian_ack_template.md` for a ready-to-fill
-> template that matches the governance evidence contract.
+> Tasdiqni boshqa dalillar yonida saqlang (`artifacts/finance/repo/<slug>/`)
+> shuning uchun `scripts/repo_evidence_manifest.py` faylni xuddi shu daraxtga yozadi
+> bosqichli ko'rsatmalar va konfiguratsiya parchalari. Qarang
+> `docs/examples/finance/repo_custodian_ack_template.md` to'ldirishga tayyor
+> boshqaruvni tasdiqlovchi shartnomaga mos keladigan shablon.
 
-## 3. Configuration Snippet
+## 3. Konfiguratsiya parchasi
 
-Paste the `[settlement.repo]` TOML block that will land on the cluster (including
-`collateral_substitution_matrix`). Store the hash next to the snippet so
-auditors can confirm the runtime policy that was active when the repo booking
-was approved.
+Klasterga tushadigan `[settlement.repo]` TOML blokini joylashtiring (jumladan,
+`collateral_substitution_matrix`). Xeshni parchaning yonida shunday saqlang
+auditorlar repo bron qilish paytida faol bo'lgan ish vaqti siyosatini tasdiqlashlari mumkin
+tasdiqlandi.
 
 ```toml
 [settlement.repo]
@@ -89,12 +90,12 @@ default_margin_percent = "0.025"
 
 `SHA-256 (config snippet): <sha256>`
 
-### 3.1 Post-Approval Configuration Snapshots
+### 3.1 Tasdiqdan keyingi konfiguratsiya suratlari
 
-After the referendum or governance vote completes and the `[settlement.repo]`
-change is rolled out, capture `/v1/configuration` snapshots from every peer so
-auditors can prove the approved policy is live across the cluster (see
-`docs/source/finance/repo_ops.md` §2.9 for the evidence workflow).
+Referendum yoki boshqaruv ovoz berish tugagandan so'ng va `[settlement.repo]`
+o'zgartirish amalga oshirildi, har bir tengdoshdan `/v1/configuration` suratlarini oling
+auditorlar tasdiqlangan siyosat klaster bo'ylab amalda ekanligini isbotlashlari mumkin (qarang
+Dalillar ish jarayoni uchun `docs/source/finance/repo_ops.md` §2.9).
 
 ```bash
 mkdir -p artifacts/finance/repo/<slug>/config/peers
@@ -103,37 +104,37 @@ curl -fsSL https://peer01.example/v1/configuration \
   > artifacts/finance/repo/<slug>/config/peers/peer01.json
 ```
 
-| Peer / source | File | SHA-256 | Block height | Notes |
-|---------------|------|---------|--------------|-------|
-| `peer01` | `config/peers/peer01.json` | `<sha256>` | `<block-height>` | Snapshot captured immediately after the config rollout. |
-| `peer02` | `config/peers/peer02.json` | `<sha256>` | `<block-height>` | Confirms `[settlement.repo]` matches the staged TOML. |
+| Tengdosh / manba | Fayl | SHA-256 | Blok balandligi | Eslatmalar |
+|-------------|------|---------|--------------|-------|
+| `peer01` | `config/peers/peer01.json` | `<sha256>` | `<block-height>` | Snapshot konfiguratsiyani ishga tushirgandan so'ng darhol olingan. |
+| `peer02` | `config/peers/peer02.json` | `<sha256>` | `<block-height>` | `[settlement.repo]` bosqichli TOMLga mos kelishini tasdiqlaydi. |
 
-Record the digests alongside the peer ids in `hashes.txt` (or the equivalent
-summary) so reviewers can trace which nodes ingested the change. The snapshots
-live under `config/peers/` next to the TOML snippet and will be picked up
-automatically by `scripts/repo_evidence_manifest.py`.
+`hashes.txt` (yoki ekvivalenti) da dayjestlarni tengdosh identifikatorlari bilan birga yozib oling
+xulosa) shunday qilib, sharhlovchilar oʻzgarishlarni qaysi tugunlar qabul qilganligini kuzatishi mumkin. Suratlar
+TOML snippeti yonida `config/peers/` ostida yashaydi va olinadi
+avtomatik ravishda `scripts/repo_evidence_manifest.py` tomonidan.
 
-## 4. Deterministic Test Artefacts
+## 4. Deterministik sinov artefaktlari
 
-Attach the latest outputs from:
+Quyidagilardan eng so'nggi natijalarni biriktiring:
 
 - `cargo test -p iroha_core -- repo_deterministic_lifecycle_proof_matches_fixture`
 - `cargo test --package integration_tests --test repo`
 
-Record file paths + hashes for the log bundles or JUnit XML produced by your CI
-system.
+Jurnal to'plamlari yoki CI tomonidan ishlab chiqarilgan JUnit XML uchun fayl yo'llari + xeshlarni yozib oling
+tizimi.
 
-| Artefact | File | SHA-256 | Notes |
+| Artefakt | Fayl | SHA-256 | Eslatmalar |
 |----------|------|---------|-------|
-| Lifecycle proof log | `tests/repo_lifecycle.log` | `<sha256>` | Captured with `--nocapture` output. |
-| Integration test log | `tests/repo_integration.log` | `<sha256>` | Includes substitution + margin cadence coverage. |
+| Hayotiy tsiklni tekshirish jurnali | `tests/repo_lifecycle.log` | `<sha256>` | `--nocapture` chiqishi bilan olingan. |
+| Integratsiya sinovlari jurnali | `tests/repo_integration.log` | `<sha256>` | O'zgartirish + marja kadansini qoplashni o'z ichiga oladi. |
 
 ## 5. Lifecycle Proof Snapshot
 
-Every packet must include the deterministic lifecycle snapshot exported from
-`repo_deterministic_lifecycle_proof_matches_fixture`. Run the harness with the
-export knobs enabled so reviewers can diff the JSON frame and digest against
-the fixture tracked in `crates/iroha_core/tests/fixtures/` (see
+Har bir paket eksport qilingan deterministik hayot tsiklining suratini o'z ichiga olishi kerak
+`repo_deterministic_lifecycle_proof_matches_fixture`. bilan jabduqni boshqaring
+Eksport tugmalari yoqilgan, shuning uchun sharhlovchilar JSON ramkasini farqlashi va unga qarshi hazm qilishlari mumkin
+`crates/iroha_core/tests/fixtures/` da kuzatilgan armatura (qarang
 `docs/source/finance/repo_ops.md` §2.7).
 
 ```bash
@@ -143,24 +144,24 @@ cargo test -p iroha_core \
   -- --exact smartcontracts::isi::repo::tests::repo_deterministic_lifecycle_proof_matches_fixture
 ```
 
-Or use the pinned helper to regenerate the fixtures and copy them into your
-evidence bundle in one step:
+Yoki moslamalarni qayta tiklash va ularni nusxalash uchun mahkamlangan yordamchidan foydalaning
+dalillar to'plami bir bosqichda:
 
 ```bash
 scripts/regen_repo_proof_fixture.sh --toolchain <toolchain> \
   --bundle-dir artifacts/finance/repo/<slug>
 ```
 
-| Artefact | File | SHA-256 | Notes |
+| Artefakt | Fayl | SHA-256 | Eslatmalar |
 |----------|------|---------|-------|
-| Snapshot JSON | `repo_proof_snapshot.json` | `<sha256>` | Canonical lifecycle frame emitted by the proof harness. |
-| Digest file | `repo_proof_digest.txt` | `<sha256>` | Uppercase hex digest mirrored from `crates/iroha_core/tests/fixtures/repo_lifecycle_proof.digest`; attach even when unchanged. |
+| Snapshot JSON | `repo_proof_snapshot.json` | `<sha256>` | Kanonik hayot aylanishi ramkasi isbotlovchi jabduqlar tomonidan chiqariladi. |
+| Dijest fayli | `repo_proof_digest.txt` | `<sha256>` | `crates/iroha_core/tests/fixtures/repo_lifecycle_proof.digest` dan aks ettirilgan katta olti burchakli dayjest; o'zgarmagan holda ham biriktiring. |
 
-## 6. Evidence Manifest
+## 6. Dalillar manifesti
 
-Generate the manifest for the entire evidence directory so auditors can verify
-hashes without unpacking the archive. The helper mirrors the workflow described
-in `docs/source/finance/repo_ops.md` §3.2.
+Auditorlar tekshirishi uchun barcha dalillar katalogi uchun manifestni yarating
+arxivni ochmasdan xeshlar. Yordamchi tasvirlangan ish jarayonini aks ettiradi
+`docs/source/finance/repo_ops.md` §3.2 da.
 
 ```bash
 python3 scripts/repo_evidence_manifest.py \
@@ -169,40 +170,40 @@ python3 scripts/repo_evidence_manifest.py \
   --output artifacts/finance/repo/<slug>/manifest.json
 ```
 
-| Artefact | File | SHA-256 | Notes |
+| Artefakt | Fayl | SHA-256 | Eslatmalar |
 |----------|------|---------|-------|
-| Evidence manifest | `manifest.json` | `<sha256>` | Include the checksum in the governance ticket / referendum notes. |
+| Dalillar manifest | `manifest.json` | `<sha256>` | Boshqaruv biletiga/referendum eslatmalariga nazorat summasini kiriting. |
 
-## 7. Telemetry & Event Snapshot
+## 7. Telemetriya va voqealar surati
 
-Export the relevant `AccountEvent::Repo(*)` entries and any dashboards or CSV
-exports referenced in `docs/source/finance/repo_ops.md`. Record the files +
-hashes here so reviewers can jump straight to the evidence.
+Tegishli `AccountEvent::Repo(*)` yozuvlarini va har qanday asboblar panelini yoki CSVni eksport qiling
+`docs/source/finance/repo_ops.md` da havola qilingan eksport. Fayllarni yozib oling +
+Bu yerda xeshlar, shuning uchun sharhlovchilar to'g'ridan-to'g'ri dalillarga o'tishlari mumkin.
 
-| Export | File | SHA-256 | Notes |
+| Eksport | Fayl | SHA-256 | Eslatmalar |
 |--------|------|---------|-------|
-| Repo events JSON | `evidence/repo_events.ndjson` | `<sha256>` | Raw Torii event stream filtered to the desk accounts. |
-| Telemetry CSV | `evidence/repo_margin_dashboard.csv` | `<sha256>` | Exported from Grafana using the Repo Margin panel. |
+| Repo hodisalari JSON | `evidence/repo_events.ndjson` | `<sha256>` | Xom Torii hodisa oqimi stol hisoblariga filtrlangan. |
+| Telemetriya CSV | `evidence/repo_margin_dashboard.csv` | `<sha256>` | Repo margin paneli yordamida Grafana dan eksport qilindi. |
 
-## 8. Approvals & Signatures
+## 8. Tasdiqlashlar va imzolar
 
 - **Dual-control signers:** `<names + timestamps>`
-- **GAR / minutes digest:** `<sha256>` of the signed GAR PDF or minutes upload.
-- **Storage location:** `governance://finance/repo/<slug>/packet/`
+- **GAR / daqiqalar dayjesti:** Imzolangan GAR PDF hujjatining `<sha256>` yoki yuklangan daqiqalar.
+- **Saqlash joyi:** `governance://finance/repo/<slug>/packet/`
 
-## 9. Checklist
+## 9. Tekshirish ro'yxati
 
-Mark each item once complete.
+Har bir elementni tugallangandan keyin belgilang.
 
-- [ ] Instruction payloads staged, hashed, and attached.
-- [ ] Configuration snippet hash recorded.
-- [ ] Deterministic test logs captured + hashed.
-- [ ] Lifecycle snapshot + digest exported.
-- [ ] Evidence manifest generated and hash recorded.
-- [ ] Event/telemetry exports captured + hashed.
-- [ ] Dual-control acknowledgements archived.
-- [ ] GAR/minutes uploaded; digest recorded above.
+- [ ] Yo'riqnomaning foydali yuklari bosqichma-bosqich, xeshlangan va biriktirilgan.
+- [ ] Konfiguratsiya parchasi xeshi qayd etildi.
+- [ ] Deterministik test jurnallari olingan + xeshlangan.
+- [ ] Hayot siklining surati + dayjest eksport qilindi.
+- [ ] Dalil manifest yaratildi va xesh qayd etildi.
+- [ ] Hodisa/telemetriya eksporti yozib olindi + xeshlangan.
+- [ ] Ikkilamchi boshqaruv tasdiqlari arxivlandi.
+- [ ] GAR/daqiqa yuklangan; yuqorida qayd etilgan dayjest.
 
-Maintaining this template alongside every packet keeps the governance DAG
-deterministic and provides auditors with a portable manifest for repo lifecycle
-decisions.
+Ushbu shablonni har bir paket bilan birga saqlash DAG boshqaruvini saqlab qoladi
+deterministik va auditorlarga repo hayot aylanishi uchun portativ manifestni taqdim etadi
+qarorlar.

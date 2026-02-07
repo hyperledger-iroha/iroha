@@ -7,72 +7,73 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 305a3f3b253a013825d4dd798d2282e111913ec777fe0fbf5b02a92c7172b92a
 source_last_modified: "2025-12-29T18:16:35.076964+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
-# SNS Arbitration Transparency Report — <Month YYYY>
+# SNS Арбитрын ил тод байдлын тайлан — <Сар ЖYYY>
 
-- **Suffix:** `<.sora / .nexus / .dao>`
-- **Reporting window:** `<ISO start>` → `<ISO end>`
-- **Prepared by:** `<Council liaison>`
-- **Source artefacts:** `cases.ndjson` SHA256 `<hash>`, dashboard export `<filename>.json`
+- **Дагавар:** `<.sora / .nexus / .dao>`
+- **Мэдээллийн цонх:** `<ISO start>` → `<ISO end>`
+- **Бэлтгэсэн:** `<Council liaison>`
+- **Эх олдворууд:** `cases.ndjson` SHA256 `<hash>`, хяналтын самбарын экспорт `<filename>.json`
 
-## 1. Executive Summary
+## 1. Дүгнэлт
 
-- Total new cases: `<count>`
-- Cases closed this period: `<count>`
-- SLA compliance: `<ack %>` acknowledge / `<resolution %>` decision
-- Guardian overrides issued: `<count>`
-- Transfers/refunds executed: `<count>`
+- Нийт шинэ тохиолдол: `<count>`
+- Энэ хугацаанд хаагдсан хэргүүд: `<count>`
+- SLA-ын нийцэл: `<ack %>` хүлээн зөвшөөрөх / `<resolution %>` шийдвэр
+- Хамгаалагчийг хүчингүй болгосон: `<count>`
+- Гүйцэтгэсэн шилжүүлэг / буцаан олголт: `<count>`
 
 ## 2. Case Mix
 
-| Dispute type | New cases | Closed cases | Median resolution (days) |
-|--------------|-----------|--------------|--------------------------|
-| Ownership | 0 | 0 | 0 |
-| Policy violation | 0 | 0 | 0 |
-| Abuse | 0 | 0 | 0 |
-| Billing | 0 | 0 | 0 |
-| Other | 0 | 0 | 0 |
+| Маргааны төрөл | Шинэ тохиолдол | Хаалттай хэргүүд | Дундаж нарийвчлал (өдөр) |
+|-------------|-----------|--------------|--------------------------|
+| Эзэмшил | 0 | 0 | 0 |
+| Бодлогын зөрчил | 0 | 0 | 0 |
+| Хүчирхийлэл | 0 | 0 | 0 |
+| Тооцоо | 0 | 0 | 0 |
+| Бусад | 0 | 0 | 0 |
 
-## 3. SLA Performance
+## 3. SLA гүйцэтгэл
 
-| Priority | Acknowledge SLA | Achieved | Resolution SLA | Achieved | Breaches |
+| Тэргүүлэх чиглэл | SLA-г хүлээн зөвшөөрөх | Хүрсэн | Тогтоолын SLA | Хүрсэн | Зөрчил |
 |----------|-----------------|----------|----------------|----------|----------|
-| Urgent | ≤ 2 h | 0% | ≤ 72 h | 0% | 0 |
-| High | ≤ 8 h | 0% | ≤ 10 d | 0% | 0 |
-| Standard | ≤ 24 h | 0% | ≤ 21 d | 0% | 0 |
-| Info | ≤ 3 d | 0% | ≤ 30 d | 0% | 0 |
+| Яаралтай | ≤ 2 цаг | 0% | ≤ 72 цаг | 0% | 0 |
+| Өндөр | ≤ 8 цаг | 0% | ≤ 10d | 0% | 0 |
+| Стандарт | ≤ 24 цаг | 0% | ≤ 21d | 0% | 0 |
+| Мэдээлэл | ≤ 3d | 0% | ≤ 30d | 0% | 0 |
 
-Describe root causes for any breaches and link to remediation tickets.
+Аливаа зөрчлийн үндсэн шалтгааныг тайлбарлаж, засварын тасалбар руу холбоно уу.
 
-## 4. Case Register
+## 4. Тохиолдлын бүртгэл
 
-| Case ID | Selector | Priority | Status | Outcome | Notes |
+| Кейс ID | Сонгогч | Тэргүүлэх чиглэл | Статус | Үр дүн | Тэмдэглэл |
 |---------|----------|----------|--------|---------|-------|
-| SNS-YYYY-NNNNN | `label.suffix` | Standard | Closed | Upheld | `<summary>` |
+| SNS-YYYY-NNNNN | `label.suffix` | Стандарт | Хаалттай | Батлагдсан | `<summary>` |
 
-Provide one-line notes referencing anonymised facts or public vote links. Seal
-where required and mention redactions applied.
+Нэр нь үл мэдэгдэгч баримтууд эсвэл олон нийтийн санал өгөх холбоосыг агуулсан нэг мөрт тэмдэглэл өгнө үү. Битүүмжлэх
+шаардлагатай бол засварлахыг дурдах.
 
-## 5. Actions & Remedies
+## 5. Үйлдлүүд ба эмчилгээ
 
-- **Freezes / releases:** `<counts + case ids>`
-- **Transfers:** `<counts + assets moved>`
-- **Billing adjustments:** `<credits/debits>`
-- **Policy follow-ups:** `<tickets or RFCs opened>`
+- **Хөлдөх / гаргах:** `<counts + case ids>`
+- **Шилжүүлэг:** `<counts + assets moved>`
+- **Төлбөрийн тохируулга:** `<credits/debits>`
+- **Бодлогын хяналт:** `<tickets or RFCs opened>`
 
-## 6. Appeals & Guardian Overrides
+## 6. Давж заалдах хүсэлт, асран хамгаалагчийн хүчингүй болгох
 
-Summarise any appeals escalated to the guardian board, including timestamps and
-decisions (approve/deny). Link to `sns governance appeal` records or council
-votes.
+Асран хамгаалагчийн зөвлөлд хүргүүлсэн аливаа давж заалдах хүсэлтийг нэгтгэн дүгнэх, үүнд цагийн тэмдэг болон
+шийдвэрүүд (батлах/татгалзах). `sns governance appeal` бүртгэл эсвэл зөвлөл рүү холбоно уу
+санал.
 
-## 7. Outstanding Items
+## 7. Гайхалтай зүйлс
 
-- `<Action item>` — Owner `<name>`, ETA `<date>`
-- `<Action item>` — Owner `<name>`, ETA `<date>`
+- `<Action item>` — Эзэмшигч `<name>`, ETA `<date>`
+- `<Action item>` — Эзэмшигч `<name>`, ETA `<date>`
 
-Attach NDJSON, Grafana exports, and CLI logs referenced in this report.
+Энэ тайланд дурдсан NDJSON, Grafana экспорт болон CLI бүртгэлийг хавсаргана уу.

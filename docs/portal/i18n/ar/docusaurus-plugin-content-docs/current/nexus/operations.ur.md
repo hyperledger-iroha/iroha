@@ -4,70 +4,72 @@ direction: rtl
 source: docs/portal/docs/nexus/operations.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: nexus-operations
-title: Nexus آپریشنز رن بُک
-description: Nexus آپریٹر ورک فلو کا فیلڈ کے لئے تیار خلاصہ، جو `docs/source/nexus_operations.md` کی عکاسی کرتا ہے۔
+المعرف: عمليات الترابط
+العنوان: Nexus آبريشنز رن بُك
+الوصف: Nexus عمل رائع لإنجاز العمل بشكل كامل، جو `docs/source/nexus_operations.md` هو عمل رائع.
 ---
 
-اس صفحے کو `docs/source/nexus_operations.md` کے تیز ریفرنس کے طور پر استعمال کریں۔ یہ آپریشنل چیک لسٹ، تبدیلی کے انتظام کے hooks، اور ٹیلیمیٹری کوریج کی ضروریات کو سمیٹتا ہے جن پر Nexus آپریٹرز کو عمل کرنا ہوتا ہے۔
+هذه الصفحة `docs/source/nexus_operations.md` تستخدم الآن للريفرنس. لقد بدأت هذه الخطوة الأولى في تنظيم الخطافات والعناصر الأساسية التي يجب مراعاتها في Nexus.
 
-## لائف سائیکل چیک لسٹ
+## لعشاق سائیکل چیک لٹ
 
-| مرحلہ | اقدامات | ثبوت |
+| رحلةہ | اجراءات | ثبوت |
 |-------|--------|----------|
-| پری فلائٹ | ریلیز ہیشز/سگنیچرز کی تصدیق کریں، `profile = "iroha3"` کنفرم کریں، اور کنفیگ ٹیمپلیٹس تیار کریں۔ | `scripts/select_release_profile.py` آؤٹ پٹ، checksum لاگ، دستخط شدہ مینفسٹ بَنڈل۔ |
-| کیٹلاگ الائنمنٹ | `[nexus]` کیٹلاگ، روٹنگ پالیسی اور DA تھریش ہولڈز کو کونسل کے جاری کردہ مینفسٹ کے مطابق اپ ڈیٹ کریں، پھر `--trace-config` کیپچر کریں۔ | `irohad --sora --config ... --trace-config` آؤٹ پٹ جو onboarding ٹکٹ کے ساتھ محفوظ ہے۔ |
-| اسموک اور کٹ اوور | `irohad --sora --config ... --trace-config` چلائیں، CLI اسموک (`FindNetworkStatus`) چلائیں، ٹیلیمیٹری ایکسپورٹس کی توثیق کریں، اور ایڈمیشن کی درخواست دیں۔ | اسموک ٹیسٹ لاگ + Alertmanager کنفرمیشن۔ |
-| اسٹیڈی اسٹیٹ | dashboards/alerts مانیٹر کریں، گورننس کی cadence کے مطابق کیز روٹیٹ کریں، اور جب مینفسٹ بدلے تو configs/runbooks ہم آہنگ کریں۔ | سہ ماہی ریویو منٹس، ڈیش بورڈ اسکرین شاٹس، روٹیشن ٹکٹ IDs۔ |
+| پری فلائٹ | تسجيل الدخول/النقر على تسجيلات الفيديو، `profile = "iroha3"` تسجيل الدخول، وكلمة المرور. | `scripts/select_release_profile.py` هذا هو المجموع الاختباري، وهو برنامج يعمل بنفسي. |
+| كلينمنت | `[nexus]` تقوم بتمديد الوقت إلى المستشارين وروينج باليس و DA بما يتوافق مع كل كريترز، ثم حاسب `--trace-config` کریں۔ | `irohad --sora --config ... --trace-config` هذا هو ما حدث بالفعل. |
+| اسموک و کٹ اوور | `irohad --sora --config ... --trace-config` كلاي، CLI اسمو (`FindNetworkStatus`) كلاي، ايليميكر هي لعبة كرة قدم حقيقية، وإيميشن. | اسموک ٹیست لاگ + تنبيه مدير التنبيه. |
+| الموقع | تعمل لوحات المعلومات/التنبيهات على تغيير الإيقاع، وضبط الإيقاع وفقًا لروتين اللعبة، واستبدال التكوينات/دفاتر التشغيل. | ما هو ريو مينيس، كل مركز بورصة، تحويل معرفات. |
 
-تفصیلی onboarding (کلیدوں کی تبدیلی، روٹنگ ٹیمپلیٹس، ریلیز پروفائل کے مراحل) `docs/source/sora_nexus_operator_onboarding.md` میں موجود ہے۔
+تفاصيل onboarding (التغيير، روتننج ٹمبليس، ريليز الرائدة في المراحل) `docs/source/sora_nexus_operator_onboarding.md` موجود وموجود.
 
-## تبدیلی کا انتظام
+## تغيير الانتظام
 
-1. **ریلیز اپ ڈیٹس** - `status.md`/`roadmap.md` میں اعلانات ٹریک کریں؛ ہر ریلیز PR کے ساتھ onboarding چیک لسٹ منسلک کریں۔
-2. **Lane مینفسٹ تبدیلیاں** - Space Directory سے دستخط شدہ بَنڈلز کی تصدیق کریں اور انہیں `docs/source/project_tracker/nexus_config_deltas/` کے تحت محفوظ کریں۔
-3. **کنفیگریشن ڈیلٹاز** - `config/config.toml` میں ہر تبدیلی کے لئے lane/data-space کا حوالہ دینے والا ٹکٹ ضروری ہے۔ جب نوڈز شامل ہوں یا اپ گریڈ ہوں تو موثر کنفیگ کی ریڈیکٹڈ کاپی محفوظ کریں۔
-4. **Rollback drills** - سہ ماہی stop/restore/smoke طریقہ کار کی مشق کریں؛ نتائج `docs/source/project_tracker/nexus_config_deltas/<date>-rollback.md` میں لاگ کریں۔
-5. **Compliance approvals** - private/CBDC lanes کو DA پالیسی یا ٹیلیمیٹری redaction knobs بدلنے سے پہلے compliance منظوری درکار ہے (دیکھیں `docs/source/cbdc_lane_playbook.md`).
+1. **ريليز اب ڈيس** - `status.md`/`roadmap.md` تعلن عن إعلانات تجارية؛ لقد أستمرت ريليز في العلاقات العامة في تأهيل شخص واحد من كل منسلك.
+2. **تبديل المسار** - يحتوي دليل الفضاء على قائمة بأبحاث البحث و`docs/source/project_tracker/nexus_config_deltas/` تحت محفوظات الكري.
+3. **الصفحة الرئيسية** - `config/config.toml` ستغير مسار/مساحة البيانات إلى هذا المسار وهذا ضروري. تتيح لك الأخبار التي تتضمن القليل أو التطبيق مزيدًا من الملفات التي يمكن حفظها في سجل القصاصات.
+4. **تدريبات التراجع** - تعمل على إيقاف/استعادة/دخان بطريقة ما؛ نتائج `docs/source/project_tracker/nexus_config_deltas/<date>-rollback.md` لا تزال قائمة.
+5. **موافقات الامتثال** - ممرات خاصة/CBDC مقابض تنقيح DA باليس أو إليمتري تعدل أعلى مستوى من الامتثال وفتحة التحكم (ديك `docs/source/cbdc_lane_playbook.md`).
 
-## ٹیلیمیٹری اور SLOs
+## ٹيليميٹری و SLOs
 
-- Dashboards: `dashboards/grafana/nexus_lanes.json`, `nexus_settlement.json`, اور SDK مخصوص ویوز (مثلاً `android_operator_console.json`).
-- Alerts: `dashboards/alerts/nexus_audit_rules.yml` اور Torii/Norito transport قواعد (`dashboards/alerts/torii_norito_rpc_rules.yml`).
-- دیکھنے کے لئے میٹرکس:
-  - `nexus_lane_height{lane_id}` - تین slots تک پیش رفت صفر ہو تو الرٹ کریں۔
-  - `nexus_da_backlog_chunks{lane_id}` - lane مخصوص تھریش ہولڈز سے اوپر الرٹ کریں (ڈیفالٹ 64 public / 8 private).
-  - `nexus_settlement_latency_seconds{lane_id}` - جب P99 900 ms (public) یا 1200 ms (private) سے اوپر جائے تو الرٹ کریں۔
-  - `torii_request_failures_total{scheme="norito_rpc"}` - اگر 5 منٹ کی error ratio >2% ہو تو الرٹ کریں۔
-  - `telemetry_redaction_override_total` - Sev 2 فوری؛ یقینی بنائیں کہ overrides کے لئے compliance ٹکٹس ہوں۔
-- [Nexus telemetry remediation plan](./nexus-telemetry-remediation) میں دیا گیا چیک لسٹ کم از کم سہ ماہی چلائیں اور بھرا ہوا فارم آپریشنز ریویو نوٹس کے ساتھ منسلک کریں۔
+- لوحات المعلومات: `dashboards/grafana/nexus_lanes.json` و`nexus_settlement.json` وSDK مخصوص ویوز (مثلاً `android_operator_console.json`).
+- التنبيهات: `dashboards/alerts/nexus_audit_rules.yml` وTorii/Norito متطلبات النقل (`dashboards/alerts/torii_norito_rpc_rules.yml`).
+- إضافة إلى العلامات التجارية:
+  - `nexus_lane_height{lane_id}` - هذه الفتحات تصل إلى الصفر أو إلى الصفر.
+  - `nexus_da_backlog_chunks{lane_id}` - حارة مخصوص تھریش ہولڈز سے أوبر الرٹ کریں (ڈیفالٹ 64 عام / 8 خاص).
+  - `nexus_settlement_latency_seconds{lane_id}` - JP P99 900 مللي ثانية (عام) أو 1200 مللي ثانية (خاص)
+  - `torii_request_failures_total{scheme="norito_rpc"}` - إذا كانت نسبة الخطأ 5% >2% فهذا يعني أنك ستفعل ذلك.
+  - `telemetry_redaction_override_total` - سيف 2 فوری؛ هذه القواعد تتجاوز الامتثال.
+- [Nexus خطة معالجة القياس عن بعد](./nexus-telemetry-remediation) قم بقراءة المزيد من المعلومات والمزيد من ملاحظات ريو الزراعية کریں۔
 
-## انسیڈنٹ میٹرکس
+## الشركات العالمية
 
-| شدت | تعریف | ردعمل |
-|----------|------------|----------|
-| Sev 1 | data-space isolation کی خلاف ورزی، settlement کا 15 منٹ سے زیادہ رکنا، یا governance ووٹ میں خرابی۔ | Nexus Primary + Release Engineering + Compliance کو پیج کریں، ایڈمیشن فریز کریں، آرٹیفیکٹس جمع کریں، <=60 منٹ میں کمیونیکیشن جاری کریں، RCA <=5 کاروباری دن۔ |
-| Sev 2 | lane backlog SLA کی خلاف ورزی، ٹیلیمیٹری blind spot >30 منٹ، مینفسٹ rollout ناکام۔ | Nexus Primary + SRE کو پیج کریں، <=4 گھنٹے میں مٹیگیٹ کریں، 2 کاروباری دن کے اندر follow-ups فائل کریں۔ |
-| Sev 3 | غیر رکاوٹی drift (docs، alerts). | tracker میں لاگ کریں اور sprint کے اندر fix شیڈول کریں۔ |
+| شدت | تعريف | رد عمل |
+|----------|-----------|----------|
+| سيف 1 | يعد عزل مساحة البيانات بمثابة خلل في التسوية يبلغ 15 مليونًا أو أكثر من الحوكمة. | Nexus الابتدائي + هندسة الإصدار + الامتثال، سلسلة كريتيف، مجلة آرتيفيكية جماعية، <= 60 مليون لعبة جماعية، RCA <= 5 كروباري. |
+| سيف 2 | حارة backlog SLA هذا هو الخطأ الذي حدث، النقطة العمياء >30 شهرًا، أنا نفسي طرح ناكام. | Nexus Primary + SRE بطاقة الائتمان، <= 4 بطاقة عضوية، 2 بطاقة متابعة لللاعبين. |
+| سيف 3 | غير رکاوٹی الانجراف (مستندات، تنبيهات). | يقوم جهاز التعقب بتتبع السرعة وسرعة الركض لإصلاح شيول الكري. |
 
-انسیڈنٹ ٹکٹس میں متاثرہ lane/data-space IDs، مینفسٹ ہیشز، ٹائم لائن، سپورٹنگ میٹرکس/لاگز، اور follow-up ٹاسکس/مالکان درج ہونا ضروری ہیں۔
+يعد اتصال الإنترنت بمعرفات النطاق/مساحة البيانات، والإنترنت، والإنترنت، والرياضة/اللاقطات، ومتابعة المهام/فئة المالك أمرًا ضروريًا.
 
 ## ثبوت آرکائیو
 
-- bundles/manifestes/telemetry exports کو `artifacts/nexus/<lane>/<date>/` کے تحت محفوظ کریں۔
-- ہر ریلیز کے لئے redacted configs + `--trace-config` آؤٹ پٹ محفوظ رکھیں۔
-- جب config یا مینفسٹ تبدیلیاں ہوں تو کونسل منٹس + دستخط شدہ فیصلے منسلک کریں۔
-- Nexus میٹرکس کے لئے متعلقہ Prometheus ہفتہ وار snapshots 12 ماہ تک محفوظ کریں۔
-- runbook edits کو `docs/source/project_tracker/nexus_config_deltas/README.md` میں ریکارڈ کریں تاکہ آڈیٹرز جان سکیں ذمہ داریاں کب بدلیں۔
+- الحزم/البيانات/صادرات القياس عن بعد `artifacts/nexus/<lane>/<date>/` کے تحت محفوظ کریں۔
+- قم بإدراج التكوينات المنقحة + `--trace-config` في آخر تحديث.
+- حول التكوين أو التغيير، يمكنك الحصول على مستشار منتس + أداة جديدة للقراءة.
+- Nexus متعلقات Prometheus لقطات الحرب 12 شهرًا محفوظًا.
+- تعديلات دليل التشغيل التي `docs/source/project_tracker/nexus_config_deltas/README.md` هي عبارة عن تعديلات على سجل اللاعبين في ذاكرة التخزين المؤقت المحدثة.
 
-## متعلقہ مواد
+## ما يتعلقہ مادة
 
-- Overview: [Nexus overview](./nexus-overview)
-- Specification: [Nexus spec](./nexus-spec)
-- Lane geometry: [Nexus lane model](./nexus-lane-model)
-- Transition & routing shims: [Nexus transition notes](./nexus-transition-notes)
-- Operator onboarding: [Sora Nexus operator onboarding](./nexus-operator-onboarding)
-- Telemetry remediation: [Nexus telemetry remediation plan](./nexus-telemetry-remediation)
+- نظرة عامة: [نظرة عامة على Nexus](./nexus-overview)
+- المواصفات: [مواصفات Nexus](./nexus-spec)
+- هندسة المسار: [Nexus نموذج المسار](./nexus-lane-model)
+- حشوات النقل والتوجيه: [Nexus ملاحظات الانتقال](./nexus-transition-notes)
+- تأهيل المشغل: [تأهيل المشغل Sora Nexus](./nexus-operator-onboarding)
+- معالجة القياس عن بعد: [Nexus خطة معالجة القياس عن بعد](./nexus-telemetry-remediation)

@@ -7,18 +7,19 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 5ca51ec624ebbb4b3760d5f2265d31047cd3b6492e21bdb10a3aa61655ccca69
 source_last_modified: "2025-12-29T18:16:35.069181+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Android Partner SLA Discovery Notes — Template
+# Android Partner SLA Discovery Notes — Загвар
 
-Use this template for every AND8 SLA discovery session. Store the filled copy
-under `docs/source/sdk/android/partner_sla_sessions/<partner>/<date>/minutes.md`
-and attach supporting artefacts (questionnaire responses, acknowledgements,
-attachments) in the same directory.
+AND8 SLA илрүүлэх сесс бүрт энэ загварыг ашиглаарай. Бүрэн хуулбарыг хадгална уу
+`docs/source/sdk/android/partner_sla_sessions/<partner>/<date>/minutes.md` доор
+болон туслах олдворуудыг хавсаргах (асуулгын хариулт, талархал,
+хавсралтууд) ижил лавлахад.
 
 ```
 Partner: <Name>                      Date: <YYYY-MM-DD>  Time: <UTC>
@@ -27,55 +28,55 @@ Android attendees: <Program Lead / Partner Eng / Support Eng / Compliance>
 Meeting link / ticket: <URL or ID>
 ```
 
-## 1. Agenda & Context
+## 1. Хэлэлцэх асуудал ба агуулга
 
-- Purpose of the session (pilot scope, release window, telemetry expectations).
-- Reference docs shared ahead of the call (support playbook, release calendar,
-  telemetry dashboards).
+- Чуулганы зорилго (туршилтын цар хүрээ, хувилбарын цонх, телеметрийн хүлээлт).
+- Дуудлагын өмнө хуваалцсан лавлагааны баримтууд (дэмжих ном, хувилбарын хуанли,
+  телеметрийн хяналтын самбар).
 
-## 2. Workload Overview
+## 2. Ажлын ачааллын тойм
 
-| Topic | Notes |
+| Сэдэв | Тэмдэглэл |
 |-------|-------|
-| Target workloads / chains | |
-| Expected transaction volume | |
-| Critical business windows / blackout periods | |
-| Regulatory regimes (GDPR, MAS, FISC, etc.) | |
-| Required languages / localisation | |
+| Зорилтот ажлын ачаалал / сүлжээ | |
+| Хүлээгдэж буй гүйлгээний хэмжээ | |
+| Бизнесийн эгзэгтэй цонхнууд / харанхуй үеүүд | |
+| Зохицуулалтын дэглэмүүд (GDPR, MAS, FISC гэх мэт) | |
+| Шаардлагатай хэл / нутагшуулах | |
 
-## 3. SLA Discussion
+## 3. SLA-ийн хэлэлцүүлэг
 
-| SLA Class | Partner expectation | Delta from baseline? | Action required |
+| SLA анги | Түншийн хүлээлт | Дельта үндсэн үзүүлэлтээс үү? | Үйлдэл хийх шаардлагатай |
 |-----------|--------------------|----------------------|-----------------|
-| Critical fix (48 h) | | Yes/No | |
-| High-severity (5 business days) | | Yes/No | |
-| Maintenance (30 days) | | Yes/No | |
-| Cutover notice (60 days) | | Yes/No | |
-| Incident communications cadence | | Yes/No | |
+| Чухал засвар (48 цаг) | | Тийм/Үгүй | |
+| Өндөр ноцтой (ажлын 5 өдөр) | | Тийм/Үгүй | |
+| Засвар үйлчилгээ (30 хоног) | | Тийм/Үгүй | |
+| Таслах мэдэгдэл (60 хоног) | | Тийм/Үгүй | |
+| Ослын харилцааны хэмнэл | | Тийм/Үгүй | |
 
-Document any additional SLA clauses requested by the partner (e.g. dedicated
-phone bridge, extra telemetry exports).
+Түншээс хүссэн нэмэлт SLA заалтуудыг баримтжуулах (жишээ нь: тусгайлан зориулсан
+утасны гүүр, нэмэлт телеметрийн экспорт).
 
-## 4. Telemetry & Access Requirements
+## 4. Телеметрийн болон хандалтын шаардлага
 
-- Grafana / Prometheus access needs:
-- Log/trace export requirements:
-- Offline evidence or dossier expectations:
+- Grafana / Prometheus хандалтын хэрэгцээ:
+- Бүртгэл/мөшгих экспортын шаардлага:
+- Офлайн нотлох баримт эсвэл файлын хүлээлт:
 
-## 5. Compliance & Legal Notes
+## 5. Дагаж мөрдөх болон хууль эрх зүйн тэмдэглэл
 
-- Jurisdictional notification requirements (statute + timing).
-- Required legal contacts for incident updates.
-- Data residency constraints / storage requirements.
+- Харьяаллын мэдэгдлийн шаардлага (хууль + цаг хугацаа).
+- Ослын мэдээг авахын тулд хууль ёсны холбоо барих шаардлагатай.
+- Өгөгдлийн оршин суух хязгаарлалт / хадгалах шаардлага.
 
-## 6. Decisions & Action Items
+## 6. Шийдвэр & Үйл ажиллагааны зүйл
 
-| Item | Owner | Due | Notes |
+| Зүйл | Эзэмшигч | Хугацаа | Тэмдэглэл |
 |------|-------|-----|-------|
 | | | | |
 
-## 7. Acknowledgement
+## 7. Талархал
 
-- Partner acknowledged baseline SLA? (Y/N)
-- Follow-up acknowledgement method (email / ticket / signature):
-- Attach confirming email or meeting minutes to this directory before closing.
+- Түнш нь үндсэн SLA-г хүлээн зөвшөөрсөн үү? (Тийм/Үгүй)
+- Дахин хүлээн зөвшөөрөх арга (и-мэйл / тасалбар / гарын үсэг):
+- Хаахаасаа өмнө баталгаажуулах имэйл эсвэл хурлын тэмдэглэлийг энэ лавлахад хавсаргана уу.

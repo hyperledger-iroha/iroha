@@ -8,43 +8,45 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: Operator Runbooks Index
 description: Canonical entry point for the migrated SoraFS operator runbooks.
 sidebar_label: Runbook Index
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-> Mirrors the owner ledger that lives under `docs/source/sorafs/runbooks/`.
-> Every new SoraFS operations guide must be linked here once it is published in
-> the portal build.
+> ასახავს მფლობელის დავთარს, რომელიც ცხოვრობს `docs/source/sorafs/runbooks/`-ის ქვეშ.
+> ყოველი ახალი SoraFS ოპერაციების სახელმძღვანელო უნდა იყოს მიბმული აქ, როგორც კი ის გამოქვეყნდება
+> პორტალის აშენება.
 
-Use this page to verify which runbooks have completed the migration from the
-source path, and the portal copy so reviewers can jump straight to the desired
-guide during the beta preview.
+გამოიყენეთ ეს გვერდი, რათა გადაამოწმოთ, რომელმა წიგნებმა დაასრულეს მიგრაცია
+წყაროს გზა და პორტალის ასლი, რათა მიმომხილველებმა პირდაპირ სასურველზე გადახტეს
+სახელმძღვანელო ბეტა გადახედვისას.
 
-## Beta preview host
+## ბეტა წინასწარი გადახედვის ჰოსტი
 
-The DocOps wave has now promoted the reviewer-approved beta preview host at
-`https://docs.iroha.tech/`. When pointing operators or reviewers to a migrated
-runbook, reference that hostname so they exercise the checksum-gated portal
-snapshot. Publishing/rollback procedures live in
+DocOps ტალღამ ახლა დააწინაურა მიმომხილველის მიერ დამტკიცებული ბეტა წინასწარი გადახედვის მასპინძელი
+`https://docs.iroha.tech/`. როდესაც მიუთითებს ოპერატორებს ან მიმომხილველებს მიგრაციაზე
+runbook, მითითება, რომ ჰოსტის სახელი, რათა მათ განახორციელონ checksum-gated პორტალი
+სნეპშოტი. გამოქვეყნების/დაბრუნების პროცედურები ცოცხალია
 [`devportal/preview-host-exposure`](../devportal/preview-host-exposure.md).
 
-| Runbook | Owner(s) | Portal copy | Source |
-|---------|----------|-------------|--------|
-| Gateway & DNS kickoff | Networking TL, Ops Automation, Docs/DevRel | [`sorafs/gateway-dns-runbook`](./gateway-dns-runbook.md) | `docs/source/sorafs_gateway_dns_design_runbook.md` |
-| SoraFS operations playbook | Docs/DevRel | [`sorafs/operations-playbook`](./operations-playbook.md) | `docs/source/sorafs/operations_playbook.md` |
-| Capacity reconciliation | Treasury / SRE | [`sorafs/capacity-reconciliation`](./capacity-reconciliation.md) | `docs/source/sorafs/runbooks/capacity_reconciliation.md` |
-| Pin registry ops | Tooling WG | [`sorafs/pin-registry-ops`](./pin-registry-ops.md) | `docs/source/sorafs/pin_registry_ops.md` |
-| Node operations checklist | Storage Team, SRE | [`sorafs/node-operations`](./node-operations.md) | `docs/source/sorafs/runbooks/sorafs_node_ops.md` |
-| Dispute & revocation runbook | Governance Council | [`sorafs/dispute-revocation-runbook`](./dispute-revocation-runbook.md) | `docs/source/sorafs/dispute_revocation_runbook.md` |
-| Staging manifest playbook | Docs/DevRel | [`sorafs/staging-manifest-playbook`](./staging-manifest-playbook.md) | `docs/source/sorafs/staging_manifest_playbook.md` |
-| Taikai anchor observability | Media Platform WG / DA Program / Networking TL | [`sorafs/taikai-anchor-runbook`](./taikai-anchor-runbook.md) | `docs/source/taikai_anchor_monitoring.md` |
+| Runbook | მფლობელ(ებ)ი | პორტალი ასლი | წყარო |
+|---------|----------|------------|--------|
+| Gateway & DNS kickoff | ქსელის TL, ოპერაციების ავტომატიზაცია, Docs/DevRel | [`sorafs/gateway-dns-runbook`](./gateway-dns-runbook.md) | `docs/source/sorafs_gateway_dns_design_runbook.md` |
+| SoraFS ოპერაციების სათამაშო წიგნი | Docs/DevRel | [`sorafs/operations-playbook`](./operations-playbook.md) | `docs/source/sorafs/operations_playbook.md` |
+| შესაძლებლობების შეჯერება | ხაზინა / SRE | [`sorafs/capacity-reconciliation`](./capacity-reconciliation.md) | `docs/source/sorafs/runbooks/capacity_reconciliation.md` |
+| პინი რეესტრის ოპერაციები | ინსტრუმენტები WG | [`sorafs/pin-registry-ops`](./pin-registry-ops.md) | `docs/source/sorafs/pin_registry_ops.md` |
+| კვანძის ოპერაციების ჩამონათვალი | შენახვის გუნდი, SRE | [`sorafs/node-operations`](./node-operations.md) | `docs/source/sorafs/runbooks/sorafs_node_ops.md` |
+| დავის და გაუქმების სახელმძღვანელო | მმართველობის საბჭო | [`sorafs/dispute-revocation-runbook`](./dispute-revocation-runbook.md) | `docs/source/sorafs/dispute_revocation_runbook.md` |
+| მანიფესტის დადგმა სათამაშო წიგნი | Docs/DevRel | [`sorafs/staging-manifest-playbook`](./staging-manifest-playbook.md) | `docs/source/sorafs/staging_manifest_playbook.md` |
+| ტაიკაის წამყვანის დაკვირვებადობა | მედია პლატფორმა WG / DA პროგრამა / ქსელში TL | [`sorafs/taikai-anchor-runbook`](./taikai-anchor-runbook.md) | `docs/source/taikai_anchor_monitoring.md` |
 
-## Verification checklist
+## შემოწმების სია
 
-- [x] Portal build links to this index (sidebar entry).
-- [x] Every migrated runbook lists the canonical source path to keep reviewers
-  aligned during doc reviews.
-- [x] The DocOps preview pipeline blocks merges when a listed runbook is missing
-  from the portal output.
+- [x] პორტალის აშენების ბმულები ამ ინდექსზე (გვერდითა ზოლის ჩანაწერი).
+- [x] ყოველი მიგრირებული წიგნში ჩამოთვლილია კანონიკური წყაროს გზა რეცენზენტების შესანარჩუნებლად
+  გასწორებულია დოკუმენტის განხილვისას.
+- [x] DocOps-ის წინასწარი გადახედვის მილსადენის ბლოკები ერწყმის, როდესაც ჩამოთვლილი runbook აკლია
+  პორტალის გამომავალიდან.
 
-Future migrations (e.g., new chaos drills or governance appendices) should add a
-row to the table above and update the DocOps checklist embedded in
+მომავალი მიგრაციები (მაგ., ახალი ქაოსური წვრთნები ან მმართველობის დანართები) უნდა დაემატოს ა
+გადადით ზემოთ ცხრილში და განაახლეთ ჩაშენებული DocOps საკონტროლო სია
 `docs/examples/docs_preview_request_template.md`.

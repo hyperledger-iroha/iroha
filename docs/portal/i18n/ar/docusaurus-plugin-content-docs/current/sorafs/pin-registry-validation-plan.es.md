@@ -4,36 +4,38 @@ direction: rtl
 source: docs/portal/docs/sorafs/pin-registry-validation-plan.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: pin-registry-validation-plan
-title: Plan de validacion de manifests del Pin Registry
-sidebar_label: Validacion del Pin Registry
-description: Plan de validacion para el gating de ManifestV1 previo al rollout del Pin Registry SF-4.
+المعرف: خطة التحقق من صحة السجل
+العنوان: خطة التحقق من صحة بيانات سجل Pin
+Sidebar_label: التحقق من صحة السجل Pin
+الوصف: خطة التحقق من صحة بوابة ManifestV1 السابقة لبدء تشغيل Pin Registry SF-4.
 ---
 
-:::note Fuente canónica
-Esta pagina refleja `docs/source/sorafs/pin_registry_validation_plan.md`. Mantén ambas ubicaciones alineadas mientras la documentación heredada siga activa.
+:::ملاحظة فوينتي كانونيكا
+هذه الصفحة تعكس `docs/source/sorafs/pin_registry_validation_plan.md`. حافظ على مواقعك المتواجدة أثناء تنشيط المستندات المخزنة.
 :::
 
-# Plan de validacion de manifests del Pin Registry (Preparacion SF-4)
+# خطة التحقق من بيانات السجل السري (الإعداد SF-4)
 
-Este plan describe los pasos requeridos para integrar la validacion de
-`sorafs_manifest::ManifestV1` en el futuro contrato del Pin Registry para que el
-trabajo de SF-4 se apoye en el tooling existente sin duplicar la logica de
-encode/decode.
+تصف هذه الخطة الخطوات المطلوبة لتكامل التحقق من الصحة
+`sorafs_manifest::ManifestV1` وعقد Pin Registry المستقبلي من أجل ذلك
+تعمل SF-4 على مساعدة الأدوات الموجودة دون تكرار المنطق
+ترميز/فك تشفير.
 
-## Objetivos
+##الأهداف
 
-1. Las rutas de envio del host verifican la estructura del manifest, el perfil de
-   chunking y los envelopes de gobernanza antes de aceptar propuestas.
-2. Torii y los servicios de gateway reutilizan las mismas rutinas de validacion
-   para asegurar un comportamiento determinista entre hosts.
-3. Las pruebas de integracion cubren casos positivos/negativos para aceptacion de
-   manifests, enforcement de politica y telemetria de errores.
+1. تتحقق طرق إرسال المضيف من بنية البيان والملف
+   تقطيع المغلفات وإدارتها قبل قبول العرض.
+2. Torii وخدمات البوابة تعيد استخدام نفس إجراءات التحقق من الصحة
+   لضمان سلوك محدد بين المضيفين.
+3. تجارب التكامل تشمل الحالات الإيجابية/السلبية لقبولها
+   البيانات، وإنفاذ السياسة وقياس الأخطاء عن بعد.
 
-## Arquitectura
+## الهندسة المعمارية
 
 ```mermaid
 flowchart LR
@@ -45,45 +47,38 @@ flowchart LR
     registry --> torii
 ```
 
-### Componentes
+### المكونات- `ManifestValidator` (وحدة جديدة في الصندوق `sorafs_manifest` أو `sorafs_pin`)
+  يغلف الشيكات الهيكلية وبوابات السياسة.
+- Torii يعرض نقطة نهاية gRPC `SubmitManifest` التي اتصل بها
+  `ManifestValidator` قبل تجديد العقد.
+- يمكن لطريق جلب البوابة استهلاك نفس المدقق اختياريًا
+  تظهر بيانات ذاكرة التخزين المؤقت الجديدة من السجل.
 
-- `ManifestValidator` (nuevo modulo en el crate `sorafs_manifest` o `sorafs_pin`)
-  encapsula los chequeos estructurales y los gates de politica.
-- Torii expone un endpoint gRPC `SubmitManifest` que llama a
-  `ManifestValidator` antes de reenviar al contrato.
-- La ruta de fetch del gateway puede consumir opcionalmente el mismo validador
-  al cachear nuevos manifests desde el registry.
+## قم بإلغاء تحديد الأشياء| تاريا | الوصف | مسؤول | حالة |
+|------|-------------------|------------|------|------|------|------|
+| Esqueleto de API V1 | إضافة `validate_manifest(manifest: &ManifestV1, policy: &PinPolicyInputs) -> Result<(), ValidationError>` إلى `sorafs_manifest`. قم بتضمين التحقق من ملخص BLAKE3 والبحث عن سجل المقطع. | الأشعة تحت الحمراء الأساسية | ✅هيكو | المساعدون المشاركون (`validate_chunker_handle`، `validate_pin_policy`، `validate_manifest`) يعيشون الآن في `sorafs_manifest::validation`. |
+| كابلادو دي بوليتيكا | قم بتعيين التكوين السياسي للسجل (`min_replicas`، ونوافذ انتهاء الصلاحية، ومقابض القطع المسموح بها) ومدخلات التحقق. | الحوكمة / البنية التحتية الأساسية | Pendiente — rastreado en SORAFS-215 |
+| التكامل Torii | التحقق من صحة البيانات في Torii; تحويل الأخطاء Norito estructurados ante Fallas. | فريق Torii | التخطيط — rastreado en SORAFS-216 |
+| كعب العقد المضيف | تأكد من أن نقطة الدخول الخاصة بعقد إعادة الشراء تظهر سقوط علامة التحقق من الصحة؛ مقاييس المقاييس. | فريق العقد الذكي | ✅هيكو | `RegisterPinManifest` الآن يستدعي المدقق المشترك (`ensure_chunker_handle`/`ensure_pin_policy`) قبل تغيير الحالة واختبارات الوحدة التي تعالج حالات الفشل. || الاختبارات | تجميع الاختبارات الوحدوية للمدقق + حالات محاولة بناء البيانات غير الصالحة؛ اختبارات التكامل في `crates/iroha_core/tests/pin_registry.rs`. | نقابة ضمان الجودة | 🟠 أتقدم | يتم دمج الاختبارات الموحدة للمدقق جنبًا إلى جنب مع عمليات الاسترداد عبر السلسلة؛ لا جناح كامل من التكامل إذا كان متوقعا. |
+| مستندات | قم بتحديث `docs/source/sorafs_architecture_rfc.md` و`migration_roadmap.md` مرة واحدة حيث يتم عرض المدقق؛ توثيق باستخدام CLI en `docs/source/sorafs/manifest_pipeline.md`. | فريق المستندات | Pendiente — rastreado en DOCS-489 |
 
-## Desglose de tareas
+## التبعيات
 
-| Tarea | Descripcion | Responsable | Estado |
-|------|-------------|-------------|--------|
-| Esqueleto de API V1 | Agregar `validate_manifest(manifest: &ManifestV1, policy: &PinPolicyInputs) -> Result<(), ValidationError>` a `sorafs_manifest`. Incluir verificacion de digest BLAKE3 y lookup del chunker registry. | Core Infra | ✅ Hecho | Los helpers compartidos (`validate_chunker_handle`, `validate_pin_policy`, `validate_manifest`) ahora viven en `sorafs_manifest::validation`. |
-| Cableado de politica | Mapear la configuracion de politica del registry (`min_replicas`, ventanas de expiracion, handles de chunker permitidos) a las entradas de validacion. | Governance / Core Infra | Pendiente — rastreado en SORAFS-215 |
-| Integracion Torii | Llamar al validador dentro del envio de manifests en Torii; devolver errores Norito estructurados ante fallas. | Torii Team | Planificado — rastreado en SORAFS-216 |
-| Stub de contrato host | Asegurar que el entrypoint del contrato rechace manifests que fallen el hash de validacion; exponer contadores de metricas. | Smart Contract Team | ✅ Hecho | `RegisterPinManifest` ahora invoca el validador compartido (`ensure_chunker_handle`/`ensure_pin_policy`) antes de mutar el estado y los tests unitarios cubren los casos de falla. |
-| Tests | Agregar tests unitarios para el validador + casos trybuild para manifests invalidos; tests de integracion en `crates/iroha_core/tests/pin_registry.rs`. | QA Guild | 🟠 En progreso | Los tests unitarios del validador aterrizaron junto con los rechazos on-chain; la suite completa de integracion sigue pendiente. |
-| Docs | Actualizar `docs/source/sorafs_architecture_rfc.md` y `migration_roadmap.md` una vez que el validador aterrice; documentar uso de CLI en `docs/source/sorafs/manifest_pipeline.md`. | Docs Team | Pendiente — rastreado en DOCS-489 |
+- الانتهاء من اختبار Norito لـ Pin Registry (المرجع: العنصر SF-4 في خريطة الطريق).
+- مغلفات تسجيل الشركات من خلال المشورة (تأكد من رسم الخرائط للمدقق البحري المحدد).
+- قرارات التصديق على Torii لإرسال البيانات.
 
-## Dependencias
+## التخفيضات والتخفيفات
 
-- Finalizacion del esquema Norito del Pin Registry (ref: item SF-4 en el roadmap).
-- Envelopes del chunker registry firmados por el consejo (asegura que el mapping del validador sea determinista).
-- Decisiones de autenticacion de Torii para el envio de manifests.
-
-## Riesgos y mitigaciones
-
-| Riesgo | Impacto | Mitigacion |
+| ريسجو | امباكتو | التخفيف |
 |--------|---------|------------|
-| Interpretacion divergente de politica entre Torii y el contrato | Aceptacion no determinista. | Compartir crate de validacion + agregar tests de integracion que comparen decisiones del host vs on-chain. |
-| Regresion de performance para manifests grandes | Envios mas lentos | Medir via cargo criterion; considerar cachear resultados de digest del manifest. |
-| Deriva de mensajes de error | Confusion de operadores | Definir codigos de error Norito; documentarlos en `manifest_pipeline.md`. |
+| تفسير متباين للسياسة بين Torii والعقد | القبول ليس محددا. | مشاركة صندوق التحقق من الصحة + اختبارات التكامل المجمعة لمقارنة قرارات المضيف مقابل ما هو متصل بالسلسلة. |
+| تراجع الأداء للبيانات الكبرى | Envios mas lentos | ميدير عبر معيار الشحن؛ ضع في اعتبارك نتائج التخزين المؤقت لملخص البيان. |
+| مشتق من رسائل الخطأ | ارتباك المشغلين | تحديد رموز الخطأ Norito؛ Documentarlos en `manifest_pipeline.md`. |
 
-## Objetivos de cronograma
+## Objetivos de cronograma- الموسم 1: اختبار المستوى `ManifestValidator` + الاختبارات الموحدة.
+- الأسبوع 2: قم بتوصيل البيئة إلى Torii وقم بتحديث CLI لكشف أخطاء التحقق من الصحة.
+- الفصل 3: تنفيذ خطافات العقد، وجمع اختبارات التكامل، وتحديث المستندات.
+- الفصل 4: قم بالمراسلة من البداية إلى النهاية مع الإدخال في سجل الهجرة والتقاط موافقة النصيحة.
 
-- Semana 1: aterrizar el esqueleto `ManifestValidator` + tests unitarios.
-- Semana 2: cablear el envio en Torii y actualizar la CLI para mostrar errores de validacion.
-- Semana 3: implementar hooks del contrato, agregar tests de integracion, actualizar docs.
-- Semana 4: correr ensayo end-to-end con entrada en el ledger de migracion y capturar aprobacion del consejo.
-
-Este plan se referenciara en el roadmap una vez que comience el trabajo del validador.
+يتم الرجوع إلى هذه الخطة في خريطة الطريق عندما تبدأ وظيفة المدقق.

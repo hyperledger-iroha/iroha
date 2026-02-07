@@ -4,28 +4,30 @@ direction: ltr
 source: docs/portal/docs/norito/examples/call-transfer-asset.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
 slug: /norito/examples/call-transfer-asset
-title: Вызвать перенос с хоста из Kotodama
-description: Показывает, как точка входа Kotodama может вызвать инструкцию хоста `transfer_asset` с встроенной проверкой метаданных.
-source: crates/ivm/docs/examples/08_call_transfer_asset.ko
+título: Вызвать перенос с хоста из Kotodama
+descripción: Coloque el cable de alimentación Kotodama en la instalación del servidor `transfer_asset` con un controlador de metadano integrado.
+fuente: crates/ivm/docs/examples/08_call_transfer_asset.ko
 ---
 
-Показывает, как точка входа Kotodama может вызвать инструкцию хоста `transfer_asset` с встроенной проверкой метаданных.
+Coloque el cable de alimentación Kotodama en la instalación del servidor `transfer_asset` con un controlador de metadano integrado.
 
 ## Пошаговый обход реестра
 
 - Пополните полномочия контракта (например `ih58...`) активом, который он будет переводить, и выдайте полномочию роль `CanTransfer` или эквивалентное разрешение.
-- Вызовите точку входа `call_transfer_asset`, чтобы перевести 5 единиц с аккаунта контракта на `ih58...`, отражая то, как ончейн-автоматизация может оборачивать вызовы хоста.
-- Проверьте балансы через `FindAccountAssets` или `iroha_cli ledger assets list --account ih58...` и просмотрите события, чтобы подтвердить, что guard метаданных записал контекст перевода.
+- Utilice este vídeo `call_transfer_asset`, antes de 5 ediciones del contrato de cuenta con `ih58...`, además de eso. ончейн-автоматизация может оборачивать вызовы хоста.
+- Guarde los equilibrios entre `FindAccountAssets` y `iroha_cli ledger assets list --account ih58...` y promueva la seguridad, la protección y la protección de metadanos. записал контекст перевода.
 
 ## Связанные руководства SDK
 
-- [Quickstart Rust SDK](/sdks/rust)
-- [Quickstart Python SDK](/sdks/python)
-- [Quickstart JavaScript SDK](/sdks/javascript)
+- [SDK de inicio rápido de Rust](/sdks/rust)
+- [SDK de Python de inicio rápido](/sdks/python)
+- [SDK de JavaScript de inicio rápido](/sdks/javascript)
 
 [Скачать исходник Kotodama](/norito-snippets/call-transfer-asset.ko)
 

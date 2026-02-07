@@ -7,56 +7,57 @@ generator: scripts/sync_docs_i18n.py
 source_hash: cb0a770fac1086462d949dbf17dd5a05f133169e57d50b0d90ddb48ae05f2853
 source_last_modified: "2026-01-05T09:28:11.822642+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-//! Dependency Audit Summary
+//! မှီခိုမှု စာရင်းစစ် အကျဉ်းချုပ်
 
-Date: 2025-09-01
+ရက်စွဲ- 2025-09-01
 
-Scope: Workspace-wide review of all crates declared in Cargo.toml files and resolved in Cargo.lock. Performed with cargo-audit against the RustSec advisory DB plus manual review for crate legitimacy and “main crate” choices for algorithms.
+နယ်ပယ်- Cargo.toml ဖိုင်များတွင် ကြေညာထားသော သေတ္တာအားလုံး၏ Workspace တစ်ခုလုံးကို ပြန်လည်သုံးသပ်ပြီး Cargo.lock တွင် ဖြေရှင်းထားသည်။ ကုန်တင်-စာရင်းစစ်ဖြင့် RustSec အကြံပေး DB နှင့် အယ်လဂိုရီသမ်များအတွက် တရားဝင်ဖြစ်မှုနှင့် အယ်လဂိုရီသမ်များအတွက် "ပင်မသေတ္တာ" ရွေးချယ်မှုများအတွက် လူကိုယ်တိုင် ပြန်လည်သုံးသပ်ခြင်း နှင့် လုပ်ဆောင်ခဲ့သည်။
 
-Tools/commands run:
-- `cargo tree -d --workspace --locked --offline` – inspected duplicate versions
-- `cargo audit` – scanned Cargo.lock for known vulnerabilities and yanked crates
+ကိရိယာများ/အမိန့်စာများ လုပ်ဆောင်သည်-
+- `cargo tree -d --workspace --locked --offline` - မိတ္တူဗားရှင်းများကို စစ်ဆေးထားသည်။
+- `cargo audit` - သိရှိထားသည့် အားနည်းချက်များနှင့် တွန်းထားသော သေတ္တာများအတွက် စကင်န်ဖတ်ထားသော Cargo.lock
 
-Security advisories found (now 0 vulns; 2 warnings):
-- crossbeam-channel — RUSTSEC-2025-0024
-  - Fixed: bumped to `0.5.15` in `crates/ivm/Cargo.toml`.
+လုံခြုံရေး အကြံပေးချက်များကို တွေ့ရှိသည် (ယခု 0 vulns; သတိပေးချက် 2 ခု)
+- အလျားလိုက်-ချန်နယ် — RUSTSEC-2025-0024
+  - ပြင်ဆင်ထားသည်- `crates/ivm/Cargo.toml` တွင် `0.5.15` သို့ ထိသွားသည်။
 
-  - Fixed: flipped `pprof` to `prost-codec` in `crates/iroha_torii/Cargo.toml`.
+  - ပြင်ဆင်ထားသည်- `pprof` ကို `crates/iroha_torii/Cargo.toml` တွင် `prost-codec` သို့ ပြောင်းထားသည်။
 
-- ring — RUSTSEC-2025-0009
-  - Fixed: bumped QUIC/TLS stack (`quinn 0.11`, `rustls 0.23`, `tokio-rustls 0.26`) and updated WS stack to `tungstenite/tokio-tungstenite 0.24`. Forced lock to `ring 0.17.12` via `cargo update -p ring --precise 0.17.12`.
+- လက်စွပ် - RUSTSEC-2025-0009
+  - ပြင်ဆင်ထားသည်- QUIC/TLS stack (`quinn 0.11`၊ `rustls 0.23`၊ `tokio-rustls 0.26`) နှင့် WS stack ကို `tungstenite/tokio-tungstenite 0.24` သို့ အပ်ဒိတ်လုပ်ထားသည်။ `cargo update -p ring --precise 0.17.12` မှတစ်ဆင့် `ring 0.17.12` သို့ အတင်းအဓမ္မသော့ခတ်ထားသည်။
 
-Remaining advisories: none. Remaining warnings: `backoff` (unmaintained), `derivative` (unmaintained).
+လက်ကျန် အကြံပေးချက်များ- မရှိပါ။ လက်ကျန်သတိပေးချက်များ- `backoff` (မထိန်းသိမ်းရသေး)၊ `derivative` (မထိန်းသိမ်းရသေး)။
 
-Legitimacy and “main crate” assessment (spotlight):
-- Hashing: `sha2` (RustCrypto), `blake2` (RustCrypto), `tiny-keccak` (widely used) — canonical choices.
-- AEAD/Symmetric: `aes-gcm`, `chacha20poly1305`, `aead` traits (RustCrypto) — canonical.
-- Signatures/ECC: `ed25519-dalek`, `x25519-dalek` (dalek project), `k256` (RustCrypto), `secp256k1` (libsecp bindings) — all legitimate; prefer a single secp256k1 stack (`k256` for pure Rust or `secp256k1` for libsecp) to reduce surface area.
-- BLS12-381/ZK: `blstrs`, `halo2_*` — widely used in production ZK ecosystems; legitimate.
-- PQ: `pqcrypto-dilithium`, `pqcrypto-traits` — legit reference crates.
-- TLS: `rustls`, `tokio-rustls`, `hyper-rustls` — canonical modern Rust TLS stack.
-- Noise: `snow` — canonical implementation.
-- Serialization: `parity-scale-codec` is canonical for SCALE. Serde has been removed from production dependencies across the workspace; Norito derives/writers cover every runtime path. Any residual Serde references live in historical documentation, guardrail scripts, or test-only allowlists.
-- FFI/libs: `libsodium-sys-stable`, `openssl` — legitimate; prefer Rustls over OpenSSL in production paths (current code already does).
+တရားဝင်မှုနှင့် "ပင်မသေတ္တာ" အကဲဖြတ်မှု (မီးမောင်းထိုးပြ)-
+- Hashing- `sha2` (RustCrypto), `blake2` (RustCrypto), `tiny-keccak` (တွင်ကျယ်စွာအသုံးပြုသည်) — ကျမ်းဂန်ရွေးချယ်မှုများ။
+- AEAD/Symmetric- `aes-gcm`, `chacha20poly1305`, `aead` စရိုက်များ (RustCrypto) — ကျမ်းဂန်ဆိုင်ရာ။
+- လက်မှတ်များ/ECC- `ed25519-dalek`, `x25519-dalek` (dalek ပရောဂျက်), `k256` (RustCrypto), `secp256k1` (libsecp bindings) — အားလုံးတရားဝင်; မျက်နှာပြင်ဧရိယာကိုလျှော့ချရန်အတွက် secp256k1 stack (`k256` for pure Rust သို့မဟုတ် `secp256k1` for libsecp) ကို နှစ်သက်သည်။
+- BLS12-381/ZK- `blstrs`, `halo2_*` — ထုတ်လုပ်မှု ZK ဂေဟစနစ်များတွင် တွင်ကျယ်စွာ အသုံးပြုသည်။ တရားဝင်
+- PQ: `pqcrypto-dilithium`, `pqcrypto-traits` — တရားဝင်ရည်ညွှန်းသေတ္တာများ။
+- TLS: `rustls`၊ `tokio-rustls`၊ `hyper-rustls` — canonical ခေတ်မီ Rust TLS စတက်။
+- ဆူညံသံ- `snow` — canonical အကောင်အထည်ဖော်မှု။
+- Serialization- `parity-scale-codec` သည် SCALE အတွက် canonical ဖြစ်သည်။ Serde ကို အလုပ်ခွင်အနှံ့ ထုတ်လုပ်မှု မှီခိုမှုမှ ဖယ်ရှားလိုက်သည် ။ Norito သည် runtime လမ်းကြောင်းတိုင်းကို ဆင်းသက်လာသည်/စာရေးသူများ။ ကျန်ရှိနေသည့် Serde ကိုးကားချက်များသည် သမိုင်းဆိုင်ရာ စာရွက်စာတမ်းများ၊ ကာရန်းစခရစ်များ သို့မဟုတ် စမ်းသပ်မှုသီးသန့်စာရင်းများတွင် နေထိုင်ပါသည်။
+- FFI/libs- `libsodium-sys-stable`၊ `openssl` — တရားဝင်၊ ထုတ်လုပ်မှုလမ်းကြောင်းများတွင် OpenSSL ထက် Rustls ကို ပိုနှစ်သက်သည် (လက်ရှိကုဒ်ရှိပြီးသား)။
 
-Recommendations:
-- Address warnings:
-  - Consider replacing `backoff` with `retry`/`futures-retry` or a local exponential backoff helper.
-  - Replace `derivative` derives with manual impls or `derive_more` where applicable.
-- Medium: unify on either `k256` or `secp256k1` where possible to reduce duplicate implementations (leave both only if genuinely required).
-- Medium: review `poseidon-primitives 0.2.0` provenance for ZK usage; if feasible, consider aligning with an Arkworks/Halo2-native Poseidon implementation to minimize parallel ecosystems.
+အကြံပြုချက်များ-
+- လိပ်စာသတိပေးချက်များ
+  - `backoff` ကို `retry`/`futures-retry` သို့မဟုတ် ဒေသဆိုင်ရာ ထပ်ကိန်းပြန်အကူပေးသူဖြင့် အစားထိုးရန် စဉ်းစားပါ။
+  - `derivative` ကို manual impls သို့မဟုတ် `derive_more` ဖြင့် အစားထိုးအသုံးပြုနိုင်ပါသည်။
+- အလယ်အလတ်- ပွားနေသော အကောင်အထည်ဖော်မှုများကို လျှော့ချရန် ဖြစ်နိုင်သည့် `k256` သို့မဟုတ် `secp256k1` ပေါ်တွင် ပေါင်းစည်းပါ (အမှန်တကယ် လိုအပ်မှသာ နှစ်ခုလုံးကို ချန်ထားခဲ့ပါ)။
+- အလတ်စား- ZK အသုံးပြုမှုအတွက် `poseidon-primitives 0.2.0` သက်သေကို ပြန်လည်သုံးသပ်ပါ။ ဖြစ်နိုင်ပါက၊ မျဉ်းပြိုင်ဂေဟစနစ်များကို လျှော့ချရန် Arkworks/Halo2-native Poseidon အကောင်အထည်ဖော်မှုဖြင့် ချိန်ညှိရန် စဉ်းစားပါ။
 
-Notes:
-- `cargo tree -d` shows expected duplicate major versions (`bitflags` 1/2, multiple `ring`), not by itself a security risk but increases build surface.
-- No typosquat-like crates were observed; all names and sources resolve to well-known ecosystem crates or internal workspace members.
-- Experimental: added `iroha_crypto` feature `bls-backend-blstrs` to begin migrating BLS to a blstrs‑only backend (removes dependence on arkworks when enabled). Default remains `w3f-bls` to avoid behavior/encoding changes. Alignment plan:
-  - Add round-trip fixtures in `crates/iroha_crypto/tests/bls_backend_compat.rs` that derive keys once and assert equality across both backends, covering `SecretKey`, `PublicKey`, and signature aggregation.
+မှတ်စုများ-
+- `cargo tree -d` သည် မျှော်လင့်ထားသော မိတ္တူပွားနေသော အဓိကဗားရှင်းများ (`bitflags` 1/2၊ multiple `ring`) ကို မိမိကိုယ်တိုင်က လုံခြုံရေးအန္တရာယ်မဟုတ်ဘဲ တည်ဆောက်မှုမျက်နှာပြင်ကို တိုးစေသည်။
+- typosquat နှင့်တူသော သေတ္တာများကို မတွေ့ရှိရပါ။ အမည်များနှင့် အရင်းအမြစ်များအားလုံးသည် လူသိများသော ဂေဟစနစ်သေတ္တာများ သို့မဟုတ် အတွင်းပိုင်းအလုပ်ခွင်အဖွဲ့ဝင်များကို ဖြေရှင်းပေးသည်။
+- စမ်းသပ်မှု- `iroha_crypto` အင်္ဂါရပ် `bls-backend-blstrs` ကို BLS ကို blstrs သီးသန့်နောက်ကွယ်သို့ စတင်ပြောင်းရွှေ့ရန် (ဖွင့်ထားသောအခါ arkworks ပေါ်တွင်မှီခိုမှုကို ဖယ်ရှားသည်)။ အပြုအမူ/ကုဒ်ပြောင်းခြင်းများကို ရှောင်ရှားရန် ပုံသေမှာ `w3f-bls` ရှိပါသည်။ ချိန်ညှိမှု အစီအစဉ်-
+  - `SecretKey`၊ `PublicKey` နှင့် လက်မှတ်ပေါင်းစည်းခြင်းတို့ကို ဖုံးအုပ်ထားသော သော့များကို တစ်ကြိမ်ရရှိပြီး နောက်ခံနှစ်ခုလုံးတွင် တန်းတူညီမျှမှုကို အခိုင်အမာအခိုင်အမာရရှိသည့် `crates/iroha_crypto/tests/bls_backend_compat.rs` တွင် အသွားအပြန် ပွဲစဉ်များကို ပေါင်းထည့်ပါ။
 
-Follow-ups (proposed work items):
-- Keep the Serde guardrails in CI (`scripts/check_no_direct_serde.sh`, `scripts/deny_serde_json.sh`) so new production usages cannot be introduced.
+နောက်ဆက်တွဲများ (အဆိုပြုထားသော အလုပ်အကြောင်းအရာများ)
+- Serde guardrails များကို CI (`scripts/check_no_direct_serde.sh`, `scripts/deny_serde_json.sh`) တွင်ထားရှိထားပါက ထုတ်လုပ်မှုအသုံးပြုမှုအသစ်များကို မိတ်ဆက်မရနိုင်ပါ။
 
-Testing performed for this audit:
-- Ran `cargo audit` with the latest advisory DB; verified the four advisories and their dependency trees.
-- Searched for direct dependency declarations of affected crates to pinpoint fix locations.
+ဤစစ်ဆေးမှုအတွက် စမ်းသပ်ခြင်း-
+- နောက်ဆုံး အကြံပေး DB ဖြင့် `cargo audit` ကို ပြေးပါ။ အကြံပေးချက်လေးခုနှင့် ၎င်းတို့၏ မှီခိုမှုသစ်ပင်များကို စိစစ်ခဲ့သည်။
+- ပြုပြင်ရန်တည်နေရာကိုသိရှိနိုင်စေရန် ထိခိုက်သေတ္တာများ၏ တိုက်ရိုက်မှီခိုမှုကြေငြာချက်များကို ရှာဖွေခဲ့သည်။

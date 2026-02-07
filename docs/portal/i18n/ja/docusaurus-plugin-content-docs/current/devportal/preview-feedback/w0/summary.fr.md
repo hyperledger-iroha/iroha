@@ -4,61 +4,63 @@ direction: ltr
 source: docs/portal/docs/devportal/preview-feedback/w0/summary.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: preview-feedback-w0-summary
-title: Digest des retours mi-parcours W0
-sidebar_label: Retours W0 (mi-parcours)
-description: Points de controle, constats et actions de mi-parcours pour la vague de preview des maintainers core.
+id: プレビュー-フィードバック-w0-まとめ
+タイトル: Digest des retours mi-parcours W0
+サイドバーラベル: ルトゥール W0 (ミパルクール)
+説明: 管理者コアの曖昧なプレビューを提供する、管理ポイント、統計情報、およびアクションの管理。
 ---
 
-| Element | Details |
+|要素 |詳細 |
 | --- | --- |
-| Vague | W0 - Maintainers core |
-| Date du digest | 2025-03-27 |
-| Fenetre de review | 2025-03-25 -> 2025-04-08 |
-| Participants | docs-core-01, sdk-rust-01, sdk-js-01, sorafs-ops-01, observability-01 |
-| Tag d'artefact | `preview-2025-03-24` |
+|あいまい | W0 - メンテナコア |
+|ダイジェストの日付 | 2025-03-27 |
+|フェネトレ・ド・レビュー | 2025-03-25 -> 2025-04-08 |
+|参加者 | docs-core-01、sdk-rust-01、sdk-js-01、sorafs-ops-01、observability-01 |
+|タグ・ダルティファクト | `preview-2025-03-24` |
 
-## Points saillants
+## ポイントの船員
 
-1. **Workflow de checksum** - Tous les reviewers ont confirme que `scripts/preview_verify.sh`
-   a reussi contre le couple descriptor/archive partage. Aucun override manuel requis.
-2. **Retours de navigation** - Deux problemes mineurs d'ordre du sidebar ont ete signales
-   (`docs-preview/w0 #1-#2`). Les deux sont routes vers Docs/DevRel et ne bloquent pas la
-   vague.
-3. **Parite des runbooks SoraFS** - sorafs-ops-01 a demande des liens croises plus clairs
-   entre `sorafs/orchestrator-ops` et `sorafs/multi-source-rollout`. Issue de suivi ouverte;
-   a traiter avant W1.
-4. **Revue de telemetrie** - observability-01 a confirme que `docs.preview.integrity`,
-   `TryItProxyErrors` et les logs du proxy Try-it sont restes au vert; aucune alerte n'a
-   ete declenchee.
+1. **チェックサムのワークフロー** - レビュー担当者が確認しない `scripts/preview_verify.sh`
+   reussi contre le couple 記述子/アーカイブ部分。 Aucun はマヌエルの要求をオーバーライドします。
+2. **ナビゲーションの詳細** - シグナルに関するサイドバーの詳細な問題
+   (`docs-preview/w0 #1-#2`)。ルートと Docs/DevRel およびブロック パスの詳細
+   曖昧な。
+3. **ランブック SoraFS** のパリテ - sorafs-ops-01 クロワーズとクレアの要求
+   `sorafs/orchestrator-ops` と `sorafs/multi-source-rollout` を入力してください。問題を解決します。
+   トレイターアバントW1。
+4. **遠隔測定のレビュー** - 可観測性-01 確認クエリ `docs.preview.integrity`、
+   `TryItProxyErrors` プロキシのログを試してみてください。オーキュン・アラート・ナ
+   エテ・デクレンシェ。
 
-## Actions
+## アクション
 
-| ID | Description | Responsable | Statut |
+| ID |説明 |責任者 |法令 |
 | --- | --- | --- | --- |
-| W0-A1 | Reordonner les entrees du sidebar du devportal pour mettre en avant les docs pour reviewers (`preview-invite-*` regroupes). | Docs-core-01 | Termine - le sidebar liste maintenant les docs reviewers de facon contigue (`docs/portal/sidebars.js`). |
-| W0-A2 | Ajouter un lien croise explicite entre `sorafs/orchestrator-ops` et `sorafs/multi-source-rollout`. | Sorafs-ops-01 | Termine - chaque runbook pointe desormais vers l'autre pour que les operateurs voient les deux guides pendant les rollouts. |
-| W0-A3 | Partager des snapshots de telemetrie + bundle de requetes avec le tracker de governance. | Observability-01 | Termine - bundle attache a `DOCS-SORA-Preview-W0`. |
+| W0-A1 | Reordonner les entrees du Sidebar du devportal pour metre en avant les docs pour reviewers (`preview-invite-*` regroupes)。 |ドキュメントコア-01 |終了 - サイドバーのリスト、メンテナンス、ドキュメントのレビュー担当者の継続的な情報 (`docs/portal/sidebars.js`)。 |
+| W0-A2 | Ajouter un lien croise、`sorafs/orchestrator-ops` et `sorafs/multi-source-rollout` を明示的に指定してください。 |ソラフス-ops-01 |テルミネ - チャック ランブック ポワント デソルメ 対 ロートル フォア ケ レ オペレーター ボイエン レ ドゥ ガイド ペンダント レ ロールアウト。 |
+| W0-A3 |テレメトリのスナップショットとガバナンスのトラッカーのリクエストをバンドルします。 |可観測性-01 |終了 - `DOCS-SORA-Preview-W0` をバンドル添付します。 |
 
-## Resume de sortie (2025-04-08)
+## 出撃再開 (2025-04-08)
 
-- Les cinq reviewers ont confirme la fin, purge les builds locaux et quitte la fenetre de
-  preview; les revocations d'acces sont enregistrees dans `DOCS-SORA-Preview-W0`.
-- Aucun incident ni alerte pendant la vague; les dashboards de telemetrie sont restes verts
-  pendant toute la periode.
-- Les actions de navigation + liens croises (W0-A1/A2) sont implementees et refletees dans
-  les docs ci-dessus; la preuve telemetrie (W0-A3) est attachee au tracker.
-- Bundle de preuve archive: screenshots de telemetrie, accuses d'invitation et ce digest
-  sont lies depuis l'issue du tracker.
+- レビュー担当者はラ・フィンを確認せず、ロコーの建物を削除し、フェネトル・ドをやめてください
+  プレビュー; `DOCS-SORA-Preview-W0` による登録取り消しの申請。
+- Aucun事件に警告ペンダントla曖昧;テレメトリのダッシュボードの残りの部分
+  ペンダント トゥート ラ ピリオド。
+- ナビゲーションのアクションとクロワーズの先取特権 (W0-A1/A2) 実施者およびリフレ員のソント
+  les docs ci-dessus; la preuve telemetry (W0-A3) EST 添付者 au トラッカー。
+- プルーブ アーカイブのバンドル: テレメトリーのスクリーンショット、招待状の告発などのダイジェスト
+  追跡者の問題はありません。
 
-## Prochaines etapes
+## プロカインエテープ
 
-- Implementer les actions W0 avant d'ouvrir W1.
-- Obtenir l'approbation legale et un slot de staging pour le proxy, puis suivre les etapes de
-  preflight de la vague partenaires detaillees dans le [preview invite flow](../../preview-invite-flow.md).
+- 実装者はアクション W0 アバンドゥブリル W1 を実行します。
+- ステージングの代理人として合法的かつスロットの承認を取得し、管理者を保護します
+  曖昧なパートナーの詳細を説明するプレフライト [プレビュー招待フロー](../../preview-invite-flow.md)。
 
-_Ce digest est lie depuis le [preview invite tracker](../../preview-invite-tracker.md) pour
-garder le roadmap DOCS-SORA tracable._
+_Ce ダイジェスト est lie depuis le [プレビュー招待トラッカー](../../preview-invite-tracker.md) を注ぐ
+ガーダー ル ロードマップ DOCS-SORA 追跡可能。_

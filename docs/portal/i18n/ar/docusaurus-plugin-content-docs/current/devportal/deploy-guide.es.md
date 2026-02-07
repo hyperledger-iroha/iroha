@@ -4,39 +4,41 @@ direction: rtl
 source: docs/portal/docs/devportal/deploy-guide.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-## Panorama general
+## بانوراما عامة
 
-Este playbook convierte los elementos del roadmap **DOCS-7** (publicacion de SoraFS) y **DOCS-8**
-(automatizacion de pin de CI/CD) en un procedimiento accionable para el portal de desarrolladores.
-Cubre la fase de build/lint, el empaquetado SoraFS, la firma de manifiestos con Sigstore,
-la promocion de alias, la verificacion y los drills de rollback para que cada preview y release
-sea reproducible y auditable.
+يقوم هذا الدليل بتحويل عناصر خريطة الطريق **DOCS-7** (منشور SoraFS) و **DOCS-8**
+(أتمتة دبوس CI/CD) في إجراء مناسب لبوابة المطورين.
+قم بتغطية مرحلة البناء/الوبر، التغليف SoraFS، الشركة المصنعة للبيانات مع Sigstore،
+الترويج للاسم المستعار والتحقق وتدريبات التراجع حتى يتم معاينة كل إصدار وإصداره
+البحر قابل للتكرار وقابل للتدقيق.
 
-El flujo asume que tienes el binario `sorafs_cli` (construido con `--features cli`), acceso a
-un endpoint Torii con permisos de pin-registry, y credenciales OIDC para Sigstore. Guarda secretos
-de larga vida (`IROHA_PRIVATE_KEY`, `SIGSTORE_ID_TOKEN`, tokens de Torii) en tu vault de CI; las
-ejecuciones locales pueden cargarlos desde exports del shell.
+يفترض التدفق أن لديه الثنائي `sorafs_cli` (الذي تم إنشاؤه باستخدام `--features cli`)، قم بالوصول إلى
+نقطة نهاية Torii مع أذونات تسجيل الدبوس، وبيانات الاعتماد OIDC لـ Sigstore. حراسة الأسرار
+لحياة طويلة (`IROHA_PRIVATE_KEY`، `SIGSTORE_ID_TOKEN`، الرموز المميزة لـ Torii) في قبو CI؛ لاس
+يمكن تنفيذ عمليات التنفيذ المحلية من خلال صادرات Shell.
 
-## Prerequisitos
+## المتطلبات الأساسية
 
-- Node 18.18+ con `npm` o `pnpm`.
-- `sorafs_cli` desde `cargo run -p sorafs_car --features cli --bin sorafs_cli`.
-- URL de Torii que expone `/v1/sorafs/*` mas una cuenta/clave privada de autoridad que pueda enviar manifiestos y alias.
-- Emisor OIDC (GitHub Actions, GitLab, workload identity, etc.) para emitir un `SIGSTORE_ID_TOKEN`.
-- Opcional: `examples/sorafs_cli_quickstart.sh` para dry runs y `docs/source/sorafs_ci_templates.md` para scaffolding de workflows de GitHub/GitLab.
-- Configura las variables OAuth de Try it (`DOCS_OAUTH_*`) y ejecuta la
-  [security-hardening checklist](./security-hardening.md) antes de promocionar un build
-  fuera del lab. El build del portal ahora falla cuando estas variables faltan
-  o cuando los knobs de TTL/polling quedan fuera de las ventanas aplicadas; exporta
-  `DOCS_OAUTH_ALLOW_INSECURE=1` solo para previews locales desechables. Adjunta la
-  evidencia de pen-test al ticket de release.
+- العقدة 18.18+ مع `npm` أو `pnpm`.
+- `sorafs_cli` من `cargo run -p sorafs_car --features cli --bin sorafs_cli`.
+- عنوان URL الخاص بـ Torii الذي يعرض `/v1/sorafs/*` يحتوي على حساب/مفتاح خاص للمصدر يمكنك من خلاله إرسال البيانات والاسم المستعار.
+- Emisor OIDC (GitHub Actions وGitLab وهوية عبء العمل وما إلى ذلك) لإصدار `SIGSTORE_ID_TOKEN`.
+- اختياري: `examples/sorafs_cli_quickstart.sh` للتشغيل الجاف و`docs/source/sorafs_ci_templates.md` لدعم سير العمل في GitHub/GitLab.
+- قم بتكوين متغيرات OAuth من Try it (`DOCS_OAUTH_*`) وقم بتشغيلها
+  [قائمة التحقق من تعزيز الأمان](./security-hardening.md) قبل الترويج للإنشاء
+  مختبر النار. بناء البوابة الآن سوف يسقط عندما تكون هذه المتغيرات فالتان
+  عندما يتم تشغيل مقابض TTL/الاقتراع على النوافذ المطبقة؛ importa
+  `DOCS_OAUTH_ALLOW_INSECURE=1` منفردًا لمعاينة الإعدادات المحلية القابلة للإلغاء. ملحق لا
+  دليل اختبار القلم على تذكرة الإصدار.
 
-## Paso 0 - Captura un paquete del proxy Try it
+## Paso 0 - التقاط حزمة من الوكيل جربها
 
-Antes de promocionar un preview a Netlify o al gateway, sella las fuentes del proxy Try it y el
-digest del manifiesto OpenAPI firmado en un paquete determinista:
+قبل الترويج لمعاينة Netlify أو أي بوابة، قم ببيع مصادر الوكيل جربها بنفسك
+ملخص البيان OpenAPI الثابت في حزمة محددة:
 
 ```bash
 cd docs/portal
@@ -46,14 +48,14 @@ npm run release:tryit-proxy -- \
   --label preview-2026-02-14
 ```
 
-`scripts/tryit-proxy-release.mjs` copia los helpers de proxy/probe/rollback, verifica la firma
-OpenAPI y escribe `release.json` mas `checksums.sha256`. Adjunta este paquete al ticket de
-promocion de Netlify/SoraFS gateway para que los revisores puedan reproducir las fuentes exactas
-del proxy y las pistas del target Torii sin reconstruir. El paquete tambien registra si los
-bearers provistos por el cliente estaban habilitados (`allow_client_auth`) para mantener el plan
-de rollout y las reglas CSP en sincronizacion.
+`scripts/tryit-proxy-release.mjs` نسخ مساعدي الوكيل/التحقيق/الاستعادة، التحقق من الشركة
+OpenAPI واكتب `release.json` mas `checksums.sha256`. هذا الملحق هو حزمة التذكرة
+الترويج لبوابة Netlify/SoraFS حتى تتمكن المراجعات من إعادة إنتاج العناصر الدقيقة
+يتم إعادة بناء الوكيل ومسارات الهدف Torii. الحزمة تامبيان مسجلة si los
+القائمون على توفير الدعم للعملاء المؤهلين (`allow_client_auth`) للحفاظ على الخطة
+بدء التشغيل وأنظمة CSP والمزامنة.
 
-## Paso 1 - Build y lint del portal
+## الخطوة 1 - قم ببناء البوابة
 
 ```bash
 cd docs/portal
@@ -66,18 +68,18 @@ npm run check:links
 npm run build
 ```
 
-`npm run build` ejecuta automaticamente `scripts/write-checksums.mjs`, produciendo:
+يتم تنفيذ `npm run build` تلقائيًا `scripts/write-checksums.mjs`، مما يؤدي إلى:
 
-- `build/checksums.sha256` - manifiesto SHA256 adecuado para `sha256sum -c`.
-- `build/release.json` - metadatos (`tag`, `generated_at`, `source`) fijados en cada CAR/manifiesto.
+- `build/checksums.sha256` - يوضح SHA256 المناسب لـ `sha256sum -c`.
+- `build/release.json` - البيانات الوصفية (`tag`، `generated_at`، `source`) موجودة في كل CAR/manifiersto.
 
-Archiva ambos archivos junto al resumen CAR para que los revisores puedan comparar artefactos de
-preview sin reconstruir.
+أرشفة مجموعة كبيرة من الأرشيفات جنبًا إلى جنب مع السيرة الذاتية لـ CAR حتى يتمكن المراجعون من مقارنة المصنوعات اليدوية
+معاينة دون إعادة البناء.
 
-## Paso 2 - Empaqueta los assets estaticos
+## الخطوة 2 - إمباكيتا الأصول الثابتة
 
-Ejecuta el empaquetador CAR contra el directorio de salida de Docusaurus. El ejemplo de abajo
-escribe todos los artefactos bajo `artifacts/devportal/`.
+قم بتشغيل أداة تعبئة السيارة مقابل مخرج Docusaurus. مثال العباءة
+اكتب جميع القطع الأثرية bajo `artifacts/devportal/`.
 
 ```bash
 OUT=artifacts/devportal
@@ -91,25 +93,25 @@ sorafs_cli car pack \
   --chunker-handle sorafs.sf1@1.0.0
 ```
 
-El resumen JSON captura conteos de chunks, digests y pistas de planeacion de proof que
-`manifest build` y los dashboards de CI reutilizan despues.
+تلتقط السيرة الذاتية لـ JSON محتويات القطع والملخصات والمسارات لتخطيط إثبات ذلك
+`manifest build` ويتم إعادة استخدام لوحات معلومات CI بعد ذلك.
 
-## Paso 2b - Empaqueta companions OpenAPI y SBOM
+## باسو 2ب - رفاق إمباكيتا OpenAPI y SBOM
 
-DOCS-7 requiere publicar el sitio del portal, el snapshot OpenAPI y los payloads SBOM
-como manifiestos distintos para que los gateways puedan engrapar los headers
-`Sora-Proof`/`Sora-Content-CID` para cada artefacto. El helper de release
-(`scripts/sorafs-pin-release.sh`) ya empaqueta el directorio OpenAPI
-(`static/openapi/`) y los SBOMs emitidos via `syft` en CARs separados
-`openapi.*`/`*-sbom.*` y registra los metadatos en
-`artifacts/sorafs/portal.additional_assets.json`. Al ejecutar el flujo manual,
-repite los Pasos 2-4 para cada payload con sus propios prefijos y etiquetas de metadatos
-(por ejemplo `--car-out "$OUT"/openapi.car` mas
-`--metadata alias_label=docs.sora.link/openapi`). Registra cada par manifiesto/alias
-en Torii (sitio, OpenAPI, SBOM del portal, SBOM de OpenAPI) antes de cambiar DNS para que
-el gateway pueda servir pruebas engrapadas para todos los artefactos publicados.
+يتطلب DOCS-7 نشر موقع البوابة واللقطة OpenAPI والحمولات SBOM
+كما تظهر هذه الميزات المميزة حتى تتمكن البوابات من حفر الرؤوس
+`Sora-Proof`/`Sora-Content-CID` لكل قطعة أثرية. مساعد الافراج
+(`scripts/sorafs-pin-release.sh`) لتعبئة الدليل OpenAPI
+(`static/openapi/`) وSBOMs الصادرة عبر `syft` والسيارات المنفصلة
+`openapi.*`/`*-sbom.*` وقم بتسجيل البيانات التعريفية
+`artifacts/sorafs/portal.additional_assets.json`. تشغيل دليل التدفق,
+كرر الخطوات 2-4 لكل حمولة مع تفضيلاتك وبيانات التعريف الخاصة بك
+(على سبيل المثال `--car-out "$OUT"/openapi.car` ماس
+`--metadata alias_label=docs.sora.link/openapi`). Registra cada par manificto/alias
+في Torii (الموقع، OpenAPI، SBOM في البوابة، SBOM في OpenAPI) قبل تغيير DNS لذلك
+يمكن للبوابة أن تخدم بشكل تجريبي لجميع القطع الأثرية المنشورة.
 
-## Paso 3 - Construye el manifiesto
+## الخطوة 3 - بناء البيان
 
 ```bash
 sorafs_cli manifest build \
@@ -122,10 +124,10 @@ sorafs_cli manifest build \
   --metadata alias_label=docs.sora.link
 ```
 
-Ajusta los flags de politica de pin segun tu ventana de release (por ejemplo, `--pin-storage-class
-hot` para canaries). La variante JSON es opcional pero conveniente para code review.
+قم بضبط الأعلام السياسية من خلال نافذة الإصدار الثانية (على سبيل المثال، `--pin-storage-class
+hot` الفقرة الكناري). يعد متغير JSON اختياريًا ولكنه مناسب لمراجعة الكود.
 
-## Paso 4 - Firma con Sigstore
+## باسو 4 - Firma con Sigstore
 
 ```bash
 sorafs_cli manifest sign \
@@ -137,16 +139,16 @@ sorafs_cli manifest sign \
   --identity-token-audience sorafs-devportal
 ```
 
-El bundle registra el digest del manifiesto, los digests de chunks y un hash BLAKE3 del token
-OIDC sin persistir el JWT. Guarda tanto el bundle como la firma separada; las promociones de
-produccion pueden reutilizar los mismos artefactos en lugar de re-firmar. Las ejecuciones locales
-pueden reemplazar los flags del provider con `--identity-token-env` (o establecer
-`SIGSTORE_ID_TOKEN` en el entorno) cuando un helper OIDC externo emite el token.
+تسجل الحزمة ملخص البيان وملخصات القطع وتجزئة الرمز المميز BLAKE3
+OIDC بدون استمرار JWT. حراسة هذه الحزمة كشركة منفصلة؛ العروض الترويجية دي
+يمكن للإنتاج إعادة استخدام نفس المصنوعات اليدوية في مكان إعادة التثبيت. عمليات القذف المحلية
+يمكنك استبدال علامات الموفر مع `--identity-token-env` (أو المُنشئ
+`SIGSTORE_ID_TOKEN` في الداخل) أثناء وجود مساعد OIDC خارجيًا لإصدار الرمز المميز.
 
-## Paso 5 - Envia al pin registry
+## Paso 5 - تسجيل Envia al pin
 
-Envia el manifiesto firmado (y el plan de chunks) a Torii. Solicita siempre un resumen para que
-la entrada/alias resultante sea auditable.
+قم بإرسال البيان الثابت (وخطة القطع) إلى Torii. اطلب دائمًا استئنافًا لذلك
+la entrada/alias resultante sea قابلة للتدقيق.
 
 ```bash
 sorafs_cli manifest submit \
@@ -163,20 +165,20 @@ sorafs_cli manifest submit \
   --response-out "$OUT"/portal.submit.response.json
 ```
 
-Cuando se despliega un alias de preview o canary (`docs-preview.sora`), repite el
-envio con un alias unico para que QA pueda verificar el contenido antes de la promocion a
-produccion.
+عند إرسال اسم مستعار لمعاينة الكناري (`docs-preview.sora`)، كرر ذلك
+أرسل اسمًا مستعارًا فريدًا حتى تتمكن ضمان الجودة من التحقق من المحتوى قبل الترويج
+إنتاج.
 
-El binding de alias requiere tres campos: `--alias-namespace`, `--alias-name` y `--alias-proof`.
-Governance produce el bundle de proof (base64 o bytes Norito) cuando se aprueba la solicitud
-del alias; guardalo en secretos de CI y exponlo como archivo antes de invocar `manifest submit`.
-Deja los flags de alias sin establecer cuando solo piensas fijar el manifiesto sin tocar DNS.
+يتطلب التجليد المستعار ثلاثة مجالات: `--alias-namespace`، `--alias-name` و`--alias-proof`.
+تقوم الحوكمة بإنتاج حزمة إثبات (base64 أو بايت Norito) عندما يتم تقديم الطلب
+الاسم المستعار؛ قم بحماية أسرار CI واعرض مثل هذا الملف قبل استدعاء `manifest submit`.
+قم بإدراج علامات الاسم المستعار بدون تثبيت عند الضغط فقط على إظهار البيان بدون استخدام DNS.
 
-## Paso 5b - Genera una propuesta de governance
+## الخطوة 5 ب - إنشاء نموذج للحوكمة
 
-Cada manifiesto debe viajar con una propuesta lista para Parliament para que cualquier ciudadano
-Sora pueda introducir el cambio sin pedir credenciales privilegiadas. Despues de los pasos
-submit/sign, ejecuta:
+يجب على كل بيان أن يسافر من خلال قائمة مقترحة للبرلمان من أجل أي مدينة
+يمكنك تقديم التغيير دون الحاجة إلى الحصول على امتيازات الاعتماد. بعد خطوة
+إرسال/توقيع، تنفيذ:
 
 ```bash
 sorafs_cli manifest proposal \
@@ -187,15 +189,15 @@ sorafs_cli manifest proposal \
   --proposal-out "$OUT"/portal.pin.proposal.json
 ```
 
-`portal.pin.proposal.json` captura la instruccion canonica `RegisterPinManifest`,
-el digest de chunks, la politica y la pista de alias. Adjuntalo al ticket de governance o al
-portal Parliament para que los delegados puedan comparar el payload sin reconstruir los artefactos.
-Como el comando nunca toca la clave de autoridad de Torii, cualquier ciudadano puede redactar la
-propuesta localmente.
+`portal.pin.proposal.json` يلتقط تعليمات canonica `RegisterPinManifest`,
+ملخص القطع والسياسة ومسار الاسم المستعار. مساعد على تذكرة الحكم أو الجميع
+بوابة البرلمان حتى يتمكن المندوبون من مقارنة الحمولة دون إعادة بناء المصنوعات اليدوية.
+بما أن الأمر لم يضغط على المفتاح الرئيسي لـ Torii، فيمكن لأي مدينة تعديله
+propuest localmente.
 
-## Paso 6 - Verifica pruebas y telemetria
+## الخطوة 6 - التحقق من الاختبار والقياس عن بعد
 
-Despues de fijar, ejecuta los pasos de verificacion determinista:
+بعد الفتح، قم بتنفيذ خطوات التحقق المحددة:
 
 ```bash
 sorafs_cli proof verify \
@@ -209,17 +211,17 @@ sorafs_cli manifest verify-signature \
   --chunk-plan "$OUT"/portal.plan.json
 ```
 
-- Verifica `torii_sorafs_gateway_refusals_total` y
-  `torii_sorafs_replication_sla_total{outcome="missed"}` para anomalias.
-- Ejecuta `npm run probe:portal` para ejercitar el proxy Try-It y los links registrados
-  contra el contenido recien fijado.
-- Captura la evidencia de monitoreo descrita en
-  [Publishing & Monitoring](./publishing-monitoring.md) para que la gate de observabilidad DOCS-3c
-  se satisfaga junto a los pasos de publicacion. El helper ahora acepta multiples entradas
-  `bindings` (sitio, OpenAPI, SBOM del portal, SBOM de OpenAPI) y aplica `Sora-Name`/`Sora-Proof`/`Sora-Content-CID`
-  en el host objetivo via el guard opcional `hostname`. La invocacion de abajo escribe tanto un
-  resumen JSON unico como el bundle de evidencia (`portal.json`, `tryit.json`, `binding.json` y
-  `checksums.sha256`) bajo el directorio de release:
+- التحقق `torii_sorafs_gateway_refusals_total` ذ
+  `torii_sorafs_replication_sla_total{outcome="missed"}` للشذوذ.
+- قم بتشغيل `npm run probe:portal` لتشغيل الوكيل Try-It والروابط المسجلة
+  مقابل المحتوى الذي يتم استلامه.
+- التقاط الأدلة الموضحة في الشاشة
+  [النشر والمراقبة](./publishing-monitoring.md) لبوابة المراقبة DOCS-3c
+  إنه مرضي إلى جانب خطوات النشر. المساعد الآن يقبل مضاعفات المدخلات
+  `bindings` (الموقع، OpenAPI، بوابة SBOM، SBOM في OpenAPI) ويتم تطبيق `Sora-Name`/`Sora-Proof`/`Sora-Content-CID`
+  وهدف المضيف عبر الحارس الاختياري `hostname`. La invocacion de abajo escribe tanto un
+  استئناف JSON كمجموعة من الأدلة (`portal.json`، `tryit.json`، `binding.json` y)
+  `checksums.sha256`) خلف دليل الإصدار:
 
   ```bash
   npm run monitor:publishing -- \
@@ -228,11 +230,11 @@ sorafs_cli manifest verify-signature \
     --evidence-dir ../../artifacts/sorafs/preview-2026-02-14/monitoring
   ```
 
-## Paso 6a - Planifica certificados del gateway
+## Paso 6a - مخطط البوابة المعتمد
 
-Deriva el plan de SAN/challenge TLS antes de crear paquetes GAR para que el equipo de gateway y los
-aprobadores de DNS revisen la misma evidencia. El nuevo helper refleja los insumos de automatizacion
-DG-3 enumerando hosts wildcard canonicos, pretty-host SANs, etiquetas DNS-01 y desafios ACME recomendados:
+اشتق خطة SAN/challenge TLS قبل إنشاء حزم GAR لمعدات البوابة والأشخاص
+يقوم مطورو DNS بمراجعة الأدلة نفسها. يعكس المساعد الجديد إجراءات الأتمتة
+يستضيف تعداد DG-3 رموز البدل الأساسية وشبكات SAN المضيفة الجميلة وخصائص DNS-01 والتحديات التي توصي بها ACME:
 
 ```bash
 cargo xtask soradns-acme-plan \
@@ -240,18 +242,18 @@ cargo xtask soradns-acme-plan \
   --json-out artifacts/sorafs/portal.acme-plan.json
 ```
 
-Commitea el JSON junto al bundle de release (o subelo con el ticket de cambio) para que los operadores
-puedan pegar los valores SAN en la configuracion `torii.sorafs_gateway.acme` de Torii y los revisores
-de GAR puedan confirmar los mapeos canonico/pretty sin re-ejecutar derivaciones de host. Agrega
-argumentos `--name` adicionales para cada sufijo promocionado en el mismo release.
+قم بإدراج JSON جنبًا إلى جنب مع حزمة الإصدار (أو تحت تذكرة التغيير) للمشغلين
+يمكنك تثبيت قيم SAN في التكوين `torii.sorafs_gateway.acme` de Torii والمراجعة
+يمكن لـ GAR تأكيد الخرائط الكنسي/جميلة بدون إعادة تشغيل مشتقات المضيف. أجريجا
+الحجج `--name` إضافية لكل ترويج صوفي في نفس الإصدار.
 
-## Paso 6b - Deriva mapeos de host canonicos
+## Paso 6b - مشتق من خرائط المضيف الكنسي
 
-Antes de templar payloads GAR, registra el mapeo de host determinista para cada alias.
-`cargo xtask soradns-hosts` hashea cada `--name` en su etiqueta canonica
-(`<base32>.gw.sora.id`), emite el wildcard requerido (`*.gw.sora.id`) y deriva el pretty host
-(`<alias>.gw.sora.name`). Persiste la salida en los artefactos de release para que los revisores
-DG-3 puedan comparar el mapeo junto al envio GAR:
+قبل إنشاء حمولات GAR، قم بتسجيل خريطة المضيف المحددة لكل اسم مستعار.
+`cargo xtask soradns-hosts` hashea cada `--name` على علامتك الكنسي
+(`<base32>.gw.sora.id`)، قم بإنشاء حرف البدل المطلوب (`*.gw.sora.id`) واشتقاق المضيف الجميل
+(`<alias>.gw.sora.name`). استمر في الخروج من عناصر التحرير حتى تتم المراجعة
+يمكن DG-3 مقارنة الخريطة بجوار GAR:
 
 ```bash
 cargo xtask soradns-hosts \
@@ -259,9 +261,9 @@ cargo xtask soradns-hosts \
   --json-out artifacts/sorafs/portal.canonical-hosts.json
 ```
 
-Usa `--verify-host-patterns <file>` para fallar rapido cuando un JSON de GAR o binding de gateway
-omite uno de los hosts requeridos. El helper acepta multiples archivos de verificacion, haciendo
-facil lint de tanto la plantilla GAR como el `portal.gateway.binding.json` engrapado en la misma invocacion:
+الولايات المتحدة الأمريكية `--verify-host-patterns <file>` للسقوط السريع عند استخدام JSON de GAR أو ربط البوابة
+حذف أحد المضيفين المطلوبين. المساعد يقبل عدة أرشيفات التحقق، ويزرع
+من السهل الوبر على هذا النبات GAR مثل `portal.gateway.binding.json` المحفور في نفس الاستدعاء:
 
 ```bash
 cargo xtask soradns-hosts \
@@ -269,38 +271,36 @@ cargo xtask soradns-hosts \
   --json-out artifacts/sorafs/portal.canonical-hosts.json \
   --verify-host-patterns artifacts/sorafs/portal.gar.json \
   --verify-host-patterns artifacts/sorafs/portal.gateway.binding.json
-```
+```قم بإضافة السيرة الذاتية لـ JSON وسجل التحقق من خلال تذكرة تغيير DNS/البوابة لذلك
+يمكن للمراجعين تأكيد المضيفين الكنسيين وأحرف البدل وبدون إعادة تشغيل البرامج النصية.
+أعد تنفيذ الأمر عند إضافة اسم مستعار جديد إلى الحزمة لتحديثات GAR
+هنا نفس الدليل.
 
-Adjunta el resumen JSON y el log de verificacion al ticket de cambio de DNS/gateway para que
-auditores puedan confirmar los hosts canonicos, wildcard y pretty sin re-ejecutar los scripts.
-Re-ejecuta el comando cuando se agreguen nuevos alias al bundle para que las actualizaciones GAR
-hereden la misma evidencia.
+## الخطوة 7 - إنشاء واصف قطع DNS
 
-## Paso 7 - Genera el descriptor de cutover DNS
+تتطلب عمليات قطع الإنتاج حزمة من التغييرات قابلة للتدقيق. بعد الانتهاء من تقديم الخروج
+(ملزم بالاسم المستعار)، المساعد يصدر
+`artifacts/sorafs/portal.dns-cutover.json`، الالتقاط:
 
-Los cutovers de produccion requieren un paquete de cambio auditable. Despues de un submit exitoso
-(binding de alias), el helper emite
-`artifacts/sorafs/portal.dns-cutover.json`, capturando:
+- بيانات التعريف المرتبطة بالاسم المستعار (مساحة الاسم/الاسم/الإثبات، ملخص البيان، URL Torii،
+  عصر الإرسال، autoridad)؛
+- سياق الإصدار (العلامة، التسمية المستعارة، مسارات البيان/CAR، خطة القطع، الحزمة Sigstore)؛
+- نقاط التحقق (مسبار الأمر، الاسم المستعار + نقطة النهاية Torii)؛ ذ
+- المجالات الاختيارية للتحكم في التغيير (معرف التذكرة، نافذة القطع، عمليات الاتصال،
+  اسم المضيف/منطقة الإنتاج)؛
+- بيانات التعريف الترويجية للطرق المشتقة من الرأس `Sora-Route-Binding`
+  (المضيف Canonico/CID، مسارات الرأس + الربط، أوامر التحقق)، ضمان الترويج
+  تشير GAR والتدريبات الاحتياطية إلى نفس الأدلة؛
+- المصنوعات اليدوية لخطة الطريق التي تم إنشاؤها (`gateway.route_plan.json`،
+  قوالب الرؤوس ورؤوس التراجع الاختيارية) لتذاكر التغيير والخطافات
+  يمكن لخيط CI التحقق من أن كل حزمة DG-3 تشير إلى خطط الترويج/التراجع
+  canonicos antes de la aprobacion؛
+- البيانات التعريفية الاختيارية لإبطال ذاكرة التخزين المؤقت (نقطة نهاية التطهير، متغير المصادقة، الحمولة JSON،
+  ومثال الأمر `curl`); ذ
+- تلميحات التراجع عن الواصف السابق (علامة الإصدار وملخص البيان)
+  لكي تلتقط التذاكر طريقًا احتياطيًا محددًا.
 
-- metadatos de binding de alias (namespace/name/proof, digest del manifiesto, URL Torii,
-  epoch enviado, autoridad);
-- contexto de release (tag, alias label, rutas de manifiesto/CAR, plan de chunks, bundle Sigstore);
-- punteros de verificacion (comando probe, alias + endpoint Torii); y
-- campos opcionales de change-control (id de ticket, ventana de cutover, contacto ops,
-  hostname/zone de produccion);
-- metadatos de promocion de rutas derivados del header `Sora-Route-Binding`
-  (host canonico/CID, rutas de header + binding, comandos de verificacion), asegurando que la promocion
-  GAR y los drills de fallback referencien la misma evidencia;
-- los artefactos de route-plan generados (`gateway.route_plan.json`,
-  templates de headers y headers de rollback opcionales) para que los tickets de cambio y hooks de
-  lint de CI puedan verificar que cada paquete DG-3 referencia los planes de promocion/rollback
-  canonicos antes de la aprobacion;
-- metadatos opcionales de invalidacion de cache (endpoint de purge, variable de auth, payload JSON,
-  y ejemplo de comando `curl`); y
-- hints de rollback apuntando al descriptor previo (tag de release y digest del manifiesto)
-  para que los tickets capturen una ruta de fallback determinista.
-
-Cuando el release requiere purgas de cache, genera un plan canonico junto al descriptor de cutover:
+عندما يتطلب الإصدار إزالة ذاكرة التخزين المؤقت، يتم إنشاء خطة أساسية جنبًا إلى جنب مع واصف القطع:
 
 ```bash
 cargo xtask soradns-cache-plan \
@@ -312,15 +312,15 @@ cargo xtask soradns-cache-plan \
   --json-out artifacts/sorafs/portal.cache_plan.json
 ```
 
-Adjunta el `portal.cache_plan.json` resultante al paquete DG-3 para que los operadores
-tengan hosts/paths deterministas (y los hints de auth que coinciden) al emitir requests `PURGE`.
-La seccion opcional de cache del descriptor puede referenciar este archivo directamente,
-manteniendo alineados a los revisores de change-control sobre exactamente que endpoints se limpian
-durante un cutover.
+ملحق `portal.cache_plan.json` الناتج عن الحزمة DG-3 للمشغلين
+يتم تحديد المضيفين/المسارات (وتلميحات المصادقة التي تتزامن) عن طريق إرسال طلبات `PURGE`.
+يمكن للقسم الاختياري لذاكرة التخزين المؤقت للواصف الرجوع إلى هذا الأرشيف مباشرة،
+الحفاظ على تحديثات التحكم في التغيير بشكل دقيق حتى يتم تنظيف نقاط النهاية
+خلال عملية القطع.
 
-Cada paquete DG-3 tambien necesita un checklist de promocion + rollback. Generala via
-`cargo xtask soradns-route-plan` para que los revisores de change-control puedan seguir los pasos
-exactos de preflight, cutover y rollback por alias:
+تتطلب كل حزمة DG-3 أيضًا قائمة مرجعية للترويج + التراجع. جنرالا عبر
+`cargo xtask soradns-route-plan` حتى تتمكن منشورات التحكم في التغيير من متابعة الخطوات
+تفاصيل الاختبار المبدئي والانتقال والتراجع من خلال الاسم المستعار:
 
 ```bash
 cargo xtask soradns-route-plan \
@@ -328,13 +328,13 @@ cargo xtask soradns-route-plan \
   --json-out artifacts/sorafs/gateway.route_plan.json
 ```
 
-El `gateway.route_plan.json` emitido captura hosts canonicos/pretty, recordatorios de health-check
-por etapas, actualizaciones de binding GAR, purgas de cache y acciones de rollback. Incluyelo con
-los artefactos GAR/binding/cutover antes de enviar el ticket de cambio para que Ops pueda ensayar y
-aprobar los mismos pasos con guion.
+يستضيف El `gateway.route_plan.json` emitido captura Canonicos/Pretty، مسجلات التحقق من الصحة
+من خلال الخطوات وتحديثات ربط GAR وإزالة ذاكرة التخزين المؤقت وإجراءات التراجع. بما في ذلك يخدع
+تم تصنيع GAR/الربط/القطع قبل إرسال تذكرة التغيير حتى تتمكن العملية من تجربتها
+aprobar los mesmos pasos con guion.
 
-`scripts/generate-dns-cutover-plan.mjs` impulsa este descriptor y se ejecuta automaticamente desde
-`sorafs-pin-release.sh`. Para regenerarlo o personalizarlo manualmente:
+`scripts/generate-dns-cutover-plan.mjs` هو الواصف الدافع ويتم تنفيذه تلقائيًا من هنا
+`sorafs-pin-release.sh`. لتجديد أو تخصيص يدويا:
 
 ```bash
 node scripts/generate-dns-cutover-plan.mjs \
@@ -349,76 +349,76 @@ node scripts/generate-dns-cutover-plan.mjs \
   --previous-dns-plan artifacts/sorafs/previous.dns-cutover.json
 ```
 
-Rellena los metadatos opcionales via variables de entorno antes de ejecutar el helper de pin:
+قم باستعادة البيانات التعريفية الاختيارية عبر متغيرات الإعداد قبل تشغيل مساعد الدبوس:
 
-| Variable | Proposito |
+| متغير | اقتراح |
 | --- | --- |
-| `DNS_CHANGE_TICKET` | ID de ticket almacenado en el descriptor. |
-| `DNS_CUTOVER_WINDOW` | Ventana de cutover ISO8601 (por ejemplo, `2026-03-21T15:00Z/2026-03-21T15:30Z`). |
-| `DNS_HOSTNAME`, `DNS_ZONE` | Hostname de produccion + zona autoritativa. |
-| `DNS_OPS_CONTACT` | Alias on-call o contacto de escalamiento. |
-| `DNS_CACHE_PURGE_ENDPOINT` | Endpoint de purge de cache registrado en el descriptor. |
-| `DNS_CACHE_PURGE_AUTH_ENV` | Env var que contiene el token de purge (default: `CACHE_PURGE_TOKEN`). |
-| `DNS_PREVIOUS_PLAN` | Ruta al descriptor de cutover previo para metadatos de rollback. |
+| `DNS_CHANGE_TICKET` | معرف التذكرة مخزن في الواصف. |
+| `DNS_CUTOVER_WINDOW` | فتحة التهوية ISO8601 (على سبيل المثال، `2026-03-21T15:00Z/2026-03-21T15:30Z`). |
+| `DNS_HOSTNAME`، `DNS_ZONE` | اسم المضيف للإنتاج + منطقة التشغيل التلقائية. |
+| `DNS_OPS_CONTACT` | الاسم المستعار عند الطلب أو الاتصال بالتصعيد. |
+| `DNS_CACHE_PURGE_ENDPOINT` | نقطة نهاية مسح ذاكرة التخزين المؤقت المسجلة في الواصف. |
+| `DNS_CACHE_PURGE_AUTH_ENV` | Env هو الذي يحتوي على رمز التطهير (الافتراضي: `CACHE_PURGE_TOKEN`). |
+| `DNS_PREVIOUS_PLAN` | استخدم واصف القطع السابق لبيانات التعريف الخاصة بالتراجع. |
 
-Adjunta el JSON al review de cambio DNS para que los aprobadores puedan verificar digests de manifiesto,
-bindings de alias y comandos probe sin tener que revisar logs de CI. Los flags de CLI
-`--dns-change-ticket`, `--dns-cutover-window`, `--dns-hostname`,
-`--dns-zone`, `--ops-contact`, `--cache-purge-endpoint`,
-`--cache-purge-auth-env`, y `--previous-dns-plan` proveen los mismos overrides
-cuando se ejecuta el helper fuera de CI.
+قم بإضافة JSON إلى مراجعة تغيير DNS حتى يتمكن الموردون من التحقق من خلاصات البيان،
+تستكشف روابط الأسماء المستعارة والأوامر دون مراجعة سجلات CI. أعلام CLI
+`--dns-change-ticket`، `--dns-cutover-window`، `--dns-hostname`،
+`--dns-zone`، `--ops-contact`، `--cache-purge-endpoint`،
+`--cache-purge-auth-env`، و`--previous-dns-plan` أثبتا نفس التجاوزات
+عند تشغيل مساعد CI القوي.
 
-## Paso 8 - Emite el esqueleto de zonefile del resolver (opcional)
+## الخطوة 8 - إنشاء ملف المنطقة من المحلل (اختياري)
 
-Cuando la ventana de cutover de produccion es conocida, el script de release puede emitir el
-esqueleto de zonefile SNS y el snippet de resolver automaticamente. Pasa los registros DNS deseados
-y metadatos via variables de entorno o opciones CLI; el helper llamara a
-`scripts/sns_zonefile_skeleton.py` inmediatamente despues de generar el descriptor de cutover.
-Provee al menos un valor A/AAAA/CNAME y el digest GAR (BLAKE3-256 del payload GAR firmado). Si la
-zona/hostname son conocidos y `--dns-zonefile-out` se omite, el helper escribe en
-`artifacts/sns/zonefiles/<zone>/<hostname>.json` y llena
-`ops/soradns/static_zones.<hostname>.json` como el snippet de resolver.
+عندما يتم تحديد نافذة قطع الإنتاج، يمكن أن يصدر نص الإصدار
+قم بتجميع ملف المنطقة SNS ومقتطف الحل تلقائيًا. قم بمتابعة سجلات DNS المطلوبة
+البيانات التعريفية عبر متغيرات المحتوى أو خيارات سطر الأوامر؛ المساعد لامارا أ
+`scripts/sns_zonefile_skeleton.py` فورًا بعد إنشاء واصف القطع.
+أثبت أقل قيمة من A/AAAA/CNAME وGAR (BLAKE3-256 من الحمولة الثابتة GAR). سي لا
+المنطقة/اسم المضيف son conocidos y `--dns-zonefile-out` se حذفت، el helper escribe en
+`artifacts/sns/zonefiles/<zone>/<hostname>.json` ولدينا
+`ops/soradns/static_zones.<hostname>.json` كمقتطف المحلل.
 
-| Variable / flag | Proposito |
+| المتغير / العلم | اقتراح |
 | --- | --- |
-| `DNS_ZONEFILE_OUT`, `--dns-zonefile-out` | Ruta para el esqueleto de zonefile generado. |
-| `DNS_ZONEFILE_RESOLVER_SNIPPET`, `--dns-zonefile-resolver-snippet` | Ruta del snippet de resolver (default: `ops/soradns/static_zones.<hostname>.json` cuando se omite). |
-| `DNS_ZONEFILE_TTL`, `--dns-zonefile-ttl` | TTL aplicado a los registros generados (default: 600 segundos). |
-| `DNS_ZONEFILE_IPV4`, `--dns-zonefile-ipv4` | Direcciones IPv4 (env separado por comas o flag CLI repetible). |
-| `DNS_ZONEFILE_IPV6`, `--dns-zonefile-ipv6` | Direcciones IPv6. |
-| `DNS_ZONEFILE_CNAME`, `--dns-zonefile-cname` | Target CNAME opcional. |
-| `DNS_ZONEFILE_SPKI`, `--dns-zonefile-spki-pin` | Pines SPKI SHA-256 (base64). |
-| `DNS_ZONEFILE_TXT`, `--dns-zonefile-txt` | Entradas TXT adicionales (`key=value`). |
-| `DNS_ZONEFILE_VERSION`, `--dns-zonefile-version` | Override del label de version de zonefile computado. |
-| `DNS_ZONEFILE_EFFECTIVE_AT`, `--dns-zonefile-effective-at` | Fuerza el timestamp `effective_at` (RFC3339) en lugar del inicio de la ventana de cutover. |
-| `DNS_ZONEFILE_PROOF`, `--dns-zonefile-proof` | Override del literal proof registrado en los metadatos. |
-| `DNS_ZONEFILE_CID`, `--dns-zonefile-cid` | Override del CID registrado en los metadatos. |
-| `DNS_ZONEFILE_FREEZE_STATE`, `--dns-zonefile-freeze-state` | Estado de freeze de guardian (soft, hard, thawing, monitoring, emergency). |
-| `DNS_ZONEFILE_FREEZE_TICKET`, `--dns-zonefile-freeze-ticket` | Referencia de ticket de guardian/council para freezes. |
-| `DNS_ZONEFILE_FREEZE_EXPIRES_AT`, `--dns-zonefile-freeze-expires-at` | Timestamp RFC3339 para thawing. |
-| `DNS_ZONEFILE_FREEZE_NOTES`, `--dns-zonefile-freeze-note` | Notas de freeze adicionales (env separado por comas o flag repetible). |
-| `DNS_GAR_DIGEST`, `--dns-gar-digest` | Digest BLAKE3-256 (hex) del payload GAR firmado. Requerido cuando hay bindings de gateway. |
+| `DNS_ZONEFILE_OUT`، `--dns-zonefile-out` | طريقة إنشاء ملف المنطقة. |
+| `DNS_ZONEFILE_RESOLVER_SNIPPET`، `--dns-zonefile-resolver-snippet` | مسار مقتطف الحل (الافتراضي: `ops/soradns/static_zones.<hostname>.json` عند حذفه). |
+| `DNS_ZONEFILE_TTL`، `--dns-zonefile-ttl` | تم تطبيق TTL على السجلات العامة (الافتراضي: 600 ثانية). |
+| `DNS_ZONEFILE_IPV4`، `--dns-zonefile-ipv4` | عناوين IPv4 (يتم فصلها بفواصل أو وضع علامة على CLI متكررة). |
+| `DNS_ZONEFILE_IPV6`، `--dns-zonefile-ipv6` | اتجاهات IPv6. |
+| `DNS_ZONEFILE_CNAME`، `--dns-zonefile-cname` | استهداف CNAME اختياري. |
+| `DNS_ZONEFILE_SPKI`، `--dns-zonefile-spki-pin` | الصنوبر SPKI SHA-256 (base64). |
+| `DNS_ZONEFILE_TXT`، `--dns-zonefile-txt` | إدخالات TXT إضافية (`key=value`). |
+| `DNS_ZONEFILE_VERSION`، `--dns-zonefile-version` | تجاوز تسمية إصدار Zonefile المحوسب. |
+| `DNS_ZONEFILE_EFFECTIVE_AT`، `--dns-zonefile-effective-at` | اضغط على الطابع الزمني `effective_at` (RFC3339) خلف بداية نافذة القطع. |
+| `DNS_ZONEFILE_PROOF`، `--dns-zonefile-proof` | تجاوز الدليل الحرفي المسجل في بيانات التعريف. |
+| `DNS_ZONEFILE_CID`، `--dns-zonefile-cid` | تجاوز تسجيل CID في البيانات الوصفية. |
+| `DNS_ZONEFILE_FREEZE_STATE`، `--dns-zonefile-freeze-state` | حالة التجميد (الناعم، الصلب، الذوبان، المراقبة، الطوارئ). |
+| `DNS_ZONEFILE_FREEZE_TICKET`، `--dns-zonefile-freeze-ticket` | مرجع تذكرة الوصي/المجلس للتجميد. |
+| `DNS_ZONEFILE_FREEZE_EXPIRES_AT`، `--dns-zonefile-freeze-expires-at` | الطابع الزمني RFC3339 لإذابة الجليد. |
+| `DNS_ZONEFILE_FREEZE_NOTES`، `--dns-zonefile-freeze-note` | ملاحظات التجميد الإضافية (مفصولة بفواصل أو علم متكرر). |
+| `DNS_GAR_DIGEST`، `--dns-gar-digest` | ملخص BLAKE3-256 (ست عشري) للحمولة الثابتة GAR. يتطلب الأمر عند ربط البوابة. |
 
-El workflow de GitHub Actions lee estos valores desde secrets del repositorio para que cada pin de
-produccion emita los artefactos de zonefile automaticamente. Configura los siguientes secrets
-(strings pueden contener listas separadas por comas para campos multivalor):
+سير العمل في GitHub Actions يوضح هذه القيم من أسرار المستودع لكل دبوس
+يتم إنتاج منتجات Zonefile تلقائيًا. أسرار تكوين المتابعين
+(يمكن أن تحتوي السلاسل على قوائم منفصلة بفواصل متعددة المجالات):
 
-| Secret | Proposito |
+| سر | اقتراح |
 | --- | --- |
-| `DOCS_SORAFS_DNS_HOSTNAME`, `DOCS_SORAFS_DNS_ZONE` | Hostname/zona de produccion pasados al helper. |
-| `DOCS_SORAFS_DNS_OPS_CONTACT` | Alias on-call almacenado en el descriptor. |
-| `DOCS_SORAFS_ZONEFILE_IPV4`, `DOCS_SORAFS_ZONEFILE_IPV6` | Registros IPv4/IPv6 a publicar. |
-| `DOCS_SORAFS_ZONEFILE_CNAME` | Target CNAME opcional. |
-| `DOCS_SORAFS_ZONEFILE_SPKI` | Pines SPKI base64. |
-| `DOCS_SORAFS_ZONEFILE_TXT` | Entradas TXT adicionales. |
-| `DOCS_SORAFS_ZONEFILE_FREEZE_STATE/TICKET/EXPIRES_AT/NOTES` | Metadatos de freeze registrados en el esqueleto. |
-| `DOCS_SORAFS_GAR_DIGEST` | Digest BLAKE3 en hex del payload GAR firmado. |
+| `DOCS_SORAFS_DNS_HOSTNAME`، `DOCS_SORAFS_DNS_ZONE` | اسم المضيف/منطقة الإنتاج التي تمتد إلى المساعد. |
+| `DOCS_SORAFS_DNS_OPS_CONTACT` | الاسم المستعار عند الطلب المخزن في الواصف. |
+| `DOCS_SORAFS_ZONEFILE_IPV4`، `DOCS_SORAFS_ZONEFILE_IPV6` | تسجيل IPv4/IPv6 منشور. |
+| `DOCS_SORAFS_ZONEFILE_CNAME` | استهداف CNAME اختياري. |
+| `DOCS_SORAFS_ZONEFILE_SPKI` | باينز SPKI قاعدة64. |
+| `DOCS_SORAFS_ZONEFILE_TXT` | إدخالات TXT إضافية. |
+| `DOCS_SORAFS_ZONEFILE_FREEZE_STATE/TICKET/EXPIRES_AT/NOTES` | تجميد البيانات الوصفية المسجلة على هذا النحو. |
+| `DOCS_SORAFS_GAR_DIGEST` | ملخص BLAKE3 في الحمولة السداسية GAR الثابتة. |
 
-Al disparar `.github/workflows/docs-portal-sorafs-pin.yml`, proporciona los inputs
-`dns_change_ticket` y `dns_cutover_window` para que el descriptor/zonefile hereden la ventana
-correcta. Dejarlos en blanco solo cuando ejecutes dry runs.
+على الرغم من `.github/workflows/docs-portal-sorafs-pin.yml`، يتناسب مع المدخلات
+`dns_change_ticket` و `dns_cutover_window` لوضع الواصف/ملف المنطقة هنا على النافذة
+صحيح. يقوم Dejarlos en blanco Solo cuando بإخراج الجري الجاف.
 
-Invocacion tipica (coincide con el runbook del owner SN-7):
+نوع الاستدعاء (يتزامن مع مالك دفتر التشغيل SN-7):
 
 ```bash
 ./docs/portal/scripts/sorafs-pin-release.sh \
@@ -433,41 +433,39 @@ Invocacion tipica (coincide con el runbook del owner SN-7):
   ...otros flags...
 ```
 
-El helper automaticamente arrastra el ticket de cambio como entrada TXT y hereda el inicio de la
-ventana de cutover como timestamp `effective_at` a menos que se haga override. Para el flujo
-operativo completo, ver `docs/source/sorafs_gateway_dns_owner_runbook.md`.
+يقوم المساعد تلقائيًا بسحب تذكرة التغيير مثل إدخال TXT وإدراج بداية الصفحة
+نافذة القطع مثل الطابع الزمني `effective_at` مما يجب تجاوزه. للرحلة
+العملية كاملة، الإصدار `docs/source/sorafs_gateway_dns_owner_runbook.md`.
 
 ### Nota sobre delegacion DNS publica
 
-El skeleton de zonefile solo define registros autoritativos de la zona. Aun
-debes configurar la delegacion NS/DS de la zona padre en tu registrador o
-proveedor DNS para que el internet publico pueda encontrar los nameservers.
+يقوم الهيكل العظمي لملف المنطقة بتحديد السجلات التلقائية للمنطقة فقط. عون
+يجب عليك تكوين تفويض NS/DS لمنطقة الأب ومسجلك
+مزود DNS حتى يتمكن عام الإنترنت من العثور على خوادم الأسماء.
 
-- Para cutovers en el apex/TLD, usa ALIAS/ANAME (dependiente del proveedor) o
-  publica registros A/AAAA que apunten a las IP anycast del gateway.
-- Para subdominios, publica un CNAME hacia el pretty host derivado
+- للقطع في قمة/TLD، usa ALIAS/ANAME (تبعًا للمورد) o
+  نشر السجلات A/AAAA التي تفتح بوابة IP لأي بث.
+- بالنسبة للنطاقات الفرعية، قم بنشر CNAME بواسطة المضيف الجميل المشتق
   (`<fqdn>.gw.sora.name`).
-- El host canonico (`<hash>.gw.sora.id`) permanece bajo el dominio del gateway
-  y no se publica dentro de tu zona publica.
+- المضيف Canonico (`<hash>.gw.sora.id`) يدوم طويلاً تحت سيطرة البوابة
+  ولن يتم النشر في منطقتك العامة.
 
-### Plantilla de headers del gateway
+### غرس رؤوس البوابة
 
-El helper de deploy tambien emite `portal.gateway.headers.txt` y
-`portal.gateway.binding.json`, dos artefactos que satisfacen el requisito DG-3 de
-gateway-content-binding:
+مساعد النشر ينبعث `portal.gateway.headers.txt` y
+`portal.gateway.binding.json`، هذه المصنوعات التي تلبي متطلبات DG-3
+ربط محتوى البوابة:
 
-- `portal.gateway.headers.txt` contiene el bloque completo de headers HTTP (incluyendo
-  `Sora-Name`, `Sora-Content-CID`, `Sora-Proof`, CSP, HSTS, y el descriptor
-  `Sora-Route-Binding`) que los gateways de borde deben engrapar en cada respuesta.
-- `portal.gateway.binding.json` registra la misma informacion en forma legible por maquinas
-  para que los tickets de cambio y la automatizacion puedan comparar bindings host/cid sin
-  raspar la salida de shell.
-
-Se generan automaticamente via
+- يحتوي `portal.gateway.headers.txt` على كتلة كاملة من رؤوس HTTP (بما في ذلك
+  `Sora-Name`، `Sora-Content-CID`، `Sora-Proof`، CSP، HSTS، والواصف
+  `Sora-Route-Binding`) يجب أن يتم جذب بوابات الحدود إلى كل استجابة.
+- `portal.gateway.binding.json` تسجيل هذه المعلومات بشكل مقروء للآلات
+  حتى تتمكن تذاكر التغيير والأتمتة من مقارنة الارتباطات مع المضيف/CID
+  تخلص من القشرة.يتم إنشاءه تلقائيًا عبر
 `cargo xtask soradns-binding-template`
-y capturan el alias, el digest del manifiesto y el hostname de gateway que se
-pasaron a `sorafs-pin-release.sh`. Para regenerar o personalizar el bloque de headers,
-ejecuta:
+والتقط الاسم المستعار وملخص البيان واسم مضيف البوابة الذي تريده
+باسارون `sorafs-pin-release.sh`. لتجديد أو تخصيص كتلة الرؤوس،
+القذف:
 
 ```bash
 cargo xtask soradns-binding-template \
@@ -479,17 +477,17 @@ cargo xtask soradns-binding-template \
   --headers-out artifacts/sorafs/portal.gateway.headers.txt
 ```
 
-Pasa `--csp-template`, `--permissions-template`, o `--hsts-template` para override
-de los templates de headers por default cuando un despliegue necesita directivas adicionales;
-combinalos con los switches `--no-*` existentes para eliminar un header por completo.
+Pasa `--csp-template`، `--permissions-template`، o `--hsts-template` للتجاوز
+قوالب الرؤوس الافتراضية عندما يتطلب النشر توجيهات إضافية؛
+توجد مجموعات مع المفاتيح `--no-*` لإزالة الرأس بالكامل.
 
-Adjunta el snippet de headers al request de cambio de CDN y alimenta el documento JSON
-al pipeline de automatizacion de gateway para que la promocion real de host coincida con la
-evidencia de release.
+إضافة مقتطف الرؤوس إلى طلب تغيير CDN وتشغيل مستند JSON
+خط أنابيب أتمتة البوابة بحيث يتزامن الترويج الحقيقي للمضيف مع ذلك
+أدلة الإفراج.
 
-El script de release ejecuta automaticamente el helper de verificacion para que los
-tickets DG-3 siempre incluyan evidencia reciente. Vuelve a ejecutarlo manualmente
-cuando edites el binding JSON a mano:
+يقوم نص الإصدار بتشغيل مساعد التحقق تلقائيًا لهم
+تذاكر DG-3 تتضمن الأدلة الحديثة. قم بالتشغيل يدويًا
+cuando يقوم بتحرير الربط JSON يدويًا:
 
 ```bash
 cargo xtask soradns-verify-binding \
@@ -500,25 +498,25 @@ cargo xtask soradns-verify-binding \
   --manifest-json artifacts/sorafs/portal.manifest.json
 ```
 
-El comando decodifica el payload `Sora-Proof` engrapado, asegura que el metadata `Sora-Route-Binding`
-coincida con el CID del manifiesto + hostname, y falla rapido si algun header se desvia.
-Archiva la salida de consola junto a los otros artefactos de despliegue siempre que ejecutes
-el comando fuera de CI para que los revisores DG-3 tengan prueba de que el binding fue validado
-antes del cutover.
+يتم فك تشفير الحمولة `Sora-Proof`، تأكد من بيانات التعريف `Sora-Route-Binding`
+يتزامن مع بيان CID + اسم المضيف، ويسقط بسرعة إذا تم حذف أي رأس.
+أرشفة خروج وحدة التحكم جنبًا إلى جنب مع العناصر الأخرى التي يتم تشغيلها دائمًا
+الأمر فوري من CI لكي تكون مراجع DG-3 قيد الاختبار للتأكد من صلاحية الربط
+ما قبل القطع.
 
-> **Integracion del descriptor DNS:** `portal.dns-cutover.json` ahora incrusta una seccion
-> `gateway_binding` apuntando a estos artefactos (rutas, content CID, estado de proof y el
-> template literal de headers) **y** una estrofa `route_plan` referenciando
-> `gateway.route_plan.json` mas los templates de headers principal y rollback. Incluye esos
-> bloques en cada ticket de cambio DG-3 para que los revisores puedan comparar los valores
-> exactos de `Sora-Name/Sora-Proof/CSP` y confirmar que los planes de promocion/rollback
-> coinciden con el bundle de evidencia sin abrir el archivo de build.
+> **تكامل واصف DNS:** `portal.dns-cutover.json` الآن يتم إضافة قسم
+> `gateway_binding` يشير إلى هذه المصنوعات (المسارات، المحتوى CID، حالة الإثبات، إلخ)
+> قالب الرؤوس الحرفي) **y** مرجع `route_plan`
+> `gateway.route_plan.json` المزيد من قوالب الرؤوس الرئيسية والتراجع. تشمل هذا
+> كتل وكل تذكرة تغيير DG-3 حتى يتمكن المراجعون من مقارنة القيم
+> التفاصيل الدقيقة لـ `Sora-Name/Sora-Proof/CSP` والتأكد من خطط الترويج/التراجع
+> يتزامن مع حزمة الأدلة دون فتح ملف البناء.
 
-## Paso 9 - Ejecuta monitores de publicacion
+## الخطوة 9 - تشغيل شاشات النشر
 
-El item del roadmap **DOCS-3c** requiere evidencia continua de que el portal, el proxy Try it y los
-bindings del gateway se mantienen saludables despues de un release. Ejecuta el monitor consolidado
-inmediatamente despues de los Pasos 7-8 y conectalo a tus probes programados:
+يتطلب عنصر خريطة الطريق **DOCS-3c** أدلة مستمرة على أن البوابة والوكيل جربها بنفسك
+يتم الاحتفاظ بربطات البوابة بشكل جيد بعد تحريرها. تشغيل الشاشة الموحدة
+على الفور بعد الخطوات 7-8 والاتصال ببرامج التحقيق الخاصة بك:
 
 ```bash
 cd docs/portal
@@ -528,85 +526,85 @@ npm run monitor:publishing -- \
   --evidence-dir ../../artifacts/sorafs/${RELEASE_TAG}/monitoring
 ```
 
-- `scripts/monitor-publishing.mjs` carga el archivo de config (ver
-  `docs/portal/docs/devportal/publishing-monitoring.md` para el esquema) y
-  ejecuta tres checks: probes de paths del portal + validacion de CSP/Permissions-Policy,
-  probes del proxy Try it (opcionalmente golpeando su endpoint `/metrics`), y el verificador
-  de binding de gateway (`cargo xtask soradns-verify-binding`) que ahora exige la presencia y
-  el valor esperado de Sora-Content-CID junto con las verificaciones de alias/manifiesto.
-- El comando termina con non-zero cuando falla algun probe para que CI, cron jobs, o operadores
-  de runbook puedan detener un release antes de promocionar alias.
-- Pasar `--json-out` escribe un resumen JSON unico con estado por target; `--evidence-dir`
-  emite `summary.json`, `portal.json`, `tryit.json`, `binding.json` y `checksums.sha256` para que
-  los revisores de governance puedan comparar resultados sin re-ejecutar los monitores. Archiva
-  este directorio bajo `artifacts/sorafs/<tag>/monitoring/` junto al bundle Sigstore y el
-  descriptor de cutover DNS.
-- Incluye la salida del monitor, el export de Grafana (`dashboards/grafana/docs_portal.json`),
-  y el ID del drill de Alertmanager en el ticket de release para que el SLO DOCS-3c pueda ser
-  auditado luego. El playbook dedicado de monitor de publishing vive en
+- `scripts/monitor-publishing.mjs` تحميل ملف التكوين (الإصدار
+  `docs/portal/docs/devportal/publishing-monitoring.md` للإسكويما) ذ
+  تنفيذ ثلاث عمليات تحقق: تحقيقات مسارات البوابة + التحقق من سياسة CSP/Permissions،
+  تحقيقات الوكيل جربها (اختياريًا لنقطة النهاية `/metrics`)، والمتحقق
+  ربط البوابة (`cargo xtask soradns-verify-binding`) الذي يتطلب الآن وجودًا
+  القيمة المتوقعة من Sora-Content-CID جنبًا إلى جنب مع عمليات التحقق من الاسم المستعار/البيان.
+- الأمر النهائي مع عدم وجود صفر عندما يفشل أحد المسبار لـ CI أو وظائف cron أو المشغلين
+  يمكن لـ runbook إيقاف إصدار قبل الترويج للاسم المستعار.
+- Pasar `--json-out` يكتب استئنافًا لـ JSON unico con estado por target؛ `--evidence-dir`
+  انبعاث `summary.json` و`portal.json` و`tryit.json` و`binding.json` و`checksums.sha256` لذلك
+  يمكن لمراجعي الإدارة مقارنة النتائج دون إعادة تشغيل الشاشات. أرشيفا
+  هذا الدليل باجو `artifacts/sorafs/<tag>/monitoring/` جنبًا إلى جنب مع الحزمة Sigstore y el
+  واصف قطع DNS.
+- تضمين مخرج الشاشة، التصدير Grafana (`dashboards/grafana/docs_portal.json`)،
+  ومعرف أداة التنبيه وبطاقة التحرير حتى يمكن تشغيل SLO DOCS-3c
+  com.auditado luego. كتاب اللعب المخصص لمراقبة النشر المباشر
   `docs/portal/docs/devportal/publishing-monitoring.md`.
 
-Los probes del portal requieren HTTPS y rechazan URLs base `http://` a menos que `allowInsecureHttp`
-este configurado en la config del monitor; manten targets de produccion/staging en TLS y solo
-habilita el override para previews locales.
+تتطلب تحقيقات البوابة HTTPS والعثور على عناوين URL الأساسية `http://` على الأقل `allowInsecureHttp`
+تم تكوينه في تكوين الشاشة؛ نواصل أهداف الإنتاج/العرض المسرحي عبر TLS ومنفردًا
+تمكن من التجاوز لمعاينة اللغات.
 
-Automatiza el monitor via `npm run monitor:publishing` en Buildkite/cron una vez que el portal
-este en vivo. El mismo comando, apuntado a URLs de produccion, alimenta los checks de salud
-continuos que SRE/Docs usan entre releases.
+أتمتة الشاشة عبر `npm run monitor:publishing` في Buildkite/الكرون مرة واحدة في البوابة
+هذا هو الحال في الجسم الحي. الأمر نفسه، قم بإضافة عناوين URL للإنتاج، وقم بتزويد فحوصات الصحة
+الاستمرار في استخدام SRE/Docs لجميع الإصدارات.
 
-## Automatizacion con `sorafs-pin-release.sh`
+## الأتمتة مع `sorafs-pin-release.sh`
 
-`docs/portal/scripts/sorafs-pin-release.sh` encapsula los Pasos 2-6. Este:
+`docs/portal/scripts/sorafs-pin-release.sh` مغلف لوس باسوس 2-6. إستي:
 
-1. archiva `build/` en un tarball determinista,
-2. ejecuta `car pack`, `manifest build`, `manifest sign`, `manifest verify-signature`,
-   y `proof verify`,
-3. opcionalmente ejecuta `manifest submit` (incluyendo alias binding) cuando hay credenciales
-   Torii, y
-4. escribe `artifacts/sorafs/portal.pin.report.json`, el opcional
-  `portal.pin.proposal.json`, el descriptor de cutover DNS (despues de submissions),
-  y el bundle de binding de gateway (`portal.gateway.binding.json` mas el bloque de headers)
-  para que los equipos de governance, networking y ops puedan comparar el bundle de evidencia
-  sin revisar logs de CI.
+1. أرشفة `build/` في محدد كرة القطران،
+2. قم بالإخراج `car pack`، `manifest build`، `manifest sign`، `manifest verify-signature`،
+   ذ `proof verify`,
+3. تنفيذ اختياري `manifest submit` (بما في ذلك ربط الاسم المستعار) عند الحصول على بيانات الاعتماد
+   Torii، ذ
+4. أكتب `artifacts/sorafs/portal.pin.report.json`، اختياري
+  `portal.pin.proposal.json`، واصف DNS المقطوع (بعد التقديمات)،
+  حزمة ربط البوابة (`portal.gateway.binding.json` بالإضافة إلى كتلة الرؤوس)
+  حتى تتمكن أجهزة الحوكمة والشبكات والعمليات من مقارنة حزمة الأدلة
+  لا توجد سجلات مراجعة لـ CI.
 
-Configura `PIN_ALIAS`, `PIN_ALIAS_NAMESPACE`, `PIN_ALIAS_NAME`, y (opcionalmente)
-`PIN_ALIAS_PROOF_PATH` antes de invocar el script. Usa `--skip-submit` para dry
-runs; el workflow de GitHub descrito abajo alterna esto via el input `perform_submit`.
+التكوين `PIN_ALIAS`، `PIN_ALIAS_NAMESPACE`، `PIN_ALIAS_NAME`، ذ (اختياري)
+`PIN_ALIAS_PROOF_PATH` قبل استدعاء البرنامج النصي. الولايات المتحدة الأمريكية `--skip-submit` جافة
+يدير؛ تم وصف سير العمل في GitHub مرة أخرى عبر الإدخال `perform_submit`.
 
-## Paso 8 - Publica especificaciones OpenAPI y paquetes SBOM
+## الخطوة 8 - المواصفات العامة OpenAPI وحزم SBOM
 
-DOCS-7 requiere que el build del portal, la especificacion OpenAPI y los artefactos SBOM viajen
-por el mismo pipeline determinista. Los helpers existentes cubren los tres:
+يتطلب DOCS-7 إنشاء البوابة والمواصفات OpenAPI وبيانات SBOM المنقولة
+من خلال تحديد خط الأنابيب بنفس الطريقة. المساعدون الموجودون هم ثلاثة أشخاص:
 
-1. **Regenera y firma la especificacion.**
+1. **تجديد المواصفات وتثبيتها.**
 
    ```bash
    npm run sync-openapi -- --version=2025-q3 --mirror=current --latest
    cargo xtask openapi --sign docs/portal/static/openapi/manifest.json
    ```
 
-   Pasa una etiqueta de release via `--version=<label>` cuando quieras preservar un snapshot
-   historico (por ejemplo `2025-q3`). El helper escribe el snapshot en
-   `static/openapi/versions/<label>/torii.json`, lo espeja en
-   `versions/current`, y registra los metadatos (SHA-256, estado del manifiesto, y
-   timestamp actualizado) en `static/openapi/versions.json`. El portal de desarrolladores
-   lee ese indice para que los paneles Swagger/RapiDoc puedan presentar un selector de version
-   y mostrar el digest/firma asociado en linea. Omitir `--version` mantiene las etiquetas del
-   release previo intactas y solo refresca los punteros `current` + `latest`.
+   قم بوضع علامة الإصدار عبر `--version=<label>` عندما تريد الاحتفاظ بلقطة
+   تاريخي (على سبيل المثال `2025-q3`). المساعد يكتب اللقطة en
+   `static/openapi/versions/<label>/torii.json`، يرجى الاطلاع على ذلك
+   `versions/current`، وقم بتسجيل البيانات التعريفية (SHA-256، حالة البيان، و
+   تم تحديث الطابع الزمني) في `static/openapi/versions.json`. بوابة المطورين
+   هذا مؤشر على أن لوحات Swagger/RapiDoc يمكنها تقديم محدد الإصدار
+   وإظهار الملخص/الشركة المرتبطة عبر الإنترنت. حذف `--version` احتفظ بعلامات التبويب
+   الإصدار السابق سليم كما تم تحديثه منفردًا للنقاط `current` + `latest`.
 
-   El manifiesto captura digests SHA-256/BLAKE3 para que el gateway pueda engrapar
-   headers `Sora-Proof` para `/reference/torii-swagger`.
+   يلتقط البيان ملخص SHA-256/BLAKE3 حتى تتمكن البوابة من الإمساك به
+   الرؤوس `Sora-Proof` لـ `/reference/torii-swagger`.
 
-2. **Emite SBOMs CycloneDX.** El pipeline de release ya espera SBOMs basados en syft
-   segun `docs/source/sorafs_release_pipeline_plan.md`. Manten la salida
-   junto a los artefactos de build:
+2. **Emite SBOMs CycloneDX.** خط أنابيب إطلاق سراح SBOMs القائم على النظام
+   سيجون `docs/source/sorafs_release_pipeline_plan.md`. حافظ على الخلاص
+   جنبًا إلى جنب مع قطع البناء:
 
    ```bash
    syft dir:build -o json > "$OUT"/portal.sbom.json
    syft file:docs/portal/static/openapi/torii.json -o json > "$OUT"/openapi.sbom.json
    ```
 
-3. **Empaqueta cada payload en un CAR.**
+3. **إكمال كل حمولة في سيارة.**
 
    ```bash
    sorafs_cli car pack \
@@ -622,32 +620,32 @@ por el mismo pipeline determinista. Los helpers existentes cubren los tres:
      --summary-out "$OUT"/portal.sbom.car.json
    ```
 
-   Sigue los mismos pasos de `manifest build` / `manifest sign` que el sitio principal,
-   ajustando alias por artefacto (por ejemplo, `docs-openapi.sora` para la especificacion y
-   `docs-sbom.sora` para el bundle SBOM firmado). Mantener alias distintos mantiene SoraDNS,
-   GARs y tickets de rollback acotados al payload exacto.
+   اتبع نفس الخطوات من `manifest build` / `manifest sign` إلى الموقع الرئيسي،
+   ضبط الاسم المستعار للمنتج (على سبيل المثال، `docs-openapi.sora` للمواصفات
+   `docs-sbom.sora` لحزمة SBOM الثابتة). Mantener الاسم المستعار distintos mantiene SoraDNS،
+   GARs وتذاكر التراجع عن الحمولة تمامًا.
 
-4. **Submit y bind.** Reutiliza la autoridad existente y el bundle Sigstore, pero registra
-   el tuple de alias en el checklist de release para que los auditores rastreen que nombre Sora
-   mapea a que digest de manifiesto.
+4. **إرسال وربط.** إعادة استخدام المصدر الموجود والحزمة Sigstore، فقط للتسجيل
+   مجموعة الاسم المستعار في قائمة المراجعة التي تم إصدارها حتى يتمكن المستمعون من تحديد اسم سورا
+   خريطة لكي هضم البيان.
 
-Archivar los manifiestos de spec/SBOM junto al build del portal asegura que cada ticket de
-release contiene el set completo de artefactos sin re-ejecutar el packer.
+أرشفة بيانات المواصفات/SBOM جنبًا إلى جنب مع إنشاء البوابة للتأكد من كل تذكرة
+قم بتحرير مجموعة القطع الأثرية الكاملة دون إعادة تشغيل الباكر.
 
-### Helper de automatizacion (CI/package script)
+### مساعد الأتمتة (البرنامج النصي CI/الحزمة)
 
-`./ci/package_docs_portal_sorafs.sh` codifica los Pasos 1-8 para que el item del roadmap
-**DOCS-7** pueda ejercitarse con un solo comando. El helper:
+`./ci/package_docs_portal_sorafs.sh` تدوين الخطوات 1-8 لبند خريطة الطريق
+**DOCS-7** يمكنك اللعب بأمر واحد فقط. المساعد:
 
-- ejecuta la preparacion requerida del portal (`npm ci`, sync OpenAPI/norito, tests de widgets);
-- emite los CARs y pares de manifiesto del portal, OpenAPI y SBOM via `sorafs_cli`;
-- opcionalmente ejecuta `sorafs_cli proof verify` (`--proof`) y la firma Sigstore
-  (`--sign`, `--sigstore-provider`, `--sigstore-audience`);
+- تنفيذ الإعداد المطلوب للبوابة (`npm ci`، مزامنة OpenAPI/norito، اختبارات عناصر واجهة المستخدم)؛
+- قم بإصدار سيارات وبيانات البوابة الإلكترونية، OpenAPI وSBOM عبر `sorafs_cli`؛
+- تنفيذ اختياري `sorafs_cli proof verify` (`--proof`) والشركة Sigstore
+  (`--sign`، `--sigstore-provider`، `--sigstore-audience`)؛
 - deja todos los artefactos bajo `artifacts/devportal/sorafs/<timestamp>/` y
-  escribe `package_summary.json` para que CI/tooling de release pueda ingerir el bundle; y
-- refresca `artifacts/devportal/sorafs/latest` para apuntar a la ejecucion mas reciente.
+  قم بكتابة `package_summary.json` حتى تتمكن من تثبيت CI/tooling على الحزمة؛ ذ
+- قم بتحديث `artifacts/devportal/sorafs/latest` لبدء التشغيل الأحدث.
 
-Ejemplo (pipeline completo con Sigstore + PoR):
+مثال (خط الأنابيب مكتمل مع Sigstore + PoR):
 
 ```bash
 ./ci/package_docs_portal_sorafs.sh \
@@ -657,43 +655,41 @@ Ejemplo (pipeline completo con Sigstore + PoR):
   --sigstore-audience=sorafs-devportal
 ```
 
-Flags a conocer:
+أعلام الكونسيرج:
 
-- `--out <dir>` - override del root de artefactos (default mantiene carpetas con timestamp).
-- `--skip-build` - reutiliza un `docs/portal/build` existente (util cuando CI no puede
-  reconstruir por mirrors offline).
-- `--skip-sync-openapi` - omite `npm run sync-openapi` cuando `cargo xtask openapi`
-  no puede llegar a crates.io.
-- `--skip-sbom` - evita llamar a `syft` cuando el binario no esta instalado (el script imprime
-  una advertencia en su lugar).
-- `--proof` - ejecuta `sorafs_cli proof verify` para cada par CAR/manifiesto. Los payloads de
-  multiples archivos aun requieren soporte de chunk-plan en el CLI, asi que deja este flag
-  sin establecer si encuentras errores de `plan chunk count` y verifica manualmente cuando
-  llegue el gate upstream.
-- `--sign` - invoca `sorafs_cli manifest sign`. Provee un token con
-  `SIGSTORE_ID_TOKEN` (o `--sigstore-token-env`) o deja que el CLI lo obtenga usando
-  `--sigstore-provider/--sigstore-audience`.
+- `--out <dir>` - تجاوز جذر المصنوعات اليدوية (الحفاظ الافتراضي على السجاد مع الطابع الزمني).
+- `--skip-build` - إعادة استخدام `docs/portal/build` الموجود (باستخدام CI لا يمكن
+  إعادة بناء المرايا دون اتصال بالإنترنت).
+- `--skip-sync-openapi` - حذف `npm run sync-openapi` عند `cargo xtask openapi`
+  لا يمكنك الحصول على صناديق.io.
+- `--skip-sbom` - قم بالاتصال بـ `syft` عند عدم تثبيت الملف الثنائي (يتم طباعة البرنامج النصي
+  إعلان في مكانك).
+- `--proof` - قم بتشغيل `sorafs_cli proof verify` لكل سيارة/بيان. الحمولات دي
+  تتطلب الأرشيفات المتعددة دعم مخطط القطعة في CLI، حتى يتم وضع هذه العلامة
+  بدون التثبيت إذا تم اكتشاف أخطاء `plan chunk count` والتحقق يدويًا عند
+  llegue el gate المنبع.
+- `--sign` - الاستدعاء `sorafs_cli manifest sign`. إثبات رمز مميز
+  `SIGSTORE_ID_TOKEN` (o `--sigstore-token-env`) أو دع CLI تحصل على الاستخدام
+  `--sigstore-provider/--sigstore-audience`.عندما تحسد المصنوعات اليدوية من الولايات المتحدة الأمريكية `docs/portal/scripts/sorafs-pin-release.sh`.
+الآن قم بتغليف البوابة الإلكترونية، OpenAPI والحمولات SBOM، وتأكيد كل بيان، وتسجيل بيانات التعريف
+الأصول الإضافية في `portal.additional_assets.json`. المساعد يدرك نفس المقابض الاختيارية
+يتم استخدام وحدة حزم CI بالإضافة إلى المفاتيح الجديدة `--openapi-*` و`--portal-sbom-*` وy
+`--openapi-sbom-*` لتعيين مجموعات من الأسماء المستعارة للمنتج، وتجاوز مصدر SBOM عبر
+`--openapi-sbom-source`، الحمولات الصافية المحذوفة (`--skip-openapi`/`--skip-sbom`)،
+قم بالنقر على ملف ثنائي `syft` غير افتراضي مع `--syft-bin`.
 
-Cuando envies artefactos de produccion usa `docs/portal/scripts/sorafs-pin-release.sh`.
-Ahora empaqueta el portal, OpenAPI y payloads SBOM, firma cada manifiesto, y registra metadatos
-extra de assets en `portal.additional_assets.json`. El helper entiende los mismos knobs opcionales
-usados por el packager de CI mas los nuevos switches `--openapi-*`, `--portal-sbom-*`, y
-`--openapi-sbom-*` para asignar tuples de alias por artefacto, override de la fuente SBOM via
-`--openapi-sbom-source`, omitir ciertos payloads (`--skip-openapi`/`--skip-sbom`),
-y apuntar a un binario `syft` no default con `--syft-bin`.
+يعرض البرنامج النصي كل أمر يتم تنفيذه؛ انسخ السجل في تذكرة الإصدار
+جنبًا إلى جنب مع `package_summary.json` حتى تتمكن المراجع من مقارنة ملخصات CAR وبيانات التعريف
+الخطة، وتجزئة الحزمة Sigstore بدون مراجعة الصدفة المخصصة.
 
-El script expone cada comando que ejecuta; copia el log en el ticket de release
-junto a `package_summary.json` para que los revisores puedan comparar digests de CAR, metadatos de
-plan, y hashes del bundle Sigstore sin revisar salida de shell ad hoc.
+## الخطوة 9 - التحقق من البوابة + SoraDNS
 
-## Paso 9 - Verificacion de gateway + SoraDNS
+قبل الإعلان عن عملية القطع، تأكد من ظهور الاسم المستعار الجديد عبر SoraDNS والبوابات
+إنغرابان بروباس فريسكا:
 
-Antes de anunciar un cutover, prueba que el alias nuevo resuelve via SoraDNS y que los gateways
-engrapan pruebas frescas:
-
-1. **Ejecuta el gate de probe.** `ci/check_sorafs_gateway_probe.sh` ejercita
-   `cargo xtask sorafs-gateway-probe` contra los fixtures demo en
-   `fixtures/sorafs_gateway/probe_demo/`. Para despliegues reales, apunta el probe al hostname objetivo:
+1. **قم بتشغيل بوابة المسبار.** `ci/check_sorafs_gateway_probe.sh` يتم تشغيله
+   `cargo xtask sorafs-gateway-probe` ضد التركيبات التجريبية أون
+   `fixtures/sorafs_gateway/probe_demo/`. للاستمتاع بالواقع، قم بالتحقيق في هدف اسم المضيف:
 
    ```bash
    ./ci/check_sorafs_gateway_probe.sh -- \
@@ -705,70 +701,70 @@ engrapan pruebas frescas:
      --report-json artifacts/sorafs_gateway_probe/ci/docs.json
    ```
 
-   El probe decodifica `Sora-Name`, `Sora-Proof`, y `Sora-Proof-Status` segun
-   `docs/source/sorafs_alias_policy.md` y falla cuando el digest del manifiesto,
-   los TTLs o los bindings GAR se desvian.
+   المسبار فك التشفير `Sora-Name`, `Sora-Proof`, و`Sora-Proof-Status` ثانية
+   `docs/source/sorafs_alias_policy.md` وينتهي عند ملخص البيان،
+   يتم حذف TTLs أو روابط GAR.
 
-   For lightweight spot checks (for example, when only the binding bundle
-   changed), run `cargo xtask soradns-verify-binding --binding <portal.gateway.binding.json> --alias "<alias>" --hostname "<gateway-host>" --proof-status ok --manifest-json <portal.manifest.json>`.
-   The helper validates the captured binding bundle and is handy for release
-   tickets that only need binding confirmation instead of a full probe drill.
+   لإجراء فحوصات مفاجئة خفيفة الوزن (على سبيل المثال، عند ربط الحزمة فقط
+   تم التغيير)، قم بتشغيل `cargo xtask soradns-verify-binding --binding <portal.gateway.binding.json> --alias "<alias>" --hostname "<gateway-host>" --proof-status ok --manifest-json <portal.manifest.json>`.
+   يقوم المساعد بالتحقق من صحة حزمة الربط التي تم التقاطها وهو سهل الإصدار
+   التذاكر التي تحتاج فقط إلى تأكيد ملزم بدلاً من تدريبات التحقيق الكاملة.
 
-2. **Captura evidencia de drill.** Para drills de operador o simulacros de PagerDuty, envuelve
-   el probe con `scripts/telemetry/run_sorafs_gateway_probe.sh --scenario
-   devportal-rollout -- ...`. El wrapper guarda headers/logs bajo
-   `artifacts/sorafs_gateway_probe/<stamp>/`, actualiza `ops/drill-log.md`, y
-   (opcionalmente) dispara hooks de rollback o payloads PagerDuty. Establece
-   `--host docs.sora` para validar la ruta SoraDNS en lugar de hard-codear una IP.
+2. **التقاط أدلة التدريبات.** لتدريبات المشغل أو محاكاة PagerDuty، قم بإرفاقها
+   المسبار مع البرامج النصية/القياس عن بعد/run_sorafs_gateway_probe.sh --السيناريو
+   طرح devportal -- ...`. المجمع يحرس الرؤوس/السجلات
+   `artifacts/sorafs_gateway_probe/<stamp>/`، التحديث `ops/drill-log.md`، نعم
+   (اختياريًا) يفصل خطافات التراجع أو الحمولات النافعة PagerDuty. إستابليس
+   `--host docs.sora` للتحقق من مسار SoraDNS في مكان التشفير الثابت لعنوان IP.
 
-3. **Verifica bindings DNS.** Cuando governance publica el proof del alias, registra el archivo GAR
-   referenciado por el probe (`--gar`) y adjuntalo a la evidencia de release. Los owners de resolver
-   pueden reflejar el mismo input via `tools/soradns-resolver` para asegurar que las entradas en cache
-   respeten el manifiesto nuevo. Antes de adjuntar el JSON, ejecuta
+3. **التحقق من روابط DNS.** عندما تنشر الإدارة إثبات الاسم المستعار، قم بتسجيل ملف GAR
+   تم الرجوع إلى المسبار (`--gar`) وإضافته إلى دليل الإصدار. هم أصحاب الحل
+   يمكنك تحرير نفس الإدخال عبر `tools/soradns-resolver` لضمان الإدخالات في ذاكرة التخزين المؤقت
+   احترام البيان الجديد. قبل إضافة JSON، قم بالتشغيل
    `cargo xtask soradns-verify-gar --gar <path> --name <alias> [--manifest-cid <cid>] [--telemetry-label <label>]`
-   para que el mapeo determinista de host, los metadatos del manifiesto y las etiquetas de telemetry se
-   validen offline. El helper puede emitir un resumen `--json-out` junto al GAR firmado para que los
-   revisores tengan evidencia verificable sin abrir el binario.
-  Cuando redactes un GAR nuevo, prefiere
+   حتى يتم تحديد الخريطة للمضيف وبيانات التعريف وبيانات القياس عن بعد
+   صالح حاليا. يمكن للمساعد إصدار استئناف `--json-out` جنبًا إلى جنب مع GAR الثابت لهم
+   تحتوي المراجعات على أدلة يمكن التحقق منها دون فتح الثنائي.
+  عندما يقوم بتنقيح GAR جديد، تفضل
   `cargo xtask soradns-gar-template --name <alias> --manifest <portal.manifest.json> --telemetry-label <label> ...`
-  (vuelve a `--manifest-cid <cid>` solo cuando el archivo de manifiesto no este disponible). El helper
-  ahora deriva el CID **y** el digest BLAKE3 directamente del manifest JSON, recorta espacios en blanco,
-  deduplica flags `--telemetry-label` repetidos, ordena las etiquetas, y emite los templates por default
-  de CSP/HSTS/Permissions-Policy antes de escribir el JSON para que el payload se mantenga determinista
-  incluso cuando los operadores capturan etiquetas desde shells distintas.
+  (قم بعرض `--manifest-cid <cid>` فقط عندما يكون ملف البيان غير متوفر). المساعد
+  الآن اشتقاق CID **y** ملخص BLAKE3 مباشرة من بيان JSON، قم بقص المساحات باللون الأبيض،
+  علامات إزالة التكرارات `--telemetry-label` المتكررة، وترتيب العلامات، وإصدار القوالب بشكل افتراضي
+  CSP/HSTS/Permissions-Policy قبل كتابة JSON بحيث يتم تحديد الحمولة النافعة
+  بما في ذلك عندما يلتقط المشغلون إرشادات من أغطية مختلفة.
 
-4. **Observa metricas de alias.** Manten `torii_sorafs_alias_cache_refresh_duration_ms`
-   y `torii_sorafs_gateway_refusals_total{profile="docs"}` en pantalla mientras el probe
-   corre; ambas series estan graficadas en `dashboards/grafana/docs_portal.json`.
+4. **ملاحظة مقاييس الاسم المستعار.** Manten `torii_sorafs_alias_cache_refresh_duration_ms`
+   y `torii_sorafs_gateway_refusals_total{profile="docs"}` والشاشة أمام المسبار
+   كور؛ سلسلة ambas estan graphicadas en `dashboards/grafana/docs_portal.json`.
 
-## Paso 10 - Monitoreo y bundle de evidencia
+## الخطوة 10 - مراقبة وحزمة الأدلة
 
-- **Dashboards.** Exporta `dashboards/grafana/docs_portal.json` (SLOs del portal),
-  `dashboards/grafana/sorafs_gateway_observability.json` (latencia del gateway +
-  salud de proof), y `dashboards/grafana/sorafs_fetch_observability.json`
-  (salud del orchestrator) para cada release. Adjunta los exports JSON al ticket de
-  release para que los revisores puedan reproducir los queries de Prometheus.
-- **Archivos de probe.** Conserva `artifacts/sorafs_gateway_probe/<stamp>/` en git-annex
-  o tu bucket de evidencia. Incluye el resumen del probe, headers, y payload PagerDuty
-  capturado por el script de telemetry.
-- **Bundle de release.** Guarda los resumenes de CAR del portal/SBOM/OpenAPI, bundles de manifiesto,
-  firmas Sigstore, `portal.pin.report.json`, logs de probe Try-It, y reportes de link-check
-  bajo una carpeta con timestamp (por ejemplo, `artifacts/sorafs/devportal/20260212T1103Z/`).
-- **Drill log.** Cuando los probes son parte de un drill, deja que
-  `scripts/telemetry/run_sorafs_gateway_probe.sh` agregue entradas a `ops/drill-log.md`
-  para que la misma evidencia satisfaga el requisito de caos SNNet-5.
-- **Links de ticket.** Referencia los IDs de panel de Grafana o exports PNG adjuntos en el ticket
-  de cambio, junto con la ruta del reporte de probe, para que los revisores puedan cruzar los SLOs
-  sin acceso a shell.
+- **لوحات المعلومات.** تصدير `dashboards/grafana/docs_portal.json` (SLOs للبوابة)،
+  `dashboards/grafana/sorafs_gateway_observability.json` (زمن الوصول للبوابة +
+  صحة الإثبات)، `dashboards/grafana/sorafs_fetch_observability.json`
+  (salud del Orchestra) لكل إصدار. ملحق الصادرات JSON آل تذكرة دي
+  قم بتحريره حتى تتمكن المراجعات من إعادة إنتاج الاستعلامات الخاصة بـ Prometheus.
+- **ملفات المسبار.** حفظ `artifacts/sorafs_gateway_probe/<stamp>/` في git-annex
+  يا دلو الأدلة. يتضمن السيرة الذاتية للمسبار والرؤوس والحمولة النافعة PagerDuty
+  تم التقاطه بواسطة سيناريو القياس عن بعد.
+- **إصدار الحزمة.** حفظ السيرة الذاتية لـ CAR للبوابة/SBOM/OpenAPI، وحزم البيانات،
+  الشركات Sigstore و`portal.pin.report.json` وسجلات اختبار Try-It وتقارير التحقق من الارتباط
+  احتفظ بسجادة ذات طابع زمني (على سبيل المثال، `artifacts/sorafs/devportal/20260212T1103Z/`).
+- **سجل الحفر.** عندما تكون المسابير جزءًا من الحفر، قم بذلك
+  `scripts/telemetry/run_sorafs_gateway_probe.sh` يجمع المدخلات مع `ops/drill-log.md`
+  لكي يثبت هذا الأمر أنه يلبي متطلبات SNNet-5.
+- **روابط التذكرة.** راجع معرفات لوحة Grafana أو تصدير PNG الملحقات على التذكرة
+  من خلال التغيير، جنبًا إلى جنب مع مسار تقرير التحقيق، حتى تتمكن المراجعات من الانتقال إلى SLOs
+  دون الوصول إلى قذيفة.
 
-## Paso 11 - Drill de fetch multi-source y evidencia de scoreboard
+## الخطوة 11 - أداة جلب متعددة المصادر ولوحة النتائج
 
-Publicar en SoraFS ahora requiere evidencia de fetch multi-source (DOCS-7/SF-6)
-junto a las pruebas de DNS/gateway anteriores. Despues de fijar el manifiesto:
+نشر في SoraFS الآن يتطلب أدلة جلب متعددة المصادر (DOCS-7/SF-6)
+جنبًا إلى جنب مع اختبارات DNS/البوابة السابقة. بعد ظهور البيان:
 
-1. **Ejecuta `sorafs_fetch` contra el manifiesto live.** Usa los mismos artefactos de plan/manifiesto
-   producidos en los Pasos 2-3 mas las credenciales de gateway emitidas para cada proveedor. Persiste
-   toda la salida para que los auditores puedan reproducir el rastro de decision del orchestrator:
+1. **قم بتشغيل `sorafs_fetch` ضد البيان المباشر.** استخدم نفس نتاجات الخطة/البيان
+   يتم إنتاجه في الخطوات 2-3 بالإضافة إلى شهادات اعتماد البوابة الصادرة لكل مورد. الثبات
+   كل ما في الأمر هو أن المستمعين يمكنهم إعادة إنتاج قرار المنسق:
 
    ```bash
    OUT=artifacts/sorafs/devportal
@@ -789,107 +785,105 @@ junto a las pruebas de DNS/gateway anteriores. Despues de fijar el manifiesto:
      --retry-budget=4
    ```
 
-   - Busca primero los adverts de proveedores referenciados por el manifiesto (por ejemplo
+   - ابحث أولاً عن إعلانات الموردين المرجعية حسب البيان (على سبيل المثال
      `sorafs_cli manifest describe --provider-adverts-out artifacts/sorafs/provider_adverts/`)
-     y pasalos via `--provider-advert name=path` para que el scoreboard pueda evaluar ventanas
-     de capacidad de forma determinista. Usa
-     `--allow-implicit-provider-metadata` **solo** cuando reproduces fixtures en CI; los drills
-     de produccion deben citar los adverts firmados que llegaron con el pin.
-   - Cuando el manifiesto referencie regiones adicionales, repite el comando con los tuples de
-     proveedores correspondientes para que cada cache/alias tenga un artefacto de fetch asociado.
+     والخطوات عبر `--provider-advert name=path` حتى تتمكن لوحة النتائج من تقييم النوافذ
+     القدرة على شكل محدد. الولايات المتحدة الأمريكية
+     `--allow-implicit-provider-metadata` **منفردًا** عند إعادة إنتاج التركيبات في CI؛ تدريبات لوس
+     يجب أن يعتمد الإنتاج على الإعلانات التجارية التي ستتوافق مع الدبوس.
+   - عندما يشير البيان إلى مناطق إضافية، كرر الأمر مع مجموعات
+     الموردون المراسلون لكي تتمكن كل ذاكرة تخزين مؤقت/اسم مستعار من الحصول على قطعة أثرية مرتبطة.
 
-2. **Archiva las salidas.** Guarda `scoreboard.json`,
-   `providers.ndjson`, `fetch.json`, y `chunk_receipts.ndjson` bajo la carpeta de evidencia del
-   release. Estos archivos capturan el weighting de peers, el retry budget, la latencia EWMA, y los
-   receipts por chunk que el paquete de governance debe retener para SF-7.
+2. ** أرشيفا لاس ساليداس. ** جواردا `scoreboard.json`،
+   `providers.ndjson`، `fetch.json`، و`chunk_receipts.ndjson` خلف سجادة الأدلة
+   الافراج. تلتقط هذه المحفوظات وزن النظراء وميزانية إعادة المحاولة ووقت استجابة EWMA وما إلى ذلك
+   إيصالات بسبب أن حزمة الإدارة يجب الاحتفاظ بها لـ SF-7.
 
-3. **Actualiza telemetry.** Importa las salidas de fetch en el dashboard **SoraFS Fetch
-   Observability** (`dashboards/grafana/sorafs_fetch_observability.json`),
-   observando `torii_sorafs_fetch_duration_ms`/`_failures_total` y los paneles de rango por proveedor
-   para anomalias. Enlaza los snapshots de panel Grafana al ticket de release junto con la ruta del
-   scoreboard.
+3. **تحديث القياس عن بعد.** استيراد نتائج الجلب على لوحة القيادة **SoraFS Fetch
+   إمكانية الملاحظة** (`dashboards/grafana/sorafs_fetch_observability.json`)،
+   ملاحظة `torii_sorafs_fetch_duration_ms`/`_failures_total` وألواح النطاق من قبل المورّد
+   بارا الشذوذ. قم بلصق لقطات اللوحة Grafana في تذكرة الإصدار مع المسار
+   لوحة النتائج.
 
-4. **Smokea las reglas de alerta.** Ejecuta `scripts/telemetry/test_sorafs_fetch_alerts.sh`
-   para validar el bundle de alertas Prometheus antes de cerrar el release. Adjunta la salida de
-   promtool al ticket para que los revisores DOCS-7 confirmen que las alertas de stall y
-   slow-provider siguen armadas.
+4. **قم بتفعيل قواعد التنبيه.** قم بتشغيل `scripts/telemetry/test_sorafs_fetch_alerts.sh`
+   للتحقق من حزمة التنبيهات Prometheus قبل إغلاق الإصدار. أضف الخلاصة
+   أداة الترويج للتذكرة لتأكيد مراجع DOCS-7 على تنبيهات التوقف
+   أسطول siguen مزود بطيء.
 
-5. **Cablea en CI.** El workflow de pin del portal mantiene un paso `sorafs_fetch` detras del input
-   `perform_fetch_probe`; habilitalo para ejecuciones de staging/produccion para que la evidencia de
-   fetch se produzca junto al bundle de manifiesto sin intervencion manual. Los drills locales pueden
-   reutilizar el mismo script exportando los tokens de gateway y estableciendo `PIN_FETCH_PROVIDERS`
-   a la lista de proveedores separada por comas.
+5. **كابل CI.** يحافظ سير العمل على دبوس البوابة على خطوة `sorafs_fetch` من الإدخال
+   `perform_fetch_probe`; تأهيل لتنفيذ عمليات التمثيل المسرحي/الإنتاج حتى تتمكن من إثبات ذلك
+   قم بإحضار المنتج جنبًا إلى جنب مع حزمة البيانات بدون دليل التدخل. يمكن إجراء التدريبات المحلية
+   إعادة استخدام البرنامج النصي نفسه لتصدير الرموز المميزة للبوابة وتثبيت `PIN_FETCH_PROVIDERS`
+   قائمة الموردين منفصلة بفواصل.
 
-## Promocion, observabilidad y rollback
+## الترويج وقابلية المراقبة والتراجع
 
-1. **Promocion:** manten alias separados para staging y produccion. Promociona re-ejecutando
-   `manifest submit` con el mismo manifiesto/bundle, cambiando
-   `--alias-namespace/--alias-name` para apuntar al alias de produccion. Esto evita
-   reconstruir o re-firmar una vez que QA aprueba el pin de staging.
-2. **Monitoreo:** importa el dashboard de pin-registry
-   (`docs/source/grafana_sorafs_pin_registry.json`) mas los probes especificos del portal
-   (ver `docs/portal/docs/devportal/observability.md`). Alerta en drift de checksums,
-   probes fallidos o picos de retry de proof.
-3. **Rollback:** para revertir, reenvia el manifiesto previo (o retira el alias actual) usando
-   `sorafs_cli manifest submit --alias ... --retire`. Manten siempre el ultimo bundle
-   conocido como bueno y el resumen CAR para que las pruebas de rollback puedan recrearse si
-   los logs de CI se rotan.
+1. **الترويج:** احتفظ بالاسم المستعار المنفصل للعرض والإنتاج. إعادة التنفيذ الترويجي
+   `manifest submit` بنفس البيان/الحزمة، التغيير
+   `--alias-namespace/--alias-name` لتطوير الاسم المستعار للإنتاج. هذه هي الحياة
+   قم بإعادة البناء أو التثبيت مرة أخرى عندما يتم ضبط ضمان الجودة على دبوس التدريج.
+2. **المراقبة:** استيراد لوحة معلومات التسجيل
+   (`docs/source/grafana_sorafs_pin_registry.json`) هي المسابير الخاصة بالبوابة
+   (الإصدار `docs/portal/docs/devportal/observability.md`). تنبيه في الانجراف دي المجموع الاختباري،
+   تحقيقات فشل أو صور إعادة محاولة الإثبات.
+3. **التراجع:** للرجوع، وإعادة النظر في البيان السابق (أو إزالة الاسم المستعار الفعلي) باستخدام
+   `sorafs_cli manifest submit --alias ... --retire`. حافظ على الحزمة الأخيرة
+   أعلم أنه جيد واستئناف CAR حتى تتمكن تجارب التراجع من المحاولة مرة أخرى
+   يتم تدوير سجلات CI.
 
-## Plantilla de workflow CI
+## مصنع سير العمل CI
 
-Como minimo, tu pipeline debe:
+كم الحد الأدنى، خط الأنابيب الخاص بك:
 
-1. Build + lint (`npm ci`, `npm run build`, generacion de checksums).
-2. Empaquetar (`car pack`) y computar manifiestos.
-3. Firmar usando el token OIDC del job (`manifest sign`).
-4. Subir artefactos (CAR, manifiesto, bundle, plan, summaries) para auditoria.
-5. Enviar al pin registry:
-   - Pull requests -> `docs-preview.sora`.
-   - Tags / branches protegidas -> promocion de alias de produccion.
-6. Ejecutar probes + gates de verificacion de proof antes de terminar.
+1. البناء + الوبر (`npm ci`، `npm run build`، توليد المجموع الاختباري).
+2. قم بتجميع (`car pack`) وبيانات الكمبيوتر.
+3. تثبيت استخدام الرمز المميز OIDC للمهمة (`manifest sign`).
+4. المصنوعات اليدوية الفرعية (السيارة، البيان، الحزمة، الخطة، الملخصات) للمستمعين.
+5. Enviar آل دبوس التسجيل:
+   - سحب الطلبات -> `docs-preview.sora`.
+   - العلامات / الفروع المحمية -> الترويج للاسم المستعار للإنتاج.
+6. قم بإخراج المجسات + بوابات التحقق من الإثبات قبل الانتهاء.
 
-`.github/workflows/docs-portal-sorafs-pin.yml` conecta todos estos pasos para releases manuales.
-El workflow:
+`.github/workflows/docs-portal-sorafs-pin.yml` يتواصل مع جميع هذه الخطوات لإصدارات الأدلة.
+سير العمل:
 
-- construye/testea el portal,
-- empaqueta el build via `scripts/sorafs-pin-release.sh`,
-- firma/verifica el bundle de manifiesto usando GitHub OIDC,
-- sube el CAR/manifiesto/bundle/plan/resumenes como artifacts, y
-- (opcionalmente) envia el manifiesto + alias binding cuando hay secrets.
+- بناء / اختبار البوابة الإلكترونية،
+- empaqueta el build عبر `scripts/sorafs-pin-release.sh`،
+- تأكيد/التحقق من حزمة البيانات لاستخدام GitHub OIDC،
+- sube el CAR/manificto/bundle/plan/resumenes as a Artifacts، y
+- (اختياريًا) أرسل البيان + الاسم المستعار الملزم عند أسرار القش.
 
-Configura los siguientes repository secrets/variables antes de disparar el job:
-
-| Name | Proposito |
+قم بتكوين أسرار/متغيرات المستودع التالية قبل تغيير الوظيفة:| الاسم | اقتراح |
 | --- | --- |
-| `DOCS_SORAFS_TORII_URL` | Host Torii que expone `/v1/sorafs/pin/register`. |
-| `DOCS_SORAFS_SUBMITTED_EPOCH` | Identificador de epoch registrado con submissions. |
-| `DOCS_SORAFS_AUTHORITY` / `DOCS_SORAFS_PRIVATE_KEY` | Autoridad de firma para el submit del manifiesto. |
-| `DOCS_SORAFS_ALIAS_NAMESPACE` / `DOCS_SORAFS_ALIAS_NAME` | Tuple de alias enlazado al manifiesto cuando `perform_submit` es `true`. |
-| `DOCS_SORAFS_ALIAS_PROOF_B64` | Bundle de proof de alias codificado en base64 (opcional; omite para saltar alias binding). |
-| `DOCS_ANALYTICS_*` | Endpoints de analytics/probe existentes reutilizados por otros workflows. |
+| `DOCS_SORAFS_TORII_URL` | المضيف Torii الذي يعرض `/v1/sorafs/pin/register`. |
+| `DOCS_SORAFS_SUBMITTED_EPOCH` | معرف عصر التسجيل مع التقديمات. |
+| `DOCS_SORAFS_AUTHORITY` / `DOCS_SORAFS_PRIVATE_KEY` | التلقائية الثابتة لإرسال البيان. |
+| `DOCS_SORAFS_ALIAS_NAMESPACE` / `DOCS_SORAFS_ALIAS_NAME` | تم حفظ الاسم المستعار في البيان cuando `perform_submit` es `true`. |
+| `DOCS_SORAFS_ALIAS_PROOF_B64` | حزمة إثبات الاسم المستعار المشفر في Base64 (اختياري؛ حذف للحصول على الاسم المستعار الملزم). |
+| `DOCS_ANALYTICS_*` | يتم إعادة استخدام نقاط النهاية للتحليلات/التحقق من وجودها من خلال سير عمل آخر. |
 
-Dispara el workflow via la UI de Actions:
+تغيير سير العمل عبر واجهة المستخدم الخاصة بالإجراءات:
 
-1. Provee `alias_label` (por ejemplo, `docs.sora.link`), `proposal_alias` opcional,
-   y un override opcional de `release_tag`.
-2. Deja `perform_submit` sin marcar para generar artefactos sin tocar Torii
-   (util para dry runs) o habilitalo para publicar directamente al alias configurado.
+1. قم بإثبات `alias_label` (على سبيل المثال، `docs.sora.link`)، `proposal_alias` اختياريًا،
+   وتجاوز اختياري لـ `release_tag`.
+2. Deja `perform_submit` بدون علامة تجارية لإنشاء قطع أثرية بدون Torii
+   (استخدام للتشغيل الجاف) أو التمكن من النشر مباشرة على الاسم المستعار الذي تم تكوينه.
 
-`docs/source/sorafs_ci_templates.md` aun documenta los helpers de CI genericos para
-proyectos fuera de este repo, pero el workflow del portal debe ser la opcion preferida
-para releases del dia a dia.
+`docs/source/sorafs_ci_templates.md` أحد المستندات المساعدة لـ CI العامة
+المشاريع فورًا من هذا المستودع، لكن يجب أن يكون سير عمل البوابة هو الخيار المفضل
+الفقرة النشرات ديل ديا ضياء.
 
-## Checklist
+## قائمة المراجعة
 
-- [ ] `npm run build`, `npm run test:*`, y `npm run check:links` estan en verde.
-- [ ] `build/checksums.sha256` y `build/release.json` capturados en artefactos.
-- [ ] CAR, plan, manifiesto, y resumen generados bajo `artifacts/`.
-- [ ] Bundle Sigstore + firma separada almacenados con logs.
-- [ ] `portal.manifest.submit.summary.json` y `portal.manifest.submit.response.json`
-      capturados cuando hay submissions.
-- [ ] `portal.pin.report.json` (y opcional `portal.pin.proposal.json`)
-      archivado junto a los artefactos CAR/manifiesto.
-- [ ] Logs de `proof verify` y `manifest verify-signature` archivados.
-- [ ] Dashboards de Grafana actualizados + probes Try-It exitosos.
-- [ ] Notas de rollback (ID de manifiesto previo + digest de alias) adjuntas al
-      ticket de release.
+- [ ] `npm run build`، `npm run test:*`، و`npm run check:links` موجود في اللون الأخضر.
+- [ ] تم التقاط `build/checksums.sha256` و`build/release.json` من خلال قطع أثرية.
+- [ ] CAR، خطة، إعلان، واستئناف إنشاء `artifacts/`.
+- [ ] الحزمة Sigstore + شركة منفصلة لسجلات المخازن.
+- [ ] `portal.manifest.submit.summary.json` و `portal.manifest.submit.response.json`
+      capturados cuando hay التقديمات.
+- [ ] `portal.pin.report.json` (واختياري `portal.pin.proposal.json`)
+      تم أرشفته جنبًا إلى جنب مع CAR/manifyingto المصنوعات اليدوية.
+- [ ] سجلات أرشيفات `proof verify` و`manifest verify-signature`.
+- [ ] لوحات معلومات Grafana تم تحديثها + تحقيقات Try-It خارجة.
+- [ ] ملاحظات التراجع (معرف البيان السابق + ملخص الاسم المستعار) الملحقات الإضافية
+      تذكرة الافراج.

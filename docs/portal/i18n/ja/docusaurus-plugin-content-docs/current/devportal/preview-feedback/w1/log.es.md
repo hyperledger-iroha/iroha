@@ -4,86 +4,84 @@ direction: ltr
 source: docs/portal/docs/devportal/preview-feedback/w1/log.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: preview-feedback-w1-log
-title: Log de feedback y telemetria W1
-sidebar_label: Log W1
-description: Roster agregado, checkpoints de telemetria y notas de reviewers para la primera ola de preview de partners.
+ID: プレビュー-フィードバック-w1-log
+タイトル: フィードバックとテレメトリア W1 のログ
+サイドバーラベル: ログ W1
+説明: 名簿の集合体、テレメトリーのチェックポイント、およびパートナーのプレビュー時のレビュー担当者のメモ。
 ---
 
-Este log mantiene el roster de invitaciones, checkpoints de telemetria y feedback de reviewers para el
-**preview de partners W1** que acompana las tareas de aceptacion en
-[`preview-feedback/w1/plan.md`](./plan.md) y la entrada del tracker de la ola en
-[`../../preview-invite-tracker.md`](../../preview-invite-tracker.md). Actualizalo cuando se envie una invitacion,
-se registre un snapshot de telemetria o se triagee un item de feedback para que los reviewers de gobernanza puedan reproducir
-la evidencia sin perseguir tickets externos.
+招待状の名簿、テレメトリーのチェックポイント、レビュー担当者によるフィードバックのエステ ログ マンティエン
+**パートナー W1 のプレビュー** は、最終的な承認を得ることができます
+[`preview-feedback/w1/plan.md`](./plan.md) 追跡者による追跡
+[`../../preview-invite-tracker.md`](../../preview-invite-tracker.md)。現実的には羨望の的です、
+テレメトリアのスナップショットを登録し、トリアージを行い、フィードバック アイテムを登録します。レビュー担当者がゴベルナンザ プエダンの再現者にアクセスできるようにします。
+罪を犯した証拠のチケットを外部から。
 
-## Roster de cohorte
+## コホートの名簿
 
-| Partner ID | Ticket de solicitud | NDA recibida | Invitacion enviada (UTC) | Ack/primer login (UTC) | Estado | Notas |
+|パートナー ID |チケット・デ・ソリチュード | NDAレビダ |招待状 (UTC) | ACK/プライマーログイン (UTC) |エスタード |メモ |
 | --- | --- | --- | --- | --- | --- | --- |
-| partner-w1-01 | `DOCS-SORA-Preview-REQ-P01` | OK 2025-04-03 | 2025-04-12 15:00 | 2025-04-12 15:11 | Completado 2025-04-26 | sorafs-op-01; enfocado en evidencia de paridad de docs del orchestrator. |
-| partner-w1-02 | `DOCS-SORA-Preview-REQ-P02` | OK 2025-04-03 | 2025-04-12 15:03 | 2025-04-12 15:15 | Completado 2025-04-26 | sorafs-op-02; valido cross-links de Norito/telemetria. |
-| partner-w1-03 | `DOCS-SORA-Preview-REQ-P03` | OK 2025-04-04 | 2025-04-12 15:06 | 2025-04-12 15:18 | Completado 2025-04-26 | sorafs-op-03; ejecuto drills de failover multi-source. |
-| partner-w1-04 | `DOCS-SORA-Preview-REQ-P04` | OK 2025-04-04 | 2025-04-12 15:09 | 2025-04-12 15:21 | Completado 2025-04-26 | torii-int-01; revision del cookbook de Torii `/v1/pipeline` + Try it. |
-| partner-w1-05 | `DOCS-SORA-Preview-REQ-P05` | OK 2025-04-05 | 2025-04-12 15:12 | 2025-04-12 15:23 | Completado 2025-04-26 | torii-int-02; acompanio la actualizacion de screenshot de Try it (docs-preview/w1 #2). |
-| partner-w1-06 | `DOCS-SORA-Preview-REQ-P06` | OK 2025-04-05 | 2025-04-12 15:15 | 2025-04-12 15:26 | Completado 2025-04-26 | sdk-partner-01; feedback de cookbooks JS/Swift + sanity checks del puente ISO. |
-| partner-w1-07 | `DOCS-SORA-Preview-REQ-P07` | OK 2025-04-11 | 2025-04-12 15:18 | 2025-04-12 15:29 | Completado 2025-04-26 | sdk-partner-02; compliance aprobado 2025-04-11, enfocado en notas de Connect/telemetria. |
-| partner-w1-08 | `DOCS-SORA-Preview-REQ-P08` | OK 2025-04-11 | 2025-04-12 15:21 | 2025-04-12 15:33 | Completado 2025-04-26 | gateway-ops-01; audito la guia de ops del gateway + flujo anonimo del proxy Try it. |
+|パートナー-w1-01 | `DOCS-SORA-Preview-REQ-P01` | OK 2025-04-03 | 2025-04-12 15:00 | 2025-04-12 15:11 |完全版 2025-04-26 | sorafs-op-01;オーケストレーターのドキュメントを証拠として保存します。 |
+|パートナー-w1-02 | `DOCS-SORA-Preview-REQ-P02` | OK 2025-04-03 | 2025-04-12 15:03 | 2025-04-12 15:15 |完全版 2025-04-26 | sorafs-op-02; Norito/telemetria の有効なクロスリンク。 |
+|パートナー-w1-03 | `DOCS-SORA-Preview-REQ-P03` | OK 2025-04-04 | 2025-04-12 15:06 | 2025-04-12 15:18 |完全版 2025-04-26 | sorafs-op-03;マルチソースのフェイルオーバーをドリルします。 |
+|パートナー-w1-04 | `DOCS-SORA-Preview-REQ-P04` | OK 2025-04-04 | 2025-04-12 15:09 | 2025-04-12 15:21 |完全版 2025-04-26 |鳥居-int-01;クックブックのリビジョン Torii `/v1/pipeline` + 試してみてください。 |
+|パートナー-w1-05 | `DOCS-SORA-Preview-REQ-P05` | OK 2025-04-05 | 2025-04-12 15:12 | 2025-04-12 15:23 |完全版 2025-04-26 |鳥居-int-02;実際のスクリーンショットを確認して試してみてください (docs-preview/w1 #2)。 |
+|パートナー-w1-06 | `DOCS-SORA-Preview-REQ-P06` | OK 2025-04-05 | 2025-04-12 15:15 | 2025-04-12 15:26 |完全版 2025-04-26 | SDK-パートナー-01;クックブック JS/Swift + ISO の健全性チェックのフィードバック。 |
+|パートナー-w1-07 | `DOCS-SORA-Preview-REQ-P07` | OK 2025-04-11 | 2025-04-12 15:18 | 2025-04-12 15:29 |完全版 2025-04-26 | SDK-パートナー-02; 2025 年 4 月 11 日の準拠、接続/テレメトリアに関する注意事項。 |
+|パートナー-w1-08 | `DOCS-SORA-Preview-REQ-P08` | OK 2025-04-11 | 2025-04-12 15:21 | 2025-04-12 15:33 |完全版 2025-04-26 |ゲートウェイ-ops-01; Audito la guia de ops del ゲートウェイ + Flujo anonimo del proxy 試してみてください。 |
 
-Completa los timestamps de **Invitacion enviada** y **Ack** apenas se emita el email saliente.
-Ancla los tiempos al calendario UTC definido en el plan W1.
+**招待状**と**承認**のタイムスタンプを電子メールで送信してください。
+計画 W1 でのカレンダーは UTC で定義されています。
 
-## Checkpoints de telemetria
-
-| Timestamp (UTC) | Dashboards / probes | Responsable | Resultado | Artefacto |
+## テレメトリのチェックポイント|タイムスタンプ (UTC) |ダッシュボード/プローブ |責任者 |結果 |アーティファクト |
 | --- | --- | --- | --- | --- |
-| 2025-04-06 18:05 | `docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals` | Docs/DevRel + Ops | Todo en verde | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250406` |
-| 2025-04-06 18:20 | Transcript de `npm run manage:tryit-proxy -- --stage preview-w1` | Ops | Preparado | `artifacts/docs_preview/W1/preview-2025-04-12/tryit/OPS-TRYIT-147.log` |
-| 2025-04-12 14:45 | Dashboards de arriba + `probe:portal` | Docs/DevRel + Ops | Snapshot pre-invite, sin regresiones | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250412` |
-| 2025-04-19 17:55 | Dashboards de arriba + diff de latencia del proxy Try it | Docs/DevRel lead | Chequeo de mitad de ola ok (0 alertas; latencia Try it p95=410 ms) | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250419` |
-| 2025-04-26 16:25 | Dashboards de arriba + probe de salida | Docs/DevRel + Governance liaison | Snapshot de salida, cero alertas pendientes | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250426` |
+| 2025-04-06 18:05 | `docs.preview.integrity`、`TryItProxyErrors`、`DocsPortal/GatewayRefusals` |ドキュメント/DevRel + オペレーション | Todo en verde | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250406` |
+| 2025-04-06 18:20 | `npm run manage:tryit-proxy -- --stage preview-w1` のトランスクリプト |作戦 |プレパラド | `artifacts/docs_preview/W1/preview-2025-04-12/tryit/OPS-TRYIT-147.log` |
+| 2025-04-12 14:45 |ダッシュボード + `probe:portal` |ドキュメント/DevRel + オペレーション |招待前のスナップショット、罪の回帰 | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250412` |
+| 2025-04-19 17:55 |ダッシュボードのアリバ + 遅延時間のプロキシの差分 試してみる |ドキュメント/DevRel リード | Chequeo de mitad de ola ok (0 アラート; 遅延 お試しください p95=410 ミリ秒) | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250419` |
+| 2025-04-26 16:25 |アリバのダッシュボード + サリダのプローブ |ドキュメント/DevRel + ガバナンス連携 |サリダのスナップショット、保留中のセキュリティ警告 | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250426` |
 
-Las muestras diarias de office hours (2025-04-13 -> 2025-04-25) se agrupan como exportes NDJSON + PNG bajo
-`artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/` con nombres de archivo
-`docs-preview-integrity-<date>.json` y los screenshots correspondientes.
+営業時間 (2025 年 4 月 13 日 -> 2025 年 4 月 25 日) は、NDJSON + PNG を輸出するために必要です
+`artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/` アーカイブ番号
+`docs-preview-integrity-<date>.json` y はスクリーンショットの対応者を失いました。
 
-## Log de feedback y issues
+## フィードバックの問題をログに記録する
 
-Usa esta tabla para resumir hallazgos enviados por reviewers. Enlaza cada entrada al ticket de GitHub/discuss
-mas el formulario estructurado capturado via
-[`docs/examples/docs_preview_feedback_form.md`](../../../../../examples/docs_preview_feedback_form.md).
+レビューアーによる米国のタブラ パラ レスミール ホールズゴス エンビアドス。 GitHub/ディスカッションのチケットを入手する
+マス・エル・フォーミュラド・キャプチャーによる構造化
+[`docs/examples/docs_preview_feedback_form.md`](../../../../../examples/docs_preview_feedback_form.md)。
 
-| Referencia | Severidad | Responsable | Estado | Notas |
+|参照 |セベリダッド |責任者 |エスタード |メモ |
 | --- | --- | --- | --- | --- |
-| `docs-preview/w1 #1` | Low | Docs-core-02 | Resuelto 2025-04-18 | Se aclaro el wording de nav de Try it + ancla de sidebar (`docs/source/sorafs/tryit.md` actualizado con nuevo label). |
-| `docs-preview/w1 #2` | Low | Docs-core-03 | Resuelto 2025-04-19 | Se actualizo screenshot de Try it + caption segun pedido del reviewer; artefacto `artifacts/docs_preview/W1/preview-2025-04-12/feedback/partner-w1-05/screenshot-diff.png`. |
-| - | Info | Docs/DevRel lead | Cerrado | Los comentarios restantes fueron solo Q&A; capturados en el formulario de feedback de cada partner bajo `artifacts/docs_preview/W1/preview-2025-04-12/feedback/`. |
+| `docs-preview/w1 #1` |低い |ドキュメント-コア-02 |レスエルト 2025-04-18 | Try it + サイドバー (`docs/source/sorafs/tryit.md`actualizado con nuevo label) のナビゲーションの文言を確認してください。 |
+| `docs-preview/w1 #2` |低い |ドキュメントコア-03 |レスエルト 2025-04-19 | Try it + キャプションの実際のスクリーンショットを確認してください。アーティファクト `artifacts/docs_preview/W1/preview-2025-04-12/feedback/partner-w1-05/screenshot-diff.png`。 |
+| - |情報 |ドキュメント/DevRel リード |セラード |ロス・コメンタリオス・レスタンテス・フエロン・ソロQ&A;パートナーバジョ `artifacts/docs_preview/W1/preview-2025-04-12/feedback/` をキャプチャし、フィードバック デ フィードバックを表示します。 |
 
-## Seguimiento de knowledge check y surveys
+## 知識チェックとアンケートの継続
 
-1. Registra los puntajes del quiz (objetivo >=90%) para cada reviewer; adjunta el CSV exportado junto a los artefactos de invitacion.
-2. Recolecta las respuestas cualitativas del survey capturadas con el template de feedback y reflejalas bajo
-   `artifacts/docs_preview/W1/preview-2025-04-12/surveys/`.
-3. Agenda llamadas de remediacion para cualquiera por debajo del umbral y registralas en este archivo.
+1. Registra los puntajes del quit (objetivo >=90%) para cada reviewer;招待状を保存するための追加の CSV エクスポート。
+2. フィードバックおよび参照テンプレートの調査キャプチャーを収集する
+   `artifacts/docs_preview/W1/preview-2025-04-12/surveys/`。
+3. 管理および登録の記録に関する救済に関する議題。
 
-Los ocho reviewers marcaron >=94% en el knowledge check (CSV:
-`artifacts/docs_preview/W1/preview-2025-04-12/feedback/w1-quiz-scores.csv`). No se requirieron llamadas de remediacion;
-los exports de survey para cada partner viven bajo
-`artifacts/docs_preview/W1/preview-2025-04-12/surveys/<partner-id>/summary.json`.
+Los ocho の査読者 marcaron >=94% の知識チェック (CSV:
+`artifacts/docs_preview/W1/preview-2025-04-12/feedback/w1-quiz-scores.csv`)。ラマダを修復する必要はありません。
+ロス輸出調査パラカナダパートナー ビベン・バジョ
+`artifacts/docs_preview/W1/preview-2025-04-12/surveys/<partner-id>/summary.json`。
 
-## Inventario de artefactos
+## 工芸品の発明品
 
-- Bundle de descriptor/checksum de preview: `artifacts/docs_preview/W1/preview-2025-04-12/descriptor.json`
-- Resumen de probe + link-check: `artifacts/docs_preview/W1/preview-2025-04-12/preflight-summary.json`
-- Log de cambio del proxy Try it: `artifacts/docs_preview/W1/preview-2025-04-12/tryit/OPS-TRYIT-147.log`
-- Exportes de telemetria: `artifacts/docs_preview/W1/preview-2025-04-12/grafana/<date>/`
-- Bundle diario de telemetria de office hours: `artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/`
-- Exportes de feedback + surveys: colocar carpetas por reviewer bajo
+- バンドルの記述子/チェックサムのプレビュー: `artifacts/docs_preview/W1/preview-2025-04-12/descriptor.json`
+- プローブ + リンクチェックの再開: `artifacts/docs_preview/W1/preview-2025-04-12/preflight-summary.json`
+- プロキシのログを試してみてください: `artifacts/docs_preview/W1/preview-2025-04-12/tryit/OPS-TRYIT-147.log`
+- テレメトリの輸出: `artifacts/docs_preview/W1/preview-2025-04-12/grafana/<date>/`
+- 営業時間のテレメトリアのバンドル: `artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/`
+- フィードバック + アンケートのエクスポート: レビュアー bajo によるコロカル カーペット
   `artifacts/docs_preview/W1/preview-2025-04-12/feedback/<partner-id>/`
-- CSV y resumen del knowledge check: `artifacts/docs_preview/W1/preview-2025-04-12/feedback/w1-quiz-scores.csv`
-
-Mantener el inventario sincronizado con el issue del tracker. Adjunta hashes al copiar artefactos al ticket de gobernanza
-para que los auditores verifiquen los archivos sin acceso de shell.
+- CSV および履歴書知識チェック: `artifacts/docs_preview/W1/preview-2025-04-12/feedback/w1-quiz-scores.csv`トラッカーの問題を解決するための管理。政府のチケットのコピーやアーティファクトの付加ハッシュ
+シェルにアクセスしてアーカイブを検証することができます。

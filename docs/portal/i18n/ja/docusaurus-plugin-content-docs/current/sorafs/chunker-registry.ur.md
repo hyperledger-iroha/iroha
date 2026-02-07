@@ -4,50 +4,52 @@ direction: ltr
 source: docs/portal/docs/sorafs/chunker-registry.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: chunker-registry
-title: SoraFS chunker profile registry
-sidebar_label: Chunker registry
-description: SoraFS chunker registry کے لیے profile IDs، parameters اور negotiation plan۔
+ID: チャンカーレジストリ
+タイトル: SoraFS チャンカー プロファイル レジストリ
+Sidebar_label: チャンカー レジストリ
+説明: SoraFS チャンカー レジストリ、プロファイル ID、パラメータ、ネゴシエーション プラン
 ---
 
-:::note مستند ماخذ
+:::note メモ
 :::
 
-## SoraFS chunker profile registry (SF-2a)
+## SoraFS チャンカー プロファイル レジストリ (SF-2a)
 
-SoraFS stack chunking behavior کو ایک چھوٹے namespaced registry کے ذریعے negotiate کرتا ہے۔
-ہر profile deterministic CDC parameters، semver metadata اور expected digest/multicodec assign کرتا ہے جو manifests اور CAR archives میں استعمال ہوتا ہے۔
+SoraFS スタック チャンク動作 名前空間レジストリ ネゴシエート ہے۔
+プロファイル決定論的 CDC パラメータ、サーバー メタデータ、予想されるダイジェスト/マルチコーデックの割り当て、マニフェスト、CAR アーカイブ、および
 
-Profile authors کو
+著者プロフィール
 [`docs/source/sorafs/chunker_profile_authoring.md`](./chunker-profile-authoring.md)
-میں مطلوبہ metadata، validation checklist اور proposal template دیکھنا چاہیے قبل اس کے کہ وہ نئی entries submit کریں۔
-جب governance تبدیلی approve کر دے تو
-[registry rollout checklist](./chunker-registry-rollout-checklist.md) اور
-[staging manifest playbook](./staging-manifest-playbook) کے مطابق fixtures کو staging اور production میں promote کریں۔
+メタデータの検証チェックリスト 提案テンプレートの作成 入力の送信 入力の送信
+ガバナンスを承認する
+[レジストリ展開チェックリスト](./chunker-registry-rollout-checklist.md)
+[ステージング マニフェスト プレイブック](./staging-manifest-playbook) 備品、ステージング、制作、プロモーション、プロモーション
 
-### Profiles
+### プロフィール
 
-| Namespace | Name | SemVer | Profile ID | Min (bytes) | Target (bytes) | Max (bytes) | Break mask | Multihash | Aliases | Notes |
-|-----------|------|--------|------------|-------------|----------------|-------------|------------|-----------|---------|-------|
-| `sorafs`  | `sf1` | `1.0.0` | `1` | 65536 | 262144 | 524288 | `0x0000ffff` | `0x1f` (BLAKE3-256) | `["sorafs.sf1@1.0.0", "sorafs.sf1@1.0.0"]` | SF-1 fixtures میں استعمال ہونے والا canonical profile |
+|ネームスペース |名前 |セミバージョン |プロフィールID |最小 (バイト) |ターゲット (バイト) |最大 (バイト) |マスクをブレイクする |マルチハッシュ |別名 |メモ |
+|----------|------|----------|---------------|-------------|-----|-------------|---------------|-----------|-----------|----------|
+| `sorafs` | `sf1` | `1.0.0` | `1` | 65536 | 262144 | 524288 | `0x0000ffff` | `0x1f` (ブレイク3-256) | `["sorafs.sf1@1.0.0", "sorafs.sf1@1.0.0"]` | SF-1 の試合の標準プロフィール | SF-1 の試合結果
 
-Registry code میں `sorafs_manifest::chunker_registry` کے طور پر موجود ہے (جسے [`chunker_registry_charter.md`](./chunker-registry-charter.md) govern کرتا ہے)۔ ہر entry ایک `ChunkerProfileDescriptor` کے طور پر ظاہر ہوتی ہے جس میں:
+レジストリ コード میں `sorafs_manifest::chunker_registry` کے طور پر موجود ہے (جسے [`chunker_registry_charter.md`](./chunker-registry-charter.md) 管理 کرتا ہے)۔ ہر エントリ ایک `ChunkerProfileDescriptor` کے طور پر ظاہر ہوتی ہے جس میں:
 
-* `namespace` – متعلقہ profiles کی logical grouping (مثلاً `sorafs`)۔
-* `name` – انسان کے لیے readable profile label (`sf1`, `sf1-fast`, …)۔
-* `semver` – parameter set کے لیے semantic version string۔
-* `profile` – اصل `ChunkProfile` (min/target/max/mask)۔
-* `multihash_code` – chunk digests بناتے وقت استعمال ہونے والا multihash (`0x1f`
-  SoraFS default کے لیے)۔
+* `namespace` – プロファイルの論理グループ化 (`sorafs`)
+* `name` – 読み取り可能なプロファイル ラベル (`sf1`、`sf1-fast`、…)۔
+* `semver` – パラメータ セット、セマンティック バージョン文字列
+* `profile` – `ChunkProfile` (最小/ターゲット/最大/マスク)
+* `multihash_code` – チャンク ダイジェスト、マルチハッシュ (`0x1f`)
+  SoraFS デフォルト
 
-Manifest `ChunkingProfileV1` کے ذریعے profiles کو serialize کرتا ہے۔ یہ structure registry metadata
-(namespace, name, semver) کو raw CDC parameters اور اوپر دکھائی گئی alias list کے ساتھ record کرتا ہے۔
-Consumers کو پہلے `profile_id` کے ذریعے registry lookup کرنا چاہیے اور اگر unknown IDs آئیں تو inline parameters پر fallback کرنا چاہیے؛
+マニフェスト `ChunkingProfileV1` プロファイル シリアル化 ہے۔構造レジストリのメタデータ
+(名前空間、名前、サーバー) 生の CDC パラメーター 名前 エイリアス リスト レコード ラベル
+コンシューマ `profile_id` レジストリ ルックアップ 不明な ID のインライン パラメータ フォールバック
 
-Registry کو tooling سے inspect کرنے کے لیے helper CLI چلائیں:
+レジストリとツール、検査、ヘルパー CLI、および
 
 ```
 $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
@@ -67,9 +69,9 @@ $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profi
 ]
 ```
 
-CLI کے وہ تمام flags جو JSON لکھتے ہیں (`--json-out`, `--por-json-out`, `--por-proof-out`,
-`--por-sample-out`) path کے طور پر `-` قبول کرتے ہیں، جس سے payload stdout پر stream ہوتا ہے بجائے فائل بنانے کے۔
-یہ tooling میں data pipe کرنا آسان بناتا ہے جبکہ main report کو پرنٹ کرنے والا default behavior برقرار رہتا ہے۔
+CLI のフラグと JSON のフラグ (`--json-out`、`--por-json-out`、`--por-proof-out`、
+`--por-sample-out`) パス `-` パス パス パス パス `-` ペイロード stdout ストリーム ストリームああ、
+ツール ツール データ パイプ データ パイプ メイン レポート デフォルトの動作 デフォルトの動作
 
 ```
 $ cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- ./docs.tar \
@@ -109,16 +111,16 @@ CAR data request کرتے وقت clients کو `Accept-Chunker` header بھیجن
 
 ```
 
-Gateways mutually supported profile منتخب کرتے ہیں (default `sorafs.sf1@1.0.0`) اور فیصلہ `Content-Chunker` response header کے ذریعے reflect کرتے ہیں۔ Manifests منتخب profile embed کرتے ہیں تاکہ downstream nodes HTTP negotiation پر انحصار کیے بغیر chunk layout validate کر سکیں۔
+ゲートウェイ相互サポート プロファイル منتخب کرتے ہیں (デフォルト `sorafs.sf1@1.0.0`) اور فیصلہ `Content-Chunker` 応答ヘッダー کے ذریعے 反映 کرتے ہیں۔マニフェスト プロファイルの埋め込み ダウンストリーム ノード HTTP ネゴシエーション チャンク レイアウトの検証 チャンク レイアウトの検証
 
 
 
-* **Primary path** – CARv2، BLAKE3 payload digest (`0x1f` multihash)،
-  `MultihashIndexSorted`، اور chunk profile اوپر کے مطابق record ہوتا ہے۔
+* **プライマリ パス** – CARv2、BLAKE3 ペイロード ダイジェスト (`0x1f` マルチハッシュ)
+  `MultihashIndexSorted`، اور チャンク プロファイル اوپر کے مطابق レコード ہوتا ہے۔
 
 
-### Conformance
+### 適合性
 
-* `sorafs.sf1@1.0.0` profile public fixtures (`fixtures/sorafs_chunker`) اور `fuzz/sorafs_chunker` کے تحت register corpora سے match کرتا ہے۔ End-to-end parity Rust، Go اور Node میں دیے گئے tests سے exercise کی جاتی ہے۔
-* `chunker_registry::lookup_by_profile` assert کرتا ہے کہ descriptor parameters `ChunkProfile::DEFAULT` سے match کریں تاکہ accidental divergence سے بچا جا سکے۔
-* `iroha app sorafs toolkit pack` اور `sorafs_manifest_stub` سے بنے manifests میں registry metadata شامل ہوتی ہے۔
+* `sorafs.sf1@1.0.0` プロファイル公共設備 (`fixtures/sorafs_chunker`) اور `fuzz/sorafs_chunker` ٩ے تحت register corpora سے match کرتا ہے۔エンドツーエンドのパリティ Rust Go ノードのテスト 演習のテスト
+* `chunker_registry::lookup_by_profile` 記述子パラメータをアサート `ChunkProfile::DEFAULT` 一致 偶発的発散 偶発的発散
+* `iroha app sorafs toolkit pack` اور `sorafs_manifest_stub` は、レジストリ メタデータをマニフェストします。

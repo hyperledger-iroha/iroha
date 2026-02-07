@@ -11,62 +11,63 @@ id: preview-feedback-w1-plan
 title: W1 partner preflight plan
 sidebar_label: W1 plan
 description: Tasks, owners, and evidence checklist for the partner preview cohort.
+translator: machine-google-reviewed
 ---
 
-| Item | Details |
+| Зүйл | Дэлгэрэнгүй |
 | --- | --- |
-| Wave | W1 — Partners & Torii integrators |
-| Target window | Q2 2025 week 3 |
-| Artefact tag (planned) | `preview-2025-04-12` |
-| Tracker issue | `DOCS-SORA-Preview-W1` |
+| Долгион | W1 — Түншүүд & Torii интеграторууд |
+| Зорилтот цонх | 2025 оны 2-р улирал 3 дахь долоо хоног |
+| Олдворын шошго (төлөвлөсөн) | `preview-2025-04-12` |
+| Tracker асуудал | `DOCS-SORA-Preview-W1` |
 
-## Objectives
+## Зорилтууд
 
-1. Secure legal + governance approvals for partner preview terms.
-2. Stage the Try it proxy and telemetry snapshots used in the invite bundle.
-3. Refresh the checksum-verified preview artefact and probe results.
-4. Finalise the partner roster + request templates before invites are sent.
+1. Түншийн урьдчилан харах нөхцлийн хууль эрх зүйн + засаглалын зөвшөөрлийг баталгаажуулна.
+2. Урилгын багцад ашигласан "Try it" прокси болон телеметрийн агшин агшингуудыг үе шаттайгаар тавь.
+3. Шалгах нийлбэрээр баталгаажсан урьдчилж харах олдвор болон шалгалтын үр дүнг сэргээнэ үү.
+4. Урилгыг илгээхээс өмнө түншийн жагсаалт + хүсэлтийн загваруудыг эцэслэнэ үү.
 
-## Task breakdown
+## Даалгаврын задаргаа
 
-| ID | Task | Owner | Due | Status | Notes |
+| ID | Даалгавар | Эзэмшигч | Хугацаа | Статус | Тэмдэглэл |
 | --- | --- | --- | --- | --- | --- |
-| W1-P1 | Obtain legal approval for the preview terms addendum | Docs/DevRel lead → Legal | 2025‑04‑05 | ✅ Completed | Legal ticket `DOCS-SORA-Preview-W1-Legal` signed off 2025‑04‑05; PDF attached to the tracker. |
-| W1-P2 | Capture Try it proxy staging window (2025‑04‑10) and validate proxy health | Docs/DevRel + Ops | 2025‑04‑06 | ✅ Completed | `npm run manage:tryit-proxy -- --stage preview-w1 --expires-in=21d --target https://tryit-preprod.sora` executed 2025‑04‑06; CLI transcript + `.env.tryit-proxy.bak` archived. |
-| W1-P3 | Build preview artefact (`preview-2025-04-12`), run `scripts/preview_verify.sh` + `npm run probe:portal`, archive descriptor/checksums | Portal TL | 2025‑04‑08 | ✅ Completed | Artefact + verification logs stored under `artifacts/docs_preview/W1/preview-2025-04-12/`; probe output attached to tracker. |
-| W1-P4 | Review partner intake forms (`DOCS-SORA-Preview-REQ-P01…P08`), confirm contacts + NDAs | Governance liaison | 2025‑04‑07 | ✅ Completed | All eight requests approved (last two cleared 2025‑04‑11); approvals linked in tracker. |
-| W1-P5 | Draft invite copy (based on `docs/examples/docs_preview_invite_template.md`), set `<preview_tag>` and `<request_ticket>` for each partner | Docs/DevRel lead | 2025‑04‑08 | ✅ Completed | Invite draft sent 2025‑04‑12 15:00 UTC alongside artefact links. |
+| W1-P1 | Урьдчилан харах нөхцлийн нэмэлт | хуулийн зөвшөөрөл авах Docs/DevRel тэргүүлэх → Хууль эрх зүйн | 2025-04-05 | ✅ Дууссан | Хуулийн тасалбар `DOCS-SORA-Preview-W1-Legal` 2025‑04‑05-нд гарын үсэг зурсан; Tracker дээр PDF хавсаргасан. |
+| W1-P2 | Зураг авах Үүнийг туршаад үзээрэй прокси хувилбарын цонх (2025‑04‑10) ба проксины эрүүл мэндийг баталгаажуулна уу | Docs/DevRel + Ops | 2025-04-06 | ✅ Дууссан | `npm run manage:tryit-proxy -- --stage preview-w1 --expires-in=21d --target https://tryit-preprod.sora` гүйцэтгэсэн 2025-04-06; CLI транскрипт + `.env.tryit-proxy.bak` архивлагдсан. |
+| W1-P3 | Урьдчилан харах олдворыг бүтээх (`preview-2025-04-12`), `scripts/preview_verify.sh` + `npm run probe:portal` ажиллуулах, архивын тодорхойлогч/шалгах нийлбэр | Портал TL | 2025-04-08 | ✅ Дууссан | `artifacts/docs_preview/W1/preview-2025-04-12/` дор хадгалагдсан Artefact + баталгаажуулалтын бүртгэлүүд; хянагчтай хавсаргасан датчик гаралт. |
+| W1-P4 | Түншийн элсэлтийн маягтыг (`DOCS-SORA-Preview-REQ-P01…P08`) хянаж, харилцагчдыг баталгаажуулах + NDA | Засаглалын холбоо | 2025-04-07 | ✅ Дууссан | Бүх найман хүсэлтийг зөвшөөрсөн (сүүлийн хоёр нь 2025-04-11-д батлагдсан); Tracker-д холбогдсон зөвшөөрлүүд. |
+| W1-P5 | Урилгын хуулбарын ноорог (`docs/examples/docs_preview_invite_template.md` дээр үндэслэсэн), түнш тус бүрт `<preview_tag>`, `<request_ticket>` багц | Docs/DevRel тэргүүлэх | 2025-04-08 | ✅ Дууссан | Урилгын төслийг 2025‑04‑12 15:00UTC-д олдворын холбоосын хамт илгээсэн. |
 
-## Preflight checklist
+## Нислэгийн өмнөх шалгах хуудас
 
-> Tip: run `scripts/preview_wave_preflight.sh --tag preview-2025-04-12 --base-url https://preview.staging.sora --descriptor artifacts/preview-2025-04-12/descriptor.json --archive artifacts/preview-2025-04-12/docs-portal-preview.tar.zst --tryit-target https://tryit-proxy.staging.sora --output-json artifacts/preview-2025-04-12/preflight-summary.json` to execute steps 1‑5 automatically (build, checksum verification, portal probe, link checker, and Try it proxy update). The script records a JSON log you can attach to the tracker issue.
+> Зөвлөмж: 1-5-р алхмуудыг автоматаар гүйцэтгэхийн тулд `scripts/preview_wave_preflight.sh --tag preview-2025-04-12 --base-url https://preview.staging.sora --descriptor artifacts/preview-2025-04-12/descriptor.json --archive artifacts/preview-2025-04-12/docs-portal-preview.tar.zst --tryit-target https://tryit-proxy.staging.sora --output-json artifacts/preview-2025-04-12/preflight-summary.json`-г ажиллуул (бүтээх, шалгах нийлбэр баталгаажуулах, портал шалгах, холбоос шалгагч, Проксины шинэчлэлтийг туршиж үзэх). Энэ скрипт нь таны tracker асуудалд хавсаргаж болох JSON бүртгэлийг бүртгэдэг.
 
-1. `npm run build` (with `DOCS_RELEASE_TAG=preview-2025-04-12`) to regenerate `build/checksums.sha256` and `build/release.json`.
+1. `npm run build` (`DOCS_RELEASE_TAG=preview-2025-04-12`-тай) `build/checksums.sha256` болон `build/release.json`-ийг сэргээх.
 2. `docs/portal/scripts/preview_verify.sh --build-dir docs/portal/build --descriptor artifacts/<tag>/descriptor.json --archive artifacts/<tag>/docs-portal-preview.tar.zst`.
 3. `PORTAL_BASE_URL=https://preview.staging.sora DOCS_RELEASE_TAG=preview-2025-04-12 npm run probe:portal -- --expect-release=preview-2025-04-12`.
-4. `DOCS_RELEASE_TAG=preview-2025-04-12 npm run check:links` and archive `build/link-report.json` beside the descriptor.
-5. `npm run manage:tryit-proxy -- update --target https://tryit-proxy.staging.sora` (or provide the appropriate target via `--tryit-target`); commit the updated `.env.tryit-proxy` and keep the `.bak` for rollback.
-6. Update the W1 tracker issue with log paths (descriptor checksum, probe output, Try it proxy change, Grafana snapshots).
+4. Тодорхойлогчийн хажууд `DOCS_RELEASE_TAG=preview-2025-04-12 npm run check:links` ба архив `build/link-report.json`.
+5. `npm run manage:tryit-proxy -- update --target https://tryit-proxy.staging.sora` (эсвэл тохирох зорилтыг `--tryit-target`-ээр дамжуулан өгөх); шинэчлэгдсэн `.env.tryit-proxy`-г амлаж, `.bak`-г буцаахаар үлдээнэ үү.
+6. W1 трекерийн асуудлыг бүртгэлийн замуудаар шинэчилнэ үү (тодорхойлогч шалгах нийлбэр, шалгалтын гаралт, прокси солихыг оролдох, Grafana агшин зуурын зураг).
 
-## Evidence checklist
+## Нотлох баримт шалгах хуудас
 
-- [x] Signed legal approval (PDF or ticket link) attached to `DOCS-SORA-Preview-W1`.
-- [x] Grafana screenshots for `docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals`.
-- [x] `preview-2025-04-12` descriptor + checksum log stored under `artifacts/docs_preview/W1/`.
-- [x] Invite roster table with `invite_sent_at` timestamps populated (see tracker W1 log).
-- [x] Feedback artifacts mirrored in [`preview-feedback/w1/log.md`](./log.md) with one row per partner (updated 2025-04-26 with roster/telemetry/issue data).
+- [x] `DOCS-SORA-Preview-W1` хавсаргасан гарын үсэг зурсан хууль ёсны зөвшөөрөл (PDF эсвэл тасалбарын холбоос).
+- [x] `docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals`-д зориулсан Grafana дэлгэцийн агшин.
+- [x] `preview-2025-04-12` тодорхойлогч + `artifacts/docs_preview/W1/` дор хадгалагдсан шалгах нийлбэрийн бүртгэл.
+- [x] `invite_sent_at` цагийн тэмдэглэгээ бүхий урилгын жагсаалтын хүснэгт (W1 трекерийн бүртгэлийг харна уу).
+- [x] Санал хүсэлтийн олдворуудыг [`preview-feedback/w1/log.md`](./log.md)-д нэг хамтрагч бүрт нэг эгнээнд тусгав (2025-04-26-нд жагсаалт/телеметрийн/асуудлын өгөгдлийн хамт шинэчлэгдсэн).
 
-Update this plan as tasks progress; the tracker references it to keep the roadmap
-auditable.
+Даалгаврууд ахих тусам энэ төлөвлөгөөг шинэчлэх; Замын зургийг хадгалахын тулд мөрдөгч үүнийг иш татдаг
+аудит хийх боломжтой.
 
-## Feedback workflow
+## Санал хүсэлтийн ажлын урсгал
 
-1. For each reviewer, duplicate the template in
+1. Шүүмжлэгч бүрийн хувьд загварыг хуулбарлана
    [`docs/examples/docs_preview_feedback_form.md`](../../../../../examples/docs_preview_feedback_form.md),
-   fill the metadata, and store the completed copy under
+   мета өгөгдлийг бөглөж, дууссан хуулбарыг доор хадгална
    `artifacts/docs_preview/W1/preview-2025-04-12/feedback/<partner-id>/`.
-2. Summarise invites, telemetry checkpoints, and open issues inside the live log at
-   [`preview-feedback/w1/log.md`](./log.md) so governance reviewers can replay the entire wave
-   without leaving the repository.
-3. When knowledge-check or survey exports arrive, attach them in the artefact path noted in the log
-   and cross-link the tracker issue.
+2. Урилга, телеметрийн хяналтын цэгүүд болон шууд бүртгэл доторх нээлттэй асуудлуудыг нэгтгэн бичнэ үү
+   [`preview-feedback/w1/log.md`](./log.md) тул засаглалын тоймчид давалгааг бүхэлд нь дахин тоглуулах боломжтой
+   агуулахаас гарахгүйгээр.
+3. Мэдлэг шалгах эсвэл судалгааны экспорт ирэх үед бүртгэлд тэмдэглэсэн олдворын замд хавсаргана уу.
+   болон трекерийн асуудлыг хөндлөн холбоно.

@@ -4,68 +4,64 @@ direction: ltr
 source: docs/portal/docs/devportal/preview-feedback/w1/plan.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: preview-feedback-w1-plan
-title: Plan de preflight partenaires W1
-sidebar_label: Plan W1
-description: Taches, responsables et checklist de preuve pour la cohorte de preview partenaires.
+identifiant : aperçu-feedback-w1-plan
+titre : Plan de vol en amont partenaires W1
+sidebar_label : Plan W1
+description : Taches, responsables et checklist de preuve pour la cohorte de prévisualisation partenaires.
 ---
 
-| Element | Details |
+| Élément | Détails |
 | --- | --- |
-| Vague | W1 - Partenaires et integrateurs Torii |
-| Fenetre cible | Q2 2025 semaine 3 |
-| Tag d'artefact (planifie) | `preview-2025-04-12` |
-| Issue tracker | `DOCS-SORA-Preview-W1` |
+| Vague | W1 - Partenaires et intégrateurs Torii |
+| Fenêtre cible | T2 2025 semaine 3 |
+| Tag d'artefact (planifier) ​​| `preview-2025-04-12` |
+| Suivi des problèmes | `DOCS-SORA-Preview-W1` |
 
 ## Objectifs
 
-1. Obtenir les approbations legales et governance pour les termes de preview partenaires.
-2. Preparer le proxy Try it et les snapshots de telemetrie utilises dans le bundle d'invitation.
-3. Rafraichir l'artefact de preview verifie par checksum et les resultats de probes.
-4. Finaliser le roster des partenaires et les templates de demande avant l'envoi des invitations.
+1. Obtenir les approbations légales et de gouvernance pour les termes de prévisualisation des partenaires.
+2. Préparer le proxy Try it et les instantanés de télémétrie utilisés dans le bundle d'invitation.
+3. Rafraichir l'artefact de prévisualisation vérifié par checksum et les résultats de sondes.
+4. Finaliser le roster des partenaires et les modèles de demande avant l'envoi des invitations.
 
-## Decoupage des taches
-
-| ID | Tache | Responsable | Echeance | Statut | Notes |
+## Découpage des taches| ID | Taché | Responsable | Écheance | Statuts | Remarques |
 | --- | --- | --- | --- | --- | --- |
-| W1-P1 | Obtenir l'approbation legale pour l'addendum des termes de preview | Docs/DevRel lead -> Legal | 2025-04-05 | Termine | Ticket legal `DOCS-SORA-Preview-W1-Legal` valide le 2025-04-05; PDF attache au tracker. |
-| W1-P2 | Capturer la fenetre de staging du proxy Try it (2025-04-10) et valider la sante du proxy | Docs/DevRel + Ops | 2025-04-06 | Termine | `npm run manage:tryit-proxy -- --stage preview-w1 --expires-in=21d --target https://tryit-preprod.sora` execute le 2025-04-06; transcription CLI + `.env.tryit-proxy.bak` archivees. |
-| W1-P3 | Construire l'artefact de preview (`preview-2025-04-12`), executer `scripts/preview_verify.sh` + `npm run probe:portal`, archiver descriptor/checksums | Portal TL | 2025-04-08 | Termine | Artefact + logs de verification stockes sous `artifacts/docs_preview/W1/preview-2025-04-12/`; sortie de probe attachee au tracker. |
-| W1-P4 | Revoir les formulaires d'intake partenaires (`DOCS-SORA-Preview-REQ-P01...P08`), confirmer contacts + NDAs | Governance liaison | 2025-04-07 | Termine | Les huit demandes approuvees (les deux dernieres le 2025-04-11); approbations liees dans le tracker. |
-| W1-P5 | Rediger le texte d'invitation (base sur `docs/examples/docs_preview_invite_template.md`), definir `<preview_tag>` et `<request_ticket>` pour chaque partenaire | Docs/DevRel lead | 2025-04-08 | Termine | Brouillon d'invitation envoye le 2025-04-12 15:00 UTC avec les liens d'artefact. |
+| W1-P1 | Obtenir l'approbation légale pour l'addendum des termes de prévisualisation | Responsable Docs/DevRel -> Juridique | 2025-04-05 | Terminer | Billet légal `DOCS-SORA-Preview-W1-Legal` valide le 2025-04-05 ; PDF joint au tracker. |
+| W1-P2 | Capturer la fenêtre de staging du proxy Try it (2025-04-10) et valider la santé du proxy | Docs/DevRel + Ops | 2025-04-06 | Terminer | `npm run manage:tryit-proxy -- --stage preview-w1 --expires-in=21d --target https://tryit-preprod.sora` exécute le fichier 2025-04-06 ; transcription CLI + `.env.tryit-proxy.bak` archivées. |
+| W1-P3 | Construire l'artefact de prévisualisation (`preview-2025-04-12`), exécuteur `scripts/preview_verify.sh` + `npm run probe:portal`, descripteur d'archiveur/sommes de contrôle | Portail TL | 2025-04-08 | Terminer | Artefact + logs de vérification stocks sous `artifacts/docs_preview/W1/preview-2025-04-12/`; sortie de sonde attachée au tracker. |
+| W1-P4 | Revoir les formulaires d'admission partenaires (`DOCS-SORA-Preview-REQ-P01...P08`), confirmer contacts + NDAs | Liaison gouvernance | 2025-04-07 | Terminer | Les huit demandes approuvées (les deux dernières le 2025-04-11); approbations liées dans le tracker. |
+| W1-P5 | Rediger le texte d'invitation (base sur `docs/examples/docs_preview_invite_template.md`), définir `<preview_tag>` et `<request_ticket>` pour chaque partenaire | Responsable Docs/DevRel | 2025-04-08 | Terminer | Brouillon d'invitation envoyé le 2025-04-12 15:00 UTC avec les liens d'artefact. |
 
-## Checklist preflight
+## Liste de contrôle en amont> Astuce : lancez `scripts/preview_wave_preflight.sh --tag preview-2025-04-12 --base-url https://preview.staging.sora --descriptor artifacts/preview-2025-04-12/descriptor.json --archive artifacts/preview-2025-04-12/docs-portal-preview.tar.zst --tryit-target https://tryit-proxy.staging.sora --output-json artifacts/preview-2025-04-12/preflight-summary.json` pour exécuter automatiquement les étapes 1-5 (build, checksum de vérification, sonde du portail, vérificateur de liens, et mise à jour du proxy Try it). Le script enregistre un log JSON à joindre au tracker.
 
-> Astuce: lancez `scripts/preview_wave_preflight.sh --tag preview-2025-04-12 --base-url https://preview.staging.sora --descriptor artifacts/preview-2025-04-12/descriptor.json --archive artifacts/preview-2025-04-12/docs-portal-preview.tar.zst --tryit-target https://tryit-proxy.staging.sora --output-json artifacts/preview-2025-04-12/preflight-summary.json` pour executer automatiquement les etapes 1-5 (build, verification checksum, probe du portal, link checker, et mise a jour du proxy Try it). Le script enregistre un log JSON a joindre au tracker.
-
-1. `npm run build` (avec `DOCS_RELEASE_TAG=preview-2025-04-12`) pour regenerer `build/checksums.sha256` et `build/release.json`.
+1. `npm run build` (avec `DOCS_RELEASE_TAG=preview-2025-04-12`) pour régénérer `build/checksums.sha256` et `build/release.json`.
 2. `docs/portal/scripts/preview_verify.sh --build-dir docs/portal/build --descriptor artifacts/<tag>/descriptor.json --archive artifacts/<tag>/docs-portal-preview.tar.zst`.
 3. `PORTAL_BASE_URL=https://preview.staging.sora DOCS_RELEASE_TAG=preview-2025-04-12 npm run probe:portal -- --expect-release=preview-2025-04-12`.
-4. `DOCS_RELEASE_TAG=preview-2025-04-12 npm run check:links` et archiver `build/link-report.json` a cote du descriptor.
-5. `npm run manage:tryit-proxy -- update --target https://tryit-proxy.staging.sora` (ou fournir la cible appropriee via `--tryit-target`); committer le `.env.tryit-proxy` mis a jour et conserver la `.bak` pour rollback.
-6. Mettre a jour l'issue W1 avec les chemins de logs (checksum du descriptor, sortie probe, changement du proxy Try it et snapshots Grafana).
+4. `DOCS_RELEASE_TAG=preview-2025-04-12 npm run check:links` et archiveur `build/link-report.json` à la cote du descripteur.
+5. `npm run manage:tryit-proxy -- update --target https://tryit-proxy.staging.sora` (ou fournir la cible appropriée via `--tryit-target`) ; committer le `.env.tryit-proxy` mis à jour et conserver la `.bak` pour rollback.
+6. Mettre à jour l'issue W1 avec les chemins de logs (checksum du descriptor, sortie probe, changement du proxy Try it et snapshots Grafana).
 
 ## Checklist de preuve
 
-- [x] Approbation legale signee (PDF ou lien du ticket) attachee a `DOCS-SORA-Preview-W1`.
-- [x] Screenshots Grafana pour `docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals`.
+- [x] Approbation legale signée (PDF ou lien du ticket) jointe a `DOCS-SORA-Preview-W1`.
+- [x] Captures d'écran Grafana pour `docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals`.
 - [x] Descriptor et log de checksum `preview-2025-04-12` stockes sous `artifacts/docs_preview/W1/`.
-- [x] Tableau de roster d'invitations avec `invite_sent_at` renseignes (voir le log W1 du tracker).
-- [x] Artefacts de feedback repris dans [`preview-feedback/w1/log.md`](./log.md) avec une ligne par partenaire (mis a jour 2025-04-26 avec roster/telemetria/issues).
+- [x] Tableau de roster d'invitations avec renseignes `invite_sent_at` (voir le log W1 du tracker).
+- [x] Artefacts de feedback repris dans [`preview-feedback/w1/log.md`](./log.md) avec une ligne par partenaire (mis à jour 2025-04-26 avec roster/telemetria/issues).
 
-Mettre a jour ce plan a mesure de l'avancement; le tracker s'y refere pour garder le roadmap auditable.
+Mettre un jour ce plan à mesure de l'avancement; le tracker s'y réfère pour garder la feuille de route auditable.
 
-## Flux de feedback
-
-1. Pour chaque reviewer, dupliquer le template dans
+## Flux de rétroaction1. Pour chaque reviewer, dupliquer le template dans
    [`docs/examples/docs_preview_feedback_form.md`](../../../../../examples/docs_preview_feedback_form.md),
-   remplir les metadonnees et stocker la copie complete sous
+   remplir les métadonnées et stocker la copie complète sous
    `artifacts/docs_preview/W1/preview-2025-04-12/feedback/<partner-id>/`.
-2. Resumer invitations, checkpoints de telemetrie et issues ouvertes dans le log vivant
-   [`preview-feedback/w1/log.md`](./log.md) pour que les reviewers governance puissent rejouer la vague
-   sans quitter le depot.
+2. Invitations de reprise, points de contrôle de télémétrie et enjeux ouverts dans le log vivant
+   [`preview-feedback/w1/log.md`](./log.md) pour que les reviewers gouvernance puissent rejouer la vague
+   sans quitter le dépôt.
 3. Quand les exports de knowledge-check ou de sondages arrivent, les joindre dans le chemin d'artefact note dans le log
    et lier l'issue du tracker.

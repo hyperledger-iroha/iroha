@@ -4,46 +4,48 @@ direction: rtl
 source: docs/portal/docs/devportal/preview-feedback/w2/plan.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: preview-feedback-w2-plan
-title: W2 کمیونٹی intake پلان
-sidebar_label: W2 پلان
-description: کمیونٹی preview cohort کے لئے intake، approvals، اور evidence checklist۔
+المعرف: معاينة ردود الفعل W2-الخطة
+العنوان: خطة تناول W2 کمیونٹی
+Sidebar_label: خطة W2
+الوصف: مجموعة معاينة المجموعة المدخول والموافقات وقائمة مراجعة الأدلة.
 ---
 
-| آئٹم | تفصیل |
+| ئٹم | تفاصيل |
 | --- | --- |
-| لہر | W2 - کمیونٹی reviewers |
-| ہدف ونڈو | Q3 2025 ہفتہ 1 (عارضی) |
+| لہر | W2 - کمیونٹی المراجعين |
+| ہدف ونڈو | Q3 2025 ہفتہ 1 ( معارضی) |
 | آرٹیفیکٹ ٹیگ (منصوبہ) | `preview-2025-06-15` |
 | ٹریکر ایشو | `DOCS-SORA-Preview-W2` |
 
-## مقاصد
+##مقاصد
 
-1. کمیونٹی intake criteria اور vetting workflow کی تعریف کرنا۔
-2. تجویز کردہ roster اور acceptable-use addendum کے لئے governance approval حاصل کرنا۔
-3. checksum سے verify شدہ preview artefact اور telemetry bundle کو نئی ونڈو کے لئے ریفریش کرنا۔
-4. دعوت بھیجنے سے پہلے Try it proxy اور dashboards کو stage کرنا۔
+1. تحدد معايير القبول وفحص سير العمل.
+2. ابحث عن القائمة وملحق الاستخدام المقبول للحصول على موافقة الإدارة.
+3. يقوم المجموع الاختباري بالتحقق من معاينة القطع الأثرية وحزمة القياس عن بعد التي ستساعدك على تجديدها.
+4. دعوة بھیجنے سے پہلے جرب الوكيل ولوحات المعلومات في مرحلة کرنا۔
 
-## ٹاسک بریک ڈاؤن
+## حجر الطوب
 
-| ID | ٹاسک | مالک | مقررہ تاریخ | اسٹیٹس | نوٹس |
+| معرف | ٹاسك | مالك | مقررہ تاريخ | ٹیٹس | أخبار |
 | --- | --- | --- | --- | --- | --- |
-| W2-P1 | کمیونٹی intake criteria (eligibility, max slots, CoC requirements) تیار کرنا اور governance کو گردش کرنا | Docs/DevRel lead | 2025-05-15 | ✅ مکمل | intake پالیسی `DOCS-SORA-Preview-W2` میں merge ہوئی اور 2025-05-20 کے council میٹنگ میں endorse ہوئی۔ |
-| W2-P2 | request template کو کمیونٹی سوالات کے ساتھ اپ ڈیٹ کرنا (motivation, availability, localization needs) | Docs-core-01 | 2025-05-18 | ✅ مکمل | `docs/examples/docs_preview_request_template.md` میں اب Community سیکشن شامل ہے، جو intake فارم میں حوالہ ہے۔ |
-| W2-P3 | intake پلان کے لئے governance approval حاصل کرنا (meeting vote + recorded minutes) | Governance liaison | 2025-05-22 | ✅ مکمل | ووٹ 2025-05-20 کو متفقہ طور پر پاس ہوا؛ minutes + roll call `DOCS-SORA-Preview-W2` میں لنک ہیں۔ |
-| W2-P4 | W2 ونڈو کے لئے Try it proxy staging + telemetry capture شیڈول کرنا (`preview-2025-06-15`) | Docs/DevRel + Ops | 2025-06-05 | ✅ مکمل | change ticket `OPS-TRYIT-188` منظور اور 2025-06-09 02:00-04:00 UTC میں execute ہوا؛ Grafana screenshots ٹکٹ کے ساتھ archive ہیں۔ |
-| W2-P5 | نیا preview artefact tag (`preview-2025-06-15`) build/verify کرنا اور descriptor/checksum/probe logs archive کرنا | Portal TL | 2025-06-07 | ✅ مکمل | `scripts/preview_wave_preflight.sh --tag preview-2025-06-15 ...` 2025-06-10 کو چلایا گیا؛ outputs `artifacts/docs_preview/W2/preview-2025-06-15/` میں محفوظ ہیں۔ |
-| W2-P6 | کمیونٹی invite roster تیار کرنا (<=25 reviewers, staged batches) governance approved contact info کے ساتھ | Community manager | 2025-06-10 | ✅ مکمل | پہلے cohort کے 8 community reviewers منظور ہوئے؛ request IDs `DOCS-SORA-Preview-REQ-C01...C08` tracker میں لاگ ہیں۔ |
+| W2-P1 | معايير القبول (الأهلية، الحد الأقصى للفتحات، متطلبات مدونة قواعد السلوك) التطور والحوكمة | مستندات/DevRel الرصاص | 2025-05-15 | ✅ مكمل | تم دمج كمية باليس `DOCS-SORA-Preview-W2` في 2025-05-20 حيث وافق مجلسها على ذلك. |
+| W2-P2 | قالب طلب قروض الشركات (الدافع، والتوافر، واحتياجات الترجمة) | مستندات-core-01 | 2025-05-18 | ✅ مكمل | `docs/examples/docs_preview_request_template.md` منهج مجتمعي شامل يتضمن حوالة مالية، وهو عبارة عن فارم مدخول. |
+| W2-P3 | الحصول على موافقة الحكم موافقة الإدارة (تصويت الاجتماع + المحضر المسجل) | الاتصال بالحوكمة | 2025-05-22 | ✅ مكمل | ووٹ2025-05-20 لقد اتفقنا على ذلك؛ دقائق + مكالمة هاتفية `DOCS-SORA-Preview-W2` لنك ہیں. |
+| W2-P4 | W2 ونڈو کے لئے جرب التدريج الوكيل + التقاط القياس عن بعد شيڈول کرنا (`preview-2025-06-15`) | مستندات/DevRel + Ops | 2025-06-05 | ✅ مكمل | تغيير التذكرة `OPS-TRYIT-188` طعام و 2025-06-09 02:00-04:00 UTC سيتم تنفيذه؛ لقطات شاشة Grafana أرشيف ثابت. |
+| W2-P5 | نيا معاينة علامة المنتج (`preview-2025-06-15`) إنشاء/التحقق من كرنا وأرشيف سجلات الواصف/المجموع الاختباري/التحقيق كرنا | بوابة TL | 2025-06-07 | ✅ مكمل | `scripts/preview_wave_preflight.sh --tag preview-2025-06-15 ...` 2025-06-10 كليا جايا؛ المخرجات `artifacts/docs_preview/W2/preview-2025-06-15/` محفوظه. |
+| W2-P6 | کمیونٹی دعوة القائمة تیار کرنا (<= 25 مراجعًا، دفعات مرحلية) معلومات الاتصال المعتمدة من قبل الإدارة کے ساتھ | مدير المجتمع | 2025-06-10 | ✅ مكمل | تتكون المجموعة من 8 مراجعين من المجتمع ہوئے؛ معرفات الطلب `DOCS-SORA-Preview-REQ-C01...C08` متعقب. |
 
-## Evidence checklist
+## قائمة التحقق من الأدلة
 
-- [x] governance approval record (meeting notes + vote link) `DOCS-SORA-Preview-W2` کے ساتھ منسلک ہے۔
-- [x] Updated request template `docs/examples/` کے تحت commit ہے۔
-- [x] `preview-2025-06-15` descriptor، checksum log، probe output، link report، اور Try it proxy transcript `artifacts/docs_preview/W2/` میں محفوظ ہیں۔
-- [x] Grafana screenshots (`docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals`) W2 preflight window کے لئے محفوظ ہیں۔
-- [x] Invite roster table میں reviewer IDs، request tickets، اور approval timestamps dispatch سے پہلے بھرے گئے (tracker کے W2 سیکشن میں دیکھیں)۔
+- [x] سجل موافقة الحكم (مذكرات الاجتماع + رابط التصويت) `DOCS-SORA-Preview-W2` کے ساتھ منسلک ہے۔
+- [x] تم تحديث قالب الطلب `docs/examples/` کے تحت الالتزام ہے۔
+- [x] واصف `preview-2025-06-15`، سجل المجموع الاختباري، مخرجات التحقيق، تقرير الارتباط، أو جرب نسخة الوكيل `artifacts/docs_preview/W2/` محفوظه.
+- [x] لقطات شاشة Grafana (`docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals`) نافذة الاختبار المبدئي W2 کے لئے محفوظ ہیں۔
+- [x] يتضمن جدول الدعوة معرفات المراجعين وطلب التذاكر وإرسال الطوابع الزمنية للموافقة (متتبع حلقة W2 متاح).
 
-یہ پلان اپ ڈیٹ رکھیں؛ tracker اسے ریفرنس کرتا ہے تاکہ DOCS-SORA roadmap واضح طور پر دیکھ سکے کہ W2 invitations سے پہلے کیا باقی ہے۔
+هناك خطة جديدة؛ تم تحديث تعقب التتبع باستخدام DOCS-SORA لخريطة الطريق الواضحة لدعوات W2.

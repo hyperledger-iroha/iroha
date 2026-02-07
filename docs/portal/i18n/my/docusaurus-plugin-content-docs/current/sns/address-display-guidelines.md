@@ -8,113 +8,115 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: Sora Address Display Guidelines
 sidebar_label: Address display
 description: UX and CLI requirements for IH58 vs compressed (`sora`) Sora address presentation (ADDR-6).
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-import ExplorerAddressCard from '@site/src/components/ExplorerAddressCard';
+'@site/src/components/ExplorerAddressCard' မှ ExplorerAddressCard ကို တင်သွင်းပါ။
 
-:::note Canonical Source
-This page mirrors `docs/source/sns/address_display_guidelines.md` and now serves
-as the canonical portal copy. The source file sticks around for translation PRs.
+::: Canonical Source ကို သတိပြုပါ။
+ဤစာမျက်နှာသည် `docs/source/sns/address_display_guidelines.md` ကို ရောင်ပြန်ဟပ်ပြီး ယခု ဆောင်ရွက်ပေးပါသည်။
+canonical portal ကော်ပီအဖြစ်။ ဘာသာပြန် PR များအတွက် အရင်းအမြစ်ဖိုင်သည် ကပ်လျက်။
 :::
 
-Wallets, explorers, and SDK samples must treat account addresses as immutable
-payloads. The Android retail wallet sample in
-`examples/android/retail-wallet` now demonstrates the required UX pattern:
+ပိုက်ဆံအိတ်များ၊ ရှာဖွေသူများနှင့် SDK နမူနာများသည် အကောင့်လိပ်စာများကို မပြောင်းလဲနိုင်သောအဖြစ် သတ်မှတ်ရပါမည်။
+ဝန်ဆောင်ခများ။ Android လက်လီပိုက်ဆံအိတ်နမူနာ
+ယခု `examples/android/retail-wallet` သည် လိုအပ်သော UX ပုံစံကို သရုပ်ပြသည်-
 
-- **Dual copy targets.** Ship two explicit copy buttons—IH58 (preferred) and the
-  compressed Sora-only form (`sora…`, second-best). IH58 is always safe to share externally
-  and powers the QR payload. The compressed variant must include an inline
-  warning because it only works inside Sora-aware apps. The Android retail
-  wallet sample wires both Material buttons and their tooltips in
-  `examples/android/retail-wallet/src/main/res/layout/activity_main.xml`, and
-  the iOS SwiftUI demo mirrors the same UX via `AddressPreviewCard` inside
-  `examples/ios/NoritoDemo/Sources/ContentView.swift`.
-- **Monospace, selectable text.** Render both strings with a monospace font and
-  `textIsSelectable="true"` so users can inspect values without invoking an IME.
-  Avoid editable fields: IMEs can rewrite kana or inject zero-width code points.
-- **Implicit default domain hints.** When the selector points at the implicit
-  `default` domain, surface a caption reminding operators no suffix is required.
-  Explorers should also highlight the canonical domain label when the selector
-  encodes a digest.
-- **IH58 QR payloads.** QR codes must encode the IH58 string. If QR generation
-  fails, display an explicit error instead of a blank image.
-- **Clipboard messaging.** After copying the compressed form, emit a toast or
-  snackbar reminding users that it is Sora-only and prone to IME mangling.
+- **မိတ္တူနှစ်ထပ်ပစ်မှတ်များ။** ထင်ရှားသောမိတ္တူခလုတ်နှစ်ခု—IH58 (ဦးစားပေး) နှင့်
+  ချုံ့ထားသော Sora-သီးသန့်ပုံစံ (`sora…`၊ ဒုတိယအကောင်းဆုံး)။ IH58 သည် ပြင်ပသို့ မျှဝေရန် အမြဲတမ်း ဘေးကင်းပါသည်။
+  QR payload ကို ပါဝါပေးသည်။ ဖိသိပ်ထားသော မူကွဲတွင် လိုင်းတစ်ခု ပါဝင်ရမည်။
+  Sora-aware အက်ပ်များတွင်သာ အလုပ်လုပ်သောကြောင့် သတိပေးချက်။ Android လက်လီရောင်းချမှု
+  ပိုက်ဆံအိတ်နမူနာဝါယာကြိုးများသည် ပစ္စည်းခလုတ်များနှင့် ၎င်းတို့၏ ကိရိယာဆိုင်ရာ အကြံပြုချက်များ နှစ်ခုစလုံးကို ထည့်သွင်းထားသည်။
+  `examples/android/retail-wallet/src/main/res/layout/activity_main.xml` နှင့်
+  iOS SwiftUI သရုပ်ပြသည် အတွင်းတွင် `AddressPreviewCard` မှတစ်ဆင့် အလားတူ UX ကို ထင်ဟပ်စေသည်
+  `examples/ios/NoritoDemo/Sources/ContentView.swift`။
+- **Monospace၊ ရွေးချယ်နိုင်သော စာသား။** လိုင်းနှစ်ခုလုံးကို monospace ဖောင့်ဖြင့် ပြန်ဆိုပါ။
+  `textIsSelectable="true"` ထို့ကြောင့် အသုံးပြုသူများသည် IME ကို မခေါ်ဘဲ တန်ဖိုးများကို စစ်ဆေးနိုင်သည်။
+  တည်းဖြတ်နိုင်သော အကွက်များကို ရှောင်ပါ- IME များသည် kana ကို ပြန်လည်ရေးသားနိုင်သည် သို့မဟုတ် သုညအကျယ် ကုဒ်အမှတ်များကို ထည့်သွင်းနိုင်သည်။
+- **Implicit default domain အရိပ်အမြွက်များ။** ရွေးချယ်သူသည် implicit တွင် အမှတ်ပေးသောအခါ
+  `default` ဒိုမိန်း၊ အော်ပရေတာများကို သတိပေးသည့်စာတန်းကို ပေါ်အောင် နောက်ဆက်တွဲ မလိုအပ်ပါ။
+  ရွေးချယ်သူသည် ရွေးချယ်သည့်အခါတွင် ရှာဖွေသူများသည် canonical domain အညွှန်းကို မီးမောင်းထိုးပြသင့်သည်။
+  digest ကို encode လုပ်သည်။
+- **IH58 QR ပေးချေမှုများ။** QR ကုဒ်များသည် IH58 စာကြောင်းကို ကုဒ်လုပ်ရပါမည်။ QR မျိုးဆက်ရှိရင်
+  မအောင်မြင်ပါက ပုံအလွတ်အစား ပြတ်သားစွာ အမှားအယွင်းတစ်ခုကို ပြပါ။
+- **ကလစ်ဘုတ်စာတိုပေးပို့ခြင်း။** ချုံ့ထားသောပုံစံကို ကူးယူပြီးနောက်၊ ဆန္ဒပြုခြင်း သို့မဟုတ် ထုတ်လွှတ်ပါ။
+  snackbar သည် Sora သီးသန့်ဖြစ်ပြီး IME ကိုင်တွယ်ရန် လွယ်ကူကြောင်း သုံးစွဲသူများအား သတိပေးသည်။
 
-Following these guardrails prevents Unicode/IME corruption and satisfies the
-ADDR-6 roadmap acceptance criteria for wallet/explorer UX.
+ဤအကာအရံများကို လိုက်နာခြင်းဖြင့် Unicode/IME အကျင့်ပျက်ခြစားမှုကို တားဆီးပေးပြီး ကျေနပ်စေပါသည်။
+ပိုက်ဆံအိတ်/ရှာဖွေသူ UX အတွက် ADDR-6 လမ်းပြမြေပုံ လက်ခံမှုစံနှုန်း။
 
-## Screenshot fixtures
+## ဖန်သားပြင်ဓာတ်ပုံများ
 
-Use the following fixtures during localization reviews to ensure button labels,
-tooltips, and warnings stay aligned across platforms:
+ခလုတ်အညွှန်းများကို သေချာစေရန် ဒေသအလိုက်ပြောင်းလဲခြင်းများကို ပြန်လည်သုံးသပ်ခြင်းများတွင် အောက်ဖော်ပြပါပစ္စည်းများကို အသုံးပြုပါ။
+ကိရိယာဆိုင်ရာ အကြံပြုချက်များနှင့် သတိပေးချက်များသည် ပလပ်ဖောင်းများတစ်လျှောက် လိုက်လျောညီထွေရှိနေသည်-
 
-- Android reference: `/img/sns/address_copy_android.svg`
+- Android ရည်ညွှန်းချက်- `/img/sns/address_copy_android.svg`
 
-  ![Android dual copy reference](/img/sns/address_copy_android.svg)
+  ![Android မိတ္တူနှစ်စောင် ကိုးကား](/img/sns/address_copy_android.svg)
 
-- iOS reference: `/img/sns/address_copy_ios.svg`
+- iOS ရည်ညွှန်းချက်- `/img/sns/address_copy_ios.svg`
 
-  ![iOS dual copy reference](/img/sns/address_copy_ios.svg)
+  ![iOS မိတ္တူနှစ်စောင် ကိုးကား](/img/sns/address_copy_ios.svg)
 
-## SDK helpers
+## SDK အကူအညီပေးသူများ
 
-Each SDK exposes a convenience helper that returns the IH58 (preferred) and compressed (`sora`, second-best)
-forms alongside the warning string so UI layers can stay consistent:
+SDK တစ်ခုစီသည် IH58 (ပိုနှစ်သက်သည်) ကို ပြန်ပေးသည့် အဆင်ပြေစေသည့် အကူအညီကို ဖော်ထုတ်ပေးပြီး ဖိသိပ်ထားသည် (`sora`၊ ဒုတိယအကောင်းဆုံး)
+UI အလွှာများသည် တသမတ်တည်းရှိနေနိုင်စေရန် သတိပေးစာကြောင်းနှင့်အတူ ဖောင်ပုံစံများ-
 
-- JavaScript: `AccountAddress.displayFormats(networkPrefix?: number)`
+- JavaScript- `AccountAddress.displayFormats(networkPrefix?: number)`
   (`javascript/iroha_js/src/address.js`)
-- JavaScript inspector: `inspectAccountId(...)` returns the compressed warning
-  string and appends it to `warnings` whenever callers provide a `sora…`
-  literal, so explorers/wallet dashboards can surface the Sora-only notice
-  during paste/validation flows instead of only when they generate the
-  compressed form themselves.
-- Python: `AccountAddress.display_formats(network_prefix: int = 753)`
+- JavaScript စစ်ဆေးသူ- `inspectAccountId(...)` သည် ချုံ့ထားသောသတိပေးချက်ကို ပြန်ပေးသည်။
+  ခေါ်ဆိုသူများသည် `sora…` ကို ပေးသည့်အခါတိုင်း ၎င်းကို `warnings` သို့ ပေါင်းထည့်သည်
+  ပကတိ၊ ထို့ကြောင့် စူးစမ်းသူများ/ပိုက်ဆံအိတ် ဒက်ရှ်ဘုတ်များသည် Sora-သာသတိပေးချက်ကို ဖော်ပြနိုင်သည်။
+  paste/validation flows များအတွင်း ၎င်းတို့ကို generate လုပ်သည့်အခါသာ ဖြစ်သည်။
+  compressed form တွေ သူတို့ဘာသာသူတို့။
+- Python- `AccountAddress.display_formats(network_prefix: int = 753)`
 - Swift: `AccountAddress.displayFormats(networkPrefix: UInt16 = 753)`
-- Java/Kotlin: `AccountAddress.displayFormats(int networkPrefix = 753)`
+- Java/Kotlin- `AccountAddress.displayFormats(int networkPrefix = 753)`
   (`java/iroha_android/src/main/java/org/hyperledger/iroha/android/address/AccountAddress.java`)
 
-Use these helpers instead of reimplementing the encode logic in UI layers.
-The JavaScript helper also exposes a `selector` payload on `domainSummary`
-(`tag`, `digest_hex`, `registry_id`, `label`) so UIs can indicate whether a
-selector is Local-12 or registry-backed without re-parsing the raw payload.
+UI အလွှာများရှိ ကုဒ်ယုတ္တိကို ပြန်လည်အကောင်အထည်ဖော်မည့်အစား ဤအကူအညီများကို အသုံးပြုပါ။
+JavaScript helper သည် `domainSummary` တွင် `selector` payload ကိုလည်း ဖော်ထုတ်ပေးသည်
+(`tag`, `digest_hex`, `registry_id`, `label`) ထို့ကြောင့် UI များသည် တစ်ခုဟုတ်မဟုတ် ညွှန်ပြနိုင်သည်၊
+ရွေးချယ်မှုသည် Local-12 သို့မဟုတ် payload ကြမ်းကို ပြန်လည်ခွဲခြမ်းစိတ်ဖြာခြင်းမပြုဘဲ မှတ်ပုံတင်ထားသော ကျောထောက်နောက်ခံဖြစ်သည်။
 
-## Explorer instrumentation demo
+## Explorer ကိရိယာသရုပ်ပြ
 
 <ExplorerAddressCard />
 
-Explorers should mirror the wallet telemetry and accessibility work:
+စူးစမ်းလေ့လာသူများသည် ပိုက်ဆံအိတ် telemetry ကို ရောင်ပြန်ဟပ်ထားသင့်သည်-
 
-- Apply `data-copy-mode="ih58|compressed|qr"` to copy buttons so front-ends can emit usage counters
-  alongside the Torii-side `torii_address_format_total` metric. The demo component above dispatches
-  an `iroha:address-copy` event with `{mode,timestamp}`—wire this into your analytics/telemetry
-  pipeline (e.g., push to Segment or a NORITO-backed collector) so dashboards can correlate server
-  address-format usage with client copy behaviour. Also mirror the Torii domain counters
-  (`torii_address_domain_total{domain_kind}`) in the same feed so Local-12 retirement reviews can
-  export a 30-day `domain_kind="local12"` zero-usage proof directly from the `address_ingest`
-  Grafana board.
-- Pair every control with distinct `aria-label`/`aria-describedby` hints that explain whether a
-  literal is safe to share (`IH58`) or Sora-only (compressed `sora`). Include the implicit-domain caption in
-  the description so assistive technology surfaces the same context shown visually.
-- Expose a live region (e.g., `<output aria-live="polite">…</output>`) announcing copy results and
-  warnings, matching the VoiceOver/TalkBack behaviour now wired into the Swift/Android samples.
+- ခလုတ်များကော်ပီကူးရန်အတွက် `data-copy-mode="ih58|compressed|qr"` ကိုသုံးပါ အရှေ့ဘက်စွန်းများသည် အသုံးပြုမှုကောင်တာများကို ထုတ်လွှတ်နိုင်သည်
+  Torii-ခြမ်း `torii_address_format_total` မက်ထရစ်နှင့်အတူ။ အထက်ဖော်ပြပါ သရုပ်ပြအစိတ်အပိုင်းကို ပေးပို့သည်။
+  `{mode,timestamp}` ပါသော `iroha:address-copy` ဖြစ်ရပ်—၎င်းကို သင်၏ ခွဲခြမ်းစိတ်ဖြာချက်/တယ်လီမီတာသို့ ချိတ်ဆက်ပါ။
+  ပိုက်လိုင်း (ဥပမာ၊ အပိုင်းသို့ တွန်းပို့ခြင်း သို့မဟုတ် NORITO ကျောထောက်နောက်ခံပြု စုဆောင်းသူ) သည် ဒက်ရှ်ဘုတ်များသည် ဆာဗာကို ဆက်စပ်နိုင်စေရန်
+  သုံးစွဲသူမိတ္တူအပြုအမူဖြင့် လိပ်စာဖော်မတ်အသုံးပြုမှု။ Torii ဒိုမိန်းကောင်တာများကိုလည်း ရောင်ပြန်ဟပ်ပါ။
+  Local-12 အငြိမ်းစားပြန်လည်သုံးသပ်ခြင်းများကို တူညီသောဖိဒ်တွင် (`torii_address_domain_total{domain_kind}`)
+  ရက် 30 ကြာ `domain_kind="local12"` သုညအသုံးပြုမှု အထောက်အထားကို `address_ingest` မှ တိုက်ရိုက်ထုတ်ပါ
+  Grafana ဘုတ်။
+- ထိန်းချုပ်မှုတိုင်းကို သီးခြား `aria-label`/`aria-describedby` ဖြင့် တွဲချိတ်ပါ
+  ပကတိသည် (`IH58`) သို့မဟုတ် Sora-only (ချုံ့ထားသော `sora`) မျှဝေရန် ဘေးကင်းပါသည်။ သွယ်ဝိုက်သော-ဒိုမိန်းစာတန်းကို ထည့်သွင်းပါ။
+  ဖော်ပြချက်သည် အမြင်အာရုံဖြင့် ပြသထားသည့် တူညီသောအကြောင်းအရာကို အထောက်အကူဖြစ်စေသော နည်းပညာဖြင့် ဖော်ပြချက်ဖြစ်သည်။
+- တိုက်ရိုက်ထုတ်လွှဒေသ (ဥပမာ၊ `<output aria-live="polite">…</output>`) မိတ္တူရလဒ်များကြေငြာခြင်းနှင့်
+  VoiceOver/TalkBack အပြုအမူနှင့် ကိုက်ညီသော သတိပေးချက်များကို ယခု Swift/Android နမူနာများသို့ ကြိုးတပ်ထားပါသည်။
 
-This instrumentation satisfies ADDR-6b by proving operators can observe both Torii ingestion and
-client-side copy modes before Local selectors are disabled.
+အော်ပရေတာများသည် Torii စားသုံးမှုကို လည်းကောင်း၊
+Local selectors များကို မပိတ်မီ client-side ကော်ပီမုဒ်များ။
 
-## Local → Global migration toolkit
+## Local → ကမ္ဘာလုံးဆိုင်ရာ ရွှေ့ပြောင်းခြင်းကိရိယာအစုံ
 
-Use the [Local → Global toolkit](local-to-global-toolkit.md) to automate
-JSON audit report and the converted preferred IH58 / second-best compressed (`sora`) list that operators attach
-to readiness tickets, while the accompanying runbook links the Grafana
-dashboards and Alertmanager rules that gate the strict-mode cutover.
+အလိုအလျောက်လုပ်ဆောင်ရန် [Local → Global toolkit](local-to-global-toolkit.md) ကိုသုံးပါ။
+JSON စာရင်းစစ်အစီရင်ခံစာနှင့် အော်ပရေတာများ ပူးတွဲပါရှိသော နှစ်သက်ရာ IH58 / ဒုတိယအကောင်းဆုံး ချုံ့ထားသော (`sora`) စာရင်း
+အဆင်သင့်လက်မှတ်များဆီသို့၊ ပါ၀င်သော runbook သည် Grafana ကို လင့်ခ်ချိတ်ထားစဉ်၊
+တင်းကျပ်သောမုဒ်ဖြတ်တောက်မှုကို တံခါးပေါက်ဖြစ်စေသော ဒက်ရှ်ဘုတ်များနှင့် Alertmanager စည်းမျဉ်းများ။
 
-## Binary layout quick reference (ADDR-1a)
+## Binary အပြင်အဆင် အမြန်ကိုးကား (ADDR-1a)
 
-When SDKs surface advanced address tooling (inspectors, validation hints,
-manifest builders), point developers at the canonical wire format captured in
-`docs/account_structure.md`. The layout is always
-`header · selector · controller`, where the header bits are:
+SDKs တွင် အဆင့်မြင့်လိပ်စာကိရိယာတန်ဆာပလာ (စစ်ဆေးရေးမှူးများ၊ အတည်ပြုချက် အရိပ်အမြွက်များ၊
+manifest builders) ၊ ဖမ်းယူထားသော canonical wire ဖော်မတ်ကို developer များက ထောက်ပြသည်။
+`docs/account_structure.md`။ အပြင်အဆင်က အမြဲတမ်း
+`header · selector · controller`၊ header bits များဖြစ်သည်-
 
 ```
 bit index:   7        5 4      3 2      1 0
@@ -123,14 +125,14 @@ payload bit: │version  │ class  │  norm  │ext │
              └─────────┴────────┴────────┴────┘
 ```
 
-- `addr_version = 0` (bits 7‑5) today; non-zero values are reserved and must
-  raise `AccountAddressError::InvalidHeaderVersion`.
-- `addr_class` distinguishes single (`0`) vs multisig (`1`) controllers.
-- `norm_version = 1` encodes the Norm v1 selector rules. Future norms will reuse
-  the same 2-bit field.
-- `ext_flag` is always `0`—set bits indicate unsupported payload extensions.
+ယနေ့ - `addr_version = 0` (bits7-5) သုညမဟုတ်သော တန်ဖိုးများကို သီးသန့်ထား၍ လိုအပ်ပါသည်။
+  `AccountAddressError::InvalidHeaderVersion` ကိုမြှင့်ပါ။
+- `addr_class` သည် တစ်ခုတည်း (`0`) နှင့် multisig (`1`) ထိန်းချုပ်ကိရိယာများကို ခွဲခြားသည်။
+- `norm_version = 1` သည် Normv1 ရွေးချယ်မှုစည်းမျဉ်းများကို ကုဒ်လုပ်သည်။ အနာဂတ်စံနှုန်းများကို ပြန်လည်အသုံးပြုပါမည်။
+  တူညီသော 2-bit အကွက်။
+- `ext_flag` သည် အမြဲတမ်း `0` ဖြစ်သည်— set bit များသည် ပံ့ပိုးမထားသော payload extension များကို ညွှန်ပြသည်။
 
-The selector immediately follows the header:
+ရွေးချယ်သူသည် ချက်ချင်းပင် ခေါင်းစီးကို လိုက်နာသည်-
 
 ```
 ┌──────────┬──────────────────────────────────────────────┐
@@ -138,35 +140,35 @@ The selector immediately follows the header:
 └──────────┴──────────────────────────────────────────────┘
 ```
 
-UI and SDK surfaces should be ready to display the selector kind:
+UI နှင့် SDK မျက်နှာပြင်များသည် ရွေးချယ်မှုအမျိုးအစားကိုပြသရန် အသင့်ဖြစ်သင့်သည်-
 
-- `0x00` = implicit default domain (no payload).
-- `0x01` = local digest (12-byte `blake2s_mac("SORA-LOCAL-K:v1", label)`).
-- `0x02` = global registry entry (big-endian `registry_id:u32`).
+- `0x00` = သွယ်ဝိုက်သော ပုံသေ ဒိုမိန်း (ပေးဆောင်မှု မရှိပါ)။
+- `0x01` = ဒေသဆိုင်ရာ အချေအတင် (12-byte `blake2s_mac("SORA-LOCAL-K:v1", label)`)။
+- `0x02` = ကမ္ဘာလုံးဆိုင်ရာ စာရင်းသွင်းမှု (big-endian `registry_id:u32`)။
 
-Canonical hex examples that wallet tooling can link or embed in docs/tests:
+ပိုက်ဆံအိတ်ကိရိယာတန်ဆာပလာသည် docs/tests များတွင် လင့်ခ် သို့မဟုတ် မြှုပ်နှံနိုင်သည့် Canonical hex နမူနာများ-
 
-| Selector kind | Canonical hex |
-|---------------|---------------|
-| Implicit default | `0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
+| Selector အမျိုးအစား | Canonical hex |
+|----------------|----------------|
+| သွယ်ဝိုက်သောပုံသေ | `0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
 | Local digest (`treasury`) | `0x0201b18fe9c1abbac45b3e38fc5d0001203b77a042f1de02f6d5f418f36a2a28ea` |
-| Global registry (`android`) | `0x020200000059a6a47eb7c9aa415f77b18636a85a57837d5518ff5357ef63c35202` |
+| ကမ္ဘာလုံးဆိုင်ရာ မှတ်ပုံတင်ခြင်း (`android`) | `0x020200000059a6a47eb7c9aa415f77b18636a85a57837d5518ff5357ef63c35202` |
 
-Refer to `docs/source/references/address_norm_v1.md` for the full selector/state
-table and `docs/account_structure.md` for the complete byte diagram.
+ရွေးချယ်မှု/အခြေအနေ အပြည့်အစုံအတွက် `docs/source/references/address_norm_v1.md` ကို ကိုးကားပါ။
+ပြီးပြည့်စုံသော byte diagram အတွက် ဇယားနှင့် `docs/account_structure.md`။
 
-## Enforcing canonical forms
+## ကျင့်ထုံးပုံစံများကို ပြဋ္ဌာန်းခြင်း။
 
-strings must follow the CLI workflow documented under ADDR-5:
+စာကြောင်းများသည် ADDR-5 အောက်တွင် မှတ်တမ်းတင်ထားသော CLI အလုပ်အသွားအလာအတိုင်း လုပ်ဆောင်ရမည်-
 
-1. `iroha tools address inspect` now emits a structured JSON summary with IH58,
-   compressed, and canonical hex payloads. The summary also includes a `domain`
-   object with `kind`/`warning` fields and echoes any provided domain via the
-   `input_domain` field. When `kind` is `local12`, the CLI prints a warning to
-   stderr and the JSON summary echoes the same guidance so CI pipelines and SDKs
-   can surface it. Pass `--append-domain` whenever you want the converted
-   encoding replayed as `<ih58>@<domain>`.
-2. SDKs can surface the same warning/summary via the JavaScript helper:
+1. `iroha tools address inspect` သည် ယခုအခါ IH58 ဖြင့် ဖွဲ့စည်းထားသော JSON အကျဉ်းချုပ်ကို ထုတ်လွှတ်သည်၊
+   compressed နှင့် canonical hex payload များ။ အနှစ်ချုပ်တွင် `domain` လည်း ပါဝင်သည်။
+   `kind`/`warning` အကွက်များဖြင့် အရာဝတ္တုသည် ပံ့ပိုးပေးထားသည့် ဒိုမိန်းမှတဆင့် ပဲ့တင်ထပ်သည်
+   `input_domain` အကွက်။ `kind` သည် `local12` ဖြစ်သောအခါ၊ CLI မှ သတိပေးချက်ကို print ထုတ်ပါသည်။
+   stderr နှင့် JSON အနှစ်ချုပ်သည် တူညီသောလမ်းညွှန်ချက်ကို ပဲ့တင်ထပ်သောကြောင့် CI ပိုက်လိုင်းများနှင့် SDKs
+   ပေါ်အောင် လုပ်နိုင်ပါတယ်။ သင်ပြောင်းလဲလိုသည့်အခါတိုင်း `--append-domain` ကို ဖြတ်ပါ။
+   ကုဒ်နံပါတ်ကို `<ih58>@<domain>` အဖြစ် ပြန်ဖွင့်သည်။
+2. SDKs သည် JavaScript အထောက်အကူမှတစ်ဆင့် အလားတူသတိပေးချက်/အကျဉ်းချုပ်ကို ဖော်ပြနိုင်သည်-
 
    ```js
    import { inspectAccountId } from "@iroha/iroha-js";
@@ -177,69 +179,67 @@ strings must follow the CLI workflow documented under ADDR-5:
    }
    console.log(summary.ih58.value, summary.compressed);
    ```
-  The helper preserves the IH58 prefix detected from the literal unless you
-  explicitly provide `networkPrefix`, so summaries for non-default networks do
-  not silently re-render with the default prefix.
+  ကူညီသူသည် သင်မဟုတ်ပါက ပကတိမှတွေ့ရှိထားသော IH58 ရှေ့ဆက်ကို ထိန်းသိမ်းသည်။
+  `networkPrefix` ကို အထူးတလည် ပံ့ပိုးပေးသောကြောင့် ပုံသေမဟုတ်သော ကွန်ရက်များအတွက် အကျဉ်းချုပ်များ
+  မူရင်းရှေ့ဆက်ဖြင့် တိတ်တဆိတ် ပြန်မဖော်ပြပါ။
 
-3. Convert the canonical payload by reusing the `ih58.value` or `compressed`
-   fields from the summary (or request another encoding via `--format`). These
-   strings are already safe to share externally.
-4. Update manifests, registries, and customer-facing documents with the
-   canonical form and notify counterparties that Local selectors will be
-   rejected once the cutover completes.
-5. For bulk data sets, run
-   `iroha tools address audit --input addresses.txt --network-prefix 753`. The command
-   reads newline-separated literals (comments starting with `#` are ignored, and
-   `--input -` or no flag uses STDIN), emits a JSON report with
-   canonical/preferred IH58/second-best compressed (`sora`) summaries for every entry, and counts both parse
-   dumps that contain junk rows, and gate automation with `--fail-on-warning`
-   once operators are ready to block Local selectors in CI.
-6. When you need a newline-to-newline rewrite, use
-  For Local-selector remediation spreadsheets, use
-  to export a `input,status,format,…` CSV that highlights canonical encodings, warnings, and parse failures in one pass.
-   The helper skips non-Local rows by default, converts every remaining entry
-   into the requested encoding (IH58 preferred/compressed (`sora`) second-best/hex/JSON), and preserves the
-   original domain when `--append-domain` is set. Pair it with `--allow-errors`
-   to keep scanning even when a dump contains malformed literals.
-7. CI/lint automation can run `ci/check_address_normalize.sh`, which extracts
-   the Local selectors from `fixtures/account/address_vectors.json`, converts
-   them via `iroha tools address normalize`, and replays
-   `iroha tools address audit --fail-on-warning` to prove releases no longer emit
-   Local digests.
+3. `ih58.value` သို့မဟုတ် `compressed` ကို ပြန်သုံးခြင်းဖြင့် canonical payload ကို ပြောင်းပါ
+   အနှစ်ချုပ်မှ ကွက်လပ်များ (သို့မဟုတ် `--format` မှတစ်ဆင့် အခြားသော ကုဒ်နံပါတ်ကို တောင်းဆိုပါ)။ ဒါတွေ
+   စာကြောင်းများသည် ပြင်ပသို့မျှဝေရန် လုံခြုံနေပြီဖြစ်သည်။
+4. မန်နီးဖက်စ်များ၊ မှတ်ပုံတင်မှုများနှင့် ဖောက်သည်ရင်ဆိုင်နေရသော စာရွက်စာတမ်းများကို အပ်ဒိတ်လုပ်ပါ။
+   Canonical ပုံစံနှင့် Local selectors များဖြစ်မည့် ပြိုင်ဘက်များကို အကြောင်းကြားပါ။
+   ဖြတ်တောက်မှုပြီးသွားသည်နှင့် ငြင်းပယ်ခဲ့သည်။
+5. ဒေတာအစုအဝေးများအတွက်၊ လုပ်ဆောင်ပါ။
+   `iroha tools address audit --input addresses.txt --network-prefix 753`။ အမိန့်ပေးသည်။
+   မျဉ်းခွဲထားသော စာလုံးအသစ်များကို ဖတ်သည် (`#` ဖြင့် စတင်သော မှတ်ချက်များကို လျစ်လျူရှုပြီး၊
+   `--input -` သို့မဟုတ် အလံမရှိသော STDIN ကိုအသုံးပြုသည်) နှင့်အတူ JSON အစီရင်ခံစာကို ထုတ်လွှတ်သည်
+   ထည့်သွင်းမှုတိုင်းအတွက် canonical/preferred IH58/second-best compressed (`sora`) အနှစ်ချုပ်များနှင့် parse နှစ်ခုလုံးကို ရေတွက်သည်
+   အမှိုက်တန်းများပါရှိသော အမှိုက်ပုံများနှင့် `--fail-on-warning` ဖြင့် ဂိတ်အလိုအလျောက်စနစ်
+   အော်ပရေတာများသည် CI တွင် Local selectors များကိုပိတ်ဆို့ရန်အဆင်သင့်ဖြစ်သောအခါ။
+6. လိုင်းအသစ်မှ လိုင်းအသစ်ပြန်လည်ရေးရန် လိုအပ်သောအခါတွင် အသုံးပြုပါ။
+  Local-selector remediation spreadsheets အတွက် အသုံးပြုပါ။
+  ဖြတ်သန်းမှုတစ်ခုတွင် Canonical ကုဒ်များ၊ သတိပေးချက်များနှင့် ခွဲခြမ်းစိတ်ဖြာမှု မအောင်မြင်မှုများကို မီးမောင်းထိုးပြသည့် `input,status,format,…` CSV ကို ထုတ်ယူရန်။
+   ကူညီသူသည် မူရင်းအားဖြင့် Local မဟုတ်သော အတန်းများကို ကျော်သွားကာ ကျန်ရှိသော ဝင်ခွင့်အားလုံးကို ပြောင်းလဲပေးပါသည်။
+   တောင်းဆိုထားသော ကုဒ်နံပါတ်ထဲသို့ (IH58 ဦးစားပေး/ချုံ့ထားသော (`sora`) ဒုတိယအကောင်းဆုံး/hex/JSON) နှင့် ထိန်းသိမ်းစောင့်ရှောက်ထားသည်။
+   `--append-domain` ကို သတ်မှတ်သောအခါ မူရင်းဒိုမိန်း။ ၎င်းကို `--allow-errors` နှင့်တွဲပါ။
+   အမှိုက်ပုံကြီးတွင် ပုံသဏ္ဍာန်မမှန်သော စာလုံးများပါရှိနေသည့်တိုင် စကင်န်ဖတ်ရန်။
+7. CI/lint အလိုအလျောက်စနစ်သည် `ci/check_address_normalize.sh` ကို ထုတ်ယူနိုင်ပြီး၊
+   `fixtures/account/address_vectors.json` မှ Local selectors များကို convert လုပ်သည်။
+   ၎င်းတို့ကို `iroha tools address normalize` မှတစ်ဆင့် ပြန်လည်ပြသသည်။
+   ထုတ်ဝေမှုများ မထုတ်တော့ကြောင်း သက်သေပြရန် `iroha tools address audit --fail-on-warning`
+   ဒေသဆိုင်ရာ မှတ်တမ်းများ။`torii_address_local8_total{endpoint}` အပေါင်း
+`torii_address_collision_total{endpoint,kind="local12_digest"}`၊
+`torii_address_collision_domain_total{endpoint,domain}` နှင့်
+Grafana ဘုတ်အဖွဲ့ `dashboards/grafana/address_ingest.json` သည် ပြဋ္ဌာန်းထားသည်
+အချက်ပြ- ထုတ်လုပ်မှု ဒက်ရှ်ဘုတ်များသည် တရားဝင်ပြည်တွင်းတင်ပြမှုများနှင့် လုံးဝပြသသည်နှင့်
+ရက် 30 ဆက်တိုက် Local-12 တိုက်မှု သုည၊ Torii သည် Local-8 ကို လှန်ပါမည်
+mainnet တွင် hard-fail ဆီသို့ gate လုပ်ပြီး global domains များရှိလာသည်နှင့် Local-12 ဖြင့် နောက်တွင်
+ကိုက်ညီသော မှတ်ပုံတင်ချက်များ။ အော်ပရေတာရင်ဆိုင်နေရသောသတိပေးချက်ကို CLI ထုတ်ပေးမှုကို ထည့်သွင်းစဉ်းစားပါ။
+ဤအေးခဲမှုအတွက်—တူညီသောသတိပေးစာကြောင်းကို SDK ကိရိယာအကြံပြုချက်များနှင့် ဖြတ်၍အသုံးပြုသည်။
+လမ်းပြမြေပုံထွက်ပေါက်သတ်မှတ်ချက်များနှင့် ညီညွှတ်နေစေရန် အလိုအလျောက်စနစ်။ ယခု Torii သည် မူရင်းအတိုင်းဖြစ်သည်။
+ဆုတ်ယုတ်မှုများကို ရောဂါရှာဖွေသောအခါ။ `torii_address_domain_total{domain_kind}` ကို ရောင်ပြန်ဟပ်နေပါစေ။
+Grafana (`dashboards/grafana/address_ingest.json`) သို့ ADDR-7 အထောက်အထားထုပ်၊
+`domain_kind="local12"` မတိုင်မီ လိုအပ်သော ရက် 30 ဝင်းဒိုးအတွက် သုညတွင် ရှိနေကြောင်း သက်သေပြနိုင်သည်
+(`dashboards/alerts/address_ingest_rules.yml`) တွင် guardrails သုံးခုထပ်ထည့်သည်-
 
-`torii_address_local8_total{endpoint}` plus
-`torii_address_collision_total{endpoint,kind="local12_digest"}`,
-`torii_address_collision_domain_total{endpoint,domain}`, and the
-Grafana board `dashboards/grafana/address_ingest.json` provide the enforcement
-signal: once production dashboards show zero legitimate Local submissions and
-zero Local-12 collisions for 30 consecutive days, Torii will flip the Local-8
-gate to hard-fail on mainnet, followed by Local-12 once global domains have
-matching registry entries. Consider the CLI output the operator-facing notice
-for this freeze—the same warning string is used across SDK tooltips and
-automation to keep parity with the roadmap exit criteria. Torii now defaults to
-when diagnosing regressions. Keep mirroring `torii_address_domain_total{domain_kind}`
-into Grafana (`dashboards/grafana/address_ingest.json`) so the ADDR-7 evidence pack
-can prove `domain_kind="local12"` stayed at zero for the required 30-day window before
-(`dashboards/alerts/address_ingest_rules.yml`) adds three guardrails:
+- `AddressLocal8Resurgence` စာမျက်နှာများသည် အကြောင်းအရာတစ်ခုမှ လတ်ဆတ်သော Local-8 ကို သတင်းပို့သည့်အခါတိုင်း၊
+  တိုး။ တင်းကျပ်သောမုဒ် ဖြန့်ချိမှုများကို ရပ်ပါ၊ ပြစ်မှားနိုင်သော SDK မျက်နှာပြင်ကို ရှာဖွေပါ။
+  အချက်ပြမှု သုညသို့ ပြန်သွားသည်အထိ—ထို့နောက် မူရင်း (`true`) ကို ပြန်လည်ရယူပါ။
+- Local-12 အညွှန်းနှစ်ခု တူညီသောအခါ `AddressLocal12Collision` မီးလောင်သည်
+  ချေဖျက်သည်။ ထင်ရှားသော ပရိုမိုးရှင်းများကို ခေတ္တရပ်ပါ၊ စစ်ဆေးရန် Local → Global toolkit ကို ဖွင့်ပါ။
+  မြေပုံအညွှန်းကို ပြန်လည်ထုတ်ပြန်ခြင်းမပြုမီ Nexus အုပ်ချုပ်ရေးနှင့် ညှိနှိုင်းဆောင်ရွက်ခြင်း၊
+  မှတ်ပုံတင်စာရင်းသွင်းခြင်း သို့မဟုတ် အစုန်ထုတ်ခြင်းများကို ပြန်လည်ဖွင့်ပါ။
+- `AddressInvalidRatioSlo` သည် ရေယာဉ်စုတစ်ခုလုံး အကျုံးမဝင်သောအချိုး (မပါဝင်သည့်အခါ သတိပေးသည်
+  Local-8/strict-mode rejections) သည် 0.1% SLO ကို ဆယ်မိနစ်ထက်ကျော်လွန်ပါသည်။ သုံးပါ။
+  တာဝန်ရှိသောဆက်စပ်အကြောင်းအရာ/အကြောင်းပြချက်နှင့် ခွဲခြားသတ်မှတ်ရန် `torii_address_invalid_total`
+  တင်းကျပ်သောမုဒ်ကို ပြန်လည်မဖွင့်မီ ကိုယ်ပိုင် SDK အဖွဲ့နှင့် ညှိနှိုင်းပါ။
 
-- `AddressLocal8Resurgence` pages whenever a context reports a fresh Local-8
-  increment. Halt strict-mode rollouts, locate the offending SDK surface in the
-  until the signal returns to zero—then restore the default (`true`).
-- `AddressLocal12Collision` fires when two Local-12 labels hash to the same
-  digest. Pause manifest promotions, run the Local → Global toolkit to audit
-  the digest mapping, and coordinate with Nexus governance before reissuing the
-  registry entry or re-enabling downstream rollouts.
-- `AddressInvalidRatioSlo` warns when the fleet-wide invalid ratio (excluding
-  Local-8/strict-mode rejections) exceeds the 0.1 % SLO for ten minutes. Use
-  `torii_address_invalid_total` to pinpoint the responsible context/reason and
-  coordinate with the owning SDK team before re-enabling strict mode.
+### ထုတ်ပြန်ချက် မှတ်စုအတိုအထွာ (ပိုက်ဆံအိတ်နှင့် ရှာဖွေသူ)
 
-### Release note snippet (wallet & explorer)
+ပို့ဆောင်သည့်အခါ ပိုက်ဆံအိတ်/ရှာဖွေသူထုတ်လွှတ်သည့်မှတ်စုများတွင် အောက်ပါကျည်ဆန်ကို ထည့်သွင်းပါ။
+ဖြတ်တောက်မှု-
 
-Include the following bullet in the wallet/explorer release notes when shipping
-the cutover:
-
-> **Addresses:** Added the `iroha tools address normalize --only-local --append-domain`
-> helper and wired it into CI (`ci/check_address_normalize.sh`) so wallet/explorer
-> before Local-8/Local-12 are blocked on mainnet. Update any custom exports to
-> run the command and attach the normalized list to the release evidence bundle.
+> **လိပ်စာများ-** `iroha tools address normalize --only-local --append-domain` ကို ထည့်ခဲ့သည်။
+> helper နှင့် CI (`ci/check_address_normalize.sh`) သို့ ကြိုးတပ်ပြီး ပိုက်ဆံအိတ်/ရှာဖွေသူ
+> Local-8/Local-12 ကို mainnet တွင် ပိတ်ဆို့ခြင်းမပြုမီ။ စိတ်ကြိုက်တင်ပို့မှုများကို အပ်ဒိတ်လုပ်ပါ။
+> အမိန့်ကို run ပြီး ပုံမှန်လုပ်ထားသောစာရင်းကို ထုတ်ပေးသည့်အထောက်အထားအစုအဝေးတွင် ပူးတွဲပါ။

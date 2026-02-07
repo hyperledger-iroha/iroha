@@ -4,46 +4,48 @@ direction: rtl
 source: docs/portal/docs/devportal/preview-feedback/w2/plan.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: preview-feedback-w2-plan
-title: План community intake W2
-sidebar_label: План W2
-description: Intake, одобрения и чек-лист доказательств для community preview когорты.
+ID: پیش نظارہ-فیڈ بیک-ڈبلیو 2-پلان
+عنوان: کمیونٹی انٹیک پلان ڈبلیو 2
+سائڈبار_لیبل: ڈبلیو 2 منصوبہ
+تفصیل: کمیونٹی کے پیش نظارہ کوہورٹ کے لئے انٹیک ، منظوری اور شواہد چیک لسٹ۔
 ---
 
-| Пункт | Детали |
+| آئٹم | تفصیلات |
 | --- | --- |
-| Волна | W2 - community reviewers |
-| Целевое окно | Q3 2025 неделя 1 (предварительно) |
-| Тег артефакта (план) | `preview-2025-06-15` |
-| Трекер | `DOCS-SORA-Preview-W2` |
+| لہر | ڈبلیو 2 - کمیونٹی جائزہ لینے والے |
+| ہدف ونڈو | Q3 2025 ہفتہ 1 (ابتدائی) |
+| نمونہ ٹیگ (منصوبہ) | `preview-2025-06-15` |
+| ٹریکر | `DOCS-SORA-Preview-W2` |
 
-## Цели
+## اہداف
 
-1. Определить критерии community intake и workflow vetting.
-2. Получить governance-одобрение для предложенного roster и acceptable-use addendum.
-3. Обновить checksum-верифицированный preview-артефакт и телеметрический bundle под новое окно.
-4. Подготовить Try it proxy и dashboards до отправки приглашений.
+1. کمیونٹی کی مقدار اور ورک فلو کی جانچ کے معیار کی وضاحت کریں۔
+2. مجوزہ روسٹر اور قابل قبول استعمال کے اضافے کے لئے گورننس کی منظوری حاصل کریں۔
+3. ایک نئی ونڈو کے نیچے چیکسم کی تصدیق شدہ پیش نظارہ نمونہ اور ٹیلی میٹری بنڈل کو اپ ڈیٹ کریں۔
+4. دعوت نامے بھیجنے سے پہلے اسے پراکسی اور ڈیش بورڈز کی تیاری کریں۔
 
-## Разбивка задач
+## ٹاسک خرابی
 
-| ID | Задача | Владелец | Срок | Статус | Примечания |
+| ID | مسئلہ | مالک | آخری تاریخ | حیثیت | نوٹ |
 | --- | --- | --- | --- | --- | --- |
-| W2-P1 | Подготовить критерии community intake (eligibility, max slots, требования CoC) и разослать в governance | Docs/DevRel lead | 2025-05-15 | ✅ Завершено | Политика intake смержена в `DOCS-SORA-Preview-W2` и одобрена на совете 2025-05-20. |
-| W2-P2 | Обновить request template вопросами для community (motivation, availability, localization needs) | Docs-core-01 | 2025-05-18 | ✅ Завершено | `docs/examples/docs_preview_request_template.md` теперь включает раздел Community и указан в intake форме. |
-| W2-P3 | Получить governance-одобрение плана intake (голосование + протокол) | Governance liaison | 2025-05-22 | ✅ Завершено | Голосование прошло единогласно 2025-05-20; протокол и roll call связаны в `DOCS-SORA-Preview-W2`. |
-| W2-P4 | Запланировать staging Try it proxy + телеметрию для окна W2 (`preview-2025-06-15`) | Docs/DevRel + Ops | 2025-06-05 | ✅ Завершено | Change ticket `OPS-TRYIT-188` одобрен и выполнен 2025-06-09 02:00-04:00 UTC; Grafana скриншоты сохранены с тикетом. |
-| W2-P5 | Собрать/проверить новый preview artefact tag (`preview-2025-06-15`) и архивировать descriptor/checksum/probe logs | Portal TL | 2025-06-07 | ✅ Завершено | `scripts/preview_wave_preflight.sh --tag preview-2025-06-15 ...` выполнен 2025-06-10; outputs сохранены в `artifacts/docs_preview/W2/preview-2025-06-15/`. |
-| W2-P6 | Сформировать roster community приглашений (<=25 reviewers, staged batches) с контактами, одобренными governance | Community manager | 2025-06-10 | ✅ Завершено | Первая когорта из 8 community reviewers одобрена; IDs `DOCS-SORA-Preview-REQ-C01...C08` записаны в трекере. |
+| W2-P1 | کمیونٹی انٹیک کے معیار (اہلیت ، زیادہ سے زیادہ سلاٹ ، سی او سی کی ضروریات) تیار کریں اور گورننس کو بھیجیں | دستاویزات/ڈیوریل لیڈ | 2025-05-15 | ✅ مکمل | انٹیک پالیسی کو `DOCS-SORA-Preview-W2` میں اپنایا گیا تھا اور اسے کونسل نے 2025-05-20 پر منظور کیا تھا۔ |
+| W2-P2 | معاشرے کے سوالات کے ساتھ درخواست کے ٹیمپلیٹ کو اپ ڈیٹ کریں (حوصلہ افزائی ، دستیابی ، لوکلائزیشن کی ضروریات) | DOCS-CORE-01 | 2025-05-18 | ✅ مکمل | `docs/examples/docs_preview_request_template.md` میں اب ایک کمیونٹی سیکشن شامل ہے اور انٹیک فارم میں درج ہے۔ |
+| W2-P3 | انٹیک پلان (ووٹنگ + پروٹوکول) کی گورننس-منظوری حاصل کریں گورننس رابطہ | 2025-05-22 | ✅ مکمل | 05/2025 کو ووٹ متفق تھا۔ پروٹوکول اور رول کال `DOCS-SORA-Preview-W2` میں منسلک ہیں۔ |
+| W2-P4 | شیڈول اسٹیجنگ کو ونڈو W2 (`preview-2025-06-15`) کے لئے پراکسی + ٹیلی میٹری کی کوشش کریں | دستاویزات/ڈیوریل + اوپس | 2025-06-05 | ✅ مکمل | ٹکٹ `OPS-TRYIT-188` کو تبدیل کریں اور اس پر عمل درآمد 2025-06-09 02: 00-04: 00 UTC ؛ Grafana اسکرین شاٹس ٹکٹ کے ساتھ محفوظ کیا گیا ہے۔ |
+| W2-P5 | نیا پیش نظارہ آرٹ فیکٹ ٹیگ (`preview-2025-06-15`) اور آرکائو ڈسکرپٹر/چیکم/تحقیقات لاگز کو جمع کریں/چیک کریں پورٹل TL | 2025-06-07 | ✅ مکمل | `scripts/preview_wave_preflight.sh --tag preview-2025-06-15 ...` مکمل 2025-06-10 ؛ آؤٹ پٹ `artifacts/docs_preview/W2/preview-2025-06-15/` میں محفوظ ہیں۔ |
+| W2-P6 | گورننس کے ذریعہ منظور شدہ رابطوں کے ساتھ کمیونٹی کے دعوت ناموں (<= 25 جائزہ نگاروں ، اسٹیجڈ بیچز) کا ایک روسٹر بنائیں | کمیونٹی مینیجر | 2025-06-10 | ✅ مکمل | 8 کمیونٹی جائزہ نگاروں کا پہلا گروہ منظور کرلیا گیا ہے۔ IDS `DOCS-SORA-Preview-REQ-C01...C08` ٹریکر میں ریکارڈ کیا گیا ہے۔ |
 
-## Чек-лист доказательств
+## ثبوت چیک لسٹ
 
-- [x] Запись governance approval (заметки встречи + ссылка на голосование) приложена к `DOCS-SORA-Preview-W2`.
-- [x] Обновленный request template закоммичен под `docs/examples/`.
-- [x] Descriptor `preview-2025-06-15`, checksum log, probe output, link report и Try it proxy transcript сохранены в `artifacts/docs_preview/W2/`.
-- [x] Grafana screenshots (`docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals`) сняты для окна preflight W2.
-- [x] Таблица roster приглашений с reviewer IDs, request tickets и timestamps одобрений заполнена до отправки (см. секцию W2 в трекере).
+- [x] گورننس کی منظوری کا ریکارڈ (میٹنگ نوٹ + ووٹنگ لنک) `DOCS-SORA-Preview-W2` سے منسلک ہے۔
+- [x] تازہ ترین درخواست ٹیمپلیٹ `docs/examples/` کے لئے پرعزم ہے۔
+۔
+۔
+۔
 
-Держите этот план актуальным; трекер ссылается на него, чтобы roadmap DOCS-SORA видел, что осталось до рассылки W2 приглашений.
+اس منصوبے کو موجودہ رکھیں ؛ ٹریکر اس سے مراد ہے تاکہ روڈ میپ دستاویزات۔ SORA دیکھ سکے کہ W2 دعوت نامے بھیجنے سے پہلے کیا باقی ہے۔

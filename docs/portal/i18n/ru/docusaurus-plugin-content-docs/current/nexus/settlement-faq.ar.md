@@ -4,35 +4,37 @@ direction: ltr
 source: docs/portal/docs/nexus/settlement-faq.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: nexus-settlement-faq
-title: الأسئلة الشائعة للتسوية
-description: إجابات موجهة للمشغلين تغطي توجيه التسوية وتحويل XOR والقياس عن بعد وأدلة التدقيق.
+идентификатор: nexus-settlement-faq
+Название: الأسئلة الشائعة للتسوية
+описание: Дэниел Уилсон, Дэниел Уилсон, XOR, Нэнил Бёрн. وأدلة التدقيق.
 ---
 
-تعكس هذه الصفحة الأسئلة الشائعة الداخلية للتسوية (`docs/source/nexus_settlement_faq.md`) بحيث يستطيع قراء البوابة مراجعة نفس الإرشادات دون التنقيب في mono-repo. تشرح كيف يعالج Settlement Router المدفوعات، وما المقاييس التي يجب مراقبتها، وكيف ينبغي للـ SDK دمج حمولات Norito.
+Установите флажок "Настроить блок управления двигателем" (`docs/source/nexus_settlement_faq.md`) Вы можете получить доступ к новому репозиторию в монорепозитории. Маршрутизатор поселений, который находится в Нижнем Новгороде, в Нью-Йорке. Для SDK используется Norito.
 
 ## أبرز النقاط
 
-1. **تعيين lane** — يعلن كل dataspace عن `settlement_handle` (`xor_global` أو `xor_lane_weighted` أو `xor_hosted_custody` أو `xor_dual_fund`). راجع أحدث كتالوج lane تحت `docs/source/project_tracker/nexus_config_deltas/`.
-2. **تحويل حتمي** — يحول الـ router جميع التسويات إلى XOR عبر مصادر السيولة المعتمدة من الحوكمة. تقوم lanes الخاصة بتمويل مخازن XOR مسبقا؛ ولا تطبق haircuts إلا عندما تنحرف المخازن خارج السياسة.
-3. **القياس عن بعد** — راقب `nexus_settlement_latency_seconds` وعدادات التحويل ومقاييس haircut. توجد لوحات المتابعة في `dashboards/grafana/nexus_settlement.json` والتنبيهات في `dashboards/alerts/nexus_audit_rules.yml`.
-4. **الأدلة** — أرشف الإعدادات وسجلات الـ router وتصديرات القياس عن بعد وتقارير المطابقة لأغراض التدقيق.
-5. **مسؤوليات SDK** — يجب على كل SDK توفير أدوات مساعدة للتسوية ومعرفات lane ومشفري حمولات Norito للحفاظ على التكافؤ مع الـ router.
+1. **Переулок** — область данных в пространстве `settlement_handle` (`xor_global` أو `xor_lane_weighted` أو `xor_hosted_custody` أو `xor_dual_fund`). راجع أحدث كتالوج Lane تحت `docs/source/project_tracker/nexus_config_deltas/`.
+2. **Отключить соединение** — маршрутизатор выполняет функцию XOR, используя функцию XOR. В действительности. تقومlanes الخاصة بتمويل مخازن XOR مسبقا؛ Если вам нужны стрижки, вы можете сделать это прямо сейчас.
+3. **القياس عن بعد** — راقب `nexus_settlement_latency_seconds` стрижка в стиле Navigator. Установите флажок для `dashboards/grafana/nexus_settlement.json` и установите для `dashboards/alerts/nexus_audit_rules.yml`.
+4. **Установка** — подключение к маршрутизатору и подключение к нему маршрутизатора. Сделайте это.
+5. **Внедрение SDK** – использование SDK в режиме онлайн-просмотра в Лейн-Федерации. Установите Norito для подключения к маршрутизатору.
 
 ## أمثلة على التدفقات
 
-| نوع lane | الأدلة المطلوبة | ماذا يثبت |
+| Нюрн переулок | الأدلة المطلوبة | ماذا يثبت |
 |-----------|--------------------|----------------|
-| خاصة `xor_hosted_custody` | سجل الـ router + `nexus_settlement_latency_seconds{lane}` + `settlement_router_haircut_total{lane}` | تؤكد أن مخازن CBDC تخصم XOR حتمي وأن haircuts تبقى ضمن السياسة. |
-| عامة `xor_global` | سجل الـ router + مرجع DEX/TWAP + مقاييس زمن الاستجابة/التحويل | يثبت أن مسار السيولة المشترك سعّر التحويل وفق TWAP المنشور دون haircut. |
-| هجينة `xor_dual_fund` | سجل الـ router يظهر تقسيم public مقابل shielded + عدادات القياس عن بعد | يثبت أن المزج بين shielded/public احترم نسب الحوكمة وسجل haircut المطبق على كل جزء. |
+| خاصة `xor_hosted_custody` | Маршрутизатор + `nexus_settlement_latency_seconds{lane}` + `settlement_router_haircut_total{lane}` | Он был создан для CBDC и XOR, а также для стрижки волос в ресторане CBDC. |
+| عامة `xor_global` | Подключение маршрутизатора + поддержка DEX/TWAP + подключение к сети/телефонии | В 2017 году в журнале «Старый мир» и в TWAP появилась новая стрижка. |
+| Код `xor_dual_fund` | Интернет-маршрутизатор общедоступный экранированный + экранированный маршрутизатор | يثبت أن المزج BTON, защищенный/публичный احترم احترم نسب الحوكمة وسجل, стрижка المطبق على كل جزء. |
 
 ## هل تحتاج مزيدا من التفاصيل؟
 
-- FAQ الكامل: `docs/source/nexus_settlement_faq.md`
-- مواصفة Settlement router: `docs/source/settlement_router.md`
-- دليل سياسات CBDC: `docs/source/cbdc_lane_playbook.md`
-- دليل التشغيل: [عمليات Nexus](./nexus-operations)
+- Часто задаваемые вопросы: `docs/source/nexus_settlement_faq.md`.
+- Маршрутизатор расчетов: `docs/source/settlement_router.md`.
+- Доступ к CBDC: `docs/source/cbdc_lane_playbook.md`
+- Код запроса: [عمليات Nexus](./nexus-operations)

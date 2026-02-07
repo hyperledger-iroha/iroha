@@ -4,64 +4,61 @@ direction: ltr
 source: docs/portal/docs/sns/registry-schema.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 :::note Source canonique
-Cette page reflete `docs/source/sns/registry_schema.md` et sert desormais de copie canonique du portail. Le fichier source reste pour les mises a jour de traduction.
+Cette page reflète `docs/source/sns/registry_schema.md` et sert désormais de copie canonique du portail. Le fichier source reste pour les mises à jour de traduction.
 :::
 
-# Schema du registre Sora Name Service (SN-2a)
+# Schéma du registre Sora Name Service (SN-2a)
 
-**Statut:** Redige 2026-03-24 -- soumis a la revue du programme SNS  
-**Lien roadmap:** SN-2a "Registry schema & storage layout"  
-**Portee:** Definir les structures Norito canoniques, les etats de cycle de vie et les evenements emis pour le Sora Name Service (SNS) afin que les implementations de registre et de registrar restent deterministes dans les contrats, SDKs et gateways.
+**Statut:** Redige 2026-03-24 -- soumis à la revue du programme SNS  
+**Feuille de route des liens :** SN-2a "Schéma de registre et disposition du stockage"  
+**Portée :** Définir les structures Norito canoniques, les états de cycle de vie et les événements émis pour le Sora Name Service (SNS) afin que les implémentations de registre et de registrar restent déterministes dans les contrats, SDK et gateways.
 
-Ce document complete le livrable de schema pour SN-2a en precisant:
+Ce document complet le livrable de schéma pour SN-2a en précisant :
 
-1. Identifiants et regles de hashing (`SuffixId`, `NameHash`, derivation des selecteurs).
-2. Structs/enums Norito pour les enregistrements de noms, politiques de suffixes, tiers de prix, repartitions de revenus et evenements du registre.
-3. Layout de stockage et prefixes d'indexes pour un replay deterministe.
-4. Une machine d'etats couvrant l'enregistrement, le renouvellement, grace/redemption, freezes et tombstones.
-5. Evenements canoniques consommes par l'automatisation DNS/gateway.
+1. Identifiants et règles de hachage (`SuffixId`, `NameHash`, dérivation des sélecteurs).
+2. Structs/enums Norito pour les enregistrements de noms, politiques de suffixes, niveaux de prix, répartitions de revenus et événements du registre.
+3. Disposition de stockage et préfixes d'index pour une relecture déterministe.
+4. Une machine d'états comprenant l'enregistrement, le renouvellement, la grâce/rédemption, les gels et les pierres tombales.
+5. Événements canoniques consommés par l'automatisation DNS/gateway.
 
-## 1. Identifiants et hashing
-
-| Identifiant | Description | Derivation |
+## 1. Identifiants et hachage| Identifiant | Descriptif | Dérivation |
 |------------|-------------|------------|
-| `SuffixId` (`u16`) | Identifiant de registre pour les suffixes de premier niveau (`.sora`, `.nexus`, `.dao`). Aligne sur le catalogue des suffixes dans [`sns_suffix_governance_charter.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sns_suffix_governance_charter.md). | Attribue par vote de gouvernance; stocke dans `SuffixPolicyV1`. |
-| `SuffixSelector` | Forme canonique en chaine du suffixe (ASCII, lower-case). | Exemple: `.sora` -> `sora`. |
-| `NameSelectorV1` | Selecteur binaire pour le label enregistre. | `struct NameSelectorV1 { version:u8 (=1); suffix_id:u16; label_len:u16; label_bytes:Vec<u8> }`. Le label est NFC + lower-case selon Norm v1. |
-| `NameHash` (`[u8;32]`) | Cle primaire de recherche utilisee par contrats, evenements et caches. | `blake3(NameSelectorV1_bytes)`. |
+| `SuffixId` (`u16`) | Identifiant de registre pour les suffixes de premier niveau (`.sora`, `.nexus`, `.dao`). Alignez sur le catalogue des suffixes dans [`sns_suffix_governance_charter.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sns_suffix_governance_charter.md). | Attribute par vote de gouvernance; stocké dans `SuffixPolicyV1`. |
+| `SuffixSelector` | Forme canonique en chaîne du suffixe (ASCII, minuscule). | Exemple : `.sora` -> `sora`. |
+| `NameSelectorV1` | Sélecteur binaire pour le label enregistré. | `struct NameSelectorV1 { version:u8 (=1); suffix_id:u16; label_len:u16; label_bytes:Vec<u8> }`. Le label est NFC + minuscule selon la norme v1. |
+| `NameHash` (`[u8;32]`) | Clé primaire de recherche utilisée par contrats, événements et caches. | `blake3(NameSelectorV1_bytes)`. |
 
-Exigences de determinisme:
+Exigences de déterminisme :
 
-- Les labels sont normalises via Norm v1 (UTS-46 strict, STD3 ASCII, NFC). Les chaines utilisateur DOIVENT etre normalisees avant le hash.
-- Les labels reserves (de `SuffixPolicyV1.reserved_labels`) n'entrent jamais dans le registre; les overrides uniquement gouvernance emettent des evenements `ReservedNameAssigned`.
+- Les labels sont normalisés via la Norme v1 (UTS-46 strict, STD3 ASCII, NFC). Les chaînes utilisateur DOIVENT sont normalisées avant le hachage.
+- Les labels réserves (de `SuffixPolicyV1.reserved_labels`) n'entrent jamais dans le registre ; les overrides uniquement gouvernance emettent des événements `ReservedNameAssigned`.
 
 ## 2. Structures Norito
 
-### 2.1 NameRecordV1
-
-| Champ | Type | Notes |
+### 2.1 NomEnregistrementV1| Champion | Tapez | Remarques |
 |-------|------|-------|
-| `suffix_id` | `u16` | Reference `SuffixPolicyV1`. |
-| `selector` | `NameSelectorV1` | Octets du selecteur brut pour audit/debug. |
-| `name_hash` | `[u8; 32]` | Cle pour maps/evenements. |
+| `suffix_id` | `u16` | Référence `SuffixPolicyV1`. |
+| `selector` | `NameSelectorV1` | Octets du sélecteur brut pour audit/debug. |
+| `name_hash` | `[u8; 32]` | Clé pour cartes/événements. |
 | `normalized_label` | `AsciiString` | Label lisible pour l'humain (post Norm v1). |
-| `display_label` | `AsciiString` | Casing fourni par le steward; cosmetique optionnelle. |
-| `owner` | `AccountId` | Controle les renouvellements/transferts. |
-| `controllers` | `Vec<NameControllerV1>` | References vers des adresses de compte cibles, resolvers ou metadata d'application. |
+| `display_label` | `AsciiString` | Boîtier fourni par le steward; cosmétique optionnelle. |
+| `owner` | `AccountId` | Contrôler les renouvellements/transferts. |
+| `controllers` | `Vec<NameControllerV1>` | Références vers des adresses de compte cibles, résolveurs ou métadonnées d'application. |
 | `status` | `NameStatus` | Indicateur de cycle de vie (voir Section 4). |
-| `pricing_class` | `u8` | Index dans les tiers de prix du suffixe (standard, premium, reserved). |
-| `registered_at` | `Timestamp` | Timestamp de bloc de l'activation initiale. |
-| `expires_at` | `Timestamp` | Fin du terme paye. |
-| `grace_expires_at` | `Timestamp` | Fin de grace d'auto-renouvellement (default +30 jours). |
-| `redemption_expires_at` | `Timestamp` | Fin de la fenetre de redemption (default +60 jours). |
-| `auction` | `Option<NameAuctionStateV1>` | Present quand des Dutch reopen ou encheres premium sont actives. |
-| `last_tx_hash` | `Hash` | Pointeur deterministe vers la transaction qui a produit cette version. |
-| `metadata` | `Metadata` | Metadata arbitraire du registrar (text records, proofs). |
+| `pricing_class` | `u8` | Index dans les niveaux de prix du suffixe (standard, premium, réservé). |
+| `registered_at` | `Timestamp` | Timestamp du bloc de l’activation initiale. |
+| `expires_at` | `Timestamp` | Fin du terme payant. |
+| `grace_expires_at` | `Timestamp` | Fin de grâce d'auto-renouvellement (par défaut +30 jours). |
+| `redemption_expires_at` | `Timestamp` | Fin de la fenêtre de rachat (par défaut +60 jours). |
+| `auction` | `Option<NameAuctionStateV1>` | Présent quand les Néerlandais rouvrent ou enchères premium sont actifs. |
+| `last_tx_hash` | `Hash` | Pointeur déterministe vers la transaction qui a produit cette version. || `metadata` | `Metadata` | Metadata arbitraire du registrar (enregistrements texte, preuves). |
 
-Structs de support:
+Structures de support :
 
 ```text
 Enum NameStatus {
@@ -117,26 +114,24 @@ Enum AuctionKind {
 }
 ```
 
-### 2.2 SuffixPolicyV1
-
-| Champ | Type | Notes |
+### 2.2 SuffixPolicyV1| Champion | Tapez | Remarques |
 |-------|------|-------|
-| `suffix_id` | `u16` | Cle primaire; stable entre versions de politique. |
+| `suffix_id` | `u16` | Clé primaire; stable entre versions de politique. |
 | `suffix` | `AsciiString` | par exemple, `sora`. |
-| `steward` | `AccountId` | Steward defini dans le charter de gouvernance. |
+| `steward` | `AccountId` | Steward défini dans la charte de gouvernance. |
 | `status` | `SuffixStatus` | `Active`, `Paused`, `Revoked`. |
-| `payment_asset_id` | `AsciiString` | Identifiant d'actif de settlement par defaut (par exemple `xor#sora`). |
-| `pricing` | `Vec<PriceTierV1>` | Coefficients de prix par tiers et regles de duree. |
-| `min_term_years` | `u8` | Plancher pour le terme achete quel que soit l'override de tier. |
-| `grace_period_days` | `u16` | Default 30. |
-| `redemption_period_days` | `u16` | Default 60. |
-| `max_term_years` | `u8` | Maximum de renouvellement anticipe. |
-| `referral_cap_bps` | `u16` | <=1000 (10%) selon le charter. |
+| `payment_asset_id` | `AsciiString` | Identifiant d'actif de règlement par défaut (par exemple `xor#sora`). |
+| `pricing` | `Vec<PriceTierV1>` | Coefficients de prix par niveaux et règles de durée. |
+| `min_term_years` | `u8` | Plancher pour le terme acheté quel que soit l'override de tier. |
+| `grace_period_days` | `u16` | Par défaut 30. |
+| `redemption_period_days` | `u16` | Par défaut 60. |
+| `max_term_years` | `u8` | Anticipation maximale de renouvellement. |
+| `referral_cap_bps` | `u16` | <=1000 (10%) selon la charte. |
 | `reserved_labels` | `Vec<ReservedNameV1>` | Liste fournie par la gouvernance avec instructions d'affectation. |
-| `fee_split` | `SuffixFeeSplitV1` | Parts tresorerie / steward / referral (basis points). |
-| `fund_splitter_account` | `AccountId` | Compte qui detient l'escrow + distribue les fonds. |
-| `policy_version` | `u16` | Incremente a chaque changement. |
-| `metadata` | `Metadata` | Notes etendues (KPI covenant, hashes de docs de compliance). |
+| `fee_split` | `SuffixFeeSplitV1` | Trésorerie de pièces / steward / référencement (points de base). |
+| `fund_splitter_account` | `AccountId` | Compte qui détient l'escrow + distribue les fonds. |
+| `policy_version` | `u16` | Incrémentez à chaque changement. |
+| `metadata` | `Metadata` | Notes étendues (KPI covenant, hashs de docs de conformité). |
 
 ```text
 Struct PriceTierV1 {
@@ -162,20 +157,18 @@ Struct SuffixFeeSplitV1 {
     referral_max_bps: u16, // optional referral carve-out (<= 1000)
     escrow_bps: u16,       // % routed to claw-back escrow
 }
-```
+```### 2.3 Enregistrements de revenus et de règlement
 
-### 2.3 Enregistrements de revenus et de settlement
-
-| Struct | Champs | But |
+| Structure | Champions | Mais |
 |--------|--------|-----|
-| `RevenueShareRecordV1` | `suffix_id`, `epoch_id`, `treasury_amount`, `steward_amount`, `referral_amount`, `escrow_amount`, `settled_at`, `tx_hash`. | Enregistrement deterministe des paiements routes par epoque de settlement (hebdomadaire). |
-| `RevenueAccrualEventV1` | `name_hash`, `suffix_id`, `event`, `gross_amount`, `net_amount`, `referral_account`. | Emis a chaque paiement poste (enregistrement, renouvellement, enchere). |
+| `RevenueShareRecordV1` | `suffix_id`, `epoch_id`, `treasury_amount`, `steward_amount`, `referral_amount`, `escrow_amount`, `settled_at`, `tx_hash`. | Enregistrement déterministe des routes de paiements par époque de règlement (hebdomadaire). |
+| `RevenueAccrualEventV1` | `name_hash`, `suffix_id`, `event`, `gross_amount`, `net_amount`, `referral_account`. | Emis a chaque poste de paiement (enregistrement, renouvellement, enchere). |
 
-Tous les champs `TokenValue` utilisent l'encodage fixe canonique de Norito avec le code devise declare dans le `SuffixPolicyV1` associe.
+Tous les champs `TokenValue` utilisent l'encodage fixe canonique de Norito avec le code devise déclarer dans le `SuffixPolicyV1` associé.
 
-### 2.4 Evenements du registre
+### 2.4 Événements du registre
 
-Les evenements canoniques fournissent un log de replay pour l'automatisation DNS/gateway et l'analytique.
+Les événements canoniques fournissent un log de replay pour l'automatisation DNS/gateway et l'analyse.
 
 ```text
 Struct RegistryEventV1 {
@@ -204,50 +197,44 @@ Enum RegistryEventKind {
 }
 ```
 
-Les evenements doivent etre ajoutes a un log rejouable (par exemple, le domaine `RegistryEvents`) et refletes vers les feeds gateway pour que les caches DNS invalident dans les SLA.
+Les événements doivent être ajoutés un log rejouable (par exemple, le domaine `RegistryEvents`) et reflétés vers les flux gateway pour que les caches DNS invalident dans les SLA.
 
-## 3. Layout de stockage et indexes
-
-| Cle | Description |
+## 3. Disposition de stockage et index| Clé | Descriptif |
 |-----|-------------|
-| `Names::<name_hash>` | Map primaire de `name_hash` vers `NameRecordV1`. |
-| `NamesByOwner::<AccountId, suffix_id>` | Index secondaire pour UI wallet (pagination friendly). |
-| `NamesByLabel::<suffix_id, normalized_label>` | Detecte les conflits, alimente la recherche deterministe. |
+| `Names::<name_hash>` | Carte primaire de `name_hash` vers `NameRecordV1`. |
+| `NamesByOwner::<AccountId, suffix_id>` | Index secondaire pour UI wallet (pagination conviviale). |
+| `NamesByLabel::<suffix_id, normalized_label>` | Détecter les conflits, alimenter la recherche déterministe. |
 | `SuffixPolicies::<suffix_id>` | Dernier `SuffixPolicyV1`. |
 | `RevenueShare::<suffix_id, epoch_id>` | Historique `RevenueShareRecordV1`. |
-| `RegistryEvents::<u64>` | Log append-only cle par sequence monotone. |
+| `RegistryEvents::<u64>` | Journal d'ajout uniquement clé par séquence monotone. |
 
-Toutes les cles sont serialisees via des tuples Norito pour garder un hashing deterministe entre hotes. Les mises a jour d'index se font atomiquement avec l'enregistrement principal.
+Tous les clés sont sérialisés via des tuples Norito pour garder un hachage déterministe entre les hôtes. Les mises à jour d'index se font atomiquement avec l'enregistrement principal.
 
-## 4. Machine d'etats du cycle de vie
+## 4. Machine d'états du cycle de vie| État | Conditions d'entrée | Transitions permises | Remarques |
+|-------|----------|-----------|-------|
+| Disponible | Dérive quand `NameRecord` est absent. | `PendingAuction` (premium), `Active` (standard d'enregistrement). | La recherche de disponibilité lit seulement les index. |
+| En attente d'enchères | Cri quand `PriceTierV1.auction_kind` != aucun. | `Active` (enchère réglée), `Tombstoned` (aucune enchère). | Les enchères emettent `AuctionOpened` et `AuctionSettled`. |
+| Actif | Enregistrement ou renouvellement réussi. | `GracePeriod`, `Frozen`, `Tombstoned`. | `expires_at` pilote la transition. |
+| Période de grâce | Automatique quand `now > expires_at`. | `Active` (renouvellement à temps), `Redemption`, `Tombstoned`. | Par défaut +30 jours ; résolument plus marque. |
+| Rédemption | `now > grace_expires_at` mais `< redemption_expires_at`. | `Active` (renouvellement tardif), `Tombstoned`. | Les commandes exigeant des frais de pénalité. |
+| Congelé | Freeze de gouvernance ou tuteur. | `Active` (après assainissement), `Tombstoned`. | Ne peut pas transférer ni mettre à jour les contrôleurs. |
+| Tombé | Abandon volontaire, résultat d'un litige permanent, ou rachat expiré. | `PendingAuction` (réouverture aux Pays-Bas) ou reste tombé. | L'événement `NameTombstoned` doit inclure une raison. |Les transitions d'état DOIVENT émettre le `RegistryEventKind` correspondant pour que les caches restent en aval cohérentes. Les noms tombstoned entrant en encheres Dutch rouvrir attachent une charge utile `AuctionKind::DutchReopen`.
 
-| Etat | Conditions d'entree | Transitions permises | Notes |
-|-------|--------------------|---------------------|-------|
-| Available | Derive quand `NameRecord` est absent. | `PendingAuction` (premium), `Active` (enregistrement standard). | La recherche de disponibilite lit seulement les indexes. |
-| PendingAuction | Cree quand `PriceTierV1.auction_kind` != none. | `Active` (enchere reglee), `Tombstoned` (aucune enchere). | Les encheres emettent `AuctionOpened` et `AuctionSettled`. |
-| Active | Enregistrement ou renouvellement reussi. | `GracePeriod`, `Frozen`, `Tombstoned`. | `expires_at` pilote la transition. |
-| GracePeriod | Automatique quand `now > expires_at`. | `Active` (renouvellement a temps), `Redemption`, `Tombstoned`. | Default +30 jours; resolu mais marque. |
-| Redemption | `now > grace_expires_at` mais `< redemption_expires_at`. | `Active` (renouvellement tardif), `Tombstoned`. | Les commandes exigent des frais de penalite. |
-| Frozen | Freeze de gouvernance ou guardian. | `Active` (apres remediation), `Tombstoned`. | Ne peut pas transferer ni mettre a jour les controllers. |
-| Tombstoned | Abandon volontaire, resultat de litige permanent, ou redemption expiree. | `PendingAuction` (Dutch reopen) ou reste tombstoned. | L'evenement `NameTombstoned` doit inclure une raison. |
+## 5. Événements canoniques et sync gateway
 
-Les transitions d'etat DOIVENT emettre le `RegistryEventKind` correspondant pour que les caches downstream restent coherentes. Les noms tombstoned entrant en encheres Dutch reopen attachent un payload `AuctionKind::DutchReopen`.
+Les passerelles s'abonnent à `RegistryEventV1` et synchronisent DNS/SoraFS via :
 
-## 5. Evenements canoniques et sync gateway
+1. Récupérer le dernier `NameRecordV1` référence par la séquence d'événements.
+2. Régénérer les modèles de résolveur (adresses IH58 préférées + compressées (`sora`) en deuxième choix, enregistrements texte).
+3. Pinner les données de zone mises à jour via le workflow SoraDNS décrit dans [`soradns_registry_rfc.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/soradns/soradns_registry_rfc.md).
 
-Les gateways s'abonnent a `RegistryEventV1` et synchronisent DNS/SoraFS via:
+Garanties de livraison d'événements :
 
-1. Recuperer le dernier `NameRecordV1` reference par la sequence d'evenements.
-2. Regenerer les templates de resolver (adresses IH58 preferees + compressed (`sora`) en second choix, text records).
-3. Pinner les donnees de zone mises a jour via le workflow SoraDNS decrit dans [`soradns_registry_rfc.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/soradns/soradns_registry_rfc.md).
+- Chaque transaction qui affecte un `NameRecordV1` *doit* ajouter exactement un événement avec `version` strictement croissant.
+- Les événements `RevenueSharePosted` référencent les colonies émises par `RevenueShareRecordV1`.
+- Les événements freeze/unfreeze/tombstone incluent les hashes d'artefacts de gouvernance dans `metadata` pour le replay d'audit.
 
-Garanties de livraison d'evenements:
-
-- Chaque transaction qui affecte un `NameRecordV1` *doit* ajouter exactement un evenement avec `version` strictement croissante.
-- Les evenements `RevenueSharePosted` referencent les settlements emis par `RevenueShareRecordV1`.
-- Les evenements freeze/unfreeze/tombstone incluent les hashes d'artefacts de gouvernance dans `metadata` pour le replay d'audit.
-
-## 6. Exemples de payloads Norito
+## 6. Exemples de charges utiles Norito
 
 ### 6.1 Exemple NameRecord
 
@@ -307,10 +294,8 @@ SuffixPolicyV1 {
 }
 ```
 
-## 7. Prochaines etapes
+## 7. Prochaines étapes- **SN-2b (Registrar API & gouvernance hooks) :** exposer ces structs via Torii (bindings Norito et JSON) et connecter les contrôles d'admission aux artefacts de gouvernance.
+- **SN-3 (Auction & Registration Engine) :** réutilisez `NameAuctionStateV1` pour implémenter la logique commit/reveal et Dutch open.
+- **SN-5 (Paiement & règlement) :** exploiteur `RevenueShareRecordV1` pour la réconciliation financière et l'automatisation des rapports.
 
-- **SN-2b (Registrar API & governance hooks):** exposer ces structs via Torii (bindings Norito et JSON) et connecter les checks d'admission aux artefacts de gouvernance.
-- **SN-3 (Auction & registration engine):** reutiliser `NameAuctionStateV1` pour implementer la logique commit/reveal et Dutch reopen.
-- **SN-5 (Payment & settlement):** exploiter `RevenueShareRecordV1` pour la reconciliation financiere et l'automatisation des rapports.
-
-Les questions ou demandes de changement doivent etre deposees avec les mises a jour du roadmap SNS dans `roadmap.md` et refletees dans `status.md` lors de la fusion.
+Les questions ou demandes de changement doivent être déposées avec les mises à jour du roadmap SNS dans `roadmap.md` et reflétées dans `status.md` lors de la fusion.

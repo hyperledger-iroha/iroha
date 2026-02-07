@@ -8,92 +8,94 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: Preview feedback logging
 sidebar_label: Feedback logging
 description: How DOCS-SORA records invite waves, telemetry events, and feedback digests for the docs portal preview.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-import previewFeedbackSummary from '@site/src/data/previewFeedbackSummary.json';
+'@site/src/data/previewFeedbackSummary.json' မှ အကြိုသုံးသပ်ချက်အကျဉ်းချုပ်ကို တင်သွင်းပါ။
 
-function FeedbackSummaryTable() {
+လုပ်ဆောင်ချက် တုံ့ပြန်ချက်အကျဉ်းချုပ်ဇယား() {
   const waves = previewFeedbackSummary?.waves ?? [];
   if (waves.length === 0) {
-    return (
+    ပြန်လာ (
       <p>
-        No preview feedback entries have been recorded in
+        အစမ်းကြည့်ရှုသည့် တုံ့ပြန်ချက် ထည့်သွင်းမှုများကို မှတ်တမ်းတင်ထားခြင်း မရှိပါ။
         {' '}
         <code>{previewFeedbackSummary?.source ?? 'artifacts/docs_portal_preview/feedback_log.json'}</code>
         .
       </p>
     );
   }
-  return (
-    <table>
+  ပြန်လာ (
+    <စားပွဲ>
       <thead>
         <tr>
           <th>Wave</th>
-          <th>Status</th>
-          <th>Total events</th>
-          <th>Invites</th>
-          <th>Open invites</th>
-          <th>Acknowledged</th>
-          <th>Revoked</th>
-          <th>Feedback</th>
-          <th>Issues</th>
-          <th>Completion %</th>
+          <th>အခြေအနေ</th>
+          <th>စုစုပေါင်းဖြစ်ရပ်များ</th>
+          <th>ဖိတ်ကြားသည်</th>
+          <th>ဖိတ်ကြားချက်များ</th>
+          <th>အသိအမှတ်ပြု</th>
+          <th>ရုတ်သိမ်းခဲ့သည်</th>
+          <th>တုံ့ပြန်ချက်</th>
+          <th>ပြဿနာများ</th>
+          <th>ပြီးစီးမှု %</th>
           <th>Ack %</th>
-          <th>Response rate</th>
+          <th>တုံ့ပြန်မှုနှုန်း</th>
           <th>Ack latency (avg h)</th>
-          <th>Feedback latency (avg h)</th>
-          <th>Last event</th>
-          <th>Days since last event</th>
+          <th>တုံ့ပြန်ချက် တုံ့ပြန်ချိန်ကြာချိန် (ပျမ်းမျှနာရီ)</th>
+          <th>နောက်ဆုံးဖြစ်ရပ်</th>
+          <th>ပြီးခဲ့သော ပွဲစကတည်းက နေ့ရက်များ</th>
         </tr>
       </thead>
       <tbody>
-        {waves.map((wave) => {
-          const feedback = wave.feedbackCount ?? wave.eventCounts?.['feedback-submitted'] ?? 0;
-          const issues = wave.issuesCount ?? wave.eventCounts?.['issue-opened'] ?? 0;
-          const acknowledgements =
-            wave.acknowledgements ?? wave.eventCounts?.acknowledged ?? 0;
-          const revocations =
-            wave.revocations ?? wave.eventCounts?.['access-revoked'] ?? 0;
-          const responseRate =
-            wave.responseRatePercent == null ? '—' : `${wave.responseRatePercent}%`;
-          const completionPercent =
+        {waves.map((လှိုင်း) => {
+          const တုံ့ပြန်ချက် = wave.feedbackCount ?? wave.eventCounts?['feedback-submitted'] ?? 0;
+          const issues = wave.issuesCount ?? wave.eventCounts?['issue-opened'] ?? 0;
+          const ဝန်ခံချက် =
+            wave.acknowledgements ?? wave.eventCounts?.acknowledged?? 0;
+          const ရုတ်သိမ်းခြင်း =
+            wave.revocations ?? wave.eventCounts?['access-revoked'] ?? 0;
+          const တုံ့ပြန်မှုနှုန်း =
+            wave.responseRatePercent == null ? '—': `${wave.responseRatePercent}%`;
+          const completionPercent=
             wave.inviteCompletionPercent == null
               ? '—'
               : `${wave.inviteCompletionPercent}%`;
-          const ackPercent =
-            wave.ackRatePercent == null ? '—' : `${wave.ackRatePercent}%`;
-          const ackLatency =
+          const ackPercent=
+            wave.ackRatePercent == null ? '—': `${wave.ackRatePercent}%`;
+          const ackLatency = သည်။
             wave.ackLatencyHoursAvg == null ? '—' : wave.ackLatencyHoursAvg;
-          const feedbackLatency =
-            wave.feedbackLatencyHoursAvg == null ? '—' : wave.feedbackLatencyHoursAvg;
-          return (
+          const feedbackLatency=
+            wave.feedbackLatencyHoursAvg == null ? '—' : wave.feedback LatencyHoursAvg;
+          ပြန်လာ (
             <tr key={wave.wave}>
               <td>{wave.wave}</td>
-              <td>{wave.status ?? 'pending'}</td>
+              <td>{wave.status ?? 'ဆိုင်းငံ့'</td>
               <td>{wave.totalEvents}</td>
-              <td>{wave.invites?.total ?? 0}</td>
+              <td>{wave.invites?.စုစုပေါင်း ?? 0}</td>
               <td>{wave.invites?.open ?? 0}</td>
-              <td>{acknowledgements}</td>
-              <td>{revocations}</td>
-              <td>{feedback}</td>
-              <td>{issues}</td>
+              <td>{အသိအမှတ်ပြုချက်များ</td>
+              <td>{ပြန်လည်ရုပ်သိမ်းမှုများ</td>
+              <td>{တုံ့ပြန်ချက်</td>
+              <td>{ပြဿနာများ</td>
               <td>{completionPercent}</td>
               <td>{ackPercent}</td>
               <td>{responseRate}</td>
-              <td title={wave.ackLatencyHoursP95 == null ? undefined : `p95 ${wave.ackLatencyHoursP95}h`}>
+              <td title={wave.ackLatencyHoursP95 == null ? သတ်မှတ်မထားသော : `p95 ${wave.ackLatencyHoursP95}h`}>
                 {ackLatency}
               </td>
               <td
-                title={
+                ခေါင်းစဉ်={
                   wave.feedbackLatencyHoursP95 == null
-                    ? undefined
+                    ? သတ်မှတ်မထားသော
                     : `p95 ${wave.feedbackLatencyHoursP95}h`
                 }
               >
-                {feedbackLatency}
+                {feedback Latency}
               </td>
               <td>{wave.lastEventTimestamp ?? '—'}</td>
-              <td>{wave.daysSinceLastEvent ?? '—'}</td>
+              <td>{wave.daysSinceLastEvent ?? '—'</td>
             </tr>
           );
         })}
@@ -102,75 +104,73 @@ function FeedbackSummaryTable() {
   );
 }
 
-The roadmap calls for verifiable evidence whenever we invite reviewers into the
-docs portal preview. This note explains how to capture that evidence with the
-`preview-feedback-log` helper, how to share the resulting artefacts with
-governance, and where to file digests once a wave closes.
+ကျွန်ုပ်တို့သည် ဝေဖန်သုံးသပ်သူများကို ဖိတ်ခေါ်သည့်အခါတိုင်း လမ်းပြမြေပုံသည် အတည်ပြုနိုင်သော အထောက်အထားများကို တောင်းဆိုပါသည်။
+docs portal ကို အစမ်းကြည့်ရှုခြင်း။ ဤမှတ်စုတွင် ထိုအထောက်အထားများကို မည်သို့ဖမ်းယူရမည်ကို ရှင်းပြထားသည်။
+`preview-feedback-log` အကူအညီပေးသူ၊ ရရှိလာသော အနုပညာပစ္စည်းများကို မည်သို့မျှဝေမည်နည်း။
+လှိုင်းတစ်ခုပိတ်ပြီးသည်နှင့် အုပ်ချုပ်မှုအား မည်သည့်နေရာတွင် ချေဖျက်မည်နည်း။
 
-## Why we log feedback
+## အဘယ်ကြောင့်ကျွန်ုပ်တို့ တုံ့ပြန်ချက်ကို မှတ်တမ်းတင်ထားသနည်း။
 
-- **Compliance:** every invite must record who accessed the preview, when they
-  acknowledged the acceptable-use policy, and when their access was revoked.
-- **Telemetry correlation:** the log lets us correlate portal telemetry spikes
-  or Try it traffic with specific invite cohorts.
-- **Governance evidence:** each DOCS-SORA checkpoint needs a machine-readable
-  summary showing invite counts, open reviewers, and the state of outstanding
-  issues.
+- **လိုက်နာမှု-** ဖိတ်ကြားချက်တိုင်းသည် အစမ်းကြည့်ရှုမှုကို ဝင်ရောက်ကြည့်ရှုသည့်အခါ ၎င်းတို့ကို မှတ်တမ်းတင်ရပါမည်။
+  လက်ခံနိုင်သော-အသုံးပြုမှုမူဝါဒကို အသိအမှတ်ပြုပြီး ၎င်းတို့၏အသုံးပြုခွင့်ကို ရုတ်သိမ်းလိုက်သည့်အခါ။
+- **Telemetry ဆက်စပ်မှု-** မှတ်တမ်းသည် ကျွန်ုပ်တို့အား portal telemetry spikes များကို ဆက်စပ်ပေးသည်
+  သို့မဟုတ် သတ်မှတ်ထားသော ဖိတ်ကြားမှု အစုအဖွဲ့များဖြင့် လမ်းကြောင်းပြောင်းကြည့်ပါ။
+- **အုပ်ချုပ်မှုအထောက်အထား-** DOCS-SORA စစ်ဆေးရေးဂိတ်တစ်ခုစီတွင် စက်ဖြင့်ဖတ်နိုင်သော လိုအပ်သည်
+  ဖိတ်ခေါ်မှုအရေအတွက်ကို ပြသသည့် အကျဉ်းချုပ်၊ ပွင့်လင်းစွာ သုံးသပ်သူများနှင့် ထူးထူးခြားခြား အခြေအနေ
+  ကိစ္စများ။
 
-All evidence lives under `artifacts/docs_portal_preview/` so it can be attached
-to the invite wave ticket or governance review without scraping CI logs.
+အထောက်အထားအားလုံးသည် `artifacts/docs_portal_preview/` အောက်တွင် ရှိနေသောကြောင့် ၎င်းကို ပူးတွဲထားနိုင်သည်။
+CI မှတ်တမ်းများကို မဖျက်ဘဲ ဖိတ်ခေါ်လှိုင်းလက်မှတ် သို့မဟုတ် အုပ်ချုပ်မှုပြန်လည်သုံးသပ်ခြင်းသို့။
 
-## Live invite summary
+## တိုက်ရိုက်ဖိတ်ကြားမှုအကျဉ်းချုပ်
 
-`docs/portal/scripts/preview-feedback-summary.mjs` ingests the shared log and
-writes `src/data/previewFeedbackSummary.json` during `npm run build`. The table
-below renders that JSON so reviewers can see the current invite footprint
-without running the CLI helper.
+`docs/portal/scripts/preview-feedback-summary.mjs` သည် မျှဝေထားသော မှတ်တမ်းကို ထည့်သွင်းသည်။
+`npm run build` အတွင်း `src/data/previewFeedbackSummary.json` ရေးသည်။ စားပွဲ
+အောက်တွင်ဖော်ပြထားသော JSON သည် သုံးသပ်သူများသည် လက်ရှိဖိတ်ကြားထားသည့်ခြေရာကို မြင်နိုင်စေရန်
+CLI helper ကိုမလုပ်ဆောင်ဘဲ။
 
-<FeedbackSummaryTable />
+<တုံ့ပြန်ချက်အကျဉ်းချုပ်ဇယား />ဖိတ်ကြားထားသော စုစုပေါင်းများအပြင်၊ အနှစ်ချုပ်သည် ယခုတွင် အသိအမှတ်ပြုမှုနှင့် ပေါ်လာပါသည်။
+ရုတ်သိမ်းမှု အရေအတွက်၊ ရရှိလာသော တုံ့ပြန်မှုနှုန်း (တုံ့ပြန်ချက် တင်ပြချက်များဖြင့် ပိုင်းခြားထားသည်။
+စုစုပေါင်းဖိတ်ကြားမှုများ) နှင့် တစ်ခုကြားရှိ ပျမ်းမျှကြာချိန် (hoverable p95 ဖြင့်)
+ဖိတ်ကြားချက်နှင့် သုံးသပ်သူ၏ အသိအမှတ်ပြုမှု သို့မဟုတ် အကြံပြုချက် တင်ပြချက်။ အသစ်
+**ပြီးစီးမှု %** ကော်လံတွင် ဖိတ်ကြားချက်မည်မျှ ပိတ်ထားသည်ကို ပြသည် (အသိအမှတ်ပြုသည် သို့မဟုတ်
+ရုတ်သိမ်းလိုက်သည်) **Ack %** သည် လက်ခံသူမည်မျှကို အတိအလင်း အတည်ပြုကြောင်း မီးမောင်းထိုးပြနေချိန်တွင်
+လက်ခံနိုင်သောအဆင့်များ။ ဤရရှိသည့် ရာခိုင်နှုန်းများ—အပြင် JSON သီးသန့်
+ပြန်လည်ရုပ်သိမ်းခြင်း/ပြဿနာနှုန်းများ—ပြန်လည်သုံးသပ်သူများသည် အတည်ပြုနိုင်စေရန် အုပ်ချုပ်မှုဒက်ရှ်ဘုတ်များကို ဖြည့်သွင်းပါ။
+CLI အကူအညီပေးသူကို မလုပ်ဆောင်ဘဲ ပါဝင်မှုအဆင့်နှင့် အလှည့်အပြောင်းအချိန်နှစ်ခုလုံး။
+**အခြေအနေ** ကော်လံသည် လှိုင်းငြိမ်နေခြင်းရှိမရှိ မီးမောင်းထိုးပြသည်။
+တက်ကြွသော (`active`) ကို ပိတ်သော်လည်း 14 ရက်ကြာ စောင့်ကြည့်ရေးဝင်းဒိုး (`closed`) အတွင်း သို့မဟုတ်၊
+(`archived`) အတွက် အဆင်သင့်။ **ပြီးခဲ့သော ပွဲစကတည်းက နေ့ရက်များ** မက်ထရစ်က မည်ကဲ့သို့ ပြသည်
+ကောင်စီများသည် နောက်ဆုံး ဖိတ်ခေါ်ခြင်း/တုံ့ပြန်ချက် လုပ်ဆောင်ချက်ကြောင့် ကြာမြင့်နေပြီဖြစ်သည်။
+ထုပ်ပိုးရန် လိုအပ်သော လှိုင်းများ သို့မဟုတ် ကြာရှည်စွာ လက်ခံသူများကို ပြန်လည် ထိတွေ့ဆက်ဆံပါ။
 
-In addition to the invite totals, the summary now surfaces acknowledgement and
-revocation counts, the derived response rate (feedback submissions divided by
-total invites), and the average latency (with a hoverable p95) between an
-invite and the reviewer’s acknowledgement or feedback submission. The new
-**Completion %** column shows how many invites have been closed (acknowledged or
-revoked), while **Ack %** highlights how many recipients explicitly confirmed
-the acceptable-use steps. These derived percentages—plus the JSON-only
-revocation/issue rates—feed the governance dashboards so reviewers can confirm
-both participation levels and turnaround time without running the CLI helper.
-The **Status** column highlights whether a wave is still
-active (`active`), closed but within the 14-day monitoring window (`closed`), or
-ready for archival (`archived`). The **Days since last event** metric shows how
-long it has been since the final invite/feedback action so councils can spot
-waves that need to be wrapped up or re-engage lingering recipients.
+### Wave `preview-20260218` အတို
 
-### Wave `preview-20260218` recap
+- **Scope-** Finance beta၊ observability ops၊ SDK ပါတနာ၊ နှင့် ecosystem advocate reviewers များကို လာမည့် DOCS-SORA ဂိတ်မတိုင်မီ **2026-02-18** တွင် ဖိတ်ကြားထားသည်။
+- ** မက်ထရစ်များ-** ဖိတ်ခေါ်ချက် ၄ စောင်၊ အသိအမှတ်ပြုချက် ၄ ချက်၊ ပြန်လည်ရုပ်သိမ်းမှု ၄ ကြိမ်နှင့် တုံ့ပြန်ချက်တင်ပြချက် ၄ စောင် (`responseRatePercent = 100`)၊ စောင့်ကြည့်လေ့လာနိုင်မှုအစုအဖွဲ့မှ တင်ပြသော တစ်ခုတည်းသော နောက်ဆက်တွဲပြဿနာ (`DOCS-SORA-Preview-20260218`)။
+- **အထောက်အထား-** `artifacts/docs_portal_preview/feedback_log.json` သည် ယခုလှိုင်းအတွက် အသေးစိတ်ဖြစ်ရပ်အချိန်ဇယားပါ၀င်ပြီး `artifacts/docs_portal_preview/preview-20260218-summary.json` သည် အုပ်ချုပ်ရေးပက်ကေ့ဂျ်များနှင့် ပူးတွဲပါရှိသော ပုံမှန်မက်ထရစ်များကို ဖမ်းယူပါသည်။ `npm run --prefix docs/portal preview:log -- --summary --summary-json` မှတစ်ဆင့် ပေါ်တယ်ဒေတာကို ပြန်လည်ထုတ်ပေးခြင်းသည် တူညီသောနံပါတ်များကို `src/data/previewFeedbackSummary.json` သို့ ဆွဲထုတ်သည်။
+- **Wave helper-** `npm run --prefix docs/portal preview:wave -- --wave preview-20260218 --invite-start 2026-02-18 --invite-end 2026-02-28 --report-date 2026-03-01 --notes "Finance/observability beta wave"` သည် လှိုင်းတစ်ခုချင်းစီ၏ အနှစ်ချုပ်၊ အနှစ်ချုပ်၊ နှင့် ပြန်လည်ဆန်းသစ်ထားသော portal data ကို အဆင့်တစ်ဆင့်တွင် ထုတ်လွှတ်ပါသည်။
+- **နောက်ဆက်တွဲများ-** ကြည့်ရှုနိုင်မှု တုံ့ပြန်ချက်သည် စမ်းသုံးကြည့်ရန် တောင်းဆိုမှုများအတွက် နောက်ထပ် CSP နမူနာများကို ကန့်သတ်ထားသည်။ Docs/DevRel သည် `docs/portal/docs/sorafs/observability-plan.md` (§4.2) အောက်တွင် ရေးထားသည်ကို ခြေရာခံနေသောကြောင့် နောက်လာမည့် ဖိတ်ကြားချက်လှိုင်းသည် ပြုပြင်မှုကို အတည်ပြုနိုင်သည်။ အတိုချုံး အပြည့်အစုံသည် [`preview-feedback/w3/summary.md`](./preview-feedback/w3/summary.md) တွင် [`preview-feedback/w3/log.md`](./preview-feedback/w3/log.md) တွင် ရိုက်ကူးထားသော timeline ဖြင့် နေထိုင်ပါသည်။
 
-- **Scope:** Finance beta, observability ops, SDK partner, and ecosystem advocate reviewers invited on **2026‑02‑18** ahead of the next DOCS-SORA checkpoint.
-- **Metrics:** 4 invites, 4 acknowledgements, 4 revocations, and 4 feedback submissions (`responseRatePercent = 100`) with a single follow-up issue (`DOCS-SORA-Preview-20260218`) filed by the observability cohort.
-- **Evidence:** `artifacts/docs_portal_preview/feedback_log.json` now includes the detailed event timeline for this wave and `artifacts/docs_portal_preview/preview-20260218-summary.json` captures the normalized metrics we attach to governance packets. Regenerating the portal data via `npm run --prefix docs/portal preview:log -- --summary --summary-json` pulls the same numbers into `src/data/previewFeedbackSummary.json`.
-- **Wave helper:** `npm run --prefix docs/portal preview:wave -- --wave preview-20260218 --invite-start 2026-02-18 --invite-end 2026-02-28 --report-date 2026-03-01 --notes "Finance/observability beta wave"` emits the per-wave summary, digest, and refreshed portal data in one step.
-- **Follow-ups:** Observability feedback scoped additional CSP examples for Try it requests; Docs/DevRel are tracking the write-up under `docs/portal/docs/sorafs/observability-plan.md` (§4.2) so the next invite wave can validate the fix. The full recap lives in [`preview-feedback/w3/summary.md`](./preview-feedback/w3/summary.md) with the timeline captured in [`preview-feedback/w3/log.md`](./preview-feedback/w3/log.md).
+## ပွဲအစီအစဥ်
 
-## Event taxonomy
+| ပွဲ | ဘယ်အချိန်မှာ မှတ်တမ်းတင်မလဲ။ မှတ်စုများ |
+| ---| ---| ---|
+| `invite-sent` | ဖိတ်စာအီးမေးလ်ပို့ပြီးပြီးချင်း။ | လက်ခံသူ တစ်ဦးလျှင် ဝင်ခွင့်တစ်ခုစီကို ပေါင်းထည့်ပါ ထို့ကြောင့် ဖိတ်ကြားချက်အရေအတွက်များ မှန်ကန်နေပါစေ။ |
+| `acknowledged` | သုံးသပ်သူမှ အတည်ပြုသောအခါတွင် ၎င်းတို့သည် လုံခြုံရေး/ကြည့်ရှုနိုင်မှုဆိုင်ရာ စာရွက်စာတမ်းများကို ဖတ်ပြီး checksum ဂိတ်ကို ပြေးသည်။ | ရွေးချယ်နိုင်သော်လည်း ပါတနာအုပ်စုများအတွက် အကြံပြုထားသည်။ |
+| `feedback-submitted` | ပြန်လည်သုံးသပ်သူတစ်ဦးသည် သဘောတူထားသည့် ခြေရာခံကိရိယာမှတစ်ဆင့် ရှာဖွေတွေ့ရှိမှုကို ပေးပို့သည့်အခါ။ | `--notes` အကွက်တွင် ပြဿနာ/လင့်ခ်ကို ထည့်သွင်းပါ။ |
+| `issue-opened` | DOCS-SORA သည် တုံ့ပြန်ချက်မှရရှိသည့် နောက်ဆက်တွဲပြဿနာကို တိုင်ကြားသည့်အခါ။ | အကြံပြုချက်ကို အစမ်းကြည့်ရှုရန် အုပ်ချုပ်ရေးသည် လမ်းပြမြေပုံအရာများကို ဆက်စပ်ပေးသည်။ |
+| `access-revoked` | သုံးသပ်သူ၏ အစမ်းကြည့်ရှုသည့် ဝင်းဒိုး ပြီးဆုံးသည်နှင့် တစ်ပြိုင်နက် သို့မဟုတ် အသုံးပြုခွင့်ကို စောစီးစွာ ရုပ်သိမ်းလိုက်သည်။ | လိုအပ်သောကြောင့် "ဖွင့်လက်ခံသူများ" အရေအတွက်သည် တိကျနေမည်ဖြစ်သည်။ |
 
-| Event | When to record it | Notes |
-| --- | --- | --- |
-| `invite-sent` | Immediately after sending an invite email. | Append one entry per recipient so invite counts stay accurate. |
-| `acknowledged` | When the reviewer confirms they read the security/observability docs and ran the checksum gate. | Optional but recommended for partner cohorts. |
-| `feedback-submitted` | When a reviewer files a finding via the agreed tracker. | Include the issue/link in the `--notes` field. |
-| `issue-opened` | When DOCS-SORA files a follow-up issue derived from feedback. | Helps governance correlate roadmap items to preview feedback. |
-| `access-revoked` | Once the reviewer’s preview window ends or access is revoked early. | Required so the “open recipients” count stays accurate. |
+နောက်ထပ် အစီအစဉ်တစ်ခု လိုအပ်ပါက ၎င်းကို ထည့်ပါ။
+`VALID_EVENTS` အတွင်းရှိ `docs/portal/scripts/preview-feedback-log.mjs` နှင့် အပ်ဒိတ်
+ဤဇယားသည် တူညီသောပြောင်းလဲမှုဖြစ်သည်။
 
-If you need an additional event, add it to
-`VALID_EVENTS` inside `docs/portal/scripts/preview-feedback-log.mjs` and update
-this table in the same change.
+## အလုပ်အသွားအလာကို မှတ်တမ်းတင်ခြင်း။
 
-## Logging workflow
-
-The helper behind `npm run preview:log` writes a single JSON log that captures
-all events. Each entry contains the wave label, recipient, event, timestamp, and
-optional notes. Example:
+`npm run preview:log` ၏ နောက်ကွယ်မှ ကူညီသူသည် ဖမ်းယူနိုင်သော JSON မှတ်တမ်းတစ်ခုအား ရေးသားသည်။
+အဖြစ်အပျက်အားလုံး။ ထည့်သွင်းမှုတစ်ခုစီတွင် လှိုင်းတံဆိပ်၊ လက်ခံသူ၊ ဖြစ်ရပ်၊ အချိန်တံဆိပ်နှင့် ပါဝင်သည်။
+ရွေးချယ်နိုင်သောမှတ်စုများ။ ဥပမာ-
 
 ```json
 {
@@ -195,7 +195,7 @@ optional notes. Example:
 }
 ```
 
-Commands:
+အမိန့်များ-
 
 ```bash
 # Append a new event (defaults to artifacts/docs_portal_preview/feedback_log.json)
@@ -225,51 +225,49 @@ npm run --prefix docs/portal preview:digest -- \
   --out artifacts/docs_portal_preview/preview-20260204-digest.md
 ```
 
-Tips:
+အကြံပြုချက်များ
 
-- Place the log under version control when working in a feature branch so other
-  maintainers can review changes. For long-running waves store the log in the
-  governance ticket and attach the final version to the release artefacts.
-- `preview:log` accepts `--log <path>` when you need to log directly inside a
-  SoraFS bundle or CI workspace.
-- Always include a `--notes` hint (issue link, GitHub handle, cohort ID) so the
-  summary is useful during the retrospective.
-- When you need deterministic summary timestamps (for CI or docs snapshots),
-  set `PREVIEW_FEEDBACK_NOW=<iso8601 timestamp>` before running the summary
-  helper. This keeps the `generatedAt`, status, and day counters consistent
-  across rebuilds.
+- အခြားအင်္ဂါရပ်ဌာနခွဲတစ်ခုတွင်အလုပ်လုပ်သောအခါ လော့ဂ်ကို ဗားရှင်းထိန်းချုပ်မှုအောက်တွင် ထားပါ။
+  ထိန်းသိမ်းသူများသည် အပြောင်းအလဲများကို ပြန်လည်သုံးသပ်နိုင်သည်။ ကြာရှည်သောလှိုင်းများအတွက် မှတ်တမ်းကို သိမ်းဆည်းပါ။
+  အုပ်ချုပ်မှုလက်မှတ်နှင့် နောက်ဆုံးဗားရှင်းကို ထုတ်ဝေမှုဆိုင်ရာ စာရွက်စာတမ်းများတွင် ပူးတွဲပါရှိသည်။
+- သင်တစ်ဦးအတွင်းသို့တိုက်ရိုက်ဝင်ရောက်ရန်လိုအပ်သောအခါ `preview:log` သည် `--log <path>` ကိုလက်ခံသည်
+  SoraFS အတွဲ သို့မဟုတ် CI အလုပ်ခွင်။
+- `--notes` အရိပ်အမြွက် (ပြဿနာလင့်ခ်၊ GitHub လက်ကိုင်၊ အစု ID) အမြဲပါ၀င်ပါ ။
+  အနှစ်ချုပ်သည် နောက်ကြောင်းပြန်စဉ်အတွင်း အသုံးဝင်သည်။
+- သင်သတ်မှတ်ထားသော အနှစ်ချုပ်အချိန်တံဆိပ်များ (CI သို့မဟုတ် docs လျှပ်တစ်ပြက်များအတွက်) လိုအပ်သောအခါ၊
+  အနှစ်ချုပ်ကို မလုပ်ဆောင်မီ `PREVIEW_FEEDBACK_NOW=<iso8601 timestamp>` ကို သတ်မှတ်ပါ။
+  ကူညီသူ။ ၎င်းသည် `generatedAt`၊ အခြေအနေနှင့် နေ့ကောင်တာများကို တသမတ်တည်းဖြစ်စေသည်။
+  ဖြတ်ပြီး ပြန်ဆောက်တယ်။
 
-## Summaries, digests, and archives
-
-1. **Per-wave summary:** generate the JSON summary and attach it to the invite
-   ticket together with the raw log. The summary enumerates total invites, open
-   recipients, and feedback counts so governance can confirm we captured every
-   reviewer. The portal build also publishes an aggregate summary at
-   `src/data/previewFeedbackSummary.json` so stakeholders can see the current
-   snapshot without running the CLI.
-2. **Weekly digest:** run `npm run --prefix docs/portal preview:digest -- --wave <label>`
-   to pre-populate the Markdown metrics, then tailor the placeholder sections
-   using the template in
+## အနှစ်ချုပ်များ၊ အကျဉ်းချုပ်များနှင့် မှတ်တမ်းများ1. **တစ်လှိုင်းအနှစ်ချုပ်-** JSON အကျဉ်းချုပ်ကို ဖန်တီးပြီး ဖိတ်ကြားချက်တွင် ပူးတွဲပါ
+   လက်မှတ်အကြမ်း မှတ်တမ်းနှင့်အတူ။ အနှစ်ချုပ်သည် စုစုပေါင်း ဖိတ်ကြားချက်များကို စာရင်းကောက်၍ ဖွင့်သည်။
+   လက်ခံသူများနှင့် တုံ့ပြန်ချက်တို့ကို ရေတွက်ထားသောကြောင့် အုပ်ချုပ်ရေးက ကျွန်ုပ်တို့ဖမ်းယူထားသည်ကို အတည်ပြုနိုင်သည်။
+   ဝေဖန်သုံးသပ်သူ။ portal build သည် စုစည်းထားသော အနှစ်ချုပ်ကို ထုတ်ဝေသည်။
+   `src/data/previewFeedbackSummary.json` ဖြစ်သောကြောင့် သက်ဆိုင်သူများအနေဖြင့် လက်ရှိအခြေအနေကို ကြည့်ရှုနိုင်ပါသည်။
+   CLI ကိုမလည်ပတ်ဘဲလျှပ်တစ်ပြက်ရိုက်ချက်။
+2. **အပတ်စဉ် မှတ်တမ်း-** `npm run --prefix docs/portal preview:digest -- --wave <label>` ကို ဖွင့်ပါ။
+   Markdown မက်ထရစ်များကို ကြိုတင်ဖြည့်သွင်းရန်၊ ထို့နောက် နေရာယူထားသည့် ကဏ္ဍများကို စိတ်ကြိုက်ပြင်ဆင်ပါ။
+   ပုံစံခွက်ကို အသုံးပြု
    [`docs/examples/docs_preview_feedback_digest.md`](../../../examples/docs_preview_feedback_digest.md)
-   before sharing it with stakeholders. Include at least: wave label, open
-   reviewers, notable findings, and next actions.
-3. **Archival:** move closed-wave logs into
-   `artifacts/docs_portal_preview/archive/<wave>/` and keep only the most recent
-   active wave at the root. This keeps CI artefacts small while preserving the
-   audit trail.
+   သက်ဆိုင်သူများနှင့် မမျှဝေမီ။ အနည်းဆုံးပါဝင်ပါ- လှိုင်းတံဆိပ်၊ အဖွင့်
+   သုံးသပ်သူများ၊ ထင်ရှားသော တွေ့ရှိချက်များနှင့် နောက်လုပ်ဆောင်မှုများ။
+3. **Archival:** အပိတ်-လှိုင်းမှတ်တမ်းများကို ရွှေ့ပါ။
+   `artifacts/docs_portal_preview/archive/<wave>/` နှင့် နောက်ဆုံးထွက်ကိုသာ သိမ်းဆည်းပါ။
+   အမြစ်တွင် လှုပ်ရှားနေသော လှိုင်း။ ၎င်းသည် CI ပစ္စည်းများကို ထိန်းသိမ်းရာတွင် သေးငယ်သွားစေသည်။
+   စာရင်းစစ်လမ်းကြောင်း။
 
-## Linking to the roadmap
+## လမ်းပြမြေပုံကို ချိတ်ဆက်ခြင်း။
 
-- Reference this document from invite and onboarding playbooks whenever you ask
-  reviewers to file feedback (see
-  [`preview-invite-flow`](./preview-invite-flow.md),
-  [`reviewer-onboarding`](./reviewer-onboarding.md), and
-  [`public-preview-invite`](./public-preview-invite.md)).
-- Mention the generated summary in `status.md` when closing a wave so DOCS-SORA
-  roadmap items (e.g., DOCS-1b/2b/3c) can cite the artefact.
-- Store hash digests alongside the summary when uploading to SoraFS so external
-  reviewers can verify the evidence bundle.
+- သင်တောင်းဆိုသည့်အခါတိုင်း ဤစာတမ်းကို ဖိတ်ကြားခြင်းနှင့် စတင်ခြင်းဆိုင်ရာ ပလေးစာအုပ်များမှ ကိုးကားပါ။
+  အကြံပြုချက်တင်ပြရန် သုံးသပ်သူများ (ကြည့်ရှုပါ။
+  [`preview-invite-flow`](./preview-invite-flow.md)၊
+  [`reviewer-onboarding`](./reviewer-onboarding.md) နှင့်
+  [`public-preview-invite`](./public-preview-invite.md))။
+- လှိုင်းကိုပိတ်သည့်အခါ `status.md` တွင် ထုတ်လုပ်ထားသော အနှစ်ချုပ်ကို ဖော်ပြပါ DOCS-SORA
+  လမ်းပြမြေပုံပါ အရာများ (ဥပမာ၊ DOCS-1b/2b/3c) သည် artefact ကို ကိုးကားနိုင်ပါသည်။
+- SoraFS သို့ ပြင်ပသို့ အပ်လုဒ်တင်သည့်အခါ အကျဉ်းချုပ်နှင့်အတူ hash digest များကို သိမ်းဆည်းပါ။
+  သုံးသပ်သူများသည် အထောက်အထားအစုအဝေးကို စစ်ဆေးနိုင်သည်။
 
-Keeping the logging workflow codified here unblocks the roadmap requirement to
-“capture feedback/telemetry for governance” and reduces the time spent
-reconstructing invite history at every milestone.
+ဤနေရာတွင် သစ်ခုတ်ခြင်းလုပ်ငန်းအသွားအလာကို ကုဒ်လုပ်ထားခြင်းဖြင့် လမ်းပြမြေပုံလိုအပ်ချက်ကို ပြန်ဖွင့်ပေးသည်။
+“အုပ်ချုပ်ရေးအတွက် တုံ့ပြန်ချက်/တယ်လီမီတာကို ဖမ်းယူပါ” နှင့် အသုံးပြုချိန်ကို လျှော့ချပေးသည်။
+သမိုင်းမှတ်တိုင်တိုင်းတွင် ဖိတ်ကြားချက်မှတ်တမ်းကို ပြန်လည်တည်ဆောက်ခြင်း။

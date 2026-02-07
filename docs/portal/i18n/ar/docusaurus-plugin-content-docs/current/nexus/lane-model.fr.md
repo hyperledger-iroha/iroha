@@ -4,50 +4,52 @@ direction: rtl
 source: docs/portal/docs/nexus/lane-model.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: nexus-lane-model
-title: Modele de lanes Nexus
-description: Taxonomie logique des lanes, geometrie de configuration et regles de merge du world-state pour Sora Nexus.
+المعرف: نموذج حارة العلاقة
+العنوان: نموذج الممرات Nexus
+الوصف: تصنيف منطق الممرات وهندسة التكوين وقواعد دمج الحالة العالمية لـ Sora Nexus.
 ---
 
-# Modele de lanes Nexus et partitionnement WSV
+# نموذج الممرات Nexus والتقسيم WSV
 
-> **Statut:** livrable NX-1 - taxonomie de lanes, geometrie de configuration et layout de stockage prets pour implementation.  
-> **Owners:** Nexus Core WG, Governance WG  
-> **Reference roadmap:** NX-1 dans `roadmap.md`
+> **الحالة:** NX-1 القابل للحياة - تصنيف الممرات وهندسة التكوين وتخطيط المخزون للتنفيذ.  
+> **المالكون:** Nexus مجموعة العمل الأساسية، مجموعة عمل الحوكمة  
+> **خارطة الطريق المرجعية:** NX-1 في `roadmap.md`
 
-Cette page du portail reflete le brief canonique `docs/source/nexus_lanes.md` afin que les operateurs Sora Nexus, owners SDK et relecteurs puissent lire la guidance lanes sans explorer l arbre mono-repo. L architecture cible garde le world state deterministe tout en permettant aux data spaces (lanes) d executer des ensembles de validateurs publics ou prives avec des workloads isoles.
+تعكس هذه الصفحة من الباب الموجز الكنسي `docs/source/nexus_lanes.md` الذي يتيح لمشغلي Sora Nexus، وأصحاب SDK والقارئين معرفة الممرات الإرشادية بدون مستكشف الشجرة الأحادية. تحافظ الهندسة المعمارية على حالة العالم التي تحدد كل ما يسمح بمساحات البيانات (الممرات) وتنفيذ مجموعات من المدققين العامين أو الخاصين مع أعباء العمل المعزولة.
 
-## Concepts
+## المفاهيم
 
-- **Lane:** shard logique du ledger Nexus avec son propre ensemble de validateurs et backlog d execution. Identifie par un `LaneId` stable.
-- **Data Space:** bucket de gouvernance regroupant une ou plusieurs lanes qui partagent les politiques de compliance, routing et settlement.
-- **Lane Manifest:** metadata controlee par la gouvernance decrivant validateurs, politique DA, token de gas, regles de settlement et permissions de routing.
-- **Global Commitment:** preuve emise par une lane qui resume les nouveaux roots d etat, les donnees de settlement et les transferts cross-lane optionnels. L anneau NPoS global ordonne les commitments.
+- **المسار:** جزء من منطق دفتر الأستاذ Nexus مع مجموعة خاصة من المدققين والتنفيذ المتراكم. تحديد الاسمية `LaneId` مستقر.
+- **مساحة البيانات:** مجموعة من الحوكمة تجمع بين أكثر من ممرات تشارك في سياسات الامتثال والتوجيه والتسوية.
+- **بيان المسار:** يتم التحكم في البيانات الوصفية من خلال المدققين الحكوميين، والبيانات السياسية، ورموز الغاز، وقواعد التسوية، وأذونات التوجيه.
+- **الالتزام العالمي:** يمكنك إنشاء مسار يستأنف الجذور الجديدة للدولة وبيانات التسوية والتحويلات عبر خيارات المسار. يتم ترتيب الالتزامات العالمية لـ NPoS.
 
-## Taxonomie des lanes
+## تصنيف الممرات
 
-Les types de lane decrivent canoniquement leur visibilite, surface de gouvernance et hooks de settlement. La geometrie de configuration (`LaneConfig`) capture ces attributs afin que les noeuds, SDKs et tooling puissent raisonner sur le layout sans logique sur mesure.
+توصف أنواع الممرات بأنها مرئية وسطح إدارة وخطافات تسوية. تلتقط هندسة التكوين (`LaneConfig`) هذه السمات للتحديثات وحزم SDK والأدوات التي لها سبب قوي في التخطيط بدون منطق القياس.
 
-| Type de lane | Visibilite | Membreship des validateurs | Exposition WSV | Gouvernance par defaut | Politique de settlement | Usage typique |
-|-----------|------------|----------------------|--------------|--------------------|-------------------|-------------|
-| `default_public` | public | Permissionless (global stake) | Replica d etat complete | SORA Parliament | `xor_global` | Ledger public de base |
-| `public_custom` | public | Permissionless ou stake-gated | Replica d etat complete | Module pondere par stake | `xor_lane_weighted` | Applications publiques a haut throughput |
-| `private_permissioned` | restricted | Ensemble fixe de validateurs (approuve par gouvernance) | Commitments et proofs | Federated council | `xor_hosted_custody` | CBDC, workloads de consortium |
-| `hybrid_confidential` | restricted | Membreship mixte; enrobe des ZK proofs | Commitments + disclosure selective | Module de monnaie programmable | `xor_dual_fund` | Monnaie programmable preservant la privacy |
+| نوع الخط | مرئي | عضوية المصدقين | معرض WSV | الحكم الافتراضي | سياسة التسوية | نوع الاستخدام |
+|-----------|------------|----------------------------|------------------------------------|----|------------|
+| `default_public` | عام | بدون إذن (حصة عالمية) | نسخة طبق الأصل من الحالة كاملة | SORA البرلمان | `xor_global` | دفتر الأستاذ العام دي قاعدة |
+| `public_custom` | عام | بدون إذن أو بوابات الحصة | نسخة طبق الأصل من الحالة كاملة | وحدة التفكير على قدم المساواة | `xor_lane_weighted` | تطبيقات تنشر الإنتاجية العالية |
+| `private_permissioned` | مقيد | مجموعة أدوات التحقق من الصحة (الموافقة على الحكم) | الالتزامات والبراهين | المجلس الاتحادي | `xor_hosted_custody` | CBDC، أعباء عمل الاتحاد |
+| `hybrid_confidential` | مقيد | مزيج العضوية؛ enrobe des إثباتات ZK | التزامات + إفصاح انتقائي | وحدة دي موناي قابلة للبرمجة | `xor_dual_fund` | Monnaie قابلة للبرمجة للحفاظ على الخصوصية |
 
-Tous les types de lane doivent declarer:
+جميع أنواع الممرات يجب أن تعلن:
 
-- Alias de dataspace - regroupement lisible par humains liant les politiques de compliance.
-- Handle de gouvernance - identifiant resolu via `Nexus.governance.modules`.
-- Handle de settlement - identifiant consomme par le settlement router pour debiter les buffers XOR.
-- Metadata de telemetrie optionnelle (description, contact, domaine business) exposee via `/status` et dashboards.
+- الاسم المستعار لمساحة البيانات - إعادة التجميع المسموح بها من قبل البشر فيما يتعلق بسياسات الامتثال.
+- التعامل مع الحكم - تحديد القرار عبر `Nexus.governance.modules`.
+- التعامل مع التسوية - تحديد الاستهلاك من خلال جهاز توجيه التسوية من أجل خصم المخازن المؤقتة XOR.
+- يتم عرض البيانات الوصفية لخيارات القياس عن بعد (الوصف، جهة الاتصال، مجال الأعمال) عبر `/status` ولوحات المعلومات.
 
-## Geometrie de configuration des lanes (`LaneConfig`)
+## هندسة تكوين الممرات (`LaneConfig`)
 
-`LaneConfig` est la geometrie runtime derivee du catalogue de lanes valide. Il ne remplace pas les manifests de gouvernance; il fournit plutot des identifiants de stockage deterministes et des hints de telemetrie pour chaque lane configuree.
+`LaneConfig` هي هندسة وقت التشغيل المستمدة من كتالوج الممرات الصالحة. لا يحل محل بيانات الحكم؛ توفر لك قائمة معرفات محددات المخزون وتلميحات القياس عن بعد لكل مسار تم تكوينه.
 
 ```text
 LaneConfigEntry {
@@ -64,61 +66,59 @@ LaneConfigEntry {
 }
 ```
 
-- `LaneConfig::from_catalog` recalcule la geometrie quand la configuration est chargee (`State::set_nexus`).
-- Les aliases sont sanitises en slugs en minuscules; les caracteres non alphanumeriques consecutifs se compressent en `_`. Si l alias produit un slug vide, on revient a `lane{id}`.
-- `shard_id` est derive de la metadata key `da_shard_id` (par defaut `lane_id`) et pilote le journal de curseur de shard persiste afin de garder la relecture DA deterministe entre redemarrages/resharding.
-- Les prefixes de cle garantissent que le WSV maintient des plages de cles par lane disjointes meme si le backend est partage.
-- Les noms de segments Kura sont deterministes entre hosts; les auditeurs peuvent verifier les repertoires de segment et les manifests sans tooling sur mesure.
-- Les segments merge (`lane_{id:03}_merge`) stockent les derniers roots de merge-hint et commitments d etat global pour cette lane.
+- `LaneConfig::from_catalog` إعادة حساب الهندسة عندما يتم شحن التكوين (`State::set_nexus`).
+- الأسماء المستعارة هي معقمة في الرخويات الصغيرة؛ يتم ضغط الأحرف غير الأبجدية الرقمية المتتالية على `_`. إذا كان الاسم المستعار ينتج مقطع فيديو، فيرجى الرجوع إلى `lane{id}`.
+- `shard_id` مشتق من مفتاح البيانات التعريفية `da_shard_id` (افتراضيًا `lane_id`) وقم بتشغيل سجل نقرة القطع المستمرة للحفاظ على القراءة التي تحدد بين عمليات إعادة التخطيط/إعادة التقطيع.
+- بادئات cle garantissent أن WSV تحافظ على خرائط المفاتيح من خلال الممرات المنفصلة meme إذا كانت الواجهة الخلفية مشاركة.
+- أسماء شرائح كورا محددة بين المضيفين؛ يمكن للمدققين التحقق من ذخيرة القطاعات والبيانات بدون أدوات قياس.
+- الأجزاء المدمجة (`lane_{id:03}_merge`) تحتوي على آخر جذور الدمج وتلميحات والتزامات الدولة العالمية لهذا المسار.
 
-## Partitionnement du world-state
+## تقسيم الدولة العالمية
 
-- Le world state logique de Nexus est l union des espaces d etat par lane. Les lanes publiques persistent l etat complet; les lanes privees/confidential exportent des roots Merkle/commitment vers le merge ledger.
-- Le stockage MV prefixe chaque cle avec le prefixe 4 octets de `LaneConfigEntry::key_prefix`, produisant des cles comme `[00 00 00 01] ++ PackedKey`.
-- Les tables partagees (accounts, assets, triggers, enregistrements de gouvernance) stockent des entrees groupees par prefixe de lane, gardant les range scans deterministes.
-- La metadata du merge-ledger reflete le meme layout: chaque lane ecrit des roots de merge-hint et des roots d etat global reduit dans `lane_{id:03}_merge`, permettant une retention ou eviction ciblee quand une lane se retire.
-- Les indexes cross-lane (account aliases, asset registries, governance manifests) stockent des prefixes de lane explicites pour que les operateurs reconcillent rapidement les entrees.
-- **Politique de retention** - les lanes publiques conservent les block bodies complets; les lanes commitments only peuvent compacter les bodies anciens apres checkpoints car les commitments sont autoritatifs. Les lanes confidential gardent des journals chiffres dans des segments dedies pour ne pas bloquer d autres workloads.
-- **Tooling** - les utilitaires de maintenance (`kagami`, commandes admin CLI) doivent referencer le namespace avec slug lors de l exposition des metriques, labels Prometheus ou archivage des segments Kura.
+- Le World State logique de Nexus est l union des espaces d etat par lane. الممرات العامة مستمرة l حالة كاملة؛ الممرات الخاصة/مصدر سري لجذور Merkle/الالتزام مقابل دمج دفتر الأستاذ.
+- يتم تحديد بادئة Stockage MV كل مرة مع البادئة 4 ثمانيات من `LaneConfigEntry::key_prefix`، ويتم إنتاج المفاتيح مثل `[00 00 00 01] ++ PackedKey`.
+- الجداول المشاركة (الحسابات والأصول والمشغلات وتسجيلات الإدارة) مخزنة في مجموعات من الإدخالات حسب بادئة المسار، مع مراعاة تحديد نطاق عمليات المسح.
+- تعكس البيانات التعريفية لسجل الدمج تخطيط meme: كل مسار يوضح جذور الدمج والتلميح وجذور الحالة العامة يتم تقليلها في `lane_{id:03}_merge`، مما يسمح بالاحتفاظ أو الإخلاء عند انسحاب المسار.
+- تحتوي الفهارس المتقاطعة (أسماء الحسابات المستعارة، وسجلات الأصول، وبيانات الإدارة) على بادئات المسار الصريحة حتى يتمكن المشغلون من التوفيق بين الإدخالات بسرعة.
+- **سياسة الاحتفاظ** - تحافظ الممرات العامة على الأجسام المكتملة؛ يمكن لالتزامات الممرات فقط أن تضغط الأجسام القديمة بعد نقاط التفتيش، حيث تصبح الالتزامات تلقائية. الممرات السرية تحتوي على دفاتر يومية في الأجزاء التالية حتى لا تحجب أعباء العمل الأخرى.
+- **الأدوات** - تقوم أدوات الصيانة (`kagami`، أوامر واجهة سطر أوامر المشرف) بالإشارة إلى مساحة الاسم مع سبيكة أثناء عرض المقاييس، والتسميات Prometheus، أو أرشفة المقاطع Kura.
 
-## Routing et APIs
+## التوجيه وواجهات برمجة التطبيقات
 
-- Les endpoints Torii REST/gRPC acceptent un `lane_id` optionnel; l absence implique `lane_default`.
-- Les SDKs exposent des selecteurs de lane et mappent des aliases conviviaux vers `LaneId` en utilisant le catalogue de lanes.
-- Les regles de routing operent sur le catalogue valide et peuvent choisir lane et dataspace. `LaneConfig` fournit des aliases friendly pour la telemetrie dans dashboards et logs.
+- نقاط النهاية Torii REST/gRPC تقبل خيار `lane_id`؛ الغياب يعني `lane_default`.
+- تعرض أدوات SDK محددات الممرات وترسم أسماء مستعارة مترابطة على `LaneId` باستخدام كتالوج الممرات.
+- تعمل قواعد التوجيه على الكتالوج الصالح ويمكن اختيار المسار ومساحة البيانات. يوفر `LaneConfig` أسماء مستعارة صديقة للقياس عن بعد في لوحات المعلومات والسجلات.
 
-## Settlement et frais
+## تسوية وآخرون
 
-- Chaque lane paie des frais XOR au set global de validateurs. Les lanes peuvent collecter des tokens de gas natifs mais doivent escrow des equivalents XOR avec les commitments.
-- Les proofs de settlement incluent le montant, la metadata de conversion et la preuve d escrow (par exemple, transfert vers le vault global de frais).
-- Le settlement router unifie (NX-3) debite les buffers en utilisant les memes prefixes de lane, donc la telemetrie de settlement s aligne avec la geometrie de stockage.
+- Chaque Lane Paie des frais XOR au set global de validateurs. يمكن أن تقوم الممرات بجمع الرموز المميزة للغاز الأصلي، ولكنها تحتاج أيضًا إلى إيداع معادلات XOR مع الالتزامات.
+- تتضمن إثباتات التسوية المبلغ، وبيانات التحويل الوصفية، وحق الضمان (على سبيل المثال، التحويل عبر الخزانة العالمية للرسوم المجانية).
+- يقوم جهاز التوجيه الموحد (NX-3) بسحب المخازن المؤقتة باستخدام بادئات المسار، مع محاذاة قياس التسوية عن بعد مع هندسة التخزين.
 
-## Gouvernance
+## الحكم
 
-- Les lanes declarent leur module de gouvernance via le catalogue. `LaneConfigEntry` porte l alias et le slug d origine pour garder la telemetrie et les audit trails lisibles.
-- Le registry Nexus distribue des lane manifests signes qui incluent `LaneId`, binding de dataspace, handle de gouvernance, handle de settlement et metadata.
-- Les hooks de runtime-upgrade continuent d appliquer les politiques de gouvernance (`gov_upgrade_id` par defaut) et journalisent les diffs via le telemetry bridge (events `nexus.config.diff`).
+- تعلن الممرات عن وحدة الإدارة عبر الكتالوج. `LaneConfigEntry` يحمل الاسم المستعار والمفتاح الأصلي لحماية القياس عن بعد ومسارات التدقيق المسموح بها.
+- يقوم السجل Nexus بتوزيع علامات بيانات المسار التي تشمل `LaneId` وربط مساحة البيانات ومعالجة الإدارة ومعالجة التسوية والبيانات الوصفية.
+- تستمر خطافات ترقية وقت التشغيل في تطبيق سياسات الإدارة (`gov_upgrade_id` افتراضيًا) وتسجيل الاختلافات عبر جسر القياس عن بعد (الأحداث `nexus.config.diff`).
 
-## Telemetrie et status
+## القياس عن بعد والحالة
 
-- `/status` expose les aliases de lane, bindings de dataspace, handles de gouvernance et profils de settlement, derives du catalogue et de `LaneConfig`.
-- Les metriques du scheduler (`nexus_scheduler_lane_teu_*`) affichent aliases/slugs afin que les operateurs puissent mapper rapidement backlog et pression TEU.
-- `nexus_lane_configured_total` compte le nombre d entrees de lane derivees et est recalcule quand la configuration change. La telemetrie emet des diffs signes quand la geometrie des lanes change.
-- Les gauges de backlog dataspace incluent la metadata alias/description pour aider les operateurs a associer la pression de file a des domaines business.
+- يعرض `/status` الأسماء المستعارة للمسار وارتباطات مساحة البيانات ومقابض الإدارة وملفات تعريف التسوية واشتقاق الكتالوج و`LaneConfig`.
+- تعرض مقاييس الجدولة (`nexus_scheduler_lane_teu_*`) الأسماء المستعارة/الارتزاقات حتى يتمكن المشغلون من رسم الخرائط المتراكمة بسرعة والضغط على TEU.
+- `nexus_lane_configured_total` يحسب اسم إدخالات المسار المشتق ويتم إعادة حسابه عند تغيير التكوين. يصدر القياس عن بعد إشارات مختلفة عند تغيير هندسة الممرات.
+- تشتمل مقاييس مساحة البيانات المتراكمة على البيانات الوصفية المستعارة/الوصف لمساعدة المشغلين على ربط ضغط الملفات بنطاقات الأعمال.
 
-## Configuration et types Norito
+## التكوين والأنواع Norito
 
-- `LaneCatalog`, `LaneConfig`, et `DataSpaceCatalog` vivent dans `iroha_data_model::nexus` et fournissent des structures au format Norito pour les manifests et SDKs.
-- `LaneConfig` vit dans `iroha_config::parameters::actual::Nexus` et est derive automatiquement du catalogue; il ne requiert pas d encodage Norito car c est un helper runtime interne.
-- La configuration cote utilisateur (`iroha_config::parameters::user::Nexus`) continue d accepter des descripteurs declaratifs de lane et dataspace; le parsing derive maintenant la geometrie et rejette les aliases invalides ou les IDs de lane dupliques.
+- `LaneCatalog` و`LaneConfig` و`DataSpaceCatalog` نشط في `iroha_data_model::nexus` ويوفر الهياكل بتنسيق Norito للبيانات وحزم SDK.
+- `LaneConfig` vit dans `iroha_config::parameters::actual::Nexus` ويتم اشتقاق الكتالوج تلقائيًا ؛ لا يتطلب الأمر ترميز Norito للسيارة وهو مساعد وقت التشغيل الداخلي.
+- التكوين الرئيسي للمستخدم (`iroha_config::parameters::user::Nexus`) يستمر في قبول واصفات الإعلانات في المسار ومساحة البيانات؛ يشتق التحليل مع الحفاظ على الهندسة وحذف الأسماء المستعارة غير الصالحة أو معرفات الممرات المزدوجة.
 
-## Travail restant
-
-- Integrer les updates du settlement router (NX-3) avec la nouvelle geometrie afin que les debits et recus de buffer XOR soient etiquetes par slug de lane.
-- Etendre le tooling admin pour lister les column families, compacter les lanes retirees et inspecter les logs de blocs par lane via le namespace slugge.
-- Finaliser l algorithme de merge (ordering, pruning, conflict detection) et attacher des fixtures de regression pour le replay cross-lane.
-- Ajouter des hooks de compliance pour whitelists/blacklists et politiques de monnaie programmable (suivi sous NX-12).
+## راحة العمل- قم بدمج تحديثات جهاز التوجيه (NX-3) مع الهندسة الجديدة حتى تتمكن الديون واستعادة المخزن المؤقت XOR من الحفاظ على قواعد المسار.
+- قم بتوسيع مسؤول الأدوات لسرد عائلات الأعمدة، وضغط الممرات المتقاعدة، وفحص سجلات الكتل حسب المسار عبر مساحة الاسم Slugge.
+- الانتهاء من خوارزمية الدمج (الترتيب، والتشذيب، واكتشاف التعارض) وإرفاق تركيبات الانحدار لإعادة التشغيل عبر الممرات.
+- إضافة خطافات الامتثال للقوائم البيضاء/القوائم السوداء وسياسات الأموال القابلة للبرمجة (التابعة لـ NX-12).
 
 ---
 
-*Cette page continuera de suivre les follow-ups NX-1 a mesure que NX-2 jusqu a NX-18 atterrissent. Merci de remonter les questions ouvertes dans `roadmap.md` ou le tracker de gouvernance afin que le portail reste aligne avec les docs canoniques.*
+*تستمر هذه الصفحة في متابعة متابعات NX-1 حتى يهاجم NX-2 NX-18. شكرًا على إعادة طرح الأسئلة المفتوحة في `roadmap.md` أو أداة تعقب الإدارة حتى يتسنى للبوابة أن تتماشى مع المستندات الأساسية.*

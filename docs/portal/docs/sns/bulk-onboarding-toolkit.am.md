@@ -7,60 +7,61 @@ generator: scripts/sync_docs_i18n.py
 source_hash: a583af55cf8b4cf5070828bfb52146be88f92937c8d7887ab37a2056bf55ec9e
 source_last_modified: "2026-01-22T16:26:46.515965+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 ---
-id: bulk-onboarding-toolkit
-title: SNS Bulk Onboarding Toolkit
-sidebar_label: Bulk onboarding toolkit
-description: CSV to RegisterNameRequestV1 automation for SN-3b registrar runs.
+መታወቂያ፡ የጅምላ-የቦርዲንግ-መሳሪያ ስብስብ
+ርዕስ፡ SNS የጅምላ ተሳፍሪ መሣሪያ ስብስብ
+sidebar_label፡ የጅምላ የመሳፈሪያ መሣሪያ ስብስብ
+መግለጫ፡ CSV ወደ RegisterNameRequestV1 አውቶሜሽን ለ SN-3b ሬጅስትራር ሩጫዎች።
 ---
 
-:::note Canonical Source
-Mirrors `docs/source/sns/bulk_onboarding_toolkit.md` so external operators see
-the same SN-3b guidance without cloning the repository.
-:::
+::: ማስታወሻ ቀኖናዊ ምንጭ
+መስተዋቶች `docs/source/sns/bulk_onboarding_toolkit.md` ስለዚህ ውጫዊ ኦፕሬተሮች ያዩታል።
+ማከማቻውን ሳይዘጉ ተመሳሳይ የ SN-3b መመሪያ.
+::
 
-# SNS Bulk Onboarding Toolkit (SN-3b)
+# የኤስኤንኤስ የጅምላ መሳፈሪያ መሳሪያ (SN-3ለ)
 
-**Roadmap reference:** SN-3b "Bulk onboarding tooling"  
-**Artifacts:** `scripts/sns_bulk_onboard.py`, `scripts/tests/test_sns_bulk_onboard.py`,
+** የመንገድ ካርታ ማጣቀሻ፡** SN-3b "የጅምላ መሣፈሪያ መሳሪያ"  
+** ቅርሶች፡** `scripts/sns_bulk_onboard.py`፣ `scripts/tests/test_sns_bulk_onboard.py`፣
 `docs/portal/scripts/sns_bulk_release.sh`
 
-Large registrars often pre-stage hundreds of `.sora` or `.nexus` registrations
-with the same governance approvals and settlement rails. Manually crafting JSON
-payloads or re-running the CLI does not scale, so SN-3b ships a deterministic
-CSV to Norito builder that prepares `RegisterNameRequestV1` structures for
-Torii or the CLI. The helper validates every row up front, emits both an
-aggregated manifest and optional newline-delimited JSON, and can submit the
-payloads automatically while recording structured receipts for audits.
+ትላልቅ መዝጋቢዎች ብዙውን ጊዜ በመቶዎች የሚቆጠሩ የ`.sora` ወይም `.nexus` ምዝገባዎችን አስቀድመው ያደርጋሉ።
+በተመሳሳይ የአስተዳደር ማፅደቂያ እና የሰፈራ ሀዲዶች. JSON በእጅ መሥራት
+ጭነት ወይም ዳግም ማስኬድ CLI አይመዘንም፣ ስለዚህ SN-3b ቆራጥነት ይልካል።
+`RegisterNameRequestV1` መዋቅሮችን የሚያዘጋጅ ከCSV እስከ Norito ግንበኛ
+Torii ወይም CLI. ረዳቱ እያንዳንዱን ረድፍ ከፊት ለፊት ያረጋግጣል፣ ሁለቱንም አንድ ያስወጣል።
+የተዋሃደ አንጸባራቂ እና አማራጭ አዲስ መስመር-የተገደበ JSON፣ እና ማስገባት ይችላል።
+ለኦዲቶች የተዋቀሩ ደረሰኞችን በሚመዘግብበት ጊዜ በራስ-ሰር ይጫናል.
 
-## 1. CSV schema
+## 1. የCSV እቅድ
 
-The parser requires the following header row (order is flexible):
+ተንታኙ የሚከተለውን የራስጌ ረድፍ ይፈልጋል (ትዕዛዙ ተለዋዋጭ ነው)
 
-| Column | Required | Description |
-|--------|----------|-------------|
-| `label` | Yes | Requested label (mixed case accepted; tool normalises per Norm v1 and UTS-46). |
-| `suffix_id` | Yes | Numeric suffix identifier (decimal or `0x` hex). |
-| `owner` | Yes | AccountId string (IH58 literal; optional @domain hint) for the registration owner. |
-| `term_years` | Yes | Integer `1..=255`. |
-| `payment_asset_id` | Yes | Settlement asset (for example `xor#sora`). |
-| `payment_gross` / `payment_net` | Yes | Unsigned integers representing asset-native units. |
-| `settlement_tx` | Yes | JSON value or literal string describing the payment transaction or hash. |
-| `payment_payer` | Yes | AccountId that authorised the payment. |
-| `payment_signature` | Yes | JSON or literal string containing the steward or treasury signature proof. |
-| `controllers` | Optional | Semicolon- or comma-separated list of controller account addresses. Defaults to `[owner]` when omitted. |
-| `metadata` | Optional | Inline JSON or `@path/to/file.json` providing resolver hints, TXT records, etc. Defaults to `{}`. |
-| `governance` | Optional | Inline JSON or `@path` pointing at a `GovernanceHookV1`. `--require-governance` enforces this column. |
+| አምድ | ያስፈልጋል | መግለጫ |
+|--------|----------|--------|
+| `label` | አዎ | የተጠየቀ መለያ (የተደባለቀ መያዣ ተቀባይነት አግኝቷል፤ የመሳሪያ መደበኛ አሰራር በ Norm v1 እና UTS-46)። |
+| `suffix_id` | አዎ | የቁጥር ቅጥያ ለዪ (አስርዮሽ ወይም `0x` ሄክስ)። |
+| `owner` | አዎ | AccountId string (IH58 በጥሬው፤ አማራጭ @domain ፍንጭ) ለመመዝገቢያ ባለቤት። |
+| `term_years` | አዎ | ኢንቲጀር `1..=255`. |
+| `payment_asset_id` | አዎ | የሰፈራ ንብረት (ለምሳሌ `xor#sora`)። |
+| `payment_gross` / `payment_net` | አዎ | የንብረት ተወላጅ ክፍሎችን የሚወክሉ ያልተፈረሙ ኢንቲጀሮች። |
+| `settlement_tx` | አዎ | የክፍያ ግብይቱን ወይም ሃሽን የሚገልጽ የJSON እሴት ወይም ቀጥተኛ ሕብረቁምፊ። |
+| `payment_payer` | አዎ | ክፍያውን የፈቀደ AccountId። |
+| `payment_signature` | አዎ | መጋቢ ወይም የግምጃ ቤት ፊርማ ማረጋገጫ የያዘ JSON ወይም ቀጥተኛ ሕብረቁምፊ። |
+| `controllers` | አማራጭ | በሴሚኮሎን- ወይም በነጠላ ሰረዝ የተለዩ የተቆጣጣሪ መለያ አድራሻዎች ዝርዝር። ሲቀሩ የ I18NI0000044X ነባሪዎች። |
+| `metadata` | አማራጭ | የመስመር ላይ JSON ወይም I18NI0000046X የመፍታት ፍንጮችን፣ የTXT መዝገቦችን እና የመሳሰሉትን ያቀርባል። የ`{}` ነባሪዎች። |
+| `governance` | አማራጭ | የመስመር ውስጥ JSON ወይም I18NI0000049X ወደ `GovernanceHookV1` እየጠቆመ። `--require-governance` ይህን አምድ ያስፈጽማል። |
 
-Any column may reference an external file by prefixing the cell value with `@`.
-Paths are resolved relative to the CSV file.
+ማንኛውም አምድ የሕዋስ እሴቱን በ`@` በማስቀደም ውጫዊ ፋይልን ሊያመለክት ይችላል።
+ከCSV ፋይል አንጻር ዱካዎች ተፈትተዋል።
 
-## 2. Running the helper
+## 2. ረዳትን በማሄድ ላይ
 
 ```bash
 python3 scripts/sns_bulk_onboard.py registrations.csv \
@@ -68,16 +69,16 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
   --ndjson artifacts/sns_bulk_requests.ndjson
 ```
 
-Key options:
+ቁልፍ አማራጮች፡-
 
-- `--require-governance` rejects rows without a governance hook (useful for
-  premium auctions or reserved assignments).
-- `--default-controllers {owner,none}` decides whether empty controller cells
-  fall back to the owner account.
-- `--controllers-column`, `--metadata-column`, and `--governance-column` rename
-  optional columns when working with upstream exports.
+- `--require-governance` ያለ የአስተዳደር መንጠቆ ረድፎችን ውድቅ ያደርጋል (ይጠቅማል)
+  ፕሪሚየም ጨረታዎች ወይም የተያዙ ሥራዎች)።
+- `--default-controllers {owner,none}` ባዶ መቆጣጠሪያ ሴሎችን ይወስናል
+  ወደ ባለቤት መለያው ይመለሱ።
+- `--controllers-column`፣ `--metadata-column`፣ እና `--governance-column` እንደገና መሰየም
+  ወደላይ ወደ ውጭ መላክ በሚሰሩበት ጊዜ አማራጭ አምዶች።
 
-On success the script writes an aggregated manifest:
+በስኬት ላይ ስክሪፕቱ የተዋሃደ አንጸባራቂ ይጽፋል፡-
 
 ```json
 {
@@ -114,9 +115,9 @@ On success the script writes an aggregated manifest:
 }
 ```
 
-If `--ndjson` is provided, each `RegisterNameRequestV1` is also written as a
-single-line JSON document so automations can stream requests directly into
-Torii:
+`--ndjson` ከተሰጠ፣ እያንዳንዱ I18NI0000059X እንዲሁ ተጽፏል
+ነጠላ-መስመር JSON ሰነድ አውቶማቲክስ ጥያቄዎችን በቀጥታ ወደ ውስጥ ማስተላለፍ ይችላሉ።
+Torii፡
 
 ```bash
 jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
@@ -128,12 +129,12 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
   done
 ```
 
-## 3. Automated submissions
+## 3. አውቶማቲክ ማቅረቢያዎች
 
-### 3.1 Torii REST mode
+### 3.1 I18NT0000006X REST ሁነታ
 
-Specify `--submit-torii-url` plus either `--submit-token` or
-`--submit-token-file` to push every manifest entry directly into Torii:
+`--submit-torii-url` እና ወይ I18NI0000061X ወይም
+`--submit-token-file` እያንዳንዱን አንጸባራቂ ግቤት በቀጥታ ወደ Torii ለመግፋት፡
 
 ```bash
 python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json \
@@ -144,18 +145,18 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- The helper issues one `POST /v1/sns/registrations` per request and aborts on
-  the first HTTP error. Responses are appended to the log path as NDJSON
-  records.
-- `--poll-status` re-queries `/v1/sns/registrations/{selector}` after each
-  submission (up to `--poll-attempts`, default 5) to confirm that the record is
-  visible. Provide `--suffix-map` (JSON of `suffix_id` to `"suffix"` values) so
-  the tool can derive `{label}.{suffix}` literals for polling.
-- Tunables: `--submit-timeout`, `--poll-attempts`, and `--poll-interval`.
+- ረዳቱ በጥያቄ አንድ I18NI0000063X ያወጣል እና ያስወርዳል
+  የመጀመሪያው የኤችቲቲፒ ስህተት። ምላሾች እንደ NDJSON በሎግ ዱካ ላይ ተያይዘዋል
+  መዝገቦች.
+- `--poll-status` እንደገና መጠይቆች I18NI0000065X ከእያንዳንዱ በኋላ
+  መዝገቡ መሆኑን ለማረጋገጥ ማስረከብ (እስከ I18NI0000066X፣ ነባሪ 5)
+  የሚታይ. `--suffix-map` (JSON of I18NI0000068X እስከ I18NI0000069X እሴቶች) ያቅርቡ
+  መሣሪያው ለምርጫ I18NI0000070X ቀጥተኛ ቃላትን ማግኘት ይችላል።
+- Tunables: I18NI0000071X, I18NI0000072X, እና I18NI0000073X.
 
-### 3.2 iroha CLI mode
+### 3.2 iroha CLI ሁነታ
 
-To route each manifest entry through the CLI, supply the binary path:
+እያንዳንዱን አንጸባራቂ ግቤት በCLI በኩል ለማምራት የሁለትዮሽ መንገድ ያቅርቡ፡
 
 ```bash
 python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json \
@@ -165,20 +166,20 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- Controllers must be `Account` entries (`controller_type.kind = "Account"`)
-  because the CLI currently exposes only account-based controllers.
-- Metadata and governance blobs are written to temporary files per request and
-  forwarded to `iroha sns register --metadata-json ... --governance-json ...`.
-- CLI stdout and stderr plus exit codes are logged; non-zero exit codes abort
-  the run.
+- ተቆጣጣሪዎች I18NI0000074X ግቤቶች (`controller_type.kind = "Account"`) መሆን አለባቸው
+  ምክንያቱም CLI በአሁኑ ጊዜ መለያ ላይ የተመሰረቱ ተቆጣጣሪዎችን ብቻ ያጋልጣል።
+- ሜታዳታ እና የአስተዳደር ብሎብ በጥያቄ ጊዜያዊ ፋይሎች ላይ የተፃፈ ነው።
+  ወደ `iroha sns register --metadata-json ... --governance-json ...` ተላልፏል.
+- CLI stdout እና stderr plus መውጫ ኮዶች ገብተዋል፤ ዜሮ ያልሆኑ የመውጫ ኮዶች ይቋረጣሉ
+  ሩጫው ።
 
-Both submission modes can run together (Torii and CLI) to cross-check registrar
-deployments or rehearse fallbacks.
+ሁለቱም የማስረከቢያ ሁነታዎች አብረው ሊሄዱ ይችላሉ (Torii እና CLI) ለመዝጋቢ ቼክ
+ማሰማራት ወይም ውድቀትን ይለማመዱ።
 
-### 3.3 Submission receipts
+### 3.3 የማስረከቢያ ደረሰኞች
 
-When `--submission-log <path>` is provided, the script appends NDJSON entries
-capturing:
+`--submission-log <path>` ሲቀርብ፣ ስክሪፕቱ የNDJSON ግቤቶችን ይጨምራል።
+በመያዝ፡
 
 ```json
 {"timestamp":"2026-03-30T07:22:04.123Z","mode":"torii","index":12,"selector":"1:alpha","status":200,"success":true,"detail":"..."}
@@ -186,17 +187,17 @@ capturing:
 {"timestamp":"2026-03-30T07:22:06.789Z","mode":"cli","index":12,"selector":"1:alpha","status":0,"success":true,"detail":"Registration accepted"}
 ```
 
-Successful Torii responses include structured fields extracted from
-`NameRecordV1` or `RegisterNameResponseV1` (for example `record_status`,
-`record_pricing_class`, `record_owner`, `record_expires_at_ms`,
-`registry_event_version`, `suffix_id`, `label`) so dashboards and governance
-reports can parse the log without inspecting free-form text. Attach this log to
-registrar tickets alongside the manifest for reproducible evidence.
+ስኬታማ የI18NT0000009X ምላሾች የተዋቀሩ መስኮችን ያካትታሉ
+`NameRecordV1` ወይም `RegisterNameResponseV1` (ለምሳሌ `record_status`፣
+`record_pricing_class`፣ `record_owner`፣ `record_expires_at_ms`፣
+`registry_event_version`፣ `suffix_id`፣ `label`) ስለዚህ ዳሽቦርዶች እና አስተዳደር
+ሪፖርቶች ነፃ ቅጽ ጽሑፍን ሳይመረምሩ መዝገቡን ሊተነተኑ ይችላሉ። ይህን ምዝግብ ማስታወሻ ያያይዙት።
+ሊባዛ ለሚችል ማስረጃ ከመግለጫው ጎን የመመዝገቢያ ትኬቶች።
 
-## 4. Docs portal release automation
+## 4. የሰነዶች ፖርታል ልቀት አውቶማቲክ
 
-CI and portal jobs call `docs/portal/scripts/sns_bulk_release.sh`, which wraps
-the helper and stores artefacts under `artifacts/sns/releases/<timestamp>/`:
+CI እና ፖርታል ስራዎች `docs/portal/scripts/sns_bulk_release.sh` ይደውሉ, እሱም ይጠቀለላል
+ረዳቱ እና ቅርሶችን በ `artifacts/sns/releases/<timestamp>/` ስር ያከማቻል፡
 
 ```bash
 docs/portal/scripts/sns_bulk_release.sh \
@@ -209,25 +210,25 @@ docs/portal/scripts/sns_bulk_release.sh \
   --cli-config configs/registrar.toml
 ```
 
-The script:
+ስክሪፕቱ፡-
 
-1. Builds `registrations.manifest.json`, `registrations.ndjson`, and copies the
-   original CSV into the release directory.
-2. Submits the manifest using Torii and/or the CLI (when configured), writing
-   `submissions.log` with the structured receipts above.
-3. Emits `summary.json` describing the release (paths, Torii URL, CLI path,
-   timestamp) so portal automation can upload the bundle to artefact storage.
-4. Produces `metrics.prom` (override via `--metrics`) containing
-   Prometheus-format counters for total requests, suffix distribution,
-   asset totals, and submission outcomes. The summary JSON links to this file.
+1. I18NI0000089X፣ `registrations.ndjson` ይገነባል እና
+   ኦሪጅናል CSV ወደ የመልቀቂያ ማውጫ።
+2. መግለጫውን Torii እና/ወይም CLI (ሲዋቀር) በመጠቀም ያቀርባል።
+   `submissions.log` ከላይ ከተዋቀሩ ደረሰኞች ጋር።
+3. Emits I18NI0000092X ልቀቱን የሚገልጽ (መንገዶች፣ Torii URL፣ CLI ዱካ፣
+   timestamp) ስለዚህ ፖርታል አውቶሜሽን ጥቅሉን ወደ አርቲፊክ ማከማቻ መስቀል ይችላል።
+4. I18NI0000093X (በ`--metrics` መሻር) ያመርታል
+   Prometheus-ቅርጸት ቆጣሪዎች ለጠቅላላ ጥያቄዎች፣ ቅጥያ ስርጭት፣
+   የንብረት ጠቅላላ, እና የማስረከቢያ ውጤቶች. JSON ማጠቃለያው ከዚህ ፋይል ጋር ይገናኛል።
 
-Workflows simply archive the release directory as a single artefact, which now
-contains everything governance needs for auditing.
+የስራ ፍሰቶች በቀላሉ የመልቀቂያ ማውጫውን እንደ አንድ ጥበባዊ ስራ በማህደር ያስቀምጣቸዋል፣ እሱም አሁን
+ለኦዲት አስተዳደር የሚያስፈልጉትን ነገሮች ሁሉ ይዟል።
 
-## 5. Telemetry & dashboards
+## 5. ቴሌሜትሪ እና ዳሽቦርዶች
 
-The metrics file generated by `sns_bulk_release.sh` exposes the following
-series:
+በ`sns_bulk_release.sh` የተፈጠረው የልኬት ፋይል የሚከተሉትን ያጋልጣል
+ተከታታይ፡
 
 ```
 # HELP sns_bulk_release_requests_total Number of registration requests per release and suffix.
@@ -238,41 +239,41 @@ sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="xor#sora"} 
 sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",success="true"} 118
 ```
 
-Feed `metrics.prom` into your Prometheus sidecar (for example via Promtail or a
-batch importer) to keep registrars, stewards, and governance peers aligned on
-bulk progress. Grafana board
-`dashboards/grafana/sns_bulk_release.json` visualises the same data with panels
-for per-suffix counts, payment volume, and submission success/failure ratios.
-The board filters by `release` so auditors can drill into a single CSV run.
+`metrics.prom` ወደ የእርስዎ I18NT0000001X የጎን መኪና (ለምሳሌ በፕሮምቴይል ወይም በ a
+ባች አስመጪ) ሬጅስትራሮች፣ መጋቢዎች እና የአስተዳደር እኩዮች እንዲሰለፉ ማድረግ
+የጅምላ እድገት. Grafana ሰሌዳ
+`dashboards/grafana/sns_bulk_release.json` ከፓነሎች ጋር ተመሳሳይ ውሂብን ያሳያል
+ለአንድ ቅጥያ ቆጠራዎች፣ የክፍያ መጠን እና የማስረከቢያ ስኬት/ውድቀት ሬሾዎች።
+ቦርዱ በI18NI0000098X ያጣራል ስለዚህ ኦዲተሮች ወደ አንድ የCSV ሩጫ መግባት ይችላሉ።
 
-## 6. Validation and failure modes
+## 6. የማረጋገጫ እና ውድቀት ሁነታዎች
 
-- **Label canonicalisation:** inputs are normalised with Python IDNA plus
-  lowercase and Norm v1 character filters. Invalid labels fail fast before any
-  network calls.
-- **Numeric guardrails:** suffix ids, term years, and pricing hints must fall
-  within `u16` and `u8` bounds. Payment fields accept decimal or hex integers
-  up to `i64::MAX`.
-- **Metadata or governance parsing:** inline JSON is parsed directly; file
-  references are resolved relative to the CSV location. Non-object metadata
-  produces a validation error.
-- **Controllers:** blank cells honour `--default-controllers`. Provide explicit
-  controller lists (for example `ih58...;ih58...`) when delegating to non-owner
-  actors.
+- ** መለያ ቀኖና: ** ግብዓቶች በ Python IDNA ፕላስ መደበኛ ናቸው።
+  ንዑስ ሆሄ እና Norm v1 ቁምፊ ማጣሪያዎች። ልክ ያልሆኑ መለያዎች ከማንኛቸውም በፊት በፍጥነት ይወድቃሉ
+  የአውታረ መረብ ጥሪዎች.
+- ** የቁጥር መከላከያ መንገዶች፡** ቅጥያ መታወቂያዎች፣ የቃል ዓመታት እና የዋጋ ፍንጮች መውደቅ አለባቸው።
+  በ `u16` እና `u8` ወሰኖች ውስጥ። የክፍያ መስኮች የአስርዮሽ ወይም የአስራስድስትዮሽ ኢንቲጀር ይቀበላሉ።
+  እስከ `i64::MAX`.
+- **ሜታዳታ ወይም የአስተዳደር መተንተን፡** የመስመር ላይ JSON በቀጥታ ተተነተነ፤ ፋይል
+  ማጣቀሻዎች ከCSV አካባቢ አንፃር ተፈትተዋል። የነገር ያልሆነ ሜታዳታ
+  የማረጋገጫ ስህተት ይፈጥራል.
+- ** ተቆጣጣሪዎች: ** ባዶ ሕዋሳት `--default-controllers` ያከብራሉ. በግልፅ ያቅርቡ
+  የመቆጣጠሪያ ዝርዝሮች (ለምሳሌ `ih58...;ih58...`) ባለቤት ላልሆኑ ውክልና ሲሰጡ
+  ተዋናዮች.
 
-Failures are reported with contextual row numbers (for example
-`error: row 12 term_years must be between 1 and 255`). The script exits with
-code `1` on validation errors and `2` when the CSV path is missing.
+አለመሳካቶች በዐውደ-ጽሑፍ የረድፍ ቁጥሮች (ለምሳሌ፦
+`error: row 12 term_years must be between 1 and 255`). ስክሪፕቱ አብሮ ይወጣል
+ኮድ `1` በማረጋገጫ ስህተቶች እና `2` የCSV መንገድ ሲጠፋ።
 
-## 7. Testing and provenance
+## 7. ሙከራ እና ፕሮቬንሽን
 
-- `python3 -m pytest scripts/tests/test_sns_bulk_onboard.py` covers CSV parsing,
-  NDJSON emission, governance enforcement, and the CLI or Torii submission
-  paths.
-- The helper is pure Python (no additional dependencies) and runs anywhere
-  `python3` is available. Commit history is tracked alongside the CLI in the
-  main repository for reproducibility.
+- `python3 -m pytest scripts/tests/test_sns_bulk_onboard.py` የCSV ትንተናን ይሸፍናል ፣
+  የNDJSON ልቀት፣ የአስተዳደር ማስፈጸሚያ እና የCLI ወይም Torii ማስረከብ
+  መንገዶች.
+- ረዳቱ ንጹህ ፓይዘን (ምንም ተጨማሪ ጥገኛ የለም) እና በየትኛውም ቦታ ይሰራል
+  `python3` ይገኛል። የቁርጥ ቀን ታሪክ በ ውስጥ ከ CLI ጋር ይከታተላል
+  ለመራባት ዋና ማከማቻ።
 
-For production runs, attach the generated manifest and NDJSON bundle to the
-registrar ticket so stewards can replay the exact payloads that were submitted
-to Torii.
+ለምርት ስራዎች፣ የመነጨውን አንጸባራቂ እና NDJSON ጥቅልን ከ
+የመመዝገቢያ ትኬት ስለዚህ መጋቢዎች የገቡትን ትክክለኛ ጭነት እንደገና መጫወት ይችላሉ።
+ወደ Torii።

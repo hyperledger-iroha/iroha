@@ -7,55 +7,56 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 7fd1985901145d0dbcc587d953b0b1a3b5210132c3f915ffd36ec81fbe0692b7
 source_last_modified: "2026-01-22T14:45:01.276618+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-title: Data Availability Commitments Plan
-sidebar_label: Commitments Plan
-description: Block, RPC, and proof plumbing for embedding DA commitments in Nexus.
+title: གནད་སྡུད་ཐོབ་ཚུགས་པའི་ཁས་བླངས་འཆར་གཞི།
+sarebar_label: ཁས་བླངས་འཆར་གཞི།
+འགྲེལ་བཤད་: བཀག་ཆ་དང་ RPC དེ་ལས་ བདེན་དཔང་ཆུ་གཡུར་ཚུ་ Nexus ནང་ DA ཁས་བླངས་ཚུ་ བཙུགས་ནིའི་དོན་ལུ་ཨིན།
 ---
 
-:::note Canonical Source
+:::དྲན་ཐོའི་འབྱུང་ཁུངས།
 :::
 
-# Sora Nexus Data Availability Commitments Plan (DA-3)
+# སོ་ར་ I18NT0000011X གནས་སྡུད་ཐོབ་ཚུགས་པའི་ཁས་བླངས་འཆར་གཞི་ (DA-3)
 
-_Drafted: 2026-03-25 — Owners: Core Protocol WG / Smart Contract Team / Storage Team_
+_ཟིན་བྲིས་: 2026-03-25 — ཇོ་བདག་: ཀོར་མཐུན་གྲོས་ ཌབ་ལུ་ཇི་/ གན་ཡིག་སྡེ་ཚན་ / གསོག་འཇོག་སྡེ་ཚན་_
 
-DA-3 extends the Nexus block format so every lane embeds deterministic records
-describing the blobs accepted by DA-2. This note captures the canonical data
-structures, block pipeline hooks, light-client proofs, and Torii/RPC surfaces
-that must land before validators can rely on DA commitments during admission or
-governance checks. All payloads are Norito-encoded; no SCALE or ad-hoc JSON.
+DA-3 གིས་ Nexus བཀག་ཆ་རྩ་སྒྲིག་འདི་རྒྱ་བསྐྱེད་འབདཝ་ལས་ ལམ་ཐིག་རེ་རེ་གིས་ གཏན་འབེབས་དྲན་ཐོ་ཚུ་བཙུགསཔ་ཨིན།
+DA-2 གིས་ངོས་ལེན་འབད་མི་ བློ་སྤོབས་ཚུ་ འགྲེལ་བཤད་རྐྱབ་ནི། དྲན་འཛིན་འདི་གིས་ ཀེ་ནོ་ནིག་གནད་སྡུད་འདི་འཛིན་བཟུང་འབདཝ་ཨིན།
+བཀོད་རིས་དང་བཀག་ཆ་གི་ཧུཀ་དང་ འོད་--མཁོ་མངགས་འབད་མི་བདེན་ཁུངས་ དེ་ལས་ Torii/RPC ཁ་ཐོག་ཚུ།
+བདེན་དཔྱད་འབད་མི་ཚུ་གིས་ འཛུལ་ཞུགས་ཀྱི་སྐབས་ལུ་ ཌི་ཨེ་ཁས་བླངས་ཚུ་ལུ་ བརྟེན་མ་ཚུགས་པའི་ཧེ་མ་ ལེན་དགོ།
+གཞུང་སྐྱོང་ཞིབ་དཔྱད་ཚུ། གླ་ཆ་ཆ་མཉམ་ Norito-encoded; SCALE ཡང་ན་ ad-hoc JSON.
 
-## Objectives
+## དམིགས་ཡུལ།
 
-- Carry per-blob commitments (chunk root + manifest hash + optional KZG
-  commitment) inside every Nexus block so peers can reconstruct availability
-  state without consulting off-ledger storage.
-- Provide deterministic membership proofs so light clients can verify that a
-  manifest hash was finalised in a given block.
-- Expose Torii queries (`/v1/da/commitments/*`) and proofs that let relays,
-  SDKs, and governance automation audit availability without replaying every
-  block.
-- Keep the existing `SignedBlockWire` envelope canonical by threading the new
-  structures through the Norito metadata header and block hash derivation.
+- བླམ་རེ་རེའི་ཁས་བླངས་ (ཆ་ཤས་ + གསལ་སྟོན་ཧེཤ་ + གདམ་ཁ་ཅན་གྱི་ཀེ་ཛི་ཇི་
+  ཁས་བླངས་) ནང་དུ་ Nexus བཀག་ཆ་དེ་ལས་ མཉམ་རོགས་ཚུ་གིས་ ཐོབ་ཚུལ་བསྐྱར་བཟོ་འབད་ཚུགས།
+  གཞིས་ཆགས་མེད་པའི་གསོག་འཇོག་དང་གྲོས་བསྟུན་མ་འབད་བར་བཞག་དགོ།
+- འཐུས་མིའི་བདེན་ཁུངས་ཚུ་བྱིན་ནིའི་དོན་ལུ་ མཁོ་མངགས་འབད་མི་ཚུ་གིས་ བདེན་དཔྱད་འབད་ཚུགས།
+  གསལ་སྟོན་ཧ་ཤི་འདི་ བྱིན་ཡོད་པའི་སྡེ་ཚན་ཅིག་ནང་ མཐའ་དཔྱད་འབད་ཡོདཔ་ཨིན།
+- I18NT0000015X འདྲི་དཔྱད་ (I18NI0000000027X) དང་ ཡིག་འཕྲིན་གཏང་མི་ བདེན་ཁུངས་ཚུ།
+  SDKs, དང་ གཞུང་སྐྱོང་རང་བཞིན་རྩིས་ཞིབ་ཀྱི་ཐོབ་ཚུལ་ཚུ་ ག་ར་ལོག་སྟེ་རྩེད་མ་དགོ་པར་
+  དུམ།
+- ད་ལྟོ་ཡོད་པའི་ `SignedBlockWire` ཐགསཔ་གསརཔ་འདི་གི་ཐོག་ལས་ ཡིག་ཤུབས་ཀེ་ནི་ཀཱལ་ཀེ་ཀེན་ཀེ་ནེ་ཀཱལ་བཞག་དགོ།
+  གཞི་བཀོད་ཚུ་ Norito མེ་ཊ་ཌེ་ཊ་ མགོ་ཡིག་བརྒྱུད་དེ་ དང་ ཧེཤ་ འབྱུང་ཁུངས་བཀག་དགོ།
 
-## Scope Overview
+## ཁྱབ་ཁོངས།
 
-1. **Data model additions** in `iroha_data_model::da::commitment` plus block
-   header changes in `iroha_data_model::block`.
-2. **Executor hooks** so `iroha_core` ingests DA receipts emitted by Torii
-   (`crates/iroha_core/src/queue.rs` and `crates/iroha_core/src/block.rs`).
-3. **Persistence/indexes** so the WSV can answer commitment queries quickly
-   (`iroha_core/src/wsv/mod.rs`).
-4. **Torii RPC additions** for list/query/prove endpoints under
+1. **གནས་སྡུད་དཔེ་ཚད་ཁ་སྐོང་** ནང་ `iroha_data_model::da::commitment` ནང་ བསྡམས་པ།
+   མགོ་ཡིག་བསྒྱུར་བཅོས་ `iroha_data_model::block`.
+2. **ལག་ལེན་འཐབ་མཁན་གྱི་ཧུཀ་** དེ་བཞིན་ `iroha_core` འབྲེལ་འཐུད་འབདཝ་ཨིན།
+   (I 18NI00000032X དང་ I18NI0000033X).
+3. **ཡུན་བརྟན་/ཟུར་ཐོ་** དེ་འབདཝ་ལས་ ཌབ་ལུ་ཨེསི་ཝི་གིས་ ཁས་བླངས་ཀྱི་དྲི་བ་ཚུ་ མགྱོགས་དྲགས་སྦེ་ ལན་རྐྱབ་ཚུགས།
+   (I 18NI00000034X).
+4. **Torii RPC ཁ་སྐོང་** འདི་ ཐོ་ཡིག་/འདྲི་དཔྱད་/བདེན་དཔང་ཚུ་ འོག་ལུ་བཀོད་དེ་ཡོདཔ་ཨིན།
    `/v1/da/commitments`.
-5. **Integration tests + fixtures** validating the wire layout and proof flow in
+5. **མཉམ་བསྡོམས་བརྟག་དཔྱད་ + བདེ་སྒྲིག་** 2 2 2012 གློག་ཐག་བཀོད་སྒྲིག་དང་བདེན་དཔང་རྒྱུན་འབབ་བདེན་དཔང་བྱེད་པ།
    `integration_tests/tests/da/commitments.rs`.
 
-## 1. Data Model Additions
+## 1. གནད་སྡུད་དཔེ་ཚད་ཁ་སྐོང་ཚུ།
 
-### 1.1 `DaCommitmentRecord`
+### ༡.༡ ངའི་ ༡༨ NI00000037X
 
 ```rust
 /// Canonical record stored on-chain and inside SignedBlockWire.
@@ -75,18 +76,18 @@ pub struct DaCommitmentRecord {
 }
 ```
 
-- `KzgCommitment` reuses the existing 48-byte point used under
-  `iroha_crypto::kzg`. When absent we fall back to Merkle proofs only.
-- `proof_scheme` is derived from the lane catalog; Merkle lanes reject KZG
-  payloads while `kzg_bls12_381` lanes require non-zero KZG commitments. Torii
-  currently only produces Merkle commitments and rejects KZG-configured lanes.
-- `KzgCommitment` reuses the existing 48-byte point used under
-  `iroha_crypto::kzg`. When absent on Merkle lanes we fall back to Merkle proofs
-  only.
-- `proof_digest` anticipates DA-5 PDP/PoTR integration so the same record
-  enumerates the sampling schedule used to keep blobs live.
+- I18NI000000038X གིས་ ད་ལྟོ་ལག་ལེན་འཐབ་ཡོད་པའི་ ༤༨-བཱའིཊི་ས་ཚིགས་འདི་ ལོག་ལག་ལེན་འཐབ་ཨིན།
+  `iroha_crypto::kzg`. ང་བཅས་མེད་པའི་སྐབས་ ང་བཅས་ Merkle གི་བདེན་ཁུངས་ལུ་རྐྱངམ་ཅིག་ལྷོདཔ་ཨིན།
+- `proof_scheme` འདི་ ལམ་གྱི་ཐོ་གཞུང་ལས་ འབྱུང་ཡོདཔ་ཨིན། Merkle lans གིས་ KZG མ་དགའ།
+  I18NI000000041X ལམ་ཚུ་ལུ་ ཀེ་ཛེ་ཇི་མེན་པའི་ཁས་བླངས་ཚུ་དགོཔ་ཨིན། I18NT0000019X
+  ད་ལྟོ་ Merkle གི་ཁས་བླངས་ཚུ་རྐྱངམ་ཅིག་བཏོན་ཞིནམ་ལས་ KZG གིས་ རིམ་སྒྲིག་འབད་ཡོད་པའི་ལམ་ཚུ་ ངོས་ལེན་འབདཝ་ཨིན།
+- I18NI000000042X གིས་ ད་ལྟོ་ལག་ལེན་འཐབ་ཡོད་པའི་ ༤༨-བཱའིཊི་ས་ཚིགས་འདི་ ལོག་ལག་ལེན་འཐབ་ཨིན།
+  `iroha_crypto::kzg`. མར་ཀལ་གྱི་ལམ་ཁར་མེད་པའི་སྐབས་ ང་བཅས་ མར་ཀལ་གྱི་བདེན་ཁུངས་ལུ་ལོག་འོང་།
+  རྐྱངམ་གཅིག།
+- `proof_digest` DA-5 PDP/PoTR མཉམ་བསྡོམས་ཚོད་དཔག་འབདཝ་ལས་ དྲན་ཐོ་གཅིག་པ་དེ་ཨིན།
+  བརྡ་རྟགས་ཚུ་ ཐད་རི་བ་རི་སྦེ་བཞག་ནི་གི་དོན་ལུ་ དཔེ་ཚད་ཀྱི་ལས་རིམ་འདི་ གྲངས་སུ་བཙུགས་དོ་ཡོདཔ་ཨིན།
 
-### 1.2 Block header extension
+### ༡.༢ སྡེབ་ཚན་མགོ་ཡིག་རྒྱ་བསྐྱེད་པ།
 
 ```
 pub struct BlockHeader {
@@ -100,115 +101,115 @@ pub struct DaCommitmentBundle {
 }
 ```
 
-The bundle hash feeds into both the block hash and `SignedBlockWire` metadata.
-overhead.
+བཱན་ཌལ་ཧེ་ཤི་གིས་ བཀག་ཆ་ཧེཤ་དང་ `SignedBlockWire` གཉིས་ཆ་རའི་ནང་ལུ་ བཀྲམ་སྤེལ་འབདཝ་ཨིན།
+མགོ་ཐོག་།
 
-Implementation note: `BlockPayload` and the transparent `BlockBuilder` now expose
-`da_commitments` setters/getters (see `BlockBuilder::set_da_commitments` and
-`SignedBlock::set_da_commitments`), so hosts can attach a pre-built bundle
-before sealing a block. All helper constructors default the field to `None`
-until Torii threads real bundles through.
+བཀོལ་སྤྱོད་དྲན་ཐོ།: `BlockPayload` དང་དྭངས་གསལ་གྱི་I18NI0000004XX ད་ལྟ་ཕྱིར་འདོན་བྱེད།
+`da_commitments` སྒྲིག་ཆས་/ཡིག་གཟུགས་ (`BlockBuilder::set_da_commitments` དང་གཟིགས།
+`SignedBlock::set_da_commitments`) དེ་ལས་ ཧོསིཊི་ཚུ་གིས་ སྔོན་སྒྲིག་འབད་ཡོད་པའི་ བཱན་ཌལ་ཅིག་ མཉམ་སྦྲགས་འབད་ཚུགས།
+བཀག་ཆ་ཅིག་མ་བསྡམ་པའི་ཧེ་མ་ཨིན། གྲོགས་རམ་འབད་མི་བཟོ་བསྐྲུན་པ་ཆ་མཉམ་གྱིས་ ས་སྒོ་འདི་ `None` ལུ་སྔོན་སྒྲིག་འབདཝ་ཨིན།
+b to I18NT000000020X ཐགསཔ་ཚུ་ ངོ་མ་སྦེ་ བསྡམས་ཡོདཔ་ཨིན།
 
-### 1.3 Wire encoding
+### 1.3 ཐགཔ་ཨིན་ཀོ་ཌིང་།
 
-- `SignedBlockWire::canonical_wire()` appends the Norito header for
-  `DaCommitmentBundle` immediately after the existing transaction list. The
-  version byte is `0x01`.
-- `SignedBlockWire::decode_wire()` rejects bundles whose `version` is unknown,
-  matching the Norito policy described in `norito.md`.
-- Hash derivation updates exist only in `block::Hasher`; light clients decoding
-  the existing wire format automatically gain the new field because the Norito
-  header advertises its presence.
+- `SignedBlockWire::canonical_wire()` གིས་ Norito གི་མགོ་ཡིག་འདི་ ༢༠༢༠ ལུ་ ཁ་སྐོང་འབདཝ་ཨིན།
+  ད་ལྟོ་ཡོད་པའི་ཚོང་འབྲེལ་ཐོ་ཡིག་གི་ཤུལ་ལས་ Norito དེ་འཕྲོ་ལས་རང་ཨིན། ཚིག༌ཕྲད
+  ཐོན་རིམ་བཱའིཊི་འདི་ `0x01` ཨིན།
+- I18NI000000055X གིས་ `version` མ་ཤེས་པའི་ བཱན་ཌལ་ཚུ་ བཀག་ཆ་འབདཝ་ཨིན།
+  `norito.md` ནང་གསལ་བཀོད་འབད་ཡོད་པའི་ Norito སྲིད་བྱུས་དང་མཐུན་པ།
+- ཧ་ཤི་ལས་ དུས་མཐུན་བཟོ་མི་ཚུ་ I18NI000000058X ནང་རྐྱངམ་ཅིག་ཡོདཔ་ཨིན། འོད་ཀྱི་མཁོ་མངགས་འབད་མི་ཚུ།
+  ད་ལྟོ་ཡོད་པའི་གློག་ཐག་རྩ་སྒྲིག་འདི་གིས་ རང་བཞིན་གྱིས་ ས་སྒོ་གསརཔ་འདི་ཐོབ་ཨིན་ ག་ཅི་འབད་ཟེར་བ་ཅིན་ I18NT0000006X
+  མགོ་ཡིག་གིས་ དེ་གི་ཡོད་པའི་ཁྱབ་བསྒྲགས་འབདཝ་ཨིན།
 
-## 2. Block Production Flow
+## 2. སྡེབ་ཚན་ཐོན་སྐྱེད་རྒྱུན་འབྲལ།
 
-1. Torii DA ingest finalises a `DaIngestReceipt` and publishes it on the
-   internal queue (`iroha_core::gossiper::QueueMessage::DaReceipt`).
-2. `PendingBlocks` collects all receipts whose `lane_id` matches the block under
-   construction, deduplicating by `(lane_id, client_blob_id, manifest_hash)`.
-3. Right before sealing, the block builder sorts commitments by `(lane_id,
-   epoch, sequence)` to keep the hash deterministic, encodes the bundle with the
-   Norito codec, and updates `da_commitments_hash`.
-4. The full bundle is stored in the WSV and emitted alongside the block inside
+1. Torii DA གིས་ I18NI000000059X འདི་མཇུག་བསྡུ་སྟེ་ གུ་དཔར་བསྐྲུན་འབདཝ་ཨིན།
+   ནང་འཁོད་བང་རིམ་ (`iroha_core::gossiper::QueueMessage::DaReceipt`).
+2. I18NI000000061X གིས་ I18NI000000062X གིས་ 18NI00000062X གིས་ འོག་ལུ་ཡོད་པའི་སྡེབ་ཚན་དང་མཐུན་སྒྲིག་འབད་མི་ འོང་འབབ་ཆ་མཉམ་བསྡུ་ལེན་འབདཝ་ཨིན།
+   བཟོ་བསྐྲུན་, `(lane_id, client_blob_id, manifest_hash)` གིས་ འདྲ་བཤུས་རྐྱབ་ནི།
+3. བཀག་ཆ་མ་འབད་བའི་ཧེ་མ་ བཀག་ཆ་བཟོ་མི་གིས་ `(lane_id,, གིས་ ཁས་བླངས་ཚུ་དབྱེ་སེལ་འབདཝ་ཨིན།
+   epoch, གོ་རིམ་)` ཧེཤ་གཏན་འབེབས་འདི་བཞག་ནིའི་དོན་ལུ་ བཱན་ཌལ་འདི་ དང་ཅིག་ཁར་ བརྡ་སྟོནམ་ཨིན།
+   Norito གསང་གྲངས་, དང་དུས་མཐུན་ཚུ་ I18NI000000064X.
+༤ བཱན་ཌལ་ཆ་ཚང་འདི་ ཌབ་ལུ་ཨེསི་ཝི་ནང་ གསོག་འཇོག་འབད་དེ་ ནང་ན་བཀག་ཆ་གི་མཐའམ་བདའ་སྟེ་ བཏོན་བཏངམ་ཨིན།
    `SignedBlockWire`.
 
-If block creation fails the receipts remain in the queue so the next block
-attempt can pick them up; the builder records the last included `sequence` per
-lane to avoid replay attacks.
+སྡེབ་ཚན་ གསར་བསྐྲུན་འབད་ བྱུང་འཛིན་ཚུ་ གྱལ་ནང་ལུས་ནི་འཐུས་ཤོར་བྱུང་པ་ཅིན་ སྡེབ་ཚན་ཤུལ་མམ་འདི་ཨིན།
+དཔའ་བཅམ་མི་འདི་གིས་ ཁོང་ཚུ་འཐུ་ཚུགས། བཟོ་བསྐྲུན་པ་འདི་གིས་ མཇུག་གི་ཐོ་བཀོད་ཚུ་ `sequence` ལུ་ཚུད་དེ་ཡོདཔ་ཨིན།
+བསྐྱར་རྩེད་ཀྱི་འཇབ་རྒོལ་ལས་འཛེམ་ནིའི་དོན་ལུ་ ལམ་ལུགས།
 
-## 3. RPC & Query Surface
+## 3. RPC & འདྲི་དཔྱད་ཁ་ཐོག་།
 
-Torii exposes three endpoints:
+I18NT00000022 གིས་ མཐའ་ཐིག་གསུམ་སྟོན་ཡོདཔ་ཨིན།
 
-| Route | Method | Payload | Notes |
-|-------|--------|---------|-------|
-| `/v1/da/commitments` | `POST` | `DaCommitmentQuery` (range filter by lane/epoch/sequence, pagination) | Returns `DaCommitmentPage` with total count, commitments, and block hash. |
-| `/v1/da/commitments/prove` | `POST` | `DaCommitmentProofRequest` (lane + manifest hash or `(epoch, sequence)` tuple). | Responds with `DaCommitmentProof` (record + Merkle path + block hash). |
-| `/v1/da/commitments/verify` | `POST` | `DaCommitmentProof` | Stateless helper that replays the block hash calculation and validates inclusion; used by SDKs that cannot link directly to `iroha_crypto`. |
+| ལམ། | ཐབས་ལམ་ | གླ་ཆ་ | དྲན་ཐོ། |
+|---------------------------------------------- |
+| `/v1/da/commitments` | `POST` | `DaCommitmentQuery` (ཁྱབ་ཚད་ཚགས་མ་གིས་ ལམ་/ཨི་པོཆ་/རིམ་པ་, པེ་ཇི་ནེཊ) | `DaCommitmentPage` བསྡོམས་རྩིས་དང་ ཁས་བླངས་ དེ་ལས་ ཧེཤ་ཚུ་བཀག་ཆ་འབདཝ་ཨིན། |
+| `/v1/da/commitments/prove` | `POST` | I18NI0000000073X (ལམ་ལམ་ + གསལ་སྟོན་ཧེཤ་ ཡང་ན་ `(epoch, sequence)` ཊུལ)། | I18NI000000075X དང་བཅས་ (ཐོ་བཀོད་ + མཱར་ཀེལ་འགྲུལ་ལམ་ + སྡེབ་ཚན་ཧེཤ་) དང་ཅིག་ཁར་ལན་འདེབས་འབདཝ་ཨིན། |
+| `/v1/da/commitments/verify` | I18NI0000007X | `DaCommitmentProof` | བཀག་ཆ་ཧེཤ་རྩིས་སྟོན་དང་ བདེན་དཔྱད་འབད་མི་ མངའ་སྡེ་མེད་པའི་གྲོགས་རམ་པ། `iroha_crypto` ལུ་ཐད་ཀར་དུ་འབྲེལ་མཐུད་འབད་མ་ཚུགས་པའི་ SDKs གིས་ལག་ལེན་འཐབ་ཡོདཔ་ཨིན། |
 
-All payloads live under `iroha_data_model::da::commitment`. Torii routers mount
-the handlers next to the existing DA ingest endpoints to reuse token/mTLS
-policies.
+གླ་ཆ་ཆ་མཉམ་ I18NI0000080X གི་འོག་ལུ་ཡོདཔ་ཨིན། Torii རའུ་ཊར་ཚུ་སྦྱར་བརྩེགས་འབད་ཡོདཔ།
+ད་ལྟོ་ཡོད་པའི་ཌི་ཨེ་ བཙུགས་མི་མཇུག་བསྡུའི་ས་ཁོངས་ཚུ་གི་སྦོ་ལོགས་ཁར་ ཊོ་ཀེན་/ཨེམ་ཊི་ཨེལ་ཨེསི་ ལོག་ལག་ལེན་འཐབ་ནིའི་དོན་ལུ་ འཛིན་སྐྱོང་པ་ཚུ།
+སྲིད་བྱུས།
 
-## 4. Inclusion Proofs & Light Clients
+## 4. བདེན་དཔང་དང་འོད་ཀྱི་མཁོ་འདོན་པ།
 
-- The block producer builds a binary Merkle tree over the serialized
-  `DaCommitmentRecord` list. The root feeds `da_commitments_hash`.
-- `DaCommitmentProof` packages the target record plus a vector of `(sibling_hash,
-  position)` entries so verifiers can reconstruct the root. Proofs also include
-  the block hash and signed header so light clients can verify finality.
-- CLI helpers (`iroha_cli app da prove-commitment`) wrap the proof request/verify
-  cycle and surface Norito/hex outputs for operators.
+- བཀག་ཆ་བཟོ་སྐྲུན་པ་གིས་ རིམ་སྒྲིག་འབད་ཡོད་པའི་གུ་ལས་ གཉིས་ལྡན་མར་ཀལ་ཤིང་ཅིག་བཟོ་བསྐྲུན་འབདཝ་ཨིན།
+  `DaCommitmentRecord` ཐོ་ཡིག། རྩ་བའི་ཟས་ I18NI0000082X.
+- `DaCommitmentProof` གིས་ དམིགས་གཏད་དྲན་ཐོ་དང་ `(sibling_hash, གི་ཝེག་ཊར་ཅིག་ ཐུམ་སྒྲིལ་འབདཝ་ཨིན།
+  གནས་སྟངས།` ཐོ་བཀོད་ཚུ་བདེན་དཔྱད་འབད་མི་འདི་གིས་ རྩ་བ་འདི་བསྐྱར་བཟོ་འབད་ཚུགས། བདེན་དཔང་ཚུ་ཡང་ཚུདཔ་ཨིན།
+  སྡེབ་ཚན་ཧེཤ་དང་ མགོ་ཡིག་གུ་མཚན་རྟགས་བཀོད་ཡོདཔ་ལས་ མཁོ་མངགས་འབད་མི་ཚུ་གིས་ མཐའ་དཔྱད་བདེན་དཔྱད་འབད་ཚུགས།
+- སི་ཨེལ་ཨའི་གྲོགས་རམ་པ་ (`iroha_cli app da prove-commitment`) བདེན་ཁུངས་ཀྱི་ཞུ་བ་/བདེན་བཤད་འདི་བཤུབ་ཡོདཔ།
+  འཁོར་རིམ་དང་ ཁ་ཐོག་ལུ་ Norito/hex གིས་ བཀོལ་སྤྱོད་པ་ཚུ་གི་དོན་ལུ་ ཐོན་འབྲས་ཚུ།
 
-## 5. Storage & Indexing
+## 5. བསགས་དང་ཤུགས་ཚད་ཅན།
 
-WSV stores commitments in a dedicated column family keyed by `manifest_hash`.
-Secondary indexes cover `(lane_id, epoch)` and `(lane_id, sequence)` so queries
-avoid scanning full bundles. Each record tracks the block height that sealed it,
-allowing catch-up nodes to rebuild the index quickly from the block log.
+WSV གིས་ I18NI0000085X གིས་ ལྡེ་མིག་བརྐྱབ་སྟེ་ བློ་གཏད་ཅན་གྱི་ ཀ་ཆེན་བཟའ་ཚང་ནང་ ཁས་བླངས་ཚུ་ གསོག་འཇོག་འབདཝ་ཨིན།
+གཞི་རིམ་ཟུར་ཐོ་ཚུ་གིས་ I18NI000000086X དང་ I18NI000000087X ཚུ་ཁྱབ་སྟེ་ཡོདཔ་ལས་ འདྲི་དཔྱད་ཚུ།
+ཆ་ཚང་སྦེ་ པར་ལོག་བཏབ་ནི་ལས་ འཛེམ་དགོ། དྲན་ཐོ་རེ་རེ་གིས་ བསྡམ་བཞག་མི་ སྡེབ་ཚན་མཐོ་ཚད་འདི་ བརྟག་ཞིབ་འབདཝ་ཨིན།
+བཀག་ཆ་དྲན་ཐོ་ལས་ ཟུར་ཐོ་འདི་ མགྱོགས་དྲགས་སྦེ་ ལོག་བཟོ་བཅུག་ནིའི་དོན་ལུ་ འཛིན་བཟུང་མཐུད་མཚམས་ཚུ་ འབད་བཅུགཔ་ཨིན།
 
-## 6. Telemetry & Observability
+## 6. བརྒྱུད་འཕྲིན་དང་བལྟ་ཚུགས།
 
-- `torii_da_commitments_total` increments whenever a block seals at least one
-  record.
-- `torii_da_commitment_queue_depth` tracks receipts waiting to be bundled (per
-  lane).
-- Grafana dashboard `dashboards/grafana/da_commitments.json` visualises block
-  inclusion, queue depth, and proof throughput so DA-3 release gates can audit
-  behaviour.
+- སྡེབ་ཚན་ཅིག་གིས་ ཉུང་མཐའ་གཅིག་ བསྡམ་བཞག་པའི་སྐབས་ I18NI000000008X ཡར་སེང་འབདཝ་ཨིན།
+  ཐོ་བཀོད།
+- I18NI000000089X རྗེས་འཇུག་ཐོབ་ཚུལ་ཚུ་ བསྡུ་སྒྲིག་འབད་ནི་ལུ་བསྒུག་སྡོདཔ་ཨིན། (per)
+  ལམ།
+- Grafana གི་ ཌེཤ་བོརཌི་ I18NI000000090X མཐོང་སྣང་བཀག་ཆ།
+  བཙུགས་ནི་དང་ གྱལ་རིམ་གྱི་གཏིང་ཚད་ དེ་ལས་ བདེན་ཁུངས་ཐོན་འབྲས་ དེ་འབདཝ་ལས་ DA-3 གསར་བཏོན་སྒོ་ར་གིས་ རྩིས་ཞིབ་འབད་ཚུགས།
+  བྱ༌སྤྱོད།
 
-## 7. Testing Strategy
+## 7. བརྟག་དཔྱད།
 
-1. **Unit tests** for `DaCommitmentBundle` encoding/decoding and block hash
-   derivation updates.
-2. **Golden fixtures** under `fixtures/da/commitments/` capturing canonical
-   bundle bytes and Merkle proofs.
-3. **Integration tests** booting two validators, ingesting sample blobs, and
-   asserting that both nodes agree on the bundle contents and query/proof
-   responses.
-4. **Light-client tests** in `integration_tests/tests/da/commitments.rs`
-   (Rust) that call `/prove` and verify the proof without talking to Torii.
-5. **CLI smoke** script `scripts/da/check_commitments.sh` to keep operator
-   tooling reproducible.
+1. **ཡུ་ནིཊི་བརྟག་དཔྱད་** I18NI000000091X ཨིན་ཀོ་ཌི/ཌི་ཀོ་ཌིང་དང་ ཧེཤ་བཀག་ཆ།
+   deravation དུས་མཐུན་བཟོ་ནི།
+2. **གསེར་གྱི་བརྟན་བཞུགས་ཚུ་** I18NI000000092X གི་འོག་ལུ་ ཀེ་ནོ་ནིག་བཟུང་ཡོདཔ།
+   bundle bytes དང་ Merkle གི་བདེན་ཁུངས།
+3. **མཉམ་བསྡོམས་བརྟག་དཔྱད་** བདེན་དཔྱད་པ་གཉིས་ བུཊི་འབད་ དཔེ་སྟོན་གྱི་ བོང་བུ་ཚུ་ བཙུགས་ཏེ་ དང་།
+   མཐུད་མཚམས་གཉིས་ཆ་ར་གིས་ བཱན་ཌལ་གྱི་ནང་དོན་དང་ འདྲི་དཔྱད་/བདེན་དཔང་ལུ་ ངོས་ལེན་འབདཝ་ཨིན་ཟེར་ བཤདཔ་ཨིན།
+   ལན་འདེབས་།
+༤. **འོད་རྟགས་བརྟག་དཔྱད་** ནང་ I18NI0000093X ནང་།
+   (ལམ་ལུགས་) དེ་གིས་ `/prove` ཟེར་སླབ་སྟེ་ Torii དང་མ་སླབ་པར་ བདེན་ཁུངས་བདེན་དཔྱད་འབད།
+5. **CLI དུ་བ་** ཡིག་གཟུགས་`scripts/da/check_commitments.sh` བཀོལ་སྤྱོད་བཞག་དགོས།
+   ལག་ཆས་བཟོ་ནི།
 
-## 8. Rollout Plan
+## 8. འགྲེམ་ཐོག་འཆར་གཞི།
 
-| Phase | Description | Exit Criteria |
-|-------|-------------|---------------|
-| P0 — Data model merge | Land `DaCommitmentRecord`, block header updates, and Norito codecs. | `cargo test -p iroha_data_model` green with new fixtures. |
-| P1 — Core/WSV wiring | Thread queue + block builder logic, persist indexes, and expose RPC handlers. | `cargo test -p iroha_core`, `integration_tests/tests/da/commitments.rs` pass with bundle proof assertions. |
-| P2 — Operator tooling | Ship CLI helpers, Grafana dashboard, and proof verification doc updates. | `iroha_cli app da prove-commitment` works against devnet; dashboard displays live data. |
-| P3 — Governance gate | Enable block validator requiring DA commitments on the lanes flagged in `iroha_config::nexus`. | Status entry + roadmap update mark DA-3 as 🈴. |
+| དུས་རིམ་ | འགྲེལ་བཤད་ | ཕྱིར་ཐོན་ཚད་གཞི་ |
+|------------------------------------------------------- |
+| P0 — གནད་སྡུད་དཔེ་ཚད་མཉམ་བསྡོམས་ | ས་ཆ་ `DaCommitmentRecord` དང་ བཀག་ཆ་མགོ་ཡིག་དུས་མཐུན་ཚུ་ དེ་ལས་ Norito གསང་གྲངས་ཚུ། | `cargo test -p iroha_data_model` སྒྲིག་ཆས་གསརཔ་དང་བཅས་ལྗང་ཁུ། |
+| P1 — ཀོར་/ཌབ་ལུ་ཨེསི་ཝི་གློག་ཐག་ | ཐེ་རེཌ་གྱལ་ + སྡེབ་ཚན་བཟོ་མིའི་ཚད་མ་དང་ རྟག་བརྟན་ཟུར་ཐོ་ཚུ་ དེ་ལས་ ཨར་པི་སི་འཛིན་སྐྱོང་པ་ཚུ་ གསལ་སྟོན་འབད། | `cargo test -p iroha_core`, `integration_tests/tests/da/commitments.rs` གིས་ བཱན་ཌལ་བདེན་དཔང་ཚུ་གི་ཐོག་ལས་ འགྱོཝ་ཨིན། |
+| P2 — བཀོལ་སྤྱོད་འབད་མི་ལག་ཆས་ཚུ། | གྲུ་གཟིངས་ CLI གྲོགས་རམ་པ་ I18NT0000001X ཌེཤ་བོརཌ་ དེ་ལས་ བདེན་ཁུངས་བདེན་དཔྱད་ཀྱི་ ཡིག་ཆ་དུས་མཐུན་ཚུ། | `iroha_cli app da prove-commitment` གིས་ devnet ལུ་རྒྱབ་འགལ་འབདཝ་ཨིན། dashbood གིས་ གནས་སྡུད་ཐད་གཏོང་འབདཝ་ཨིན། |
+| P3 — གཞུང་སྐྱོང་སྒོ་སྒྲིག། | I18NI0000010101X ནང་ལུ་ དར་ཁྱབ་བཏང་ཡོད་པའི་ ལམ་ཚུ་གུ་ཡོད་པའི་ DA ཁས་བླངས་ཚུ་དགོ་པའི་ སྡེབ་ཚན་བདེན་དཔྱད་པ་ ལྕོགས་ཅན་བཟོ། | གནས་སྟངས་འཛུལ་ཞུགས་ + ལམ་སྟོན་དུས་མཐུན་བཟོ་བའི་རྟགས་ DA-3 🈴. |
 
-## Open Questions
+## དྲི་བ་ཁ་ཕྱེ།
 
-1. **KZG vs Merkle defaults** — Should small blobs always skip KZG commitments to
-   reduce block size? Proposal: keep `kzg_commitment` optional and gate via
+1. **KZG vs Merkle freectis** — བླམ་ཆུང་ཆུང་ཚུ་གིས་ དུས་རྒྱུན་དུ་ KZG ཁས་བླངས་ཚུ་ ལུ་ མ་བཏང་དགོ།
+   སྡེབ་ཚན་གྱི་ཚད་འདི་མར་ཕབ་འབད? གྲོས་འཆར་: `kzg_commitment` གདམ་ཁའི་དང་ སྒོ་ར་བརྒྱུད་དེ་བཞག་དགོ།
    `iroha_config::da.enable_kzg`.
-2. **Sequence gaps** — Do we allow out-of-order lanes? Current plan rejects gaps
-   unless governance toggles `allow_sequence_skips` for emergency replay.
-3. **Light-client cache** — SDK team requested a lightweight SQLite cache for
-   proofs; pending follow-up under DA-8.
+2. **Sequence fives** — ང་བཅས་ཀྱིས་ གོ་རིམ་མེད་པའི་ལམ་ཚུ་ འབད་བཅུག་དོ་ག? ད་ལྟའི་འཆར་གཞི་གིས་ བར་སྟོང་ཚུ་ ཆ་མེད་བཏངམ་ཨིན།
+   གློ་བུར་གྱི་བསྐྱར་རྩེད་ཀྱི་དབང་དུ་བཏང་ན་ `allow_sequence_skips` ལུ་ སོར་བསྒྱུར་མ་འབད་བ་ཅིན།
+3. **Light-client འདྲ་མཛོད་** — SDK སྡེ་ཚན་གྱིས་ ལྗིད་ཚད་མར་ཕབ་ཀྱི་ SQLite འདྲ་མཛོད་ཅིག་ 2 for for 20
+   བདེན་དཔང་། DA-8 གི་འོག་ལུ་ རྗེས་འཇུག་འབད་ནི།
 
-Answering these in implementation PRs moves DA-3 from 🈸 (this document) to 🈺
-once code work begins.
+ལག་ལེན་འཐབ་ཐངས་ཀྱི་ PRs ནང་ལན་འདེབས་འབད་མི་འདི་གིས་ DA-3 འདི་ 🈸 (ཡིག་ཆ་འདི་) ལས་ 🈺 ལུ་སྤོ་བཤུད་འབདཝ་ཨིན།
+གསང་ཡིག་ལས་ཀ་འགོ་བཙུགས་ཚརཝ་ཅིག་།

@@ -4,40 +4,42 @@ direction: rtl
 source: docs/portal/docs/nexus/confidential-gas-calibration.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: Libro mayor de calibracion de gas confidencial
-description: Mediciones de calidad de release que respaldan el calendario de gas confidencial.
-slug: /nexus/confidential-gas-calibration
+العنوان: Libro Mayor de calibracion de Gas Confidential
+الوصف: أدوية ذات جودة عالية تستجيب لتقويم الغاز السري.
+سبيكة: /nexus/Confidential-gas-calibration
 ---
 
-# Lineas base de calibracion de gas confidencial
+# خطوط قاعدة معايرة الغاز السرية
 
-Este registro rastrea los resultados validados de los benchmarks de calibracion de gas confidencial. Cada fila documenta un conjunto de mediciones de calidad de release capturado con el procedimiento descrito en [Confidential Assets & ZK Transfers](./confidential-assets#calibration-baselines--acceptance-gates).
+يقوم هذا بتسجيل النتائج المعتمدة لمعايير معايرة الغاز السرية. كل ملف يوثق مجموعة من الأدوية عالية الجودة التي تم التقاطها باستخدام الإجراء الموصوف في [Confidential Assets & ZK Transfers](./confidential-assets#calibration-baselines--acceptance-gates).
 
-| Fecha (UTC) | Commit | Perfil | `ns/op` | `gas/op` | `ns/gas` | Notas |
+| فيتشا (UTC) | الالتزام | الملف الشخصي | `ns/op` | `gas/op` | `ns/gas` | نوتاس |
 | --- | --- | --- | --- | --- | --- | --- |
-| 2025-10-18 | 3c70a7d3 | baseline-neon | 2.93e5 | 1.57e2 | 1.87e3 | Darwin 25.0.0 arm64e (hostinfo); `cargo bench -p iroha_core --bench isi_gas_calibration -- --sample-size=200 --warm-up-time=5 --save-baseline neon-20251018`; `cargo test -p iroha_core bench_repro -- --ignored`; `cargo bench -p ivm --bench gas_calibration -- --sample-size=200 --warm-up-time=5`; `rustc 1.88.0 (6b00bc3)` |
-| 2026-04-12 | pending | baseline-simd-neutral | - | - | - | Ejecucion neutral x86_64 programada en el host CI `bench-x86-neon0`; ver ticket GAS-214. Los resultados se agregaran cuando termine la ventana de bench (la checklist pre-merge apunta al release 2.1). |
-| 2026-04-13 | pending | baseline-avx2 | - | - | - | Calibracion AVX2 posterior usando el mismo commit/build que la corrida neutral; requiere el host `bench-x86-avx2a`. GAS-214 cubre ambas corridas con comparacion de delta contra `baseline-neon`. |
+| 2025-10-18 | 3c70a7d3 | خط الأساس النيون | 2.93e5 | 1.57e2 | 1.87e3 | داروين 25.0.0 Arm64e (hostinfo)؛ `cargo bench -p iroha_core --bench isi_gas_calibration -- --sample-size=200 --warm-up-time=5 --save-baseline neon-20251018`; `cargo test -p iroha_core bench_repro -- --ignored`; `cargo bench -p ivm --bench gas_calibration -- --sample-size=200 --warm-up-time=5`; `rustc 1.88.0 (6b00bc3)` |
+| 2026-04-12 | في انتظار | خط الأساس-سيمد-محايد | - | - | - | إخراج محايد x86_64 مبرمج على المضيف CI `bench-x86-neon0`; نسخة التذكرة GAS-214. يتم تجميع النتائج عندما تنتهي نافذة المقعد (قائمة التحقق المسبقة للدمج تصل إلى الإصدار 2.1). |
+| 2026-04-13 | في انتظار | خط الأساس-avx2 | - | - | - | تستخدم معايرة AVX2 نفس الالتزام/البناء بحيث لا يكون المسار محايدًا؛ يتطلب المضيف `bench-x86-avx2a`. GAS-214 نطاقات مكعبة مقارنة بالدلتا مع `baseline-neon`. |
 
-`ns/op` agrega la mediana de tiempo de pared por instruccion medida por Criterion; `gas/op` es la media aritmetica de los costos de schedule correspondientes de `iroha_core::gas::meter_instruction`; `ns/gas` divide los nanosegundos sumados entre el gas sumado en el conjunto de nueve instrucciones.
+`ns/op` يجمع متوسط ​​وقت الجدار من خلال التعليمات المتوسطة من خلال المعيار؛ `gas/op` هو وسيلة الإعلام لتكاليف الجدولة المقابلة لـ `iroha_core::gas::meter_instruction`؛ `ns/gas` قم بتقسيم الأجزاء النانوية المجمعة بين الغاز المجمع إلى مجموعة من التعليمات الجديدة.
 
-*Nota.* El host arm64 actual no emite resumenes `raw.csv` de Criterion por defecto; vuelve a ejecutar con `CRITERION_OUTPUT_TO=csv` o una correccion upstream antes de etiquetar un release para que los artefactos requeridos por la checklist de aceptacion queden adjuntos. Si `target/criterion/` sigue faltando despues de `--save-baseline`, recolecta la corrida en un host Linux o serializa la salida de consola en el bundle del release como stopgap temporal. Como referencia, el log de consola arm64 de la ultima corrida vive en `docs/source/confidential_assets_calibration_neon_20251018.log`.
+*ملحوظة.* El host Arm64 فعليًا لا يصدر استئنافات `raw.csv` من معيار الخلل؛ قم بتنفيذ `CRITERION_OUTPUT_TO=csv` أو إجراء تصحيح أولي قبل إصدار إصدار حتى يتم طلب العناصر الإضافية من خلال قائمة التحقق من القبول. إذا كان `target/criterion/` يفشل بعد `--save-baseline`، فاسترجع المسار في مضيف Linux أو قم بتسلسل خروج وحدة التحكم في حزمة الإصدار كإيقاف مؤقت. كمرجع، سجل وحدة التحكم Arm64 لآخر مسار حي في `docs/source/confidential_assets_calibration_neon_20251018.log`.
 
-Medianas por instruccion de la misma corrida (`cargo bench -p iroha_core --bench isi_gas_calibration`):
+الوسائط لتعليم نفس المسار (`cargo bench -p iroha_core --bench isi_gas_calibration`):
 
-| Instruccion | mediana `ns/op` | schedule `gas` | `ns/gas` |
+| تعليمات | ميديانا `ns/op` | الجدول الزمني `gas` | `ns/gas` |
 | --- | --- | --- | --- |
-| RegisterDomain | 3.46e5 | 200 | 1.73e3 |
-| RegisterAccount | 3.15e5 | 200 | 1.58e3 |
-| RegisterAssetDef | 3.41e5 | 200 | 1.71e3 |
+| تسجيل النطاق | 3.46e5 | 200 | 1.73e3 |
+| تسجيل الحساب | 3.15ه5 | 200 | 1.58e3 |
+| تسجيل AssetDef | 3.41e5 | 200 | 1.71e3 |
 | SetAccountKV_small | 3.28e5 | 67 | 4.90e3 |
-| GrantAccountRole | 3.33e5 | 96 | 3.47e3 |
-| RevokeAccountRole | 3.12e5 | 96 | 3.25e3 |
-| ExecuteTrigger_empty_args | 1.42e5 | 224 | 6.33e2 |
-| MintAsset | 1.56e5 | 150 | 1.04e3 |
-| TransferAsset | 3.68e5 | 180 | 2.04e3 |
+| دور حساب المنحة | 3.33ه5 | 96 | 3.47e3 |
+| إبطال الحساب | 3.12e5 | 96 | 3.25ه3 |
+| تنفيذTrigger_empty_args | 1.42e5 | 224 | 6.33ه2 |
+| منتأسيت | 1.56e5 | 150 | 1.04e3 |
+| نقل الأصول | 3.68e5 | 180 | 2.04e3 |
 
-La columna de schedule esta impuesta por `gas::tests::calibration_bench_gas_snapshot` (total 1,413 gas en el conjunto de nueve instrucciones) y fallara si parches futuros cambian el metering sin actualizar los fixtures de calibracion.
+عمود الجدول الزمني هذا يفرض `gas::tests::calibration_bench_gas_snapshot` (إجمالي 1,413 غازًا ومجموعة التعليمات الجديدة) ويؤدي إلى حدوث تغييرات مستقبلية في القياس دون تحديث تركيبات المعايرة.

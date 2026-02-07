@@ -11,33 +11,34 @@ id: orchestrator-config
 title: SoraFS Orchestrator Configuration
 sidebar_label: Orchestrator Configuration
 description: Configure the multi-source fetch orchestrator, interpret failures, and debug telemetry output.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
+:::注意規範來源
 :::
 
-# Multi-Source Fetch Orchestrator Guide
+# 多源獲取協調器指南
 
-The SoraFS multi-source fetch orchestrator drives deterministic, parallel
-downloads from the provider set published in governance-backed adverts. This
-guide explains how to configure the orchestrator, what failure signals to expect
-during rollouts, and which telemetry streams expose health indicators.
+SoraFS 多源獲取協調器驅動確定性並行
+從治理支持的廣告中發布的提供商集下載。這個
+指南解釋瞭如何配置協調器以及預期的故障信號
+在推出期間，以及哪些遙測流公開健康指標。
 
-## 1. Configuration Overview
+## 1. 配置概述
 
-The orchestrator merges three sources of configuration:
+編排器合併了三個配置源：
 
-| Source | Purpose | Notes |
-|--------|---------|-------|
-| `OrchestratorConfig.scoreboard` | Normalises provider weights, validates telemetry freshness, and persists the JSON scoreboard used for audits. | Backed by `crates/sorafs_car::scoreboard::ScoreboardConfig`. |
-| `OrchestratorConfig.fetch` | Applies runtime limits (retry budgets, concurrency bounds, verification toggles). | Maps to `FetchOptions` in `crates/sorafs_car::multi_fetch`. |
-| CLI / SDK parameters | Cap the number of peers, attach telemetry regions, and surface deny/boost policies. | `sorafs_cli fetch` exposes these flags directly; SDKs thread them via `OrchestratorConfig`. |
+|來源 |目的|筆記|
+|--------|---------|--------|
+| `OrchestratorConfig.scoreboard` |規範化提供者權重，驗證遙測新鮮度，並保留用於審計的 JSON 記分板。 |由 `crates/sorafs_car::scoreboard::ScoreboardConfig` 支持。 |
+| `OrchestratorConfig.fetch` |應用運行時限制（重試預算、並發限制、驗證切換）。 |映射到 `crates/sorafs_car::multi_fetch` 中的 `FetchOptions`。 |
+| CLI/SDK 參數 |限制對等點的數量、附加遙測區域以及表面拒絕/提升策略。 | `sorafs_cli fetch` 直接公開這些標誌； SDK 通過 `OrchestratorConfig` 將它們線程化。 |
 
-The JSON helpers in `crates/sorafs_orchestrator::bindings` serialise the entire
-configuration into Norito JSON, making it portable across SDK bindings and
-automation.
+`crates/sorafs_orchestrator::bindings` 中的 JSON 幫助程序序列化整個
+配置到 Norito JSON，使其可跨 SDK 綁定和
+自動化。
 
-### 1.1 Sample JSON Configuration
+### 1.1 JSON 配置示例
 
 ```json
 {
@@ -60,17 +61,17 @@ automation.
 }
 ```
 
-Persist the file through the usual `iroha_config` layering (`defaults/`, user,
-actual) so deterministic deployments inherit the same limits across nodes.
-For a direct-only fallback profile that aligns with the SNNet-5a rollout,
-consult `docs/examples/sorafs_direct_mode_policy.json` and the companion
-guidance in `docs/source/sorafs/direct_mode_pack.md`.
+通過通常的 `iroha_config` 分層保留文件（`defaults/`，用戶，
+實際），因此確定性部署在節點之間繼承相同的限制。
+對於與 SNNet-5a 部署一致的僅直接後備配置文件，
+請參閱 `docs/examples/sorafs_direct_mode_policy.json` 和同伴
+`docs/source/sorafs/direct_mode_pack.md` 中的指導。
 
-### 1.2 Compliance Overrides
+### 1.2 合規性覆蓋
 
-SNNet-9 threads governance-driven compliance into the orchestrator. A new
-`compliance` object in the Norito JSON configuration captures the carve-outs
-that force the fetch pipeline into direct-only mode:
+SNNet-9 將治理驅動的合規性納入編排器中。一個新的
+Norito JSON 配置中的 `compliance` 對象捕獲剝離
+強制獲取管道進入僅直接模式：
 
 ```json
 "compliance": {
@@ -83,123 +84,121 @@ that force the fetch pipeline into direct-only mode:
 }
 ```
 
-- `operator_jurisdictions` declares the ISO‑3166 alpha‑2 codes where this
-  orchestrator instance operates. Codes are normalised to uppercase during
-  parsing.
-- `jurisdiction_opt_outs` mirrors the governance register. When any operator
-  jurisdiction appears on the list, the orchestrator enforces
-  `transport_policy=direct-only` and emits the policy fallback reason
-  `compliance_jurisdiction_opt_out`.
-- `blinded_cid_opt_outs` lists manifest digests (blinded CIDs, encoded as
-  uppercase hex). Matching payloads also force direct-only scheduling and
-  surface the `compliance_blinded_cid_opt_out` fallback in telemetry.
-- `audit_contacts` records the URIs governance expects operators to publish in
-  their GAR playbooks.
-- `attestations` captures the signed compliance packets backing the policy.
-  Each entry defines an optional `jurisdiction` (ISO-3166 alpha-2 code), a
-  `document_uri`, the canonical 64-character `digest_hex`, the issuance
-  timestamp `issued_at_ms`, and an optional `expires_at_ms`. These artefacts
-  flow into the orchestrator’s audit checklist so governance tooling can link
-  overrides to the signed paperwork.
+- `operator_jurisdictions` 聲明 ISO-3166 alpha-2 代碼，其中
+  Orchestrator 實例運行。代碼在期間標準化為大寫
+  解析。
+- `jurisdiction_opt_outs` 鏡像治理寄存器。當任何操作員
+  管轄權出現在列表中，協調器執行
+  `transport_policy=direct-only` 並發出策略回退原因
+  `compliance_jurisdiction_opt_out`。
+- `blinded_cid_opt_outs` 列出清單摘要（盲化 CID，編碼為
+  大寫十六進制）。匹配有效負載還強制僅直接調度和
+  表面遙測中的 `compliance_blinded_cid_opt_out` 後備。
+- `audit_contacts` 記錄治理期望運營商發布的 URI
+  他們的 GAR 劇本。
+- `attestations` 捕獲支持策略的簽名合規性數據包。
+  每個條目定義一個可選的 `jurisdiction`（ISO-3166 alpha-2 代碼）、
+  `document_uri`，規範的 64 字符 `digest_hex`，發行
+  時間戳 `issued_at_ms` 和可選的 `expires_at_ms`。這些文物
+  流入協調器的審計清單，以便治理工具可以鏈接
+  覆蓋已簽署的文件。
 
-Provide the compliance block via the usual configuration layering so operators
-receive deterministic overrides. The orchestrator applies compliance _after_
-write-mode hints: even if an SDK requests `upload-pq-only`, jurisdictional or
-manifest opt-outs still fall back to direct-only transport and fail fast when no
-compliant providers exist.
+通過通常的配置分層提供合規性塊，以便操作員
+接收確定性覆蓋。編排器應用合規性_after_
+寫入模式提示：即使 SDK 請求 `upload-pq-only`，管轄權或
+明顯的選擇退出仍然會退回到僅直接傳輸，並且在沒有時會快速失敗
+存在合規的提供商。
 
-Canonical opt-out catalogues live under
-`governance/compliance/soranet_opt_outs.json`; the Governance Council publishes
-updates via tagged releases. A complete example configuration (including
-attestations) is available in `docs/examples/sorafs_compliance_policy.json`, and
-the operational process is captured in the
-[GAR compliance playbook](../../../source/soranet/gar_compliance_playbook.md).
+規範選擇退出目錄位於
+`governance/compliance/soranet_opt_outs.json`；治理委員會發布
+通過標記版本進行更新。完整的示例配置（包括
+證明）可在 `docs/examples/sorafs_compliance_policy.json` 中找到，並且
+操作過程被捕獲在
+[GAR 合規手冊](../../../source/soranet/gar_compliance_playbook.md)。
 
-### 1.3 CLI & SDK Knobs
+### 1.3 CLI 和 SDK 旋鈕
 
-| Flag / Field | Effect |
+|旗幟/場|效果|
 |--------------|--------|
-| `--max-peers` / `OrchestratorConfig::with_max_providers` | Limits how many providers survive the scoreboard filter. Set to `None` to use every eligible provider. |
-| `--retry-budget` / `FetchOptions::per_chunk_retry_limit` | Caps retries per chunk. Exceeding the limit raises `MultiSourceError::ExhaustedRetries`. |
-| `--telemetry-json` | Injects latency/failure snapshots into the scoreboard builder. Stale telemetry beyond `telemetry_grace_secs` marks providers ineligible. |
-| `--scoreboard-out` | Persists the computed scoreboard (eligible + ineligible providers) for post-run inspection. |
-| `--scoreboard-now` | Overrides the scoreboard timestamp (Unix seconds) so fixture captures remain deterministic. |
-| `--deny-provider` / score policy hook | Deterministically exclude providers from scheduling without deleting adverts. Useful for fast-response blacklisting. |
-| `--boost-provider=name:delta` | Adjust the weighted round-robin credits for a provider while leaving governance weights untouched. |
-| `--telemetry-region` / `OrchestratorConfig::with_telemetry_region` | Labels emitted metrics and structured logs so dashboards can pivot by geography or rollout wave. |
-| `--transport-policy` / `OrchestratorConfig::with_transport_policy` | Defaults to `soranet-first` now that the multi-source orchestrator is baseline. Use `direct-only` when staging a downgrade or following a compliance directive, and reserve `soranet-strict` for PQ-only pilots; compliance overrides still act as the hard ceiling. |
+| `--max-peers` / `OrchestratorConfig::with_max_providers` |限制有多少提供商能夠通過記分板過濾器。設置為 `None` 以使用每個符合條件的提供商。 |
+| `--retry-budget` / `FetchOptions::per_chunk_retry_limit` |每個塊的重試次數上限。超過限制會引發 `MultiSourceError::ExhaustedRetries`。 |
+| `--telemetry-json` |將延遲/故障快照注入記分板生成器。超過 `telemetry_grace_secs` 的過時遙測數據將導致提供商不符合資格。 |
+| `--scoreboard-out` |保留計算的記分板（合格 + 不合格的提供商）以進行運行後檢查。 |
+| `--scoreboard-now` |覆蓋記分牌時間戳（Unix 秒），以便夾具捕獲保持確定性。 |
+| `--deny-provider` / 分數政策掛鉤 |確定地將提供商排除在日程安排之外，而不刪除廣告。對於快速響應黑名單很有用。 |
+| `--boost-provider=name:delta` |調整提供商的加權循環積分，同時保持治理權重不變。 |
+| `--telemetry-region` / `OrchestratorConfig::with_telemetry_region` |標記發出的指標和結構化日誌，以便儀表板可以按地理位置或推出波進行旋轉。 |
+| `--transport-policy` / `OrchestratorConfig::with_transport_policy` |現在，多源協調器已成為基線，默認為 `soranet-first`。在進行降級或遵循合規指令時使用 `direct-only`，​​並為僅 PQ 試點保留 `soranet-strict`；合規性覆蓋仍然是硬性上限。 |
 
-SoraNet-first is now the shipping default, and rollbacks must cite the relevant SNNet blocker. After SNNet-4/5/5a/5b/6a/7/8/12/13 graduate, governance will ratchet the required posture forward (toward `soranet-strict`); until then, only incident-driven overrides should prioritise `direct-only`, and they must be recorded in the rollout log.
+SoraNet-first 現在是默認的發貨方式，回滾必須引用相關的 SNNet 攔截器。 SNNet-4/5/5a/5b/6a/7/8/12/13 畢業後，治理將逐步推進所需的姿態（朝向 `soranet-strict`）；在此之前，只有事件驅動的覆蓋才應優先考慮 `direct-only`，並且必須將它們記錄在推出日誌中。
 
-All flags above accept `--`-style syntax in both `sorafs_cli fetch` and the
-developer-facing `sorafs_fetch` binary. SDKs expose the same options via typed
-builders.
+上面的所有標誌都接受 `--` 風格的語法 `sorafs_cli fetch` 和
+面向開發人員的 `sorafs_fetch` 二進製文件。 SDK 通過類型公開相同的選項
+建設者。
 
-### 1.4 Guard Cache Management
+### 1.4 Guard 緩存管理
 
-The CLI now wires in the SoraNet guard selector so operators can pin entry
-relays deterministically ahead of the full SNNet-5 transport rollout. Three
-new flags control the workflow:
+CLI 現在連接到 SoraNet 防護選擇器，以便操作員可以鎖定條目
+在 SNNet-5 傳輸全面推出之前確定性地進行中繼。三
+新標誌控制工作流程：
 
-| Flag | Purpose |
+|旗幟|目的|
 |------|---------|
-| `--guard-directory <PATH>` | Points to a JSON file describing the latest relay consensus (subset shown below). Passing the directory refreshes the guard cache before executing the fetch. |
-| `--guard-cache <PATH>` | Persists the Norito-encoded `GuardSet`. Subsequent runs reuse the cache even when no new directory is supplied. |
-| `--guard-target <COUNT>` / `--guard-retention-days <DAYS>` | Optional overrides for the number of entry guards to pin (default 3) and the retention window (default 30 days). |
-| `--guard-cache-key <HEX>` | Optional 32-byte key used to tag guard caches with a Blake3 MAC so the file can be verified before reuse. |
+| `--guard-directory <PATH>` |指向描述最新中繼共識的 JSON 文件（如下所示的子集）。傳遞目錄會在執行提取之前刷新防護緩存。 |
+| `--guard-cache <PATH>` |保留 Norito 編碼的 `GuardSet`。即使沒有提供新目錄，後續運行也會重用緩存。 |
+| `--guard-target <COUNT>` / `--guard-retention-days <DAYS>` |可選覆蓋要固定的門禁數量（默認 3）和保留窗口（默認 30 天）。 |
+| `--guard-cache-key <HEX>` |可選的 32 字節密鑰用於使用 Blake3 MAC 標記防護緩存，以便可以在重複使用之前驗證文件。 |
 
-Guard directory payloads use a compact schema:
+保護目錄有效負載使用緊湊的架構：
 
-The `--guard-directory` flag now expects a Norito-encoded
-`GuardDirectorySnapshotV2` payload. The binary snapshot contains:
+`--guard-directory` 標誌現在需要 Norito 編碼
+`GuardDirectorySnapshotV2` 有效負載。二進制快照包含：
 
-- `version` — schema version (currently `2`).
-- `directory_hash`, `published_at_unix`, `valid_after_unix`, `valid_until_unix` — consensus
-  metadata that must match every embedded certificate.
-- `validation_phase` — certificate policy gate (`1` = allow single Ed25519 signature,
-  `2` = prefer dual signatures, `3` = require dual signatures).
-- `issuers` — governance issuers with `fingerprint`, `ed25519_public`, and `mldsa65_public`.
-  Fingerprints are computed as
-  `BLAKE3("soranet.src.v2.issuer" || ed25519 || u32(len(ml-dsa)) || ml-dsa)`.
-- `relays` — a list of SRCv2 bundles (`RelayCertificateBundleV2::to_cbor()` output). Each bundle
-  carries the relay descriptor, capability flags, ML-KEM policy, and dual Ed25519/ML-DSA-65
-  signatures.
+- `version` — 架構版本（當前為 `2`）。
+- `directory_hash`、`published_at_unix`、`valid_after_unix`、`valid_until_unix` — 共識
+  必須與每個嵌入證書匹配的元數據。
+- `validation_phase` — 證書策略門（`1` = 允許單個 Ed25519 簽名，
+  `2` = 更喜歡雙重簽名，`3` = 需要雙重簽名）。
+- `issuers` — `fingerprint`、`ed25519_public` 和 `mldsa65_public` 的治理髮行人。
+  指紋計算如下
+  `BLAKE3("soranet.src.v2.issuer" || ed25519 || u32(len(ml-dsa)) || ml-dsa)`。
+- `relays` — SRCv2 捆綁包列表（`RelayCertificateBundleV2::to_cbor()` 輸出）。每束
+  攜帶中繼描述符、功能標誌、ML-KEM 策略和雙 Ed25519/ML-DSA-65
+  簽名。
 
-The CLI verifies every bundle against the declared issuer keys before merging the directory with
+CLI 在將目錄與合併之前根據聲明的發行者密鑰驗證每個包
 
-Invoke the CLI with `--guard-directory` to merge the latest consensus with the
-existing cache. The selector preserves pinned guards that are still within the
-retention window and eligible in the directory; new relays replace expired
-entries. After a successful fetch the updated cache is written back to the path
-supplied via `--guard-cache`, keeping subsequent sessions deterministic. SDKs
-can reproduce the same behaviour by calling
-`GuardSelector::select(&RelayDirectory, existing_guard_set, now_unix_secs)` and
-threading the resulting `GuardSet` through `SorafsGatewayFetchOptions`.
+使用 `--guard-directory` 調用 CLI，將最新共識與
+現有的緩存。選擇器保留仍在範圍內的固定防護裝置
+保留窗口和目錄中的資格；更換過期的新繼電器
+條目。成功獲取後，更新的緩存將寫迴路徑
+通過 `--guard-cache` 提供，保持後續會話的確定性。軟件開發工具包
+可以通過調用重現相同的行為
+`GuardSelector::select(&RelayDirectory, existing_guard_set, now_unix_secs)` 和
+將生成的 `GuardSet` 線程化到 `SorafsGatewayFetchOptions`。
 
-`ml_kem_public_hex` enables the selector to prioritise PQ-capable guards during
-the SNNet-5 rollout. Stage toggles (`anon-guard-pq`, `anon-majority-pq`,
-`anon-strict-pq`) now demote classical relays automatically: when a PQ guard is
-available the selector drops excess classical pins so subsequent sessions favour
-hybrid handshakes. CLI/SDK summaries surface the resulting mix via
-`anonymity_status`/`anonymity_reason`, `anonymity_effective_policy`,
-`anonymity_pq_selected`,
-`anonymity_classical_selected`, `anonymity_pq_ratio`,
-`anonymity_classical_ratio`, and the companion candidate/deficit/supply delta
-fields, making brownouts and classical fallbacks explicit.
+`ml_kem_public_hex` 使選擇器能夠在
+SNNet-5 的推出。階段切換（`anon-guard-pq`、`anon-majority-pq`、
+`anon-strict-pq`) 現在會自動降級經典繼電器：當 PQ 防護處於
+可用選擇器刪除多餘的經典引腳，以便後續會話有利於
+混合握手。 CLI/SDK 摘要通過以下方式顯示結果組合
+`anonymity_status`/`anonymity_reason`、`anonymity_effective_policy`、
+`anonymity_pq_selected`，
+`anonymity_classical_selected`，`anonymity_pq_ratio`，
+`anonymity_classical_ratio`，以及伴隨的候選/赤字/供應增量
+場，使限電和經典後備變得明確。
 
-Guard directories may now embed a complete SRCv2 bundle via
-`certificate_base64`. The orchestrator decodes every bundle, re-validates the
-Ed25519/ML-DSA signatures, and retains the parsed certificate alongside the
-guard cache. When a certificate is present it becomes the canonical source for
-PQ keys, handshake suite preferences, and weighting; expired certificates are
-propagate through circuit lifecycle management and are surfaced via
-`telemetry::sorafs.guard` and `telemetry::sorafs.circuit`, which record the
-validity window, handshake suites, and whether dual signatures were observed for
-each guard.
+Guard 目錄現在可以通過以下方式嵌入完整的 SRCv2 包
+`certificate_base64`。編排器解碼每個包，重新驗證
+Ed25519/ML-DSA 簽名，並保留解析的證書以及
+保護緩存。當證書存在時，它就成為規範來源
+PQ 密鑰、握手套件偏好和權重；過期的證書是
+通過電路生命週期管理傳播並通過
+`telemetry::sorafs.guard` 和 `telemetry::sorafs.circuit`，記錄了
+有效性窗口、握手套件以及是否觀察到雙重簽名
+每個警衛。
 
-Use the CLI helpers to keep snapshots in sync with publishers:
-
-```bash
+使用 CLI 幫助程序使快照與發布者保持同步：```bash
 sorafs_cli guard-directory fetch \
   --url https://directory.soranet.dev/mainnet_snapshot.norito \
   --output ./state/guard_directory.norito \
@@ -210,23 +209,23 @@ sorafs_cli guard-directory verify \
   --expected-directory-hash <directory-hash-hex>
 ```
 
-`fetch` downloads and verifies the SRCv2 snapshot before writing it to disk,
-while `verify` replays the validation pipeline for artefacts sourced from other
-teams, emitting a JSON summary that mirrors the CLI/SDK guard selector output.
+`fetch` 在將 SRCv2 快照寫入磁盤之前下載並驗證它，
+而 `verify` 重播來自其他來源的工件的驗證管道
+團隊，發出反映 CLI/SDK 防護選擇器輸出的 JSON 摘要。
 
-### 1.5 Circuit Lifecycle Manager
+### 1.5 電路生命週期管理器
 
-When both a relay directory and guard cache are provided, the orchestrator
-activates the circuit lifecycle manager to pre-build and renew SoraNet circuits
-before each fetch. Configuration lives in `OrchestratorConfig`
-(`crates/sorafs_orchestrator/src/lib.rs:305`) via two new fields:
+當同時提供中繼目錄和保護緩存時，編排器
+激活電路生命週期管理器以預構建和更新 SoraNet 電路
+每次獲取之前。配置位於 `OrchestratorConfig` 中
+(`crates/sorafs_orchestrator/src/lib.rs:305`) 通過兩個新字段：
 
-- `relay_directory`: carries the SNNet-3 directory snapshot so middle/exit hops
-  can be selected deterministically.
-- `circuit_manager`: optional configuration (enabled by default) controlling the
-  circuit TTL.
+- `relay_directory`：攜帶 SNNet-3 目錄快照，因此中間/出口躍點
+  可以確定性地選擇。
+- `circuit_manager`：可選配置（默認啟用）控制
+  電路TTL。
 
-Norito JSON now accepts a `circuit_manager` block:
+Norito JSON 現在接受 `circuit_manager` 塊：
 
 ```json
 "circuit_manager": {
@@ -235,30 +234,30 @@ Norito JSON now accepts a `circuit_manager` block:
 }
 ```
 
-SDKs forward directory data through
+SDK 通過以下方式轉發目錄數據
 `SorafsGatewayFetchOptions::relay_directory`
-(`crates/iroha/src/client.rs:320`), and the CLI wires it automatically whenever
-`--guard-directory` is supplied (`crates/iroha_cli/src/commands/sorafs.rs:365`).
+(`crates/iroha/src/client.rs:320`)，並且 CLI 會在任何時候自動連接它
+提供 `--guard-directory` (`crates/iroha_cli/src/commands/sorafs.rs:365`)。
 
-The manager renews circuits whenever guard metadata changes (endpoint, PQ key,
-or pinned timestamp) or the TTL elapses. The helper `refresh_circuits`
-invoked ahead of each fetch (`crates/sorafs_orchestrator/src/lib.rs:1346`)
-emits `CircuitEvent` logs so operators can trace lifecycle decisions. The soak
-test `circuit_manager_latency_soak_remains_stable_across_rotations`
-(`crates/sorafs_orchestrator/src/soranet.rs:1479`) demonstrates stable latency
-across three guard rotations; see the accompanying report at
-`docs/source/soranet/reports/circuit_stability.md:1`.
+每當保護元數據發生變化（端點、PQ 密鑰、
+或固定時間戳）或 TTL 已過。助手 `refresh_circuits`
+在每次獲取之前調用 (`crates/sorafs_orchestrator/src/lib.rs:1346`)
+發出 `CircuitEvent` 日誌，以便操作員可以跟踪生命週期決策。浸泡
+測試 `circuit_manager_latency_soak_remains_stable_across_rotations`
+(`crates/sorafs_orchestrator/src/soranet.rs:1479`) 表現出穩定的延遲
+跨越三個後衛輪換；請參閱隨附的報告
+`docs/source/soranet/reports/circuit_stability.md:1`。
 
-### 1.6 Local QUIC Proxy
+### 1.6 本地 QUIC 代理
 
-The orchestrator can optionally spawn a local QUIC proxy so browser extensions
-and SDK adapters do not have to manage certificates or guard cache keys. The
-proxy binds to a loopback address, terminates QUIC connections, and returns a
-Norito manifest describing the certificate and optional guard cache key to the
-client. Transport events emitted by the proxy are counted via
-`sorafs_orchestrator_transport_events_total`.
+編排器可以選擇生成本地 QUIC 代理，以便瀏覽器擴展
+SDK 適配器不必管理證書或保護緩存密鑰。的
+代理綁定到環回地址，終止 QUIC 連接，並返回
+Norito 清單描述了證書和可選的防護緩存密鑰
+客戶。代理髮出的傳輸事件通過以下方式進行計數
+`sorafs_orchestrator_transport_events_total`。
 
-Enable the proxy through the new `local_proxy` block in the orchestrator JSON:
+通過 Orchestrator JSON 中的新 `local_proxy` 塊啟用代理：
 
 ```json
 "local_proxy": {
@@ -282,321 +281,317 @@ Enable the proxy through the new `local_proxy` block in the orchestrator JSON:
 }
 ```
 
-- `bind_addr` controls where the proxy listens (use `0` port to request an
-  ephemeral port).
-- `telemetry_label` propagates into metrics so dashboards can distinguish
-  proxies from fetch sessions.
-- `guard_cache_key_hex` (optional) lets the proxy surface the same keyed guard
-  cache that the CLI/SDKs rely on, keeping browser extensions in sync.
-- `emit_browser_manifest` toggles whether the handshake returns a manifest that
-  extensions can store and validate.
-- `proxy_mode` selects whether the proxy bridges traffic locally (`bridge`) or
-  only emits metadata so SDKs can open SoraNet circuits themselves
-  (`metadata-only`). The proxy defaults to `bridge`; set `metadata-only` when a
-  workstation should expose the manifest without relaying streams.
-- `prewarm_circuits`, `max_streams_per_circuit`, and `circuit_ttl_hint_secs`
-  surface additional hints to the browser so it can budget parallel streams and
-  understand how aggressively the proxy reuses circuits.
-- `car_bridge` (optional) points at a local CAR archive cache. The `extension`
-  field controls the suffix appended when the stream target omits `*.car`; set
-  `allow_zst = true` to serve pre-compressed `*.car.zst` payloads directly.
-- `kaigi_bridge` (optional) exposes spooled Kaigi routes to the proxy. The
-  `room_policy` field advertises whether the bridge operates in `public` or
-  `authenticated` mode so browser clients can preselect the correct GAR labels.
-- `sorafs_cli fetch` exposes `--local-proxy-mode=bridge|metadata-only` and
-  `--local-proxy-norito-spool=PATH` overrides, letting operators toggle the
-  runtime mode or point at alternate spools without modifying the JSON policy.
-- `downgrade_remediation` (optional) configures the automatic downgrade hook.
-  When enabled the orchestrator watches relay telemetry for downgrade bursts
-  and, after the configured `threshold` within `window_secs`, forces the local
-  proxy into the `target_mode` (default `metadata-only`). Once downgrades stop
-  the proxy reverts to `resume_mode` after `cooldown_secs`. Use the `modes`
-  array to scope the trigger to specific relay roles (defaults to entry relays).
+- `bind_addr` 控制代理監聽的位置（使用 `0` 端口請求
+  臨時端口）。
+- `telemetry_label` 傳播到指標中，以便儀表板可以區分
+  來自獲取會話的代理。
+- `guard_cache_key_hex`（可選）讓代理表面具有相同的鍵控防護
+  CLI/SDK 依賴的緩存，保持瀏覽器擴展同步。
+- `emit_browser_manifest` 切換握手是否返回清單
+  擴展可以存儲和驗證。
+- `proxy_mode` 選擇代理是在本地橋接流量 (`bridge`) 還是
+  僅發出元數據，因此 SDK 可以自行打開 SoraNet 電路
+  （`metadata-only`）。代理默認為`bridge`；設置 `metadata-only` 時
+  工作站應公開清單而不中繼流。
+- `prewarm_circuits`、`max_streams_per_circuit` 和 `circuit_ttl_hint_secs`
+  向瀏覽器顯示額外的提示，以便它可以預算並行流和
+  了解代理如何積極地重用電路。
+- `car_bridge`（可選）指向本地 CAR 存檔緩存。 `extension`
+  字段控制流目標省略 `*.car` 時附加的後綴；設置
+  `allow_zst = true` 直接服務預壓縮的 `*.car.zst` 有效負載。
+- `kaigi_bridge`（可選）向代理公開假脫機的 Kaigi 路由。的
+  `room_policy` 字段通告網橋是否運行在 `public` 或
+  `authenticated` 模式，以便瀏覽器客戶端可以預先選擇正確的 GAR 標籤。
+- `sorafs_cli fetch` 暴露 `--local-proxy-mode=bridge|metadata-only` 和
+  `--local-proxy-norito-spool=PATH` 覆蓋，讓操作員切換
+  運行時模式或指向備用線軸，無需修改 JSON 策略。
+- `downgrade_remediation`（可選）配置自動降級掛鉤。
+  啟用後，協調器會監視中繼遙測以發現降級突發
+  並且，在 `window_secs` 內配置 `threshold` 後，強製本地
+  代理到 `target_mode`（默認 `metadata-only`）。一旦降級停止
+  代理在 `cooldown_secs` 之後恢復為 `resume_mode`。使用 `modes`
+  數組將觸發器範圍限定為特定中繼角色（默認為入口中繼）。
 
-When the proxy runs in bridge mode it serves two application services:
+當代理以橋接模式運行時，它提供兩個應用程序服務：
 
-- **`norito`** – the client’s stream target is resolved relative to
-  `norito_bridge.spool_dir`. Targets are sanitised (no traversal, no absolute
-  paths), and when the file lacks an extension the configured suffix is applied
-  before the payload is streamed verbatim to the browser.
-- **`car`** – stream targets resolve inside `car_bridge.cache_dir`, inherit the
-  configured default extension, and reject compressed payloads unless
-  `allow_zst` is set. Successful bridges reply with `STREAM_ACK_OK` before
-  transferring the archive bytes so clients can pipeline verification.
+- **`norito`** – 客戶端的流目標相對於
+  `norito_bridge.spool_dir`。目標被清理（沒有遍歷，沒有絕對
+  路徑），並且當文件缺少擴展名時，將應用配置的後綴
+  在有效負載逐字傳輸到瀏覽器之前。
+- **`car`** – 流目標在 `car_bridge.cache_dir` 內解析，繼承
+  配置默認擴展，並拒絕壓縮有效負載，除非
+  `allow_zst` 已設置。成功的網橋之前回复 `STREAM_ACK_OK`
+  傳輸存檔字節，以便客戶端可以進行管道驗證。
 
-In both cases the proxy supplies the cache-tag HMAC (when a guard cache key was
-present during the handshake) and records `norito_*` / `car_*` telemetry reason
-codes so dashboards can differentiate successes, missing files, and sanitisation
-failures at a glance.
+在這兩種情況下，代理都會提供緩存標籤 HMAC（當保護緩存密鑰被
+握手期間存在）並記錄 `norito_*` / `car_*` 遙測原因
+代碼，以便儀表板可以區分成功、丟失文件和清理
+失敗一目了然。
 
-`Orchestrator::local_proxy().await` exposes the running handle so callers can
-read the certificate PEM, fetch the browser manifest, or request a graceful
-shutdown when the application exits.
+`Orchestrator::local_proxy().await` 公開運行句柄，以便調用者可以
+讀取證書 PEM、獲取瀏覽器清單或請求一個優雅的
+當應用程序退出時關閉。
 
-When enabled, the proxy now serves **manifest v2** records. Besides the existing
-certificate and guard cache key, v2 adds:
+啟用後，代理現在提供**清單 v2** 記錄。除了現有的
+證書和防護緩存密鑰，v2 增加：
 
-- `alpn` (`"sorafs-proxy/1"`) and a `capabilities` array so clients can confirm
-  the stream protocol they should speak.
-- A per-handshake `session_id` and cache-tagging salt (`cache_tagging` block) to
-  derive per-session guard affinities and HMAC tags.
-- Circuit and guard-selection hints (`circuit`, `guard_selection`,
-  `route_hints`) so browser integrations can expose richer UI before streams are
-  opened.
-- `telemetry_v2` with sampling and privacy knobs for local instrumentation.
-- Each `STREAM_ACK_OK` includes `cache_tag_hex`. Clients mirror the value in
-  the `x-sorafs-cache-tag` header when issuing HTTP or TCP requests so cached
-  guard selections remain encrypted at rest.
+- `alpn` (`"sorafs-proxy/1"`) 和 `capabilities` 陣列，以便客戶可以確認
+  他們應該使用的流協議。
+- 每次握手 `session_id` 和緩存標記鹽（`cache_tagging` 塊）
+  派生每個會話防護關聯性和 HMAC 標籤。
+- 電路和保護選擇提示（`circuit`、`guard_selection`、
+  `route_hints`），因此瀏覽器集成可以在流之前公開更豐富的 UI
+  打開。
+- `telemetry_v2`，帶有用於本地儀器的採樣和隱私旋鈕。
+- 每個 `STREAM_ACK_OK` 包括 `cache_tag_hex`。客戶反映了價值
+  發出 HTTP 或 TCP 請求時的 `x-sorafs-cache-tag` 標頭如此緩存
+  守衛選擇在靜態時保持加密狀態。
 
-continue to rely on the v1 subset.
+繼續依賴 v1 子集。
 
-## 2. Failure Semantics
+## 2. 失敗語義
 
-The orchestrator enforces strict capability and budget checks before a single
-byte is transferred. Failures fall into three categories:
+協調者在單個項目之前執行嚴格的能力和預算檢查
+字節被傳輸。失敗分為三類：
 
-1. **Eligibility failures (pre-flight).** Providers missing range capability,
-   expired adverts, or stale telemetry are logged in the scoreboard artefact and
-   omitted from scheduling. CLI summaries populate the `ineligible_providers`
-   array with reasons so operators can inspect governance drift without scraping
-   logs.
-2. **Runtime exhaustion.** Each provider tracks consecutive failures. Once the
-   configured `provider_failure_threshold` is reached, the provider is marked
-   `disabled` for the remainder of the session. If every provider transitions to
-   `disabled`, the orchestrator returns
-   `MultiSourceError::NoHealthyProviders { last_error, chunk_index }`.
-3. **Deterministic aborts.** Hard limits surface as structured errors:
-   - `MultiSourceError::NoCompatibleProviders` — the manifest requires a chunk
-     span or alignment the remaining providers cannot honour.
-   - `MultiSourceError::ExhaustedRetries` — the per-chunk retry budget was
-     consumed.
-   - `MultiSourceError::ObserverFailed` — downstream observers (streaming hooks)
-     rejected a verified chunk.
+1. **資格失敗（飛行前）。 ** 提供商缺少範圍能力，
+   過期的廣告或陳舊的遙測數據會記錄在記分牌製品中，並且
+   從調度中省略。 CLI 摘要填充 `ineligible_providers`
+   列出原因，以便操作員可以檢查治理偏差而無需刮擦
+   日誌。
+2. **運行時耗盡。 ** 每個提供程序都會跟踪連續的失敗。一旦
+   達到配置的 `provider_failure_threshold`，提供商被標記
+   `disabled` 剩餘的會話時間。如果每個提供商都轉變為
+   `disabled`，協調器返回
+   `MultiSourceError::NoHealthyProviders { last_error, chunk_index }`。
+3. **確定性中止。 ** 硬限製表現為結構化錯誤：
+   - `MultiSourceError::NoCompatibleProviders` — 清單需要一個塊
+     其餘提供商無法兌現的跨度或一致性。
+   - `MultiSourceError::ExhaustedRetries` — 每個塊重試預算為
+     消耗了。
+   - `MultiSourceError::ObserverFailed` — 下游觀察者（流掛鉤）
+     拒絕了已驗證的塊。
 
-Every error embeds the offending chunk index and, when available, the final
-provider failure reason. Treat these as release blockers—retries with the same
-input will reproduce the failure until the underlying advert, telemetry, or
-provider health changes.
+每個錯誤都會嵌入有問題的塊索引，並且在可用時，會嵌入最終的塊索引
+提供商失敗原因。將它們視為釋放阻滯劑 - 使用相同的重試
+輸入將重現故障，直到底層廣告、遙測或
+提供者的健康狀況發生變化。
 
-### 2.1 Scoreboard Persistence
+### 2.1 記分牌持久化
 
-When `persist_path` is configured, the orchestrator writes the final scoreboard
-after each run. The JSON document contains:
+配置 `persist_path` 時，編排器將寫入最終記分板
+每次跑步後。 JSON 文檔包含：
 
-- `eligibility` (`eligible` or `ineligible::<reason>`).
-- `weight` (normalised weight assigned for this run).
-- `provider` metadata (identifier, endpoints, concurrency budget).
+- `eligibility`（`eligible` 或 `ineligible::<reason>`）。
+- `weight`（為本次運行分配的歸一化權重）。
+- `provider` 元數據（標識符、端點、並發預算）。
 
-Archive scoreboard snapshots alongside release artefacts so blacklisting and
-rollout decisions remain auditable.
+將記分板快照與發布工件一起存檔，以便列入黑名單和
+推出決策仍然可以審計。
 
-## 3. Telemetry & Debugging
+## 3. 遙測和調試
 
-### 3.1 Prometheus Metrics
+### 3.1 Prometheus 指標
 
-The orchestrator emits the following metrics via `iroha_telemetry`:
-
-| Metric | Labels | Description |
+協調器通過 `iroha_telemetry` 發出以下指標：|公制|標籤|描述 |
 |--------|--------|-------------|
-| `sorafs_orchestrator_active_fetches` | `manifest_id`, `region` | Gauge of in-flight orchestrated fetches. |
-| `sorafs_orchestrator_fetch_duration_ms` | `manifest_id`, `region` | Histogram recording end-to-end fetch latency. |
-| `sorafs_orchestrator_fetch_failures_total` | `manifest_id`, `region`, `reason` | Counter of terminal failures (retries exhausted, no providers, observer failure). |
-| `sorafs_orchestrator_retries_total` | `manifest_id`, `provider`, `reason` | Counter of retry attempts per provider. |
-| `sorafs_orchestrator_provider_failures_total` | `manifest_id`, `provider`, `reason` | Counter of session-level provider failures leading to disablement. |
-| `sorafs_orchestrator_policy_events_total` | `region`, `stage`, `outcome`, `reason` | Count of anonymity policy decisions (met vs. brownout) grouped by rollout stage and fallback reason. |
-| `sorafs_orchestrator_pq_ratio` | `region`, `stage` | Histogram of PQ relay share among the selected SoraNet set. |
-| `sorafs_orchestrator_pq_candidate_ratio` | `region`, `stage` | Histogram of PQ relay supply ratios in the scoreboard snapshot. |
-| `sorafs_orchestrator_pq_deficit_ratio` | `region`, `stage` | Histogram of the policy shortfall (gap between target and actual PQ share). |
-| `sorafs_orchestrator_classical_ratio` | `region`, `stage` | Histogram of classical relay share used in each session. |
-| `sorafs_orchestrator_classical_selected` | `region`, `stage` | Histogram of classical relay counts selected per session. |
+| `sorafs_orchestrator_active_fetches` | `manifest_id`、`region` |飛行中精心策劃的獲取的衡量標準。 |
+| `sorafs_orchestrator_fetch_duration_ms` | `manifest_id`，`region` |記錄端到端獲取延遲的直方圖。 |
+| `sorafs_orchestrator_fetch_failures_total` | `manifest_id`、`region`、`reason` |終端故障計數器（重試耗盡、無提供者、觀察者故障）。 |
+| `sorafs_orchestrator_retries_total` | `manifest_id`、`provider`、`reason` |每個提供商的重試嘗試計數器。 |
+| `sorafs_orchestrator_provider_failures_total` | `manifest_id`、`provider`、`reason` |導致禁用的會話級提供程序故障的計數器。 |
+| `sorafs_orchestrator_policy_events_total` | `region`、`stage`、`outcome`、`reason` |按推出階段和後備原因分組的匿名政策決策（滿足與限制）計數。 |
+| `sorafs_orchestrator_pq_ratio` | `region`，`stage` |所選 SoraNet 集之間 PQ 中繼份額的直方圖。 |
+| `sorafs_orchestrator_pq_candidate_ratio` | `region`，`stage` |記分板快照中 PQ 繼電器供電比率的直方圖。 |
+| `sorafs_orchestrator_pq_deficit_ratio` | `region`，`stage` |政策缺口的直方圖（目標與實際 PQ 份額之間的差距）。 |
+| `sorafs_orchestrator_classical_ratio` | `region`，`stage` |每個會話中使用的經典中繼份額的直方圖。 |
+| `sorafs_orchestrator_classical_selected` | `region`、`stage` |每個會話選擇的經典接力計數的直方圖。 |
 
-Integrate the metrics into staging dashboards before flipping production knobs.
-The recommended layout mirrors the SF-6 observability plan:
+在調整生產旋鈕之前，將指標集成到暫存儀表板中。
+推薦的佈局反映了 SF-6 可觀測性計劃：
 
-1. **Active fetches** — alerts if the gauge climbs without matching completions.
-2. **Retry ratio** — warns when `retry` counters exceed historical baselines.
-3. **Provider failures** — triggers pager alerts when any provider crosses
-   `session_failure > 0` within 15 minutes.
+1. **主動獲取** — 如果儀表上升而沒有匹配的完成，則會發出警報。
+2. **重試率** — 當 `retry` 計數器超過歷史基線時發出警告。
+3. **提供商故障** — 當任何提供商交叉時觸發尋呼機警報
+   15 分鐘內 `session_failure > 0`。
 
-### 3.2 Structured Log Targets
+### 3.2 結構化日誌目標
 
-The orchestrator publishes structured events to deterministic targets:
+協調器將結構化事件發佈到確定性目標：
 
-- `telemetry::sorafs.fetch.lifecycle` — `start` and `complete` lifecycle
-  markers with chunk counts, retries, and total duration.
-- `telemetry::sorafs.fetch.retry` — retry events (`provider`, `reason`,
-  `attempts`) for feeding into manual triage.
-- `telemetry::sorafs.fetch.provider_failure` — providers disabled due to
-  repeated errors.
-- `telemetry::sorafs.fetch.error` — terminal failures summarised with
-  `reason` and optional provider metadata.
+- `telemetry::sorafs.fetch.lifecycle` — `start` 和 `complete` 生命週期
+  帶有塊計數、重試和總持續時間的標記。
+- `telemetry::sorafs.fetch.retry` — 重試事件（`provider`、`reason`、
+  `attempts`) 用於輸入手動分類。
+- `telemetry::sorafs.fetch.provider_failure` — 提供商因以下原因被禁用
+  重複錯誤。
+- `telemetry::sorafs.fetch.error` — 終端故障總結為
+  `reason` 和可選的提供者元數據。
 
-Forward these streams to the existing Norito log pipeline so incident response
-has a single source of truth. Lifecycle events expose the PQ/classical mix via
-`anonymity_effective_policy`, `anonymity_pq_ratio`,
-`anonymity_classical_ratio`, and their companion counters,
-making it straightforward to wire dashboards without scraping metrics. During
-GA rollouts, pin the log level to `info` for lifecycle/retry events and rely on
-`warn` for terminal errors.
+將這些流轉發到現有的 Norito 日誌管道，以便事件響應
+有單一的事實來源。生命週期事件通過以下方式暴露 PQ/經典組合
+`anonymity_effective_policy`、`anonymity_pq_ratio`、
+`anonymity_classical_ratio` 及其配套計數器，
+使得連接儀表板變得簡單，而無需抓取指標。期間
+GA 推出，將生命週期/重試事件的日誌級別固定到 `info`，並依賴
+`warn` 表示終端錯誤。
 
-### 3.3 JSON Summaries
+### 3.3 JSON 總結
 
-Both `sorafs_cli fetch` and the Rust SDK return a structured summary containing:
+`sorafs_cli fetch` 和 Rust SDK 都返回一個結構化摘要，其中包含：
 
-- `provider_reports` with success/failure counts and whether a provider was
-  disabled.
-- `chunk_receipts` detailing which provider satisfied each chunk.
-- `retry_stats` and `ineligible_providers` arrays.
+- `provider_reports` 包含成功/失敗計數以及提供者是否
+  禁用。
+- `chunk_receipts` 詳細說明哪個提供商滿足每個塊。
+- `retry_stats` 和 `ineligible_providers` 陣列。
 
-Archive the summary file when debugging misbehaving providers—the receipts map
-directly to the log metadata above.
+調試行為不當的提供商時歸檔摘要文件 - 收據圖
+直接到上面的日誌元數據。
 
-## 4. Operational Checklist
+## 4. 操作清單
 
-1. **Stage configuration in CI.** Run `sorafs_fetch` with the target
-   configuration, pass `--scoreboard-out` to capture the eligibility view, and
-   diff against the previous release. Any unexpected ineligible provider halts
-   the promotion.
-2. **Validate telemetry.** Ensure the deployment exports `sorafs.fetch.*`
-   metrics and structured logs before enabling multi-source fetches for users.
-   The absence of metrics typically indicates the orchestrator facade was not
-   invoked.
-3. **Document overrides.** When applying emergency `--deny-provider` or
-   `--boost-provider` settings, commit the JSON (or CLI invocation) to your
-   change log. Rollbacks must revert the override and capture a new scoreboard
-   snapshot.
-4. **Re-run smoke tests.** After modifying retry budgets or provider caps,
-   re-fetch the canonical fixture (`fixtures/sorafs_manifest/ci_sample/`) and
-   verify chunk receipts remain deterministic.
+1. **CI 中的階段配置。 ** 使用目標運行 `sorafs_fetch`
+   配置，通過 `--scoreboard-out` 捕獲資格視圖，以及
+   與之前版本的差異。任何意外的不合格提供商都會停止
+   促銷。
+2. **驗證遙測。 ** 確保部署導出 `sorafs.fetch.*`
+   在為用戶啟用多源獲取之前，先查看指標和結構化日誌。
+   缺乏指標通常表明編排器外觀沒有
+   調用。
+3. **文件覆蓋。 ** 當申請緊急 `--deny-provider` 或
+   `--boost-provider` 設置，將 JSON（或 CLI 調用）提交到您的
+   更改日誌。回滾必須恢復覆蓋並捕獲新的記分板
+   快照。
+4. **重新運行冒煙測試。 ** 修改重試預算或提供商上限後，
+   重新獲取規範夾具（`fixtures/sorafs_manifest/ci_sample/`）並
+   驗證塊接收是否保持確定性。
 
-Following the steps above keeps orchestrator behaviour reproducible across
-staged rollouts and provides the telemetry necessary for incident response.
+遵循上述步驟可以使協調器行為在各個環境中重現
+分階段推出並提供事件響應所需的遙測。
 
-### 4.1 Policy Overrides
+### 4.1 策略覆蓋
 
-Operators can pin the active transport/anonymity stage without editing the
-base configuration by setting `policy_override.transport_policy` and
-`policy_override.anonymity_policy` in their `orchestrator` JSON (or supplying
-`--transport-policy-override=` / `--anonymity-policy-override=` to
-`sorafs_cli fetch`). When either override is present the orchestrator skips the
-usual brownout fallback: if the requested PQ tier cannot be satisfied, the
-fetch fails with `no providers` instead of quietly downgrading. Rollback to the
-default behaviour is as simple as clearing the override fields.
+操作員可以固定主動傳輸/匿名階段，而無需編輯
+通過設置 `policy_override.transport_policy` 和
+`policy_override.anonymity_policy` 在其 `orchestrator` JSON 中（或提供
+`--transport-policy-override=` / `--anonymity-policy-override=` 至
+`sorafs_cli fetch`）。當存在任一覆蓋時，編排器會跳過
+通常的掉電後備：如果無法滿足請求的 PQ 層，則
+獲取失敗並顯示 `no providers`，而不是悄悄降級。回滾到
+默認行為就像清除覆蓋字段一樣簡單。
 
-The standard `iroha_cli app sorafs fetch` command exposes the same override flags,
-forwarding them to the gateway client so ad-hoc fetches and automation scripts
-share the identical stage pinning behaviour.
+標準 `iroha_cli app sorafs fetch` 命令公開相同的覆蓋標誌，
+將它們轉發到網關客戶端，以便臨時獲取和自動化腳本
+共享相同的階段固定行為。
 
-Cross-SDK fixtures live under `fixtures/sorafs_gateway/policy_override/`. The
-CLI, Rust client, JavaScript bindings, and Swift harness decode
-`override.json` in their parity suites so any change to the override payloads
-must update that fixture and re-run `cargo test -p iroha`, `npm test`, and
-`swift test` to keep the SDKs aligned. Always attach the regenerated fixture to
-change review so downstream consumers can diff the override contract.
+跨 SDK 裝置位於 `fixtures/sorafs_gateway/policy_override/` 下。的
+CLI、Rust 客戶端、JavaScript 綁定和 Swift Harness 解碼
+`override.json` 在其奇偶校驗套件中，因此對覆蓋有效負載的任何更改
+必須更新該夾具並重新運行 `cargo test -p iroha`、`npm test` 和
+`swift test` 以保持 SDK 一致。始終將再生的夾具連接到
+更改審查，以便下游消費者可以區分覆蓋合同。
 
-Governance requires a runbook entry for every override. Record the reason,
-expected duration, and rollback trigger in your change log, notify the PQ
-ratchet rotation channel, and append the signed approval to the same artifact
-bundle that stores the scoreboard snapshot. Overrides are intended for short
-emergencies (e.g., PQ guard brownouts); long-running policy changes must go
-through the normal council vote so nodes converge on the new default.
+治理需要為每個覆蓋提供操作手冊條目。記錄原因，
+預期持續時間，以及更改日誌中的回滾觸發器，通知 PQ
+棘輪旋轉通道，並將簽名的批准附加到同一工件
+存儲記分板快照的包。覆蓋是為了簡短
+緊急情況（例如 PQ 警衛限電）；長期的政策變化必須取消
+通過正常的理事會投票，使節點匯聚到新的默認值上。
 
-### 4.2 PQ Ratchet Fire Drill
+### 4.2 PQ 棘輪消防演習
 
-- **Runbook:** Follow `docs/source/soranet/pq_ratchet_runbook.md` for the
-  promotion/demotion rehearsal, including guard-directory handling and rollback.
-- **Dashboard:** Import `dashboards/grafana/soranet_pq_ratchet.json` to monitor
-  `sorafs_orchestrator_policy_events_total`, brownout rate, and PQ ratio mean
-  during the drill.
-- **Automation:** `cargo test -p sorafs_orchestrator pq_ratchet_fire_drill_records_metrics`
-  exercises the same transitions and verifies that metrics increment as
-  expected before operators run the live drill.
+- **運行手冊：** 按照 `docs/source/soranet/pq_ratchet_runbook.md` 獲取
+  升級/降級演練，包括警衛目錄處理和回滾。
+- **儀表板：** 導入 `dashboards/grafana/soranet_pq_ratchet.json` 進行監控
+  `sorafs_orchestrator_policy_events_total`、掉電率和 PQ 比率平均值
+  演習期間。
+- **自動化：** `cargo test -p sorafs_orchestrator pq_ratchet_fire_drill_records_metrics`
+  執行相同的轉換並驗證指標增量是否為
+  預期在操作員進行現場演練之前。
 
-## 5. Rollout Playbooks
+## 5. 推出劇本
 
-The SNNet-5 transport rollout introduces new guard selection, governance
-attestations, and policy fallbacks. The playbooks below codify the sequence to
-follow before enabling multi-source fetches for end users, plus the downgrade
-path back to direct mode.
+SNNet-5 傳輸的推出引入了新的警衛選擇和治理
+證明和政策回退。下面的劇本將序列編碼為
+在為最終用戶啟用多源獲取以及降級之前遵循
+返回直接模式的路徑。
 
-### 5.1 Developer Pre-Flight (CI / Staging)
+### 5.1 開發人員預檢（CI/分期）
 
-1. **Regenerate scoreboards in CI.** Run `sorafs_cli fetch` (or the SDK
-   equivalent) against the `fixtures/sorafs_manifest/ci_sample/` manifest with
-   the candidate configuration. Persist the scoreboard via
-   `--scoreboard-out=artifacts/sorafs/scoreboard.json` and assert:
-   - `anonymity_status=="met"` and the `anonymity_pq_ratio` meets the targeted
-     stage (`anon-guard-pq`, `anon-majority-pq`, or `anon-strict-pq`).
-   - The deterministic chunk receipts still match the golden set committed to
-     the repository.
-2. **Verify manifest governance.** Inspect the CLI / SDK summary and ensure the
-   newly surfaced `manifest_governance.council_signatures` array contains the
-   expected Council fingerprints. This confirms gateway responses ship the GAR
-   envelope and that `validate_manifest` accepted it.
-3. **Exercise compliance overrides.** Load each jurisdictional profile from
-   `docs/examples/sorafs_compliance_policy.json` and assert the orchestrator
-   emits the correct policy fallback (`compliance_jurisdiction_opt_out` or
-   `compliance_blinded_cid_opt_out`). Record the resulting fetch failure when no
-   compliant transports are available.
-4. **Simulate downgrade.** Flip `transport_policy` to `direct-only` in the
-   configuration under test and re-run the fetch to ensure the orchestrator
-   falls back to Torii/QUIC without touching SoraNet relays. Keep this JSON
-   variant under version control so it can be promoted rapidly during an
-   incident.
+1. **在 CI 中重新生成記分板。 ** 運行 `sorafs_cli fetch`（或 SDK
+   等效）針對 `fixtures/sorafs_manifest/ci_sample/` 清單
+   候選配置。通過以下方式保留記分板
+   `--scoreboard-out=artifacts/sorafs/scoreboard.json` 並斷言：
+   - `anonymity_status=="met"` 和 `anonymity_pq_ratio` 滿足目標
+     階段（`anon-guard-pq`、`anon-majority-pq` 或 `anon-strict-pq`）。
+   - 確定性的塊收據仍然與承諾的黃金集相匹配
+     存儲庫。
+2. **驗證清單治理。 ** 檢查 CLI/SDK 摘要並確保
+   新出現的 `manifest_governance.council_signatures` 陣列包含
+   預計理事會指紋。這確認了網關響應發送了 GAR
+   信封，並且 `validate_manifest` 接受了它。
+3. **行使合規性覆蓋。 ** 從以下位置加載每個管轄區概況：
+   `docs/examples/sorafs_compliance_policy.json` 並斷言協調器
+   發出正確的策略回退（`compliance_jurisdiction_opt_out` 或
+   `compliance_blinded_cid_opt_out`）。記錄 no 時導致的 fetch 失敗
+   提供合規的運輸。
+4. **模擬降級。 ** 將`transport_policy`翻轉為`direct-only`
+   測試配置並重新運行獲取以確保協調器
+   回退到 Torii/QUIC，而不接觸 SoraNet 繼電器。保留這個 JSON
+   版本控制下的變體，因此可以在
+   事件。
 
-### 5.2 Operator Rollout (Production Waves)
+### 5.2 操作員推出（生產波次）1. **通過 `iroha_config` 暫存配置。 ** 發布所使用的確切 JSON
+   在 CI 中作為 `actual` 層覆蓋。確認 Orchestrator pod/二進製文件
+   在啟動時記錄新的配置哈希。
+2. **Prime Guard 緩存。 ** 通過 `--guard-directory` 刷新中繼目錄
+   並將 Norito 保護緩存保留為 `--guard-cache`。驗證緩存是否
+   簽名（如果配置了 `--guard-cache-key`）並存儲在版本控制下
+   改變控制。
+3. **啟用遙測儀表板。 ** 在提供用戶流量之前，請確保
+   環境發布 `sorafs.fetch.*`、`sorafs_orchestrator_policy_events_total` 和
+   代理指標（使用本地 QUIC 代理時）。警報應與
+   `anonymity_brownout_effective` 和合規性回退計數器。
+4. **運行實時冒煙測試。 ** 通過每個
+   提供商群組（PQ、經典和直接）並確認大塊收據，
+   CAR 摘要和理事會簽名與 CI 基線相匹配。
+5. **溝通激活。 ** 使用以下內容更新推出跟踪器
+   `scoreboard.json` 人工製品、防護緩存指紋以及指向
+   顯示第一次生產獲取的清單治理驗證的日誌。
 
-1. **Stage the configuration via `iroha_config`.** Publish the exact JSON used
-   in CI as an `actual` layer override. Confirm the orchestrator pod / binary
-   logs the new configuration hash on startup.
-2. **Prime guard caches.** Refresh the relay directory via `--guard-directory`
-   and persist the Norito guard cache with `--guard-cache`. Verify the cache is
-   signed (if `--guard-cache-key` is configured) and stored under versioned
-   change control.
-3. **Enable telemetry dashboards.** Before serving user traffic, ensure the
-   environment publishes `sorafs.fetch.*`, `sorafs_orchestrator_policy_events_total`, and
-   the proxy metrics (when using the local QUIC proxy). Alarms should be tied to
-   `anonymity_brownout_effective` and compliance fallback counters.
-4. **Run live smoke tests.** Fetch a governance-approved manifest through each
-   provider cohort (PQ, classical, and direct) and confirm chunk receipts,
-   CAR digests, and council signatures match the CI baseline.
-5. **Communicate activation.** Update the rollout tracker with the
-   `scoreboard.json` artefact, the guard cache fingerprint, and a link to the
-   logs showing manifest governance verification for the first production fetch.
+### 5.3 降級/回滾過程
 
-### 5.3 Downgrade / Rollback Procedure
+當事件、PQ 缺陷或監管要求強制回滾時，請遵循
+這個確定性序列：
 
-When incidents, PQ deficits, or regulatory requests force a rollback, follow
-this deterministic sequence:
+1. **切換傳輸策略。 ** 應用 `transport_policy=direct-only`（並且，如果
+   立即停止新的 SoraNet 電路建設。
+2. **刷新防護狀態。** 刪除或歸檔引用的防護緩存文件
+   `--guard-cache` 因此後續運行不會嘗試重用固定繼電器。
+   僅當計劃快速重新啟用並且緩存保留時才跳過此步驟
+   有效。
+3. **禁用本地代理。** 如果本地 QUIC 代理處於 `bridge` 模式，
+   使用 `proxy_mode="metadata-only"` 重新啟動協調器或刪除
+   `local_proxy` 完全阻止。記錄端口釋放以便工作站和
+   瀏覽器集成恢復為直接 Torii 訪問。
+4. **明確的合規性覆蓋。** 附加司法管轄區選擇退出條目（或
+   盲態 CID 條目）到受影響有效負載的合規策略，以便
+   自動化和儀表板反映了有意的直接模式操作。
+5. **捕獲審核證據。** 使用 `--scoreboard-out` 運行更改後獲取
+   並存儲 CLI JSON 摘要（包括 `manifest_governance`）
+   事件票。
 
-1. **Switch transport policy.** Apply `transport_policy=direct-only` (and, if
-   immediately halts new SoraNet circuit construction.
-2. **Flush guard state.** Delete or archive the guard cache file referenced by
-   `--guard-cache` so subsequent runs do not attempt to reuse pinned relays.
-   Skip this step only when a rapid re-enable is planned and the cache remains
-   valid.
-3. **Disable local proxies.** If the local QUIC proxy was in `bridge` mode,
-   restart the orchestrator with `proxy_mode="metadata-only"` or remove the
-   `local_proxy` block entirely. Document the port release so workstation and
-   browser integrations revert to direct Torii access.
-4. **Clear compliance overrides.** Append a jurisdictional opt-out entry (or a
-   blinded-CID entry) to the compliance policy for the affected payloads so
-   automation and dashboards reflect the intentional direct-mode operation.
-5. **Capture audit evidence.** Run a post-change fetch with `--scoreboard-out`
-   and store the CLI JSON summary (including `manifest_governance`) alongside
-   the incident ticket.
+### 5.4 監管部署清單
 
-### 5.4 Regulated Deployment Checklist
-
-| Checkpoint | Purpose | Recommended Evidence |
+|檢查站|目的|推薦證據|
 |------------|---------|----------------------|
-| Compliance policy staged | Confirms the jurisdictional carve-out aligns with GAR filings. | Signed `soranet_opt_outs.json` snapshot + orchestrator config diff. |
-| Manifest governance recorded | Proves Council signatures accompany every gateway manifest. | `sorafs_cli fetch ... --output /dev/null --summary out.json` with `manifest_governance.council_signatures` archived. |
-| Attestation inventory | Tracks the documents referenced in `compliance.attestations`. | Store PDFs/JSON artefacts alongside the attestation digest and expiry. |
-| Downgrade drill logged | Ensures rollback remains deterministic. | Quarterly dry-run record showing direct-only policy applied and guard cache cleared. |
-| Telemetry retention | Provides forensic data for regulators. | Dashboard export or OTEL snapshot confirming `sorafs.fetch.*` and compliance fallbacks are being retained per policy. |
+|合規政策出台 |確認管轄權剝離與 GAR 備案一致。 |已簽名的 `soranet_opt_outs.json` 快照 + Orchestrator 配置差異。 |
+|顯性治理記錄 |證明每個網關清單均附有理事會簽名。 | `sorafs_cli fetch ... --output /dev/null --summary out.json` 和 `manifest_governance.council_signatures` 已存檔。 |
+|認證庫存|跟踪 `compliance.attestations` 中引用的文檔。 |將 PDF/JSON 工件與證明摘要和到期時間一起存儲。 |
+|降級演習已記錄 |確保回滾保持確定性。 |顯示僅應用直接策略並清除保護緩存的季度試運行記錄。 |
+|遙測保留 |為監管機構提供取證數據。 |根據策略保留確認 `sorafs.fetch.*` 和合規回退的儀表板導出或 OTEL 快照。 |
 
-Operators should review the checklist prior to each rollout window and furnish
-the evidence pack to governance or regulators on request. Developers can reuse
-the same artefacts for postmortem packets when brownouts or compliance overrides
-are triggered during testing.
+運營商應在每個推出窗口之前檢查清單並提供
+根據要求向治理或監管機構提供證據包。開發者可以復用
+當停電或合規性覆蓋時，事後數據包的相同工件
+在測試期間被觸發。

@@ -4,9 +4,11 @@ direction: rtl
 source: docs/portal/docs/sns/address-display-guidelines.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-import ExplorerAddressCard from '@site/src/components/ExplorerAddressCard';
+יבא את ExplorerAddressCard מ-'@site/src/components/ExplorerAddressCard';
 
 :::note المصدر القياسي
 تعكس هذه الصفحة `docs/source/sns/address_display_guidelines.md` وتعمل الان
@@ -15,14 +17,14 @@ import ExplorerAddressCard from '@site/src/components/ExplorerAddressCard';
 
 يجب ان تتعامل المحافظ والمستكشفات وامثلة SDK مع عناوين الحساب كحمولات ثابتة لا
 تتغير. يعرض مثال محفظة Android في
-`examples/android/retail-wallet` نمط UX المطلوب:
+`examples/android/retail-wallet` שם UX מקור:
 
 - **هدفا نسخ منفصلان.** وفر زرين واضحين للنسخ: IH58 (المفضل) والصيغة
   المضغوطة الخاصة بـ Sora (`sora...`، الخيار الثاني). IH58 امن دائما للمشاركة خارجيا ويغذي
   حمولة QR. يجب ان تتضمن الصيغة المضغوطة تحذيرا مضمنا لانها تعمل فقط داخل
   تطبيقات واعية بـ Sora. مثال Android يربط زري Material وتلميحاتهما في
-  `examples/android/retail-wallet/src/main/res/layout/activity_main.xml`، ويطابق
-  عرض iOS SwiftUI نفس UX عبر `AddressPreviewCard` داخل
+  `examples/android/retail-wallet/src/main/res/layout/activity_main.xml`, וסיד
+  קוד iOS SwiftUI עם UX של `AddressPreviewCard`
   `examples/ios/NoritoDemo/Sources/ContentView.swift`.
 - **خط ثابت ونص قابل للتحديد.** اعرض السلسلتين بخط monospace مع
   `textIsSelectable="true"` حتى يتمكن المستخدمون من فحص القيم دون تشغيل IME.
@@ -44,11 +46,11 @@ import ExplorerAddressCard from '@site/src/components/ExplorerAddressCard';
 استخدم اللقطات التالية خلال مراجعات الترجمة لضمان بقاء تسميات الازرار
 والتلميحات والتحذيرات متوافقة عبر المنصات:
 
-- مرجع Android: `/img/sns/address_copy_android.svg`
+- מוצר אנדרואיד: `/img/sns/address_copy_android.svg`
 
   ![مرجع نسخ مزدوج Android](/img/sns/address_copy_android.svg)
 
-- مرجع iOS: `/img/sns/address_copy_ios.svg`
+- מוצר iOS: `/img/sns/address_copy_ios.svg`
 
   ![مرجع نسخ مزدوج iOS](/img/sns/address_copy_ios.svg)
 
@@ -63,8 +65,8 @@ import ExplorerAddressCard from '@site/src/components/ExplorerAddressCard';
   الى `warnings` عندما يقدم المستدعون literal `sora...`، حتى يتمكن مستكشفو
   المحافظ/لوحات التحكم من عرض تحذير Sora-only اثناء تدفقات اللصق/التحقق بدلا
   من عرضه فقط عند توليد الصيغة المضغوطة ذاتيا.
-- Python: `AccountAddress.display_formats(network_prefix: int = 753)`
-- Swift: `AccountAddress.displayFormats(networkPrefix: UInt16 = 753)`
+- פייתון: `AccountAddress.display_formats(network_prefix: int = 753)`
+- סוויפט: `AccountAddress.displayFormats(networkPrefix: UInt16 = 753)`
 - Java/Kotlin: `AccountAddress.displayFormats(int networkPrefix = 753)`
   (`java/iroha_android/src/main/java/org/hyperledger/iroha/android/address/AccountAddress.java`)
 
@@ -77,9 +79,7 @@ JavaScript ايضا حمولة `selector` على `domainSummary` (`tag`, `digest
 
 <ExplorerAddressCard />
 
-يجب ان تعكس المستكشفات اعمال القياس والاتاحة نفسها في المحافظ:
-
-- طبق `data-copy-mode="ih58|compressed|qr"` على ازرار النسخ حتى تتمكن الواجهات
+يجب ان تعكس المستكشفات اعمال القياس والاتاحة نفسها في المحافظ:- طبق `data-copy-mode="ih58|compressed|qr"` على ازرار النسخ حتى تتمكن الواجهات
   الامامية من اصدار عدادات الاستخدام بالتوازي مع مقياس Torii
   `torii_address_format_total`. المكون التجريبي اعلاه يطلق حدث
   `iroha:address-copy` مع `{mode,timestamp}` - اربط ذلك بخط تحليلاتك/تليمترتك
@@ -118,7 +118,7 @@ payload bit: │version  │ class  │  norm  │ext │
              └─────────┴────────┴────────┴────┘
 ```
 
-- `addr_version = 0` (bits 7-5) اليوم؛ القيم غير الصفرية محجوزة ويجب ان تؤدي
+- `addr_version = 0` (סיביות 7-5) القيم غير الصفرية محجوزة ويجب ان تؤدي
   الى `AccountAddressError::InvalidHeaderVersion`.
 - `addr_class` يميز بين المتحكم الفردي (`0`) والمتعدد التواقيع (`1`).
 - `norm_version = 1` يشفر قواعد محدد Norm v1. ستعيد المعايير المستقبلية استخدام
@@ -142,7 +142,7 @@ payload bit: │version  │ class  │  norm  │ext │
 امثلة hex قانونية يمكن لادوات المحافظ ربطها او ادراجها في docs/tests:
 
 | نوع المحدد | Hex قانوني |
-|---------------|---------------|
+|--------------|--------------|
 | افتراضي ضمني | `0x02000001203b6a27bcceb6a42d62a3a8d02a6f0d73653215771de243a63ac048a18b59da29` |
 | digest محلي (`treasury`) | `0x0201b18fe9c1abbac45b3e38fc5d0001203b77a042f1de02f6d5f418f36a2a28ea` |
 | سجل عالمي (`android`) | `0x020200000059a6a47eb7c9aa415f77b18636a85a57837d5518ff5357ef63c35202` |
@@ -153,14 +153,12 @@ payload bit: │version  │ class  │  norm  │ext │
 ## فرض الصيغ القانونية
 
 يجب على المشغلين الذين يحولون ترميزات Local القديمة الى IH58 قانوني او سلاسل
-مضغوطة اتباع مسار CLI الموثق تحت ADDR-5:
-
-1. `iroha tools address inspect` يصدر الان ملخص JSON منظم مع IH58 والحمولة المضغوطة
+مضغوطة اتباع مسار CLI الموثق تحت ADDR-5:1. `iroha tools address inspect` يصدر الان ملخص JSON منظم مع IH58 والحمولة المضغوطة
    والـ hex القانوني. يتضمن الملخص ايضا كائن `domain` مع حقول `kind`/`warning`
    ويعكس اي نطاق مقدم عبر الحقل `input_domain`. عندما يكون `kind` هو `local12`
    تطبع CLI تحذيرا على stderr ويعكس ملخص JSON نفس التوجيه حتى تتمكن خطوط CI و
    SDKs من عرضه. مرر `--append-domain` متى اردت اعادة تشغيل الترميز المحول
-   كـ `<ih58>@<domain>`.
+  ​​ كـ `<ih58>@<domain>`.
 2. يمكن لـ SDKs عرض نفس التحذير/الملخص عبر مساعد JavaScript:
 
    ```js
@@ -183,7 +181,7 @@ payload bit: │version  │ class  │  norm  │ext │
 5. لمجموعات البيانات الكبيرة، شغل
    `iroha tools address audit --input addresses.txt --network-prefix 753`. يقرأ الامر
    literals مفصولة باسطر جديدة (التعليقات التي تبدا بـ `#` يتم تجاهلها، و
-   `--input -` او عدم وجود علم يستخدم STDIN)، ويصدر تقرير JSON بملخصات
+   `--input -` או תקשורת ותקשורת STDIN), ותקשורת של JSON
    قانونية/IH58/مضغوطة لكل ادخال، ويحسب اخطاء التحليل وتحذيرات نطاق Local. استخدم
    `--allow-errors` عند تدقيق dumps القديمة التي تحتوي صفوفا مهملة، واضبط
    الاتمتة عبر `--fail-on-warning` حين يصبح المشغلون مستعدين لحظر محددات Local في CI.
@@ -198,11 +196,11 @@ payload bit: │version  │ class  │  norm  │ext │
    Local من `fixtures/account/address_vectors.json`، ويحولها عبر
    `iroha tools address normalize`، ويعيد تشغيل
    `iroha tools address audit --fail-on-warning` لاثبات ان الاصدارات لم تعد تصدر digests
-   Local.
+   מקומי.
 
 `torii_address_local8_total{endpoint}` بالاضافة الى
 `torii_address_collision_total{endpoint,kind="local12_digest"}`,
-`torii_address_collision_domain_total{endpoint,domain}`, ولوحة Grafana
+`torii_address_collision_domain_total{endpoint,domain}`, וולוז Grafana
 `dashboards/grafana/address_ingest.json` توفر اشارة الالتزام: عندما تعرض لوحات
 الانتاج صفرا من عمليات ارسال Local الشرعية وصفرا من تصادمات Local-12 لمدة 30 يوما
 متتالية، سيحول Torii بوابة Local-8 الى فشل صارم على mainnet، يليه Local-12 بعد
@@ -213,15 +211,13 @@ payload bit: │version  │ class  │  norm  │ext │
 Grafana (`dashboards/grafana/address_ingest.json`) حتى يتمكن حزمة دليل ADDR-7 من
 اثبات ان `domain_kind="local12"` بقيت صفرا خلال نافذة 30 يوما المطلوبة قبل ان
 تعطل mainnet المحددات القديمة. حزمة Alertmanager
-(`dashboards/alerts/address_ingest_rules.yml`) تضيف ثلاث حواجز:
-
-- `AddressLocal8Resurgence` يستدعي عندما يبلغ سياق عن زيادة Local-8 جديدة. اوقف
+(`dashboards/alerts/address_ingest_rules.yml`) تضيف ثلاث حواجز:- `AddressLocal8Resurgence` يستدعي عندما يبلغ سياق عن زيادة Local-8 جديدة. אווק
   عمليات rollout للوضع الصارم، حدد سطح SDK المخالف في لوحة المتابعة، واضبط
   الافتراضي (`true`).
 - `AddressLocal12Collision` يعمل عندما يقوم اسمان Local-12 بعمل hash الى نفس
-  digest. اوقف ترويج manifests، شغل عدة Local -> Global لتدقيق ربط digests، و
+  לעכל. اوقف ترويج manifests، شغل عدة Local -> Global لتدقيق ربط digests، و
   نسق مع حوكمة Nexus قبل اعادة اصدار ادخال السجل او اعادة تفعيل rollouts
-  downstream.
+  במורד הזרם.
 - `AddressInvalidRatioSlo` يحذر عندما يتجاوز معدل عدم الصلاحية على مستوى
   الاسطول (باستثناء رفض Local-8/strict-mode) نسبة 0.1% لمدة عشر دقائق. استخدم
   `torii_address_invalid_total` لتحديد السياق/السبب المسؤول ونسق مع فريق SDK
@@ -234,5 +230,5 @@ Grafana (`dashboards/grafana/address_ingest.json`) حتى يتمكن حزمة د
 > **العناوين:** تمت اضافة مساعد `iroha tools address normalize --only-local --append-domain`
 > وربطه في CI (`ci/check_address_normalize.sh`) حتى تتمكن مسارات المحفظة/المستكشف
 > من تحويل محددات Local القديمة الى صيغ IH58/مضغوطة قانونية قبل حظر Local-8/Local-12
-> على mainnet. حدث اي عمليات تصدير مخصصة لتشغيل الامر وارفق القائمة المعيارية
+> רשת מרכזית. حدث اي عمليات تصدير مخصصة لتشغيل الامر وارفق القائمة المعيارية
 > بحزمة دليل الاصدار.

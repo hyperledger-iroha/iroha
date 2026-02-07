@@ -8,34 +8,36 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: Default lane quickstart (NX-5)
 sidebar_label: Default Lane Quickstart
 description: Configure and verify the Nexus default lane fallback so Torii and SDKs can omit lane_id in public lanes.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
-This page mirrors `docs/source/quickstart/default_lane.md`. Keep both copies
-aligned until the localization sweep lands in the portal.
+:::དྲན་ཐོའི་འབྱུང་ཁུངས།
+ཤོག་ངོས་འདིའི་ནང་ `docs/source/quickstart/default_lane.md` ལ་སྤྲོ་སྣང་། འདྲ་གཉིས་ཆ་རང་བཞག།
+དྲྭ་ཚིགས་ནང་ལུ་ ས་གནས་ཀྱི་ཕྱགས་བརྡར་གྱི་ས་ཆ་ཚུ་ཚུན་ཚོད་ ཕྲང་སྒྲིག་འབད་ཡོདཔ་ཨིན།
 :::
 
-# Default Lane Quickstart (NX-5)
+# སྔོན་སྒྲིག་ལེན་མགྱོགས་འགོ་བཙུགས་ (NX-5)
 
-> **Roadmap context:** NX-5 — default public lane integration. The runtime now
-> exposes a `nexus.routing_policy.default_lane` fallback so Torii REST/gRPC
-> endpoints and every SDK can safely omit a `lane_id` when the traffic belongs
-> on the canonical public lane. This guide walks operators through configuring
-> the catalog, verifying the fallback in `/status`, and exercising the client
-> behaviour end to end.
+> **ལམ་ཐིག་སྐབས་དོན་:** NX-5 — སྔོན་སྒྲིག་མི་མང་ལམ་མཉམ་བསྡོམས་འབད། ད་ལྟ་ རན་ཊའི།
+> `nexus.routing_policy.default_lane` ཕོརེཀ་བེག་ སོ་ Torii རེསི་ཊི་/ཇི་ཨར་པི་སི།
+> མཐའ་མཚམས་ཚུ་དང་ ཨེསི་ཌི་ཀེ་རེ་རེ་གིས་ འགྲུལ་སྐྱོད་འདི་ ཚུདཔ་ད་ ཉེན་སྲུང་དང་ལྡནམ་སྦེ་ I18NI0000016X བཏོན་བཏང་ཚུགས།
+> ཁྲིམས་ལུགས་ཀྱི་མི་མང་ལམ་ལུགས། ལམ་སྟོན་འདི་གིས་ རིམ་སྒྲིག་འབད་ཐོག་ལས་ བཀོལ་སྤྱོད་པ་ཚུ་ལུ་འགྱོཝ་ཨིན།
+> ཐོ་གཞུང་ I18NI000000017X ནང་ ཕོལཀ་འདི་ བདེན་དཔྱད་འབད་ཞིནམ་ལས་ མཁོ་སྤྲོད་འབད་མི་ལུ་ ལག་ལེན་འཐབ་ནི།
+> སྤྱོད་ལམ་མཇུག་ལས་མཇུག་བསྡུ།
 
-## Prerequisites
+## སྔོན་འགྲོའི་ཆ་རྐྱེན།
 
-- A Sora/Nexus build of `irohad` (run with `irohad --sora --config ...`).
-- Access to the configuration repository so you can edit `nexus.*` sections.
-- `iroha_cli` configured to talk to the target cluster.
-- `curl`/`jq` (or equivalent) to inspect the Torii `/status` payload.
+- སོ་ར་/Nexus I18NI000000018X (`irohad --sora --config ...` དང་ཅིག་ཁར་གཡོག་བཀོལ་ནི།)
+- རིམ་སྒྲིག་མཛོད་ཁང་ལུ་འཛུལ་སྤྱོད་འབད་ དེ་ལས་ ཁྱོད་ཀྱིས་ `nexus.*` དབྱེ་ཚན་ཚུ་ཞུན་དག་འབད་ཚུགས།
+- དམིགས་གཏད་ཀླད་ཀོར་ལུ་སླབ་ནིའི་དོན་ལུ་ རིམ་སྒྲིག་འབད་ཡོདཔ།
+- `curl`/I18NI0000023X (ཡང་ན་དེ་དང་འདྲ་མཉམ་) I18NT000000003X I18NI0000024X པེ་ལོཌི།
 
-## 1. Describe the lane and dataspace catalog
+## 1. ལམ་དང་གནས་སྡུད་ས་ཆའི་ཐོ་གཞུང་བཤད་པ།
 
-Declare the lanes and dataspaces that should exist on the network. The snippet
-below (trimmed from `defaults/nexus/config.toml`) registers three public lanes
-plus matching dataspace aliases:
+ཡོངས་འབྲེལ་གུ་ཡོད་པའི་ ལམ་དང་ གནད་སྡུད་ས་སྒོ་ཚུ་ གསལ་བསྒྲགས་འབད། ཕྲ་རབས་འདི།
+འོག་ལུ་ (`defaults/nexus/config.toml` ལས་) མི་མང་ལམ་གསུམ་ཐོ་བཀོད་འབདཝ་ཨིན།
+བསྡོམས་པའི་གནད་སྡུད་གནམ་སྟོང་མིང་གཞན་ཚུ:
 
 ```toml
 [nexus]
@@ -78,17 +80,17 @@ description = "Zero-knowledge proofs and attachments"
 fault_tolerance = 1
 ```
 
-Each `index` must be unique and contiguous. Dataspace ids are 64-bit values;
-the examples above use the same numeric values as the lane indexes for clarity.
+`index` རེ་རེ་བཞིན་ ཁྱད་པར་ཅན་དང་ མཐུན་སྒྲིག་ཅན་སྦེ་དགོ། གནད་སྡུད་ས་སྟོང་ཨའི་ཌི་ཚུ་ ༦༤-བིཊི་གནས་གོང་ཚུ་ཨིན།
+གོང་འཁོད་ཀྱི་དཔེ་ཚུ་གིས་ དྭངས་གསལ་གྱི་དོན་ལུ་ ལམ་གྱི་ཟུར་ཐོ་ཚུ་བཟུམ་སྦེ་ ཨང་གྲངས་ཀྱི་གནས་གོང་ཚུ་ལག་ལེན་འཐབ་ཨིན།
 
-## 2. Set routing defaults and optional overrides
+## 2. འགྲུལ་ལམ་སྔོན་སྒྲིག་དང་གདམ་ཁ་ཅན་གྱི་ཟུར་ཐོ་ཚུ་གཞི་སྒྲིག་འབད།
 
-The `nexus.routing_policy` section controls the fallback lane and lets you
-override routing for specific instructions or account prefixes. If no rule
-matches, the scheduler routes the transaction to the configured `default_lane`
-and `default_dataspace`. The router logic lives in
-`crates/iroha_core/src/queue/router.rs` and applies the policy transparently to
-Torii REST/gRPC surfaces.
+I18NI000000027X དབྱེ་ཚན་འདི་གིས་ ཕོལ་བེག་ལམ་འདི་ཚད་འཛིན་འབད་དེ་ ཁྱོད་ལུ་འབད་བཅུག།
+དམིགས་བསལ་བཀོད་རྒྱ་ཡང་ན་རྩིས་ཐོའི་སྔོན་སྒྲིག་ཚུ་གི་དོན་ལུ་ ལམ་སྟོན་འབད་ནི། གལ་ཏེ་ལམ་ལུགས་མེད་ན།
+མཐུན་སྒྲིག་ཚུ་ དུས་ཚོད་བཀོད་མི་འདི་གིས་ རིམ་སྒྲིག་འབད་ཡོད་པའི་ I18NI0000028X ལུ་ ཚོང་འབྲེལ་འདི་འགྲུལ་ལམ་འབདཝ་ཨིན།
+དང་ `default_dataspace`. རའུ་ཊར་ཚད་མ་འདི་ ༢༠༡༢ ལུ་སྡོདཔ་ཨིན།
+`crates/iroha_core/src/queue/router.rs` དང་ སྲིད་བྱུས་འདི་ དྭངས་གསལ་སྦེ་ ལུ་འཇུག་སྤྱོད་འབདཝ་ཨིན།
+Torii REST/gRPC གི་ཕྱི་སྣོད།
 
 ```toml
 [nexus.routing_policy]
@@ -110,31 +112,26 @@ instruction = "smartcontract::deploy"
 description = "Route contract deployments to the zk lane for proof tracking"
 ```
 
-When you later add new lanes, update the catalog first, then extend the routing
-rules. The fallback lane should continue to point at the public lane that holds
+ཁྱོད་ཀྱིས་ ཤུལ་ལས་ ལམ་གསརཔ་ཁ་སྐོང་བརྐྱབ་པའི་སྐབས་ དང་པ་ ཐོ་གཞུང་འདི་དུས་མཐུན་བཟོ་ཞིནམ་ལས་ འགྲུལ་ལམ་འདི་རྒྱ་བསྐྱེད་འབད།
+ཁྲིམས། མི་མང་ལམ་འདི་ བཀག་འཛིན་འབད་མི་ ལམ་འདི་གིས་ འཕྲོ་མཐུད་དེ་རང་ མཚོན་རྟགས་བཀོད་དགོ།
 
-## 3. Boot a node with the policy applied
+## 3. སྲིད་བྱུས་འཇུག་སྤྱོད་དང་གཅིག་ཁར་ མཐུད་མཚམས་ཅིག་བུཊི་འབད།
 
-```bash
-IROHA_CONFIG=/path/to/nexus/config.toml
-irohad --sora --config "${IROHA_CONFIG}"
-```
+I18NF0000008X
 
-The node logs the derived routing policy during startup. Any validation errors
-(missing indexes, duplicated aliases, invalid dataspace ids) are surfaced before
-gossip begins.
+མཐུད་མཚམས་འདི་གིས་ འགོ་བཙུགས་པའི་སྐབས་ལས་ བཏོན་གཏང་ཡོད་པའི་ འགྲུལ་ལམ་སྲིད་བྱུས་འདི་ དྲན་ཐོ་བཀོདཔ་ཨིན། བདེན་དཔྱད་ཀྱི་འཛོལ་བ་གང་རུང་ཅིག།
+(ཟུར་ཐོའི་ཟུར་ཐོ་ འདྲ་བཤུས་རྐྱབ་ཡོད་པའི་ ཌབ་ལུ་ལིཌ་ གནད་སྡུད་ས་སྟོང་ ཨིཌི་) ཚུ་ ཧེ་མ་ལས་ བཏོན་ཡོདཔ་ཨིན།
+gossip འགོ་བཙུགསཔ་ཨིན།
 
-## 4. Confirm lane governance state
+## 4. བ ར་བའི་གཞུང་སྐྱོང་རྒྱལ་ཁབ།
 
-Once the node is online, use the CLI helper to verify that the default lane is
-sealed (manifest loaded) and ready for traffic. The summary view prints one row
-per lane:
+མཐུད་མཚམས་འདི་ ཡོངས་འབྲེལ་ཐོག་ལས་ འབད་ཚརཝ་ད་ སྔོན་སྒྲིག་ལམ་འདི་ ཨིན་ན་མེན་ན་ བདེན་དཔྱད་འབད་ནི་ལུ་ སི་ཨེལ་ཨའི་ གྲོགས་རམ་པ་འདི་ལག་ལེན་འཐབ།
+མཚོན་རྟགས་ (མ་བདེན) དང་ འགྲུལ་སྐྱོད་ཀྱི་དོན་ལུ་ གྲ་སྒྲིག་ཡོདཔ་ཨིན། བཅུད་དོན་མཐོང་སྣང་གིས་ གྲལ་ཐིག་གཅིག་དཔར་བསྐྲུན་འབདཝ་ཨིན།
+ལམ་རེ།
 
-```bash
-iroha_cli app nexus lane-report --summary
-```
+I18NF0000009X
 
-Example output:
+དཔེ་མཚོན་གྱི་ཐོན་འབྲས་:
 
 ```
 Lane  Alias            Module           Status  Quorum  Validators  Detail
@@ -143,20 +140,20 @@ Lane  Alias            Module           Status  Quorum  Validators  Detail
    2  zk               parliament       sealed     03           05  manifest required
 ```
 
-If the default lane shows `sealed`, follow the lane governance runbook before
-allowing external traffic. The `--fail-on-sealed` flag is handy for CI.
+སྔོན་སྒྲིག་ལམ་འདི་གིས་ `sealed` སྟོན་པ་ཅིན་ ལམ་གྱི་གཞུང་སྐྱོང་རྔོན་དེབ་འདི་ ཧེ་མ་གི་ཧེ་མ་ལས་ ལག་ལེན་འཐབ་ཨིན།
+འཕྲལ་གྱི་འགྲུལ་སྐྱོད་འབད་བཅུགཔ་ཨིན། `--fail-on-sealed` དར་འདི་ CI གི་དོན་ལུ་ ལག་ལེན་འཐབ་བཏུབ།
 
-## 5. Inspect Torii status payloads
+## 5. Torii གནས་ཚད་ཀྱི་པེ་ལོསི།
 
-The `/status` response exposes both the routing policy and the per-lane scheduler
-snapshot. Use `curl`/`jq` to confirm the configured defaults and to check that
-the fallback lane is producing telemetry:
+`/status` ལན་འདེབས་འདི་གིས་ འགྲུལ་ལམ་སྲིད་བྱུས་དང་ ལམ་ཐིག་རེ་གི་ལས་རིམ་བཟོ་མི་གཉིས་ཆ་ར་ གསལ་སྟོན་འབདཝ་ཨིན།
+པར་ལེན་ . རིམ་སྒྲིག་འབད་ཡོད་པའི་སྔོན་སྒྲིག་ཚུ་ངེས་དཔྱད་འབད་ནིའི་དོན་ལུ་ I18NI000000034X/`jq` ལག་ལེན་འཐབ།
+ཕྱིར་ལོག་ལམ་འདི་ ཊེ་ལི་མེ་ཊི་ཐོན་སྐྱེད་འབདཝ་ཨིན།
 
 ```bash
 curl -s http://127.0.0.1:8080/status | jq '.nexus.routing_policy'
 ```
 
-Sample output:
+དཔེ་ཚད་ཀྱི་ཐོན་འབྲས་:
 
 ```json
 {
@@ -169,7 +166,7 @@ Sample output:
 }
 ```
 
-To inspect the live scheduler counters for lane `0`:
+ལམ་ཐིག་ `0` གི་དོན་ལུ་ ཐད་རི་བ་རི་ ལས་རིམ་བཟོ་མི་ གྱངས་ཁ་བརྟག་དཔྱད་འབད་ནི།
 
 ```bash
 curl -s http://127.0.0.1:8080/status \
@@ -177,37 +174,37 @@ curl -s http://127.0.0.1:8080/status \
         | {lane_id, alias, dataspace_alias, committed, manifest_ready, scheduler_utilization_pct}'
 ```
 
-This confirms that the TEU snapshot, alias metadata, and manifest flags align
-with the configuration. The same payload is what Grafana panels use for the
-lane-ingest dashboard.
+འདི་གིས་ ཊི་ཨི་ཡུ་གི་པར་བཏབ་ནི་དང་ མིང་གཞན་མེ་ཊ་ཌེ་ཊ་ དེ་ལས་ དར་ཚིག་ཚུ་ཕྲང་སྒྲིག་འབད་ནི་དེ་ ངེས་གཏན་བཟོཝ་ཨིན།
+རིམ་སྒྲིག་དང་གཅིག་ཁར་། དེ་བཟུམ་མའི་ པེ་ལོཌ་འདི་ I18NT000000000X གི་ པེ་ནཱལ་ཚུ་གིས་ ལག་ལེན་འཐབ་ཨིན།
+lane-ingest dashboo.
 
-## 6. Exercise client defaults
+## 6. ལུས་སྦྱོང་མཁོ་སྤྲོད་སྔོན་སྒྲིག་ཚུ།
 
-- **Rust/CLI.** `iroha_cli` and the Rust client crate omit the `lane_id` field
-  when you do not pass `--lane-id` / `LaneSelector`. The queue router therefore
-  falls back to `default_lane`. Use explicit `--lane-id`/`--dataspace-id` flags
-  only when targeting a non-default lane.
-- **JS/Swift/Android.** Latest SDK releases treat `laneId`/`lane_id` as optional
-  and fall back to the value advertised by `/status`. Keep the routing policy in
-  sync across staging and production so mobile apps do not need emergency
-  reconfigurations.
-- **Pipeline/SSE tests.** The transaction event filters accept
-  `tx_lane_id == <u32>` predicates (see `docs/source/pipeline.md`). Subscribe to
-  `/v1/pipeline/events/transactions` with that filter to prove that writes sent
-  without an explicit lane arrive under the fallback lane id.
+- **རཱསི་/སི་ཨེལ་ཨའི་.** `iroha_cli` དང་ རཱསི་ མཁོ་མངགས་འབད་མི་ ཀརཊ་གིས་ I18NI000000038X ས་སྒོ་འདི་ བཏོན་གཏང་ཡོདཔ།
+  ཁྱོད་ཀྱིས་ `--lane-id` / `LaneSelector` མ་བརྒྱུད་པའི་སྐབས། དེ་འབདཝ་ལས་ གྱལ་རིམ་གྱི་རའུ་ཊར་འདི།
+  ལོག་ `default_lane` ལུ་ལྷོདཔ་ཨིན། གསལ་རི་རི་ `--lane-id`/I18NI0000043 དར་ཚུ་ལག་ལེན་འཐབ།
+  སྔོན་སྒྲིག་མེན་པའི་ལམ་ལུ་དམིགས་གཏད་བསྐྱེད་པའི་སྐབས་ལུ་རྐྱངམ་ཅིག།
+- **JS/Swift/Android.** མཐའ་མའི་ཨེསི་ཌི་ཀེ་ གསར་བཏོན་ཚུ་གིས་ I18NI000000444X/I18NI000000045X འདི་གདམ་ཁ་ཅན་སྦེ་བརྩི་འཇོག་འབདཝ་ཨིན།
+  དང་ `/status` གིས་ཁྱབ་བསྒྲགས་འབད་མི་གནས་གོང་ལུ་ལོག་འགྱོ། རའུ་ཊིང་སྲིད་བྱུས་ནང་བཞག།
+  གོ་རིམ་དང་ཐོན་སྐྱེད་ཀྱི་མཉམ་མཐུན་འབདཝ་ལས་ འགྲུལ་འཕྲིན་གྱི་མཉེན་ཆས་ཚུ་ལུ་ གློ་བུར་གྱི་དགོས་མཁོ་མེདཔ་ཨིན།
+  བསྐྱར་སྒྲིག་ཚུ།
+- **Pipeline/SSE བརྟག་དཔྱད།** ཚོང་འབྲེལ་བྱུང་ལས་ཚགས་མ་ཚུ་ངོས་ལེན་འབདཝ་ཨིན།
+  `tx_lane_id == <u32>` སྔོན་དཔག་ (I18NI0000048X ལུ་བལྟ།) Subscribe to
+  I18NI000000049X འདི་ ཚགས་མ་དེ་གིས་ བྲིས་ཡོདཔ་སྦེ་ བདེན་ཁུངས་བཀལ་ནིའི་དོན་ལུ་ ཚགས་མ་དེ་དང་གཅིག་ཁར་ འབད་ཡོདཔ་ཨིན།
+  མེད་པའི་ལམ་ཅིག་མེད་པར་ ཕོབ་བེག་ལེན་ཨའི་ཌི་གི་འོག་ལུ་ཨིན།
 
-## 7. Observability and governance hooks
+## 7. བལྟ་རྟོག་དང་གཞུང་སྐྱོང་ཧུམ་པ།
 
-- `/status` also publishes `nexus_lane_governance_sealed_total` and
-  `nexus_lane_governance_sealed_aliases` so Alertmanager can warn whenever a
-  lane loses its manifest. Keep those alerts enabled even for devnets.
-- The scheduler telemetry map and the lane governance dashboard
-  (`dashboards/grafana/nexus_lanes.json`) expect the alias/slug fields from the
-  catalog. If you rename an alias, relabel the corresponding Kura directories so
-  auditors keep deterministic paths (tracked under NX-1).
-- Parliament approvals for default lanes should include a rollback plan. Record
-  the manifest hash and governance evidence alongside this quickstart in your
-  operator runbook so future rotations do not guess the required state.
+- I18NI000000050X ཡང་ I18NI000000051X དང་དཔར་བསྐྲུན་འབདཝ་ཨིན།
+  `nexus_lane_governance_sealed_aliases` དེ་འབདཝ་ལས་ ཉེན་བརྡའི་མ་རར་གྱིས་ ག་དུས་འབད་རུང་ ཉེན་བརྡ་འབད་ཚུགས།
+  །ལམ་ནི་དེའི་མངོན་པར་བརླབས། ཉེན་བརྡ་དེ་ཚུ་ devnets གི་དོན་ལུ་ཡང་ ལྕོགས་ཅན་བཟོ་དགོ།
+- ལས་རིམ་བཟོ་མི་ ཊེ་ལི་མི་ཊི་སབ་ཁྲ་དང་ ལམ་གཞུང་ ཌེཤ་བོཌ།
+  (`dashboards/grafana/nexus_lanes.json`) གིས་ མིང་གཞན་/ས་ལུ་ས་ཁོངས་ཚུ་ནང་ལས་ རེ་བ་བསྐྱེདཔ་ཨིན།
+  ཐོ་གཞུང་། ཁྱོད་ཀྱིས་ མིང་གཞན་ལུ་བསྐྱར་མིང་བཏགས་པ་ཅིན་ དེ་དང་མཐུན་པའི་ཀུ་ར་སྣོད་ཐོ་ཚུ་ བསྐྱར་སྒྲིག་འབད་དགོ།
+  རྩིས་ཞིབ་པ་ཚུ་གིས་ ཐག་བཅད་པའི་ལམ་ཚུ་བཞགཔ་ཨིན། (NX-1 གི་འོག་ལུ་ བརྟག་ཞིབ་འབད་ཡོདཔ་ཨིན།)
+- སྔོན་སྒྲིག་ལམ་ཚུ་གི་དོན་ལུ་ སྤྱི་ཚོགས་ཀྱི་གནང་བ་ཚུ་ནང་ ལོག་སྤྲོད་ནི་གི་འཆར་གཞི་ཅིག་ བཙུགས་དགོ། ཐོ་བཀོད
+  ཁྱོད་ཀྱི་ནང་ལུ་ མགྱོགས་དྲགས་འགོ་བཙུགས་མི་འདི་དང་གཅིག་ཁར་ གསལ་སྟོན་གྱི་ ཧ་ཤི་དང་ གཞུང་སྐྱོང་སྒྲུབ་བྱེད་ཚུ།
+  བཀོལ་སྤྱོད་པ་རཱོན་བུཀ་ དེ་འབདཝ་ལས་ མ་འོངས་པའི་བསྒྱིར་ཚད་ཚུ་གིས་ དགོས་མཁོ་ཡོད་པའི་གནས་སྟངས་འདི་ ཕོ་ཚོད་མ་བཏོནམ་ཨིན།
 
-Once these checks pass you can treat `nexus.routing_policy.default_lane` as the
-code paths on the network.
+འདི་ཚུ་ བརྟག་ཞིབ་འདི་ཚུ་འབད་ཚརཝ་ད་ ཁྱོད་ཀྱིས་ I18NI0000004X འདི་བཟུམ་སྦེ་ བརྩི་འཇོག་འབད་ཚུགས།
+ཡོངས་འབྲེལ་ནང་གི་ཨང་རྟགས་འགྲུལ་ལམ་ཚུ།

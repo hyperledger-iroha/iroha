@@ -7,42 +7,43 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 7d6965998c392217380a1722e49098f831438e2f4499b9e3258398a66f905a35
 source_last_modified: "2025-12-29T18:16:35.080069+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# SNS Training Workbook Template
+# SNS уҡытыу эш дәфтәре ҡалыптары
 
-Use this workbook as the canonical handout for each training cohort. Replace
-placeholders (`<...>`) before distributing to attendees.
+Был эш дәфтәрен һәр уҡытыу когортаһы өсөн канонлы таратыу булараҡ ҡулланығыҙ. Алмаштырырға
+урындар (`<...>`) йыйылыусыларға таратҡансы.
 
-## Session details
-- Suffix: `<.sora | .nexus | .dao>`
-- Cycle: `<YYYY-MM>`
-- Language: `<ar/es/fr/ja/pt/ru/ur>`
-- Facilitator: `<name>`
+## Сессия реквизиттары
+- Суффикс: `<.sora | .nexus | .dao>`
+- цикл: `<YYYY-MM>`
+- Тел: `<ar/es/fr/ja/pt/ru/ur>`
+- Фасилитатор: `<name>`
 
-## Lab 1 — KPI export
-1. Open the portal KPI dashboard (`docs/portal/docs/sns/kpi-dashboard.md`).
-2. Filter by suffix `<suffix>` and time range `<window>`.
-3. Export PDF + CSV snapshots.
-4. Record SHA-256 of the exported JSON/PDF here: `______________________`.
+## 1-се лаборатория — KPI экспорты
+1. Портал KPI приборҙар таҡтаһын асырға (`docs/portal/docs/sns/kpi-dashboard.md`).
+2. `<suffix>` ялғауы һәм `<window>` ваҡыт диапазоны менән фильтр.
+3. Экспорт PDF + CSV снимоктары.
+4. Яҙма SHA-256 экспортланған JSON/PDF бында: `______________________`.
 
-## Lab 2 — Manifest drill
-1. Fetch the sample manifest from `artifacts/sns/training/<suffix>/<cycle>/manifests/<lang>.json`.
-2. Validate with `cargo run --bin sns_manifest_check -- --input <file>`.
-3. Generate resolver skeleton with `scripts/sns_zonefile_skeleton.py`.
-4. Paste the diff summary:
+## 2-се лаборатория — Манифест бура
+1. I18NI000000012X-тан өлгө күрһәтеү.
+2. `cargo run --bin sns_manifest_check -- --input <file>` менән раҫлау.
+.
+4. Дифф резюмеһын йәбештерегеҙ:
    ```
    <git diff output>
    ```
 
-## Lab 3 — Dispute simulation
-1. Use guardian CLI to start a freeze (case id `<case-id>`).
-2. Record the dispute hash: `______________________`.
-3. Upload the evidence log to `artifacts/sns/training/<suffix>/<cycle>/logs/`.
+## 3-сө лаборатория — бәхәс моделләштереү
+1. Ҡулланыу опекун CLI башлау өсөн туңдырыу (осраҡ id `<case-id>`).
+2. Бәхәс хеш яҙма: `______________________`.
+3. Дәлилдәрҙе `artifacts/sns/training/<suffix>/<cycle>/logs/`-ҡа тейәгеҙ.
 
-## Lab 4 — Annex automation
-1. Export the Grafana dashboard JSON and copy it into `artifacts/sns/regulatory/<suffix>/<cycle>/sns_suffix_analytics.json`.
-2. Run:
+## 4-се лаборатория — Ҡушымта автоматлаштырыу
+1. Экспорт I18NT00000000000X приборҙар таҡтаһы JSON һәм уны күсерергә I18NI000000018X.
+2. Йүгерергә:
    ```bash
    cargo xtask sns-annex \
      --suffix <suffix> \
@@ -53,12 +54,12 @@ placeholders (`<...>`) before distributing to attendees.
      --regulatory-entry docs/source/sns/regulatory/<memo>.md \
      --portal-entry docs/portal/docs/sns/regulatory/<memo-id>.md
    ```
-3. Paste the annex path + SHA-256 output: `________________________________`.
+3. Ҡушымта юлды йәбештереү + SHA-256 сығыш: I18NI000000019X.
 
-## Feedback notes
-- What was unclear?
-- Which labs ran over time?
-- Tooling bugs observed?
+## Кире бәйләнеш иҫкәрмәләр
+- Нимә асыҡланманы?
+- Ҡайһы лабораториялар ваҡыт үткән һайын йүгерҙе?
+- Күҙәтелгән ҡораллы ҡомаҡтар?
 
-Return completed workbooks to the facilitator; they belong under
+Ҡайтарыу тамамланған эш дәфтәрҙәрен ярҙамсыға; улар 2012 йылда ҡарай.
 `artifacts/sns/training/<suffix>/<cycle>/workbooks/`.

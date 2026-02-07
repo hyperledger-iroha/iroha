@@ -10,85 +10,86 @@ translation_last_reviewed: 2026-02-07
 id: nexus-operations
 title: Nexus operations runbook
 description: Field-ready summary of the Nexus operator workflow, mirroring `docs/source/nexus_operations.md`.
+translator: machine-google-reviewed
 ---
 
-Use this page as the quick-reference sibling of
-`docs/source/nexus_operations.md`. It distils the operational checklist, change
-management hooks, and telemetry coverage requirements that Nexus operators must
-follow.
+გამოიყენეთ ეს გვერდი, როგორც სწრაფი მითითების ძმა
+`docs/source/nexus_operations.md`. ის ასუფთავებს ოპერაციულ საკონტროლო სიას, ცვლილებას
+მართვის კაკვები და ტელემეტრიის დაფარვის მოთხოვნები, რომლებიც Nexus ოპერატორებმა უნდა
+მიჰყევი.
 
-## Lifecycle checklist
+## სასიცოცხლო ციკლის ჩამონათვალი
 
-| Stage | Actions | Evidence |
+| სცენა | მოქმედებები | მტკიცებულება |
 |-------|--------|----------|
-| Pre-flight | Verify release hashes/signatures, confirm `profile = "iroha3"`, and prepare config templates. | `scripts/select_release_profile.py` output, checksum log, signed manifest bundle. |
-| Catalog alignment | Update `[nexus]` catalog, routing policy, and DA thresholds per council-issued manifest, then capture `--trace-config`. | `irohad --sora --config … --trace-config` output stored with onboarding ticket. |
-| Smoke & cutover | Run `irohad --sora --config … --trace-config`, execute CLI smoke (`FindNetworkStatus`), validate telemetry exports, and request admission. | Smoke-test log + Alertmanager confirmation. |
-| Steady state | Monitor dashboards/alerts, rotate keys per governance cadence, and sync configs/runbooks whenever manifests change. | Quarterly review minutes, dashboard screenshots, rotation ticket IDs. |
+| გაფრენამდე | გადაამოწმეთ გამოშვების ჰეშები/ხელმოწერები, დაადასტურეთ `profile = "iroha3"` და მოამზადეთ კონფიგურაციის შაბლონები. | `scripts/select_release_profile.py` გამომავალი, საკონტროლო ჯამის ჟურნალი, ხელმოწერილი მანიფესტის ნაკრები. |
+| კატალოგის გასწორება | განაახლეთ `[nexus]` კატალოგი, მარშრუტიზაციის პოლიტიკა და DA ზღვრები საბჭოს მიერ გამოშვებულ მანიფესტზე, შემდეგ აღბეჭდეთ `--trace-config`. | `irohad --sora --config … --trace-config` გამომავალი შენახული საბორტო ბილეთით. |
+| Smoke & cutover | გაუშვით `irohad --sora --config … --trace-config`, შეასრულეთ CLI smoke (`FindNetworkStatus`), დაადასტურეთ ტელემეტრიის ექსპორტი და მოითხოვეთ დაშვება. | კვამლის ტესტის ჟურნალი + Alertmanager დადასტურება. |
+| სტაბილური მდგომარეობა | დააკვირდით საინფორმაციო დაფებს/გაფრთხილებებს, დაატრიალეთ კლავიშები მართვის კადენციის მიხედვით და სინქრონიზაცია მოახდინეთ კონფიგურაციების/გაშვების წიგნების ნებისმიერ დროს, როცა შეინიშნება ცვლილება. | კვარტალური მიმოხილვის წუთები, დაფის ეკრანის ანაბეჭდები, როტაციის ბილეთების ID. |
 
-Detailed onboarding (key replacement, routing templates, release profile steps)
-remain in `docs/source/sora_nexus_operator_onboarding.md`.
+დეტალური ჩართვა (გასაღების ჩანაცვლება, მარშრუტის შაბლონები, პროფილის გამოშვების ნაბიჯები)
+რჩება `docs/source/sora_nexus_operator_onboarding.md`-ში.
 
-## Change management
+## ცვლილებების მენეჯმენტი
 
-1. **Release updates** – track announcements in `status.md`/`roadmap.md`; attach
-   the onboarding checklist to every release PR.
-2. **Lane manifest changes** – verify signed bundles from the Space Directory and
-   archive them under `docs/source/project_tracker/nexus_config_deltas/`.
-3. **Configuration deltas** – every `config/config.toml` change requires a ticket
-   referencing the lane/data-space. Store a redacted copy of the effective config
-   whenever nodes join or upgrade.
-4. **Rollback drills** – quarterly rehearse stop/restore/smoke procedures; log
-   outcomes under `docs/source/project_tracker/nexus_config_deltas/<date>-rollback.md`.
-5. **Compliance approvals** – private/CBDC lanes must secure compliance sign-off
-   before modifying DA policy or telemetry redaction knobs (see
+1. **გამოშვების განახლებები** – აკონტროლეთ განცხადებები `status.md`/`roadmap.md`-ში; მიამაგრეთ
+   ყოველი გამოშვების PR-ის საკონტროლო სია.
+2. **Lane manifest-ის ცვლილებები** – შეამოწმეთ ხელმოწერილი პაკეტები Space Directory-დან და
+   დაარქივეთ ისინი `docs/source/project_tracker/nexus_config_deltas/` ქვეშ.
+3. **კონფიგურაციის დელტას** – ყოველი `config/config.toml` ცვლილება მოითხოვს ბილეთს
+   ზოლის/მონაცემთა სივრცის მითითება. შეინახეთ ეფექტური კონფიგურაციის რედაქტირებული ასლი
+   როდესაც კვანძები უერთდებიან ან განახლდებიან.
+4. **გაბრუნებული წვრთნები** – კვარტალური რეპეტიციების გაჩერება/აღდგენა/მოწევის პროცედურები; ჟურნალი
+   შედეგები `docs/source/project_tracker/nexus_config_deltas/<date>-rollback.md` ქვეშ.
+5. ** შესაბამისობის დამტკიცება ** – კერძო/CBDC ზოლები უნდა უზრუნველყოფდეს შესაბამისობის გაფორმებას
+   DA პოლიტიკის ან ტელემეტრიის რედაქციის ღილაკების შეცვლამდე (იხ
    `docs/source/cbdc_lane_playbook.md`).
 
-## Telemetry & SLOs
+## ტელემეტრია და SLO
 
-- Dashboards: `dashboards/grafana/nexus_lanes.json`, `nexus_settlement.json`, plus
-  SDK-specific views (e.g., `android_operator_console.json`).
-- Alerts: `dashboards/alerts/nexus_audit_rules.yml` and Torii/Norito transport
-  rules (`dashboards/alerts/torii_norito_rpc_rules.yml`).
-- Metrics to watch:
-  - `nexus_lane_height{lane_id}` – alert on zero progress for three slots.
-  - `nexus_da_backlog_chunks{lane_id}` – alert above lane-specific thresholds
-    (default 64 public / 8 private).
-  - `nexus_settlement_latency_seconds{lane_id}` – alert when P99 exceeds 900 ms
-    (public) or 1200 ms (private).
-  - `torii_request_failures_total{scheme="norito_rpc"}` – alert if 5-minute error
-    ratio >2 %.
-  - `telemetry_redaction_override_total` – Sev 2 immediately; ensure overrides
-    have compliance tickets.
-- Run the telemetry remediation checklist in
-  [Nexus telemetry remediation plan](./nexus-telemetry-remediation) at least
-  quarterly and attach the filled form to operations review notes.
+- დაფები: `dashboards/grafana/nexus_lanes.json`, `nexus_settlement.json`, პლუს
+  SDK-ს სპეციფიკური ნახვები (მაგ., `android_operator_console.json`).
+- გაფრთხილებები: `dashboards/alerts/nexus_audit_rules.yml` და Torii/Norito ტრანსპორტი
+  წესები (`dashboards/alerts/torii_norito_rpc_rules.yml`).
+- საყურებელი მეტრიკა:
+  - `nexus_lane_height{lane_id}` - გაფრთხილება ნულოვანი პროგრესის შესახებ სამი სლოტისთვის.
+  - `nexus_da_backlog_chunks{lane_id}` - გაფრთხილება ზოლის სპეციფიკური ზღვრების ზემოთ
+    (ნაგულისხმევი 64 საჯარო / 8 პირადი).
+  - `nexus_settlement_latency_seconds{lane_id}` - გაფრთხილება, როდესაც P99 აჭარბებს 900 ms-ს
+    (საჯარო) ან 1200 ms (პირადი).
+  - `torii_request_failures_total{scheme="norito_rpc"}` - გაფრთხილება 5 წუთიანი შეცდომის შემთხვევაში
+    თანაფარდობა >2%.
+  - `telemetry_redaction_override_total` – Sev2 დაუყოვნებლივ; უგულებელყოფა
+    აქვს შესაბამისობის ბილეთები.
+- გაუშვით ტელემეტრიის გამოსწორების საკონტროლო სია
+  [Nexus ტელემეტრიის გამოსწორების გეგმა] (./nexus-telemetry-remediation) მინიმუმ
+  კვარტალურად და შევსებული ფორმა დაურთოთ ოპერაციების განხილვის შენიშვნებს.
 
-## Incident matrix
+## ინციდენტის მატრიცა
 
-| Severity | Definition | Response |
+| სიმძიმე | განმარტება | პასუხი |
 |----------|------------|----------|
-| Sev 1 | Data-space isolation breach, settlement halt >15 min, or governance vote corruption. | Page Nexus Primary + Release Engineering + Compliance, freeze admission, collect artefacts, publish comms ≤60 min, RCA ≤5 business days. |
-| Sev 2 | Lane backlog SLA breach, telemetry blind spot >30 min, failed manifest rollout. | Page Nexus Primary + SRE, mitigate ≤4 h, file follow-ups within 2 business days. |
-| Sev 3 | Non-blocking drift (docs, alerts). | Log in tracker, schedule fix inside the sprint. |
+| Sev1 | მონაცემთა სივრცის იზოლაციის დარღვევა, დასახლების შეჩერება >15 წთ ან მმართველობითი ხმის კორუფცია. | გვერდი Nexus ძირითადი + გამოშვების ინჟინერია + შესაბამისობა, დაშვების გაყინვა, არტეფაქტების შეგროვება, კომისიის გამოქვეყნება ≤60 წთ, RCA ≤5 სამუშაო დღე. |
+| Sev2 | ზოლის ჩამორჩენილი SLA დარღვევა, ტელემეტრიის ბრმა წერტილი >30 წთ, მანიფესტში წარუმატებელი გაშვება. | გვერდი Nexus ძირითადი + SRE, შერბილება ≤4 სთ, შეიტანეთ შემდგომი მოქმედებები 2 სამუშაო დღის განმავლობაში. |
+| Sev3 | არადაბლოკვის დრიფტი (დოკუმენტები, გაფრთხილებები). | შედით ტრეკერში, დაგეგმეთ შესწორება სპრინტის შიგნით. |
 
-Incident tickets must record affected lane/data-space IDs, manifest hashes,
-timeline, supporting metrics/logs, and follow-up tasks/owners.
+ინციდენტის ბილეთებმა უნდა ჩაიწეროს დაზარალებული ზოლის/მონაცემთა სივრცის ID, მანიფესტის ჰეშები,
+ვადები, მხარდამჭერი მეტრიკა/ლოგები და შემდგომი ამოცანები/მფლობელები.
 
-## Evidence archive
+## მტკიცებულებათა არქივი
 
-- Store bundles/manifests/telemetry exports under `artifacts/nexus/<lane>/<date>/`.
-- Keep redacted configs + `--trace-config` output for each release.
-- Attach council minutes + signed decisions when config or manifest changes land.
-- Preserve weekly Prometheus snapshots relevant to Nexus metrics for 12 months.
-- Record runbook edits in `docs/source/project_tracker/nexus_config_deltas/README.md`
-  so auditors know when responsibilities changed.
+- შეინახეთ პაკეტები/მანიფესტები/ტელემეტრიის ექსპორტი `artifacts/nexus/<lane>/<date>/` ქვეშ.
+- შეინახეთ რედაქტირებული კონფიგურაციები + `--trace-config` გამომავალი თითოეული გამოშვებისთვის.
+- მიამაგრეთ საბჭოს ოქმები + ხელმოწერილი გადაწყვეტილებები, როდესაც კონფიგურაცია ან მანიფესტი ცვლის მიწას.
+- შეინახეთ ყოველკვირეული Prometheus კადრები, რომლებიც შეესაბამება Nexus მეტრებს 12 თვის განმავლობაში.
+- ჩაწერეთ runbook რედაქტირება `docs/source/project_tracker/nexus_config_deltas/README.md`-ში
+  ასე რომ, აუდიტორებმა იციან, როდის შეიცვალა პასუხისმგებლობა.
 
-## Related material
+## დაკავშირებული მასალა
 
-- Overview: [Nexus overview](./nexus-overview)
-- Specification: [Nexus spec](./nexus-spec)
-- Lane geometry: [Nexus lane model](./nexus-lane-model)
-- Transition & routing shims: [Nexus transition notes](./nexus-transition-notes)
-- Operator onboarding: [Sora Nexus operator onboarding](./nexus-operator-onboarding)
-- Telemetry remediation: [Nexus telemetry remediation plan](./nexus-telemetry-remediation)
+- მიმოხილვა: [Nexus მიმოხილვა](./nexus-overview)
+- სპეციფიკაცია: [Nexus სპეციფიკაცია](./nexus-spec)
+- ზოლის გეომეტრია: [Nexus ზოლის მოდელი] (./nexus-lane-model)
+- გადასვლისა და მარშრუტიზაციის შიმები: [Nexus გარდამავალი შენიშვნები] (./nexus-transition-notes)
+- ოპერატორის ჩართვა: [Sora Nexus ოპერატორის ჩართვა](./nexus-operator-onboarding)
+- ტელემეტრიის აღდგენა: [Nexus ტელემეტრიის გამოსწორების გეგმა] (./nexus-telemetry-remediation)

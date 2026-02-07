@@ -4,32 +4,34 @@ direction: ltr
 source: docs/portal/docs/nexus/telemetry-remediation.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: nexus-telemetry-remediation
-title: Plano de remediacao de telemetria do Nexus (B2)
-description: Espelho de `docs/source/nexus_telemetry_remediation_plan.md`, documentando a matriz de lacunas de telemetria e o fluxo operacional.
+ID: nexus-telemetry-remediation
+タイトル: Plano de remediacao de telemetria do Nexus (B2)
+説明: `docs/source/nexus_telemetry_remediation_plan.md` のエスペリョ、遠隔操作のマトリズ デ ラクナスのドキュメント。
 ---
 
-# Visao geral
+#ヴィサオ・ジェラル
 
-O item do roadmap **B2 - ownership de lacunas de telemetria** exige um plano publicado que vincule cada lacuna de telemetria pendente do Nexus a um sinal, um guardrail de alerta, um responsavel, um prazo e um artefato de verificacao antes do inicio das janelas de auditoria do Q1 2026. Esta pagina espelha `docs/source/nexus_telemetry_remediation_plan.md` para que release engineering, telemetry ops e os owners de SDK confirmem a cobertura antes dos ensaios routed-trace e `TRACE-TELEMETRY-BRIDGE`.
+O 項目のロードマップ **B2 - テレメトリの所有権** 公開計画の公開情報、テレメトリの詳細、Nexus の情報、アラートのガードレール、応答の確認、監査の開始および検証の準備2026 年第 1 四半期。`docs/source/nexus_telemetry_remediation_plan.md` パラケ リリース エンジニアリング、テレメトリ操作、OS 所有者が SDK を確認して、`TRACE-TELEMETRY-BRIDGE` を確認します。
 
-# Matriz de lacunas
+# マトリス・デ・ラクナス
 
-| ID da lacuna | Sinal e guardrail de alerta | Responsavel / escalonamento | Prazo (UTC) | Evidencia e verificacao |
-|--------|-------------------------|--------------------|-----------|-------------------------|
-| `GAP-TELEM-001` | Histograma `torii_lane_admission_latency_seconds{lane_id,endpoint}` com alerta **`SoranetLaneAdmissionLatencyDegraded`** disparando quando `histogram_quantile(0.95, rate(bucket[5m])) * 1000 > 750` por 5 minutos (`dashboards/alerts/soranet_lane_rules.yml`). | `@torii-sdk` (sinal) + `@telemetry-ops` (alerta); escalonamento via on-call routed-trace do Nexus. | 2026-02-23 | Testes de alerta em `dashboards/alerts/tests/soranet_lane_rules.test.yml` mais o registro do ensaio `TRACE-LANE-ROUTING` mostrando alerta disparado/recuperado e o scrape Torii `/metrics` arquivado em [Nexus transition notes](./nexus-transition-notes). |
-| `GAP-TELEM-002` | Contador `nexus_config_diff_total{knob,profile}` com guardrail `increase(nexus_config_diff_total{profile="active"}[5m]) > 0` bloqueando deploys (`docs/source/telemetry.md`). | `@nexus-core` (instrumentacao) -> `@telemetry-ops` (alerta); oficial de governanca e paginado quando o contador incrementa de forma inesperada. | 2026-02-26 | Saidas de dry-run de governanca armazenadas ao lado de `docs/source/project_tracker/nexus_config_deltas/2026Q1.md`; a checklist de release inclui a captura da consulta Prometheus mais o trecho de log provando que `StateTelemetry::record_nexus_config_diff` emitiu o diff. |
-| `GAP-TELEM-003` | Evento `TelemetryEvent::AuditOutcome` (metrica `nexus.audit.outcome`) com alerta **`NexusAuditOutcomeFailure`** quando falhas ou resultados ausentes persistem por >30 minutos (`dashboards/alerts/nexus_audit_rules.yml`). | `@telemetry-ops` (pipeline) com escalonamento para `@sec-observability`. | 2026-02-27 | O gate de CI `scripts/telemetry/check_nexus_audit_outcome.py` arquiva payloads NDJSON e falha quando uma janela TRACE nao tem evento de sucesso; capturas de alerta anexadas ao relatorio routed-trace. |
-| `GAP-TELEM-004` | Gauge `nexus_lane_configured_total` com guardrail `nexus_lane_configured_total != EXPECTED_LANE_COUNT` alimentando a checklist on-call de SRE. | `@telemetry-ops` (gauge/export) com escalonamento para `@nexus-core` quando os nos reportam tamanhos de catalogo inconsistentes. | 2026-02-28 | O teste de telemetria do scheduler `crates/iroha_core/tests/scheduler_telemetry.rs::records_lane_catalog_size` comprova a emissao; operadores anexam diff de Prometheus + trecho de log `StateTelemetry::set_nexus_catalogs` ao pacote do ensaio TRACE. |
+| ID ダ ラクナ |シナルとガードレールの警告 |応答/エスカロナメント |プラゾ (UTC) |証拠と検証 |
+|----------|----------------------|----------------------|-----------|----------------------|
+| `GAP-TELEM-001` |ヒストグラム `torii_lane_admission_latency_seconds{lane_id,endpoint}` コム アラート **`SoranetLaneAdmissionLatencyDegraded`** ディスパランド クアンド `histogram_quantile(0.95, rate(bucket[5m])) * 1000 > 750` または 5 分 (`dashboards/alerts/soranet_lane_rules.yml`)。 | `@torii-sdk` (シグナル) + `@telemetry-ops` (アラート);オンコール ルーテッド トレース経由でエスカロナメントが Nexus を実行します。 | 2026-02-23 |テスト・デ・アラート `dashboards/alerts/tests/soranet_lane_rules.test.yml` レジストリ・ド・エンサイオ `TRACE-LANE-ROUTING` ほとんどのアラート、ディスパラド/リカバリー、スクレープ Torii `/metrics` arquivado em [Nexus 移行]注](./nexus-transition-notes)。 |
+| `GAP-TELEM-002` | Contador `nexus_config_diff_total{knob,profile}` com ガードレール `increase(nexus_config_diff_total{profile="active"}[5m]) > 0` ブロックアンド デプロイ (`docs/source/telemetry.md`)。 | `@nexus-core` (instrumentacao) -> `@telemetry-ops` (alerta);公式の政府と公式のページ作成と編集の増分。 | 2026-02-26 | `docs/source/project_tracker/nexus_config_deltas/2026Q1.md`; アルマゼナダ政府のドライランについて説明します。 Prometheus は、プロバンド クエリ `StateTelemetry::record_nexus_config_diff` の差分を記録するためのキャプチャを含むリリースのチェックリストです。 |
+| `GAP-TELEM-003` |イベント `TelemetryEvent::AuditOutcome` (metrica `nexus.audit.outcome`) com アラート **`NexusAuditOutcomeFailure`** は 30 分を超える結果が持続します (`dashboards/alerts/nexus_audit_rules.yml`)。 | `@telemetry-ops` (パイプライン) `@sec-observability` からのエスカロナメント。 | 2026-02-27 | CI `scripts/telemetry/check_nexus_audit_outcome.py` arquiva ペイロード NDJSON と falha quando uma janela TRACE nao tem eventsto de sucesso のゲート。ルートトレース関連のアネクサダをキャプチャします。 |
+| `GAP-TELEM-004` |ゲージ `nexus_lane_configured_total` com ガードレール `nexus_lane_configured_total != EXPECTED_LANE_COUNT` は、SRE のオンコール チェックリストに相当します。 | `@telemetry-ops` (ゲージ/エクスポート) `@nexus-core` に関するレポートは一貫性がありません。 | 2026-02-28 |スケジューラ `crates/iroha_core/tests/scheduler_telemetry.rs::records_lane_catalog_size` を送信してテレメトリアをテストしてください。オペラドールの試験差分 Prometheus + ログ `StateTelemetry::set_nexus_catalogs` を追跡し、TRACE を実行します。 |
 
-# Fluxo operacional
+# Fluxo 運用
 
-1. **Triagem semanal.** Owners reportam progresso na chamada de readiness do Nexus; blockers e artefatos de testes de alerta sao registrados em `status.md`.
-2. **Ensaios de alertas.** Cada regra de alerta e entregue junto com uma entrada `dashboards/alerts/tests/*.test.yml` para que o CI execute `promtool test rules` quando o guardrail mudar.
-3. **Evidencia de auditoria.** Durante os ensaios `TRACE-LANE-ROUTING` e `TRACE-TELEMETRY-BRIDGE` o on-call captura resultados de consultas Prometheus, historico de alertas e saidas relevantes de scripts (`scripts/telemetry/check_nexus_audit_outcome.py`, `scripts/telemetry/check_redaction_status.py` para sinais correlacionados) e as armazena com os artefatos routed-trace.
-4. **Escalonamento.** Se algum guardrail disparar fora de uma janela ensaiada, a equipe responsavel abre um ticket de incidente Nexus referenciando este plano, incluindo o snapshot da metrica e os passos de mitigacao antes de retomar as auditorias.
+1. **問題の解決策。** 所有者は Nexus の進行状況を報告します。ブロッカーは、`status.md` の検査登録に関する警告です。
+2. **警告の警告** 警告を表示するには、`dashboards/alerts/tests/*.test.yml` パラメータ CI を実行してください。`promtool test rules` は、ガードレール ミューダーを実行します。
+3. **聴覚の証拠。** 継続的な監視 `TRACE-LANE-ROUTING` と `TRACE-TELEMETRY-BRIDGE`、オンコール キャプチャ結果の問い合わせ Prometheus、過去のアラートとスクリプト関連の発言 (`scripts/telemetry/check_nexus_audit_outcome.py`、 `scripts/telemetry/check_redaction_status.py` para sinais correlacionados) は、armazena com os artefatos Routed-trace として使用されます。
+4. **エスカロナメント** 安全なガードレールは、緊急事態に見合ったものではありません。また、インシデント Nexus は、聴衆としての重要なスナップショットのスナップショットを含む、緊急事態に対応するための設備を備えています。
 
-Com esta matriz publicada - e referenciada em `roadmap.md` e `status.md` - o item de roadmap **B2** agora atende aos criterios de aceitacao "responsabilidade, prazo, alerta, verificacao".
+Com esta matriz publicada - e Referenciada em `roadmap.md` e `status.md` - o item de roadmap **B2** agora atende aos criteria de aceitacao "responsabilidade, prazo, alerta, verificacao".

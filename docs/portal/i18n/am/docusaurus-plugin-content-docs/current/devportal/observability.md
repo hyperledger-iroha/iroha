@@ -8,40 +8,42 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: Portal Observability & Analytics
 sidebar_label: Observability
 description: Telemetry, release tagging, and verification automation for the developer portal.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-The DOCS-SORA roadmap requires analytics, synthetic probes, and broken-link
-automation for every preview build. This note documents the plumbing that now
-ships with the portal so operators can wire monitoring without leaking visitor
-data.
+የ DOCS-I18NT0000003X ፍኖተ ካርታ ትንታኔን፣ ሰው ሰራሽ መመርመሪያዎችን እና የተሰበረ ግንኙነትን ይፈልጋል።
+ለእያንዳንዱ ቅድመ እይታ ግንባታ አውቶማቲክ። ይህ ማስታወሻ አሁን ያለውን የቧንቧ ስራ ይመዘግባል።
+ኦፕሬተሮች ጎብኝዎችን ሳያፈስ ክትትል እንዲያደርጉ ፖርታሉን ይዘው ይጓዛሉ
+ውሂብ.
 
-## Release tagging
+## መለያ መስጠትን ይልቀቁ
 
-- Set `DOCS_RELEASE_TAG=<identifier>` (falls back to `GIT_COMMIT` or `dev`) when
-  building the portal. The value is injected into `<meta name="sora-release">`
-  so probes and dashboards can distinguish deployments.
-- `npm run build` emits `build/release.json` (written by
-  `scripts/write-checksums.mjs`) describing the tag, timestamp, and optional
-  `DOCS_RELEASE_SOURCE`. The same file is bundled into preview artefacts and
-  referenced by the link checker report.
+- `DOCS_RELEASE_TAG=<identifier>` ያቀናብሩ (ወደ `GIT_COMMIT` ወይም `dev` ይመለሳል)
+  ፖርታሉን መገንባት. እሴቱ ወደ `<meta name="sora-release">` ገብቷል።
+  ስለዚህ መመርመሪያዎች እና ዳሽቦርዶች ማሰማራትን መለየት ይችላሉ።
+- `npm run build` I18NI00000011 ኤክስ ያወጣል (የተፃፈ
+  `scripts/write-checksums.mjs`) መለያውን፣ የጊዜ ማህተምን እና አማራጭን የሚገልጽ
+  `DOCS_RELEASE_SOURCE`. ተመሳሳዩ ፋይል ወደ ቅድመ እይታ ቅርሶች እና
+  በአገናኝ አረጋጋጭ ዘገባ ተጠቅሷል።
 
-## Privacy-preserving analytics
+## ግላዊነትን የሚጠብቅ ትንታኔ
 
-- Configure `DOCS_ANALYTICS_ENDPOINT=<https://collector.example/ingest>` to
-  enable the lightweight tracker. Payloads contain `{ event, path, locale,
-  release, ts }` with no referrer or IP metadata, and `navigator.sendBeacon`
-  is used whenever possible to avoid blocking navigations.
-- Control sampling with `DOCS_ANALYTICS_SAMPLE_RATE` (0–1). The tracker stores
-  the last-sent path and never emits duplicate events for the same navigation.
-- The implementation lives in `src/components/AnalyticsTracker.jsx` and is
-  mounted globally through `src/theme/Root.js`.
+- `DOCS_ANALYTICS_ENDPOINT=<https://collector.example/ingest>` ወደ ያዋቅሩ
+  ቀላል ክብደት መከታተያ አንቃ። የሚጫኑ ጭነቶች `{ ክስተት፣ መንገድ፣ አካባቢ፣
+  መልቀቅ፣ ts }` with no referrer or IP metadata, and `navigator.sendBeacon`
+  አሰሳዎችን ማገድን ለማስወገድ በሚቻልበት ጊዜ ሁሉ ጥቅም ላይ ይውላል።
+- ናሙናዎችን በI18NI0000016X (0-1) ይቆጣጠሩ። መከታተያው ያከማቻል
+  የመጨረሻው የተላከው መንገድ እና ለተመሳሳይ አሰሳ የተባዙ ክስተቶችን በጭራሽ አያወጣም።
+- አተገባበሩ በ I18NI0000017X ውስጥ ይኖራል እና ነው።
+  በአለምአቀፍ ደረጃ በ `src/theme/Root.js` በኩል ተጭኗል።
 
-## Synthetic probes
+## ሰው ሰራሽ መመርመሪያዎች
 
-- `npm run probe:portal` issues GET requests against common routes
-  (`/`, `/norito/overview`, `/reference/torii-swagger`, etc.) and verifies the
-  `sora-release` meta tag matches `--expect-release` (or
-  `DOCS_RELEASE_TAG`). Example:
+- `npm run probe:portal` በጋራ መንገዶች ላይ የGET ጥያቄዎችን ያወጣል።
+  (`/`፣ `/norito/overview`፣ `/reference/torii-swagger`፣ ወዘተ) እና ያረጋግጣል።
+  `sora-release` ሜታ መለያ ከ `--expect-release` ጋር ይዛመዳል (ወይም
+  `DOCS_RELEASE_TAG`)። ምሳሌ፡-
 
 ```bash
 PORTAL_BASE_URL="https://docs.staging.sora" \
@@ -49,59 +51,59 @@ DOCS_RELEASE_TAG="preview-42" \
 npm run probe:portal -- --expect-release=preview-42
 ```
 
-Failures are reported per path, making it easy to gate CD on probe success.
+አለመሳካቶች በየመንገዱ ሪፖርት ይደረጋሉ፣ ይህም ሲዲ በምርመራ ስኬት ላይ በቀላሉ ለመግባት ያስችላል።
 
-## Broken-link automation
+## የተሰበረ-አገናኝ አውቶማቲክ
 
-- `npm run check:links` scans `build/sitemap.xml`, ensures every entry maps to a
-  local file (checking `index.html` fallbacks), and writes
-  `build/link-report.json` containing the release metadata, totals, failures,
-  and the SHA-256 fingerprint of `checksums.sha256` (exposed as `manifest.id`)
-  so every report can be tied back to the artefact manifest.
-- The script exits non-zero when a page is missing, so CI can block releases on
-  stale or broken routes. Reports cite the candidate paths that were attempted,
-  which helps trace routing regressions back to the docs tree.
+- `npm run check:links` `build/sitemap.xml` ስካን ያደርጋል፣ እያንዳንዱን ካርታ ወደ አንድ ግቤት ያረጋግጣል።
+  አካባቢያዊ ፋይል (`index.html` fallbacks በመፈተሽ) እና ይጽፋል
+  `build/link-report.json` የሚለቀቀውን ሜታዳታ፣ ጠቅላላ፣ ውድቀቶች፣
+  እና የSHA-256 የ I18NI0000030X አሻራ (እንደ `manifest.id` የተጋለጠ)
+  ስለዚህ እያንዳንዱ ዘገባ ከሥነ ጥበብ መግለጫው ጋር ሊያያዝ ይችላል።
+- አንድ ገጽ ሲጠፋ ስክሪፕቱ ከዜሮ ውጭ ይወጣል፣ ስለዚህ CI ልቀቶችን ማገድ ይችላል።
+  የቆዩ ወይም የተሰበሩ መንገዶች. ሪፖርቶች የተሞከሩትን የእጩ መንገዶችን ይጠቅሳሉ፣
+  ወደ ዶክ ዛፉ የማዞሪያ መንገዶችን ለመከታተል የሚረዳ።
 
-## Grafana dashboard & alerts
+## Grafana ዳሽቦርድ እና ማንቂያዎች
 
-- `dashboards/grafana/docs_portal.json` publishes the **Docs Portal Publishing**
-  Grafana board. It ships the following panels:
-  - *Gateway Refusals (5m)* uses `torii_sorafs_gateway_refusals_total` scoped by
-    `profile`/`reason` so SREs can detect bad policy pushes or token failures.
-  - *Alias Cache Refresh Outcomes* and *Alias Proof Age p90* track
-    `torii_sorafs_alias_cache_*` to prove fresh proofs exist before a DNS cut
-    over.
-  - *Pin Registry Manifest Counts* plus the *Active Alias Count* stat mirror the
-    pin-registry backlog and total aliases so governance can audit each release.
-  - *Gateway TLS Expiry (hours)* highlights when the publishing gateway’s TLS
-    cert approaches expiry (alert threshold at 72 h).
-  - *Replication SLA Outcomes* and *Replication Backlog* keep an eye on
-    `torii_sorafs_replication_*` telemetry to ensure all replicas meet the GA
-    bar after publishing.
-- Use the built-in template variables (`profile`, `reason`) to focus on the
-  `docs.sora` publishing profile or investigate spikes across all gateways.
-- PagerDuty routing uses the dashboard panels as evidence: alerts named
-  `DocsPortal/GatewayRefusals`, `DocsPortal/AliasCache`, and
-  `DocsPortal/TLSExpiry` fire when the corresponding series breach their
-  thresholds. Link the alert’s runbook to this page so on-call engineers can
-  replay the exact Prometheus queries.
+- `dashboards/grafana/docs_portal.json` ** የሰነዶች ፖርታል ሕትመትን ያትማል **
+  Grafana ሰሌዳ. የሚከተሉትን ፓነሎች ይልካል።
+  - *የጌትዌይ እምቢታ (5ሜ)* `torii_sorafs_gateway_refusals_total` ይጠቀማል
+    `profile`/`reason` ስለዚህ SREዎች መጥፎ የፖሊሲ ግፊቶችን ወይም የቶከን ውድቀቶችን ለይተው ማወቅ ይችላሉ።
+  - *Alias Cache Refresh results* እና *Alias Proof Age p90* ትራክ
+    `torii_sorafs_alias_cache_*` ዲ ኤን ኤስ ከመቆረጡ በፊት ትኩስ ማረጋገጫዎች መኖራቸውን ለማረጋገጥ
+    በላይ።
+  - *የፒን መዝገብ ቤት መግለጫ ብዛት* እና *የገቢር ተለዋጭ ስም ብዛት* ስታቲስቲክስ
+    የፒን መዝገብ መዝገብ እና አጠቃላይ ተለዋጭ ስሞች አስተዳደር እያንዳንዱን እትም ኦዲት ማድረግ ይችላል።
+  - *ጌትዌይ TLS የሚያበቃበት (ሰዓታት)* የማተሚያ መግቢያ በር TLS ጊዜ ድምቀቶች
+    የተረጋገጠ አቀራረቦች ጊዜው ያበቃል (የማስጠንቀቂያ ገደብ በ 72 ሰ)።
+  - * ማባዛት SLA ውጤቶች * እና * ማባዛት Backlog * ይከታተሉ
+    ሁሉም ቅጂዎች GA መገናኘታቸውን ለማረጋገጥ `torii_sorafs_replication_*` ቴሌሜትሪ
+    ባር ከታተመ በኋላ.
+- አብሮ የተሰራውን የአብነት ተለዋዋጮችን ይጠቀሙ (`profile`፣ `reason`)
+  `docs.sora` መገለጫን ማተም ወይም በሁሉም የመግቢያ መንገዶች ላይ ሹልቶችን መርምር።
+- PagerDuty ራውቲንግ ዳሽቦርድ ፓነሎችን እንደ ማስረጃ ይጠቀማል፡ ማንቂያዎች ተሰይመዋል
+  `DocsPortal/GatewayRefusals`፣ `DocsPortal/AliasCache`፣ እና
+  `DocsPortal/TLSExpiry` እሳት ተጓዳኝ ተከታታዮች ሲጥሱ
+  ገደቦች. የጥሪ መሐንዲሶች እንዲችሉ የማንቂያውን ማስኬጃ መጽሐፍ ከዚህ ገጽ ጋር ያገናኙ
+  ትክክለኛውን I18NT0000000X መጠይቆችን እንደገና ያጫውቱ።
 
-## Putting it together
+## አንድ ላይ በማጣመር
 
-1. During `npm run build`, set the release/analytics environment variables and
-   let the post-build step emit `checksums.sha256`, `release.json`, and
+1. በ `npm run build` ጊዜ፣ የመልቀቂያ/ትንታኔ የአካባቢ ተለዋዋጮችን እና
+   ከግንባታ በኋላ ያለው እርምጃ `checksums.sha256`፣ `release.json`፣ እና
    `link-report.json`.
-2. Run `npm run probe:portal` against the preview hostname with
-   `--expect-release` wired to the same tag. Save the stdout for the publishing
-   checklist.
-3. Run `npm run check:links` to fail fast on broken sitemap entries and archive
-   the generated JSON report together with the preview artefacts. CI drops the
-   latest report at `artifacts/docs_portal/link-report.json` so governance can
-   download the evidence bundle straight from the build logs.
-4. Forward the analytics endpoint to your privacy-preserving collector (Plausible,
-   self-hosted OTEL ingest, etc.) and ensure sampling rates are documented per
-   release so dashboards interpret counts correctly.
-5. CI already wires these steps through the preview/deploy workflows
-   (`.github/workflows/docs-portal-preview.yml`,
-   `.github/workflows/docs-portal-deploy.yml`), so local dry runs only need to
-   cover secret-specific behaviour.
+2. `npm run probe:portal`ን በቅድመ እይታ አስተናጋጅ ስም ያሂዱ
+   `--expect-release` በተመሳሳዩ መለያ ላይ ተጣብቋል። stdout ለህትመት ያስቀምጡ
+   የማረጋገጫ ዝርዝር.
+3. በተበላሹ የጣቢያ ካርታ ግቤቶች እና ማህደር ላይ በፍጥነት እንዳይሳካ `npm run check:links` ን ያሂዱ
+   የመነጨው JSON ሪፖርት ከቅድመ-ዕይታ ቅርሶች ጋር። CI ን ይጥላል
+   የቅርብ ጊዜ ሪፖርት በ `artifacts/docs_portal/link-report.json` ስለዚህ አስተዳደር ይችላል።
+   የማስረጃውን ጥቅል በቀጥታ ከግንባታ ምዝግብ ማስታወሻዎች ያውርዱ።
+4. የትንታኔውን የመጨረሻ ነጥብ ወደ ግላዊነት ጥበቃ ሰብሳቢዎ ያስተላልፉ (ተጨባጭ፣
+   በራስ የሚስተናገደው OTEL ኢንጀስት፣ ወዘተ.) እና የናሙና ተመኖች በእያንዳንዱ መመዝገባቸውን ያረጋግጡ
+   መልቀቅ ስለዚህ ዳሽቦርዶች በትክክል ይቆጥራሉ.
+5. CI እነዚህን ደረጃዎች አስቀድሞ በቅድመ-እይታ/የስራ ፍሰቶችን በማሰማራት ሽቦዎች ሰጥቷቸዋል።
+   (`.github/workflows/docs-portal-preview.yml`፣
+   `.github/workflows/docs-portal-deploy.yml`)፣ ስለዚህ የአካባቢ ደረቅ ሩጫዎች ብቻ ያስፈልጋቸዋል
+   ሚስጥራዊ-ተኮር ባህሪን ይሸፍኑ።

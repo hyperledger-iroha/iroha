@@ -4,70 +4,69 @@ direction: rtl
 source: docs/portal/docs/nexus/operations.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: nexus-operations
-title: Runbook de operacoes Nexus
-description: Resumo pronto para uso em campo do fluxo de trabalho do operador Nexus, espelhando `docs/source/nexus_operations.md`.
+ID: گٹھ جوڑ آپریشنز
+عنوان: آپریشنز رن بک Nexus
+تفصیل: Nexus آپریٹر ورک فلو کا فیلڈ تیار خلاصہ ، `docs/source/nexus_operations.md` کا آئینہ دار۔
 ---
 
-Use esta pagina como irmao de referencia rapida de `docs/source/nexus_operations.md`. Ela destila o checklist operacional, os ganchos de gestao de mudanca e os requisitos de cobertura de telemetria que os operadores Nexus devem seguir.
+اس صفحے کو `docs/source/nexus_operations.md` کے فوری حوالہ بہن کے طور پر استعمال کریں۔ یہ آپریشنل چیک لسٹ ، مینجمنٹ ہکس کو تبدیل کرنے ، اور ٹیلی میٹری کوریج کی ضروریات کو ختم کرتا ہے جس پر Nexus آپریٹرز کو لازمی طور پر عمل کرنا چاہئے۔
 
-## Lista de ciclo de vida
+## لائف سائیکل لسٹ
 
-| Etapa | Acoes | Evidencia |
-|-------|--------|----------|
-| Pre-voo | Verifique hashes/assinaturas de release, confirme `profile = "iroha3"` e prepare templates de configuracao. | Saida de `scripts/select_release_profile.py`, log de checksum, bundle de manifestos assinado. |
-| Alinhamento do catalogo | Atualize o catalogo `[nexus]`, a politica de roteamento e os limiares de DA conforme o manifesto emitido pelo conselho, e entao capture `--trace-config`. | Saida de `irohad --sora --config ... --trace-config` armazenada com o ticket de onboarding. |
-| Smoke e cutover | Execute `irohad --sora --config ... --trace-config`, rode o smoke do CLI (`FindNetworkStatus`), valide exportacoes de telemetria e solicite admissao. | Log de smoke-test + confirmacao do Alertmanager. |
-| Estado estavel | Monitore dashboards/alertas, rode rotacao de chaves conforme a cadencia de governanca e sincronize configs/runbooks quando manifestos mudarem. | Minutas de revisao trimestral, capturas de dashboards, IDs de tickets de rotacao. |
+| مرحلہ | حصص | ثبوت |
+| ------- | ----------- | ------------ |
+| پری فلائٹ | ریلیز ہیش/دستخط چیک کریں ، `profile = "iroha3"` کی تصدیق کریں اور کنفیگریشن ٹیمپلیٹس تیار کریں۔ | `scripts/select_release_profile.py` ، چیکسم لاگ ، دستخط شدہ مینی فیسٹ بنڈل کی آؤٹ پٹ۔ |
+| کیٹلاگ سیدھ | `[nexus]` کیٹلاگ ، روٹنگ پالیسی ، اور ڈی اے تھریشولڈز کو بورڈ کے ذریعہ جاری کردہ مینی فیسٹ کے مطابق اپ ڈیٹ کریں ، اور پھر `--trace-config` پر قبضہ کریں۔ | آن بورڈنگ ٹکٹ کے ساتھ `irohad --sora --config ... --trace-config` کا آؤٹ پٹ اسٹور کیا گیا ہے۔ |
+| دھواں اور کٹ اوور | `irohad --sora --config ... --trace-config` چلائیں ، CLI (`FindNetworkStatus`) سے دھواں چلائیں ، ٹیلی میٹری کی برآمدات کی توثیق کریں اور داخلے کی درخواست کریں۔ | دھواں ٹیسٹ لاگ + الرٹ مینجر کی تصدیق۔ |
+| مستحکم ریاست | ڈیش بورڈز/انتباہات کی نگرانی کریں ، گورننس کیڈینس کے مطابق چابیاں گھمائیں اور جب ظاہر ہوتا ہے تو تشکیل/رن بکس کو ہم آہنگ کریں۔ | سہ ماہی جائزہ لینے کے منٹ ، ڈیش بورڈ کیپچرز ، گردش کے ٹکٹ IDs۔ |
 
-O onboarding detalhado (substituicao de chaves, templates de roteamento, passos do perfil de release) permanece em `docs/source/sora_nexus_operator_onboarding.md`.
+تفصیلی آن بورڈنگ (کلیدی تبدیلی ، روٹنگ ٹیمپلیٹس ، ریلیز پروفائل مراحل) `docs/source/sora_nexus_operator_onboarding.md` پر باقی ہے۔
 
-## Gestao de mudanca
+## مینجمنٹ کو تبدیل کریں
 
-1. **Atualizacoes de release** - acompanhe anuncios em `status.md`/`roadmap.md`; anexe o checklist de onboarding a cada PR de release.
-2. **Mudancas de manifesto de lane** - verifique bundles assinados do Space Directory e arquive-os em `docs/source/project_tracker/nexus_config_deltas/`.
-3. **Deltas de configuracao** - toda mudanca em `config/config.toml` requer um ticket referenciando a lane/data-space. Guarde uma copia redigida da configuracao efetiva quando nos entram ou sao atualizados.
-4. **Treinos de rollback** - ensaie trimestralmente procedimentos de stop/restore/smoke; registre resultados em `docs/source/project_tracker/nexus_config_deltas/<date>-rollback.md`.
-5. **Aprovacoes de compliance** - lanes privadas/CBDC devem obter aval de compliance antes de alterar politica de DA ou knobs de redacao de telemetria (ver `docs/source/cbdc_lane_playbook.md`).
+1. ہر ریلیز PR پر آن بورڈنگ چیک لسٹ منسلک کریں۔
+2.
+3. جب ہم داخل ہوتے ہیں یا اپ ڈیٹ ہوتے ہیں تو کنفیگریشن کی ایک ریڈیکٹڈ کاپی موثر رکھیں۔
+4. `docs/source/project_tracker/nexus_config_deltas/<date>-rollback.md` میں ریکارڈ کے نتائج۔
+5. ** تعمیل کی منظوری ** - نجی/سی بی ڈی سی لینوں کو ڈی اے پالیسی یا ٹیلی میٹری ریڈیکشن نوبس کو تبدیل کرنے سے پہلے تعمیل کی منظوری حاصل کرنی ہوگی (`docs/source/cbdc_lane_playbook.md` دیکھیں)۔
 
-## Telemetria e SLOs
+## ٹیلی میٹری اور سلوس- ڈیش بورڈز: `dashboards/grafana/nexus_lanes.json` ، `nexus_settlement.json` ، نیز SDK- مخصوص نظارے (جیسے `android_operator_console.json`)۔
+- انتباہات: `dashboards/alerts/nexus_audit_rules.yml` اور ٹرانسپورٹ کے قواعد Torii/Norito (`dashboards/alerts/torii_norito_rpc_rules.yml`)۔
+- مشاہدہ کرنے کے لئے میٹرکس:
+  - `nexus_lane_height{lane_id}` - تین سلاٹوں کے لئے صفر پیشرفت کے لئے انتباہات۔
+  - `nexus_da_backlog_chunks{lane_id}` - فی لین (پہلے سے طے شدہ 64 پبلک / 8 نجی) دہلیز کے اوپر الرٹ۔
+  - `nexus_settlement_latency_seconds{lane_id}` - انتباہات جب P99 900 ایم ایس (عوامی) یا 1200 ایم ایس (نجی) سے زیادہ ہے۔
+  - `torii_request_failures_total{scheme="norito_rpc"}` - اگر 5 منٹ کی غلطی کی شرح> 2 ٪ ہے تو انتباہ کریں۔
+  - `telemetry_redaction_override_total` - Sev 2 فوری ؛ یقینی بنائیں کہ اوور رائڈس میں تعمیل کے ٹکٹ ہیں۔
+- [Nexus ٹیلی میٹری ریمیڈیشن پلان] (./nexus-telemetry-remediation) میں ٹیلی میٹری ریمیڈیشن چیک لسٹ کو کم سے کم سہ ماہی میں چلائیں اور آپریشنل جائزہ نوٹوں سے مکمل فارم منسلک کریں۔
 
-- Dashboards: `dashboards/grafana/nexus_lanes.json`, `nexus_settlement.json`, mais visoes especificas de SDK (por exemplo, `android_operator_console.json`).
-- Alertas: `dashboards/alerts/nexus_audit_rules.yml` e regras de transporte Torii/Norito (`dashboards/alerts/torii_norito_rpc_rules.yml`).
-- Metricas a observar:
-  - `nexus_lane_height{lane_id}` - alerta para zero progresso por tres slots.
-  - `nexus_da_backlog_chunks{lane_id}` - alerta acima dos limiares por lane (padrao 64 public / 8 private).
-  - `nexus_settlement_latency_seconds{lane_id}` - alerta quando o P99 excede 900 ms (public) ou 1200 ms (private).
-  - `torii_request_failures_total{scheme="norito_rpc"}` - alerta se a taxa de erro de 5 minutos for >2%.
-  - `telemetry_redaction_override_total` - Sev 2 imediato; garanta que overrides tenham tickets de compliance.
-- Execute o checklist de remediacao de telemetria no [Nexus telemetry remediation plan](./nexus-telemetry-remediation) pelo menos trimestralmente e anexe o formulario preenchido nas notas de revisao operacional.
+## واقعہ میٹرکس
 
-## Matriz de incidentes
+| شدت | تعریف | جواب |
+| ---------- | --------------- | ---------- |
+| sev 1 | ڈیٹا اسپیس تنہائی ، تصفیہ اسٹاپ> 15 منٹ ، یا گورننس ووٹ کی بدعنوانی کی خلاف ورزی۔ | ٹرگر Nexus پرائمری + ریلیز انجینئرنگ + تعمیل ، منجمد داخلہ ، نمونے جمع کریں ، اعلانات شائع کریں  30 منٹ ، ناکام مینی فیسٹ رول آؤٹ۔ | Nexus پرائمری + SRE ، تخفیف <= 4 H ، 2 کاروباری دنوں میں ریکارڈ فالو اپ کو چالو کریں۔ |
+| sev 3 | غیر بلاکنگ بڑھے ہوئے (دستاویزات ، انتباہات) | اسے ٹریکر پر رجسٹر کریں اور اسپرٹ کے اندر اصلاح کا شیڈول بنائیں۔ |
 
-| Severidade | Definicao | Resposta |
-|----------|------------|----------|
-| Sev 1 | Violacao de isolamento de data-space, parada de settlement >15 min, ou corrupcao de voto de governanca. | Acione Nexus Primary + Release Engineering + Compliance, congele admissao, colete artefatos, publique comunicados <=60 min, RCA <=5 dias uteis. |
-| Sev 2 | Violacao de SLA de backlog de lane, ponto cego de telemetria >30 min, rollout de manifesto falho. | Acione Nexus Primary + SRE, mitigue <=4 h, registre follow-ups em ate 2 dias uteis. |
-| Sev 3 | Deriva nao bloqueante (docs, alertas). | Registre no tracker e agende a correcao dentro do sprint. |
+واقعے کے ٹکٹوں میں متاثرہ لین/ڈیٹا اسپیس آئی ڈی ، منشور ہیش ، ٹائم لائن ، سپورٹ میٹرکس/لاگز ، اور فالو اپ ٹاسک/مالکان کو ریکارڈ کرنا چاہئے۔
 
-Tickets de incidente devem registrar IDs de lane/data-space afetadas, hashes de manifesto, timeline, metricas/logs de suporte e tarefas/owners de follow-up.
+## ثبوت آرکائیو
 
-## Arquivo de evidencias
+- `artifacts/nexus/<lane>/<date>/` میں ٹیلی میٹری بنڈل/منشور/برآمدات اسٹور کریں۔
+- ہر ریلیز کے لئے `--trace-config` کے تحریری تشکیل + آؤٹ پٹ کو برقرار رکھیں۔
+- جب تشکیل یا ظاہر تبدیلیاں رونما ہوتی ہیں تو بورڈ منٹ + دستخط شدہ فیصلوں سے منسلک ہوں۔
+- Prometheus کے ہفتہ وار اسنیپ شاٹس کو 12 ماہ کے لئے Nexus میٹرکس سے متعلق محفوظ رکھیں۔
+- `docs/source/project_tracker/nexus_config_deltas/README.md` میں لاگ ان بک میں ترمیم کریں تاکہ آڈیٹرز کو معلوم ہو کہ جب ذمہ داریاں تبدیل ہوگئیں۔
 
-- Armazene bundles/manifestos/exports de telemetria em `artifacts/nexus/<lane>/<date>/`.
-- Mantenha configs redigidas + saida de `--trace-config` para cada release.
-- Anexe minutas do conselho + decisoes assinadas quando mudancas de config ou manifesto ocorrerem.
-- Preserve snapshots semanais de Prometheus relevantes para metricas Nexus por 12 meses.
-- Registre edicoes do runbook em `docs/source/project_tracker/nexus_config_deltas/README.md` para que auditores saibam quando as responsabilidades mudaram.
+## متعلقہ مواد
 
-## Material relacionado
-
-- Visao geral: [Nexus overview](./nexus-overview)
-- Especificacao: [Nexus spec](./nexus-spec)
-- Geometria de lanes: [Nexus lane model](./nexus-lane-model)
-- Transicao e shims de roteamento: [Nexus transition notes](./nexus-transition-notes)
-- Onboarding de operadores: [Sora Nexus operator onboarding](./nexus-operator-onboarding)
-- Remediacao de telemetria: [Nexus telemetry remediation plan](./nexus-telemetry-remediation)
+- جائزہ: [Nexus جائزہ] (./nexus-overview)
+- تفصیلات: [Nexus spec] (./nexus-spec)
+- لین جیومیٹری: [Nexus لین ماڈل] (./nexus-lane-model)
+- منتقلی اور روٹنگ شمس: [Nexus منتقلی نوٹ] (./nexus-transition-notes)
+- آپریٹر آن بورڈنگ: [SORA Nexus آپریٹر آن بورڈنگ] (./nexus-operator-onboarding)
+- ٹیلی میٹری کا علاج: [Nexus ٹیلی میٹری ریمیڈیشن پلان] (./nexus-telemetry-remediation)

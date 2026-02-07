@@ -8,97 +8,99 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: Orchestrator Rollout & Tuning
 sidebar_label: Orchestrator Tuning
 description: Practical defaults, tuning guidance, and audit checkpoints for taking the multi-source orchestrator to GA.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
-:::
+::: ማስታወሻ ቀኖናዊ ምንጭ
+::
 
-# Orchestrator Rollout & Tuning Guide
+# ኦርኬስትራ ልቀት እና ማስተካከያ መመሪያ
 
-This guide builds on the [configuration reference](orchestrator-config.md) and the
-[multi-source rollout runbook](multi-source-rollout.md). It explains
-how to tune the orchestrator for each rollout phase, how to interpret the
-scoreboard artefacts, and which telemetry signals must be in place before
-expanding traffic. Apply the recommendations consistently across CLI, SDKs, and
-automation so every node follows the same deterministic fetch policy.
+ይህ መመሪያ በ [የማዋቀር ማጣቀሻ](orchestrator-config.md) እና
+[ባለብዙ-ምንጭ መልቀቅ runbook](multi-source-rollout.md)። ያስረዳል።
+ኦርኬስትራውን ለእያንዳንዱ የታቀዱ ደረጃዎች እንዴት ማስተካከል እንደሚቻል ፣ እንዴት እንደሚተረጎም
+የውጤት ሰሌዳ ቅርሶች፣ እና የትኞቹ የቴሌሜትሪ ምልክቶች ከዚህ በፊት በቦታው ላይ መሆን አለባቸው
+የትራፊክ መስፋፋት. ምክሮቹን በCLI፣ ኤስዲኬዎች እና በወጥነት ተግብር
+አውቶማቲክ ስለዚህ እያንዳንዱ መስቀለኛ መንገድ አንድ አይነት የመወሰን ፖሊሲን ይከተላል።
 
-## 1. Baseline Parameter Sets
+## 1. የመሠረት ፓራሜትር ስብስቦች
 
-Start from a shared configuration template and adjust a small set of knobs as
-the rollout progresses. The table below captures the recommended values for the
-most common phases; values not listed fall back to the defaults in
-`OrchestratorConfig::default()` and `FetchOptions::default()`.
+ከተጋራ ውቅር አብነት ይጀምሩ እና እንደ ትንሽ የመንኮራኩሮች ስብስብ ያስተካክሉ
+ልቀቱ እየቀጠለ ነው። ከዚህ በታች ያለው ሰንጠረዥ የሚመከሩትን እሴቶች ይይዛል
+በጣም የተለመዱ ደረጃዎች; ያልተዘረዘሩ እሴቶች ወደ ነባሪው ይመለሳሉ
+`OrchestratorConfig::default()` እና `FetchOptions::default()`።
 
-| Phase | `max_providers` | `fetch.per_chunk_retry_limit` | `fetch.provider_failure_threshold` | `scoreboard.latency_cap_ms` | `scoreboard.telemetry_grace_secs` | Notes |
-|-------|-----------------|-------------------------------|------------------------------------|-----------------------------|------------------------------------|-------|
-| **Lab / CI** | `3` | `2` | `2` | `2500` | `300` | Tight latency cap and grace window surface noisy telemetry quickly. Keep retries low to expose invalid manifests sooner. |
-| **Staging** | `4` | `3` | `3` | `4000` | `600` | Mirrors production defaults while leaving headroom for exploratory peers. |
-| **Canary** | `6` | `3` | `3` | `5000` | `900` | Matches defaults; set `telemetry_region` so dashboards can pivot on canary traffic. |
-| **General Availability** | `None` (use all eligible) | `4` | `4` | `5000` | `900` | Increase retry and failure thresholds to absorb transient faults while audits continue to enforce determinism. |
+| ደረጃ | `max_providers` | `fetch.per_chunk_retry_limit` | `fetch.provider_failure_threshold` | `scoreboard.latency_cap_ms` | `scoreboard.telemetry_grace_secs` | ማስታወሻ |
+|----------------------------
+| ** ላብ / CI *** | `3` | `2` | `2` | `2500` | `300` | ጥብቅ የቆይታ ቆብ እና የጸጋ መስኮት ወለል ጫጫታ ቴሌሜትሪ በፍጥነት። ልክ ያልሆኑ አንጸባራቂዎችን በቶሎ ለማጋለጥ ሙከራዎችን ይቀንሱ። |
+| ** መድረክ *** | `4` | `3` | `3` | `4000` | `600` | ለአሳሽ እኩዮች ከዋናው ክፍል ሲወጡ የምርት ነባሪዎችን ያንጸባርቃል። |
+| **ካናሪ** | `6` | `3` | `3` | `5000` | `900` | ግጥሚያዎች ነባሪዎች; ዳሽቦርዶች የካናሪ ትራፊክን እንዲቀይሩ `telemetry_region` ያዘጋጁ። |
+| ** አጠቃላይ ተገኝነት *** | `None` (ብቁ የሆኑትን ይጠቀሙ) | `4` | `4` | `5000` | `900` | ኦዲት መወሰኑን መተግበሩን በሚቀጥልበት ጊዜ አላፊ ጥፋቶችን ለመቀበል ድጋሚ መሞከር እና ውድቅ ጣራዎችን ይጨምሩ። |
 
-- `scoreboard.weight_scale` remains at the default `10_000` unless a downstream
-  system requires a different integer resolution. Increasing the scale does not
-  change provider ordering; it only emits a denser credit distribution.
-- When migrating between phases, persist the JSON bundle and use
-  `--scoreboard-out` so the audit trail records the exact parameter set.
+- የታችኛው ተፋሰስ ካልሆነ በስተቀር `scoreboard.weight_scale` በነባሪ I18NI0000041X ይቆያል
+  ስርዓቱ የተለየ የኢንቲጀር ጥራት ይፈልጋል። መጠኑን መጨመር አያመጣም
+  ለውጥ አቅራቢ ማዘዝ; ጥቅጥቅ ያለ የብድር ስርጭት ብቻ ነው የሚያወጣው።
+- በደረጃዎች መካከል ሲሰደዱ የJSON ቅርቅቡን ይቀጥሉ እና ይጠቀሙ
+  `--scoreboard-out` ስለዚህ የኦዲት ዱካ ትክክለኛውን መለኪያ ስብስብ ይመዘግባል።
 
-## 2. Scoreboard Hygiene
+## 2. የውጤት ሰሌዳ ንጽሕና
 
-The scoreboard combines manifest requirements, provider adverts, and telemetry.
-Before rolling forward:
+የውጤት ሰሌዳው አንጸባራቂ መስፈርቶችን፣ የአቅራቢ ማስታወቂያዎችን እና ቴሌሜትሪን ያጣምራል።
+ወደፊት ከመንከባለል በፊት፡-
 
-1. **Validate telemetry freshness.** Ensure the snapshots referenced by
-   `--telemetry-json` were captured within the configured grace window. Entries
-   older than the configured `telemetry_grace_secs` fail with
-   `TelemetryStale { last_updated }`. Treat this as a hard stop and refresh the
-   telemetry export before continuing.
-2. **Inspect eligibility reasons.** Persist artefacts via
-   `--scoreboard-out=/var/lib/sorafs/scoreboards/preflight.json`. Each entry
-   carries an `eligibility` block with the exact failure cause. Do not override
-   capability mismatches or expired adverts; fix the upstream payload.
-3. **Review weight deltas.** Compare the `normalised_weight` field against the
-   previous release. Weight shifts >10 % should correlate with deliberate advert
-   or telemetry changes and must be acknowledged in the rollout log.
-4. **Archive artefacts.** Configure `scoreboard.persist_path` so every run emits
-   the final scoreboard snapshot. Attach the artefact to the release record
-   alongside the manifest and telemetry bundle.
-5. **Record provider mix evidence.** `scoreboard.json` metadata _and_ the
-   matching `summary.json` must expose `provider_count`,
-   `gateway_provider_count`, and the derived `provider_mix` label so reviewers
-   can prove whether the run was `direct-only`, `gateway-only`, or `mixed`.
-   Gateway captures therefore report `provider_count=0` plus
-   `provider_mix="gateway-only"`, while mixed runs require non-zero counts for
-   both sources. `cargo xtask sorafs-adoption-check` enforces these fields (and
-   fails when the counts/labels disagree), so always run it alongside
-   `ci/check_sorafs_orchestrator_adoption.sh` or your bespoke capture script to
-   produce the `adoption_report.json` evidence bundle. When Torii gateways are
-   involved, keep `gateway_manifest_id`/`gateway_manifest_cid` in the scoreboard
-   metadata so the adoption gate can correlate the manifest envelope with the
-   captured provider mix.
+1. **የቴሌሜትሪ ትኩስነትን ያረጋግጡ።** የተጠቀሱ ቅጽበተ-ፎቶዎችን ያረጋግጡ
+   `--telemetry-json` በተዋቀረው የጸጋ መስኮት ውስጥ ተይዟል። ግቤቶች
+   ከተዋቀረው I18NI0000044X በላይ የቆየ አይሳካም።
+   `TelemetryStale { last_updated }`. ይህንን እንደ ጠንካራ ማቆሚያ ይያዙት እና ያድሱት።
+   ከመቀጠልዎ በፊት ቴሌሜትሪ ወደ ውጪ መላክ.
+2. ** የብቃት ምክንያቶችን መርምር።** ቅርሶችን በ በኩል ቀጥል።
+   `--scoreboard-out=/var/lib/sorafs/scoreboards/preflight.json`. እያንዳንዱ ግቤት
+   ከትክክለኛው የውድቀት መንስኤ ጋር `eligibility` ብሎክ ይይዛል። አትሻር
+   የአቅም አለመመጣጠን ወይም ጊዜ ያለፈባቸው ማስታወቂያዎች; ወደ ላይ ያለውን ጭነት አስተካክል።
+3. **የክብደት ዴልታዎችን ይገምግሙ።** የ`normalised_weight` መስክን ከ
+   ቀዳሚ ልቀት. የክብደት ፈረቃ>10% ሆን ተብሎ ከሚታወቅ ማስታወቂያ ጋር መዛመድ አለበት።
+   ወይም ቴሌሜትሪ ይቀየራል እና በታቀደ ምዝግብ ማስታወሻ ውስጥ መታወቅ አለበት።
+4. **የቅርሶች ማህደር።** እያንዳንዱ ሩጫ እንዲለቅ `scoreboard.persist_path` አዋቅር
+   የመጨረሻው የውጤት ሰሌዳ ቅጽበታዊ እይታ. አርቲፊኬቱን ከተለቀቀው መዝገብ ጋር ያያይዙት።
+   ከማንፀባረቂያው እና ከቴሌሜትሪ ጥቅል ጋር።
+5. **የመመዝገብ አቅራቢ ቅይጥ ማስረጃ።** `scoreboard.json` ሜታዳታ _እና_ የ
+   ተዛማጅ `summary.json` I18NI0000052X ማጋለጥ አለበት፣
+   `gateway_provider_count`፣ እና የተገኘው I18NI0000054X መለያ ስለዚህ ገምጋሚዎች
+   ሩጫው I18NI0000055X፣ `gateway-only`፣ ወይም `mixed` መሆኑን ማረጋገጥ ይችላል።
+   ጌትዌይ ስለዚህ `provider_count=0` plus ሪፖርት አድርግ
+   `provider_mix="gateway-only"`፣ የተቀላቀሉ ሩጫዎች ግን ዜሮ ያልሆኑ ቆጠራዎች ያስፈልጋቸዋል
+   ሁለቱም ምንጮች. `cargo xtask sorafs-adoption-check` እነዚህን መስኮች ያስፈጽማል (እና
+   ቆጠራዎቹ/ስያሜዎቹ በማይስማሙበት ጊዜ አይሳካም)፣ ስለዚህ ሁል ጊዜ ከጎኑ ያሂዱት
+   `ci/check_sorafs_orchestrator_adoption.sh` ወይም የርስዎ ቀረጻ ስክሪፕት ወደ
+   የ `adoption_report.json` የማስረጃ ጥቅል ያዘጋጁ። Torii በሮች ሲሆኑ
+   ተሳታፊ፣ `gateway_manifest_id`/I18NI0000064X በውጤት ሰሌዳው ውስጥ ያቆዩት።
+   ሜታዳታ ስለዚህ የማደጎ በር አንጸባራቂውን ፖስታ ከ
+   የተያዙ የአቅራቢዎች ድብልቅ.
 
-For detailed field definitions see
-`crates/sorafs_car/src/scoreboard.rs` and the CLI summary structure exposed by
+ለዝርዝር የመስክ ፍቺዎች ይመልከቱ
+`crates/sorafs_car/src/scoreboard.rs` እና የCLI ማጠቃለያ መዋቅር በ ተጋልጧል
 `sorafs_cli fetch --json-out`.
 
-## CLI & SDK Flag Reference
+## CLI እና ኤስዲኬ ባንዲራ ማጣቀሻ
 
-`sorafs_cli fetch` (see `crates/sorafs_car/src/bin/sorafs_cli.rs`) and the
-`iroha_cli app sorafs fetch` wrapper (`crates/iroha_cli/src/commands/sorafs.rs`)
-share the same orchestrator configuration surface. Use the following flags when
-capturing rollout evidence or replaying the canonical fixtures:
+`sorafs_cli fetch` (`crates/sorafs_car/src/bin/sorafs_cli.rs` ይመልከቱ) እና እ.ኤ.አ.
+`iroha_cli app sorafs fetch` መጠቅለያ (I18NI0000070X)
+ተመሳሳይ የኦርኬስትራ ውቅር ገጽን ያካፍሉ። የሚከተሉትን ባንዲራዎች ሲጠቀሙ ይጠቀሙ
+የታቀዱ ማስረጃዎችን ማንሳት ወይም ቀኖናዊ መጫዎቻዎችን እንደገና መጫወት፡-
 
-Shared multi-source flag reference (keep CLI help and docs in sync by editing this file only):
+የተጋራ ባለብዙ-ምንጭ ባንዲራ ማጣቀሻ (ይህን ፋይል በማርትዕ ብቻ የCLI እገዛን እና ሰነዶችን ማመሳሰል ያቆዩ)።
 
-- `--max-peers=<count>` limits how many eligible providers survive the scoreboard filter. Leave unset to stream from every eligible provider, set to `1` only when intentionally exercising the single-source fallback. Mirrors the `maxPeers` knob in SDKs (`SorafsGatewayFetchOptions.maxPeers`, `SorafsGatewayFetchOptions.max_peers`).
-- `--retry-budget=<count>` forwards to the per-chunk retry limit enforced by `FetchOptions`. Use the rollout table in the tuning guide for recommended values; CLI runs that collect evidence must match SDK defaults to keep parity.
-- `--telemetry-region=<label>` tags `sorafs_orchestrator_*` Prometheus series (and OTLP relays) with a region/env label so dashboards can separate lab, staging, canary, and GA traffic.
-- `--telemetry-json=<path>` injects the snapshot referenced by the scoreboard. Persist the JSON next to the scoreboard so auditors can replay the run (and so `cargo xtask sorafs-adoption-check --require-telemetry` can prove which OTLP stream fed the capture).
-- `--local-proxy-*` (`--local-proxy-mode`, `--local-proxy-norito-spool`, `--local-proxy-kaigi-spool`, `--local-proxy-kaigi-policy`) enable the bridge observer hooks. When set, the orchestrator streams chunks through the local Norito/Kaigi proxy so browser clients, guard caches, and Kaigi rooms receive the same receipts emitted by Rust.
-- `--scoreboard-out=<path>` (optionally paired with `--scoreboard-now=<unix_secs>`) persists the eligibility snapshot for auditors. Always pair the persisted JSON with the telemetry and manifest artefacts referenced in the release ticket.
-- `--deny-provider name=ALIAS` / `--boost-provider name=ALIAS:delta` apply deterministic adjustments on top of the advert metadata. Use these flags only for rehearsals; production downgrades must flow through governance artefacts so every node applies the same policy bundle.
-- `--provider-metrics-out` / `--chunk-receipts-out` retain the per-provider health metrics and chunk receipts referenced by the rollout checklist; attach both artefacts when filing adoption evidence.
+- `--max-peers=<count>` ምን ያህል ብቁ አቅራቢዎች ከውጤት ሰሌዳ ማጣሪያ እንደሚተርፉ ይገድባል። ከእያንዳንዱ ብቁ አቅራቢ ለመለቀቅ እንዳልተዋቀረ ይተዉ፣ ወደ `1` ያቀናብሩ ነጠላ-ምንጭ ውድቀትን ሆን ብለው ሲለማመዱ ብቻ። በኤስዲኬዎች (`SorafsGatewayFetchOptions.maxPeers`፣ I18NI0000075X) ውስጥ የ`maxPeers` ቁልፍን ያንጸባርቃል።
+- `--retry-budget=<count>` በ`FetchOptions` ወደተፈፀመው በእያንዳንዱ-ቻንክ የድጋሚ ሙከራ ገደብ ያስተላልፋል። ለሚመከሩት እሴቶች በመቃኛ መመሪያው ውስጥ የታቀደውን ሠንጠረዥ ይጠቀሙ; ማስረጃን የሚሰበስበው CLI ሩጫዎች እኩልነትን ለመጠበቅ ከኤስዲኬ ነባሪዎች ጋር መዛመድ አለባቸው።
+- `--telemetry-region=<label>` መለያዎች `sorafs_orchestrator_*` Prometheus ተከታታይ (እና OTLP ሪሌይ) ከክልል/ኤንቪ መለያ ጋር ዳሽቦርዶች የላብራቶሪ፣ የደረጃ፣ የካናሪ እና የ GA ትራፊክን ይለያሉ።
+- `--telemetry-json=<path>` በውጤት ሰሌዳው የተጠቀሰውን ቅጽበታዊ ገጽ እይታ ያስገባል። ኦዲተሮች ሩጫውን እንደገና እንዲጫወቱ ከውጤት ሰሌዳው ቀጥሎ ያለውን JSON ያቆዩት (እና ስለዚህ `cargo xtask sorafs-adoption-check --require-telemetry` የትኛው የ OTLP ዥረት መቅረቡን እንደመገበ ማረጋገጥ ይችላል)።
+- `--local-proxy-*` (`--local-proxy-mode`፣ `--local-proxy-norito-spool`፣ `--local-proxy-kaigi-spool`፣ `--local-proxy-kaigi-policy`) የድልድይ ተመልካቾችን መንጠቆዎች ያነቃል። ሲዋቀር ኦርኬስትራተሩ በአካባቢያዊው I18NT0000004X/Kaigi ፕሮክሲ በኩል ይለቀቃል ስለዚህ የአሳሽ ደንበኞች፣ የጥበቃ መሸጎጫዎች እና የካይጊ ክፍሎች በሩስት የሚለቀቁትን ተመሳሳይ ደረሰኞች ይቀበላሉ።
+- `--scoreboard-out=<path>` (በአማራጭ ከ`--scoreboard-now=<unix_secs>` ጋር የተጣመረ) ለኦዲተሮች የብቁነት ቅጽበታዊ ገጽ እይታ እንደቀጠለ ነው። ሁልጊዜ የቀጠለውን JSON ከቴሌሜትሪ እና በመለቀቂያ ትኬቱ ላይ ከተጠቀሱት የሰነድ ማስረጃዎች ጋር ያጣምሩ።
+- `--deny-provider name=ALIAS`/I18NI0000090X በማስታወቂያ ዲበ ዳታ ላይ የሚወስኑ ማስተካከያዎችን ይተግብሩ። እነዚህን ባንዲራዎች ለልምምድ ብቻ ይጠቀሙ; የምርት ማሽቆልቆል በአስተዳደር ቅርሶች በኩል መፍሰስ አለበት ስለዚህ እያንዳንዱ መስቀለኛ መንገድ አንድ አይነት የፖሊሲ ጥቅል ይተገበራል።
+- `--provider-metrics-out` / I18NI0000092X በታቀደ ቼክ ዝርዝሩ የተጠቀሰውን የእያንዳንዱን አቅራቢ የጤና መለኪያዎችን እና ቁርጥራጭ ደረሰኞችን ይይዛል። የማደጎ ማስረጃ በሚያስገቡበት ጊዜ ሁለቱንም ቅርሶች አያይዝ።
 
-Example (using the published fixture):
+ምሳሌ (የታተመውን መሣሪያ በመጠቀም)
 
 ```bash
 sorafs_cli fetch \
@@ -115,110 +117,108 @@ cargo xtask sorafs-adoption-check \
   --summary artifacts/sorafs_orchestrator/latest/summary.json
 ```
 
-SDKs consume the same configuration via `SorafsGatewayFetchOptions` in the Rust
-client (`crates/iroha/src/client.rs`), the JS bindings
-(`javascript/iroha_js/src/sorafs.js`), and the Swift SDK
-(`IrohaSwift/Sources/IrohaSwift/SorafsOptions.swift`). Keep those helpers in
-lock-step with the CLI defaults so operators can copy policies across automation
-without bespoke translation layers.
+ኤስዲኬዎች በዛገቱ ውስጥ በI18NI0000093X በኩል ተመሳሳይ ውቅር ይበላሉ
+ደንበኛ (`crates/iroha/src/client.rs`)፣ የጄኤስ ማሰሪያዎች
+(`javascript/iroha_js/src/sorafs.js`)፣ እና ስዊፍት ኤስዲኬ
+(`IrohaSwift/Sources/IrohaSwift/SorafsOptions.swift`)። እነዚያን ረዳቶች ያቆዩዋቸው
+ኦፕሬተሮች በራስ ሰር ፖሊሲዎችን መቅዳት እንዲችሉ ከCLI ነባሪዎች ጋር መቆለፍ
+ያለ ተተርጉሟል የትርጉም ንብርብሮች.
 
-## 3. Fetch Policy Tuning
+## 3. የፖሊሲ ማስተካከል
 
-`FetchOptions` controls retry behaviour, concurrency, and verification. When
-tuning:
+`FetchOptions` ባህሪን፣ ተመሳሳይነትን እና ማረጋገጫን እንደገና ይሞክሩ። መቼ
+ማስተካከል፡
 
-- **Retries:** Raising `per_chunk_retry_limit` beyond `4` increases recovery
-  time but risks masking provider faults. Prefer keeping `4` as the ceiling and
-  relying on the provider rotation to surface poor performers.
-- **Failure threshold:** The `provider_failure_threshold` governs when a
-  provider is disabled for the remainder of the session. Align this value with
-  retry policy: a threshold lower than the retry budget forces the orchestrator
-  to eject a peer before all retries are exhausted.
-- **Concurrency:** Leave `global_parallel_limit` unset (`None`) unless a
-  specific environment cannot saturate the advertised ranges. When set, ensure
-  the value is ≤ the sum of provider stream budgets to avoid starvation.
-- **Verification toggles:** `verify_lengths` and `verify_digests` must remain
-  enabled in production. They guarantee determinism when mixed provider fleets
-  are in play; only disable them in isolated fuzzing environments.
+- ** ድጋሚ ሙከራዎች:** `per_chunk_retry_limit` ከ `4` በላይ ማሳደግ መልሶ ማግኘትን ይጨምራል
+  ጊዜ ግን የአቅራቢውን ስህተቶች መደበቅ አደጋ ላይ ይጥላል። `4`ን እንደ ጣሪያ አድርጎ ማስቀመጥን እመርጣለሁ።
+  በአቅራቢው አዙሪት ላይ በመተማመን ደካማ ፈጻሚዎችን ወደላይ ማዞር።
+- ** የመውደቅ ገደብ፡** `provider_failure_threshold` የሚገዛው ሀ
+  ለቀሪው ክፍለ ጊዜ አቅራቢው ተሰናክሏል። ይህን እሴት ከ ጋር አስተካክል።
+  ድጋሚ ሞክር ፖሊሲ፡ ከድጋሚ ሙከራ ባጀት ያነሰ ደረጃ ኦርኬስትራውን ያስገድደዋል
+  ሁሉም ሙከራዎች ከመሟሟቸው በፊት እኩያውን ማስወጣት።
+- **ተዛማጅነት፡** `global_parallel_limit` እንዳልተዋቀረ ይተውት (`None`) ካልሆነ በስተቀር
+  የተወሰነ አካባቢ የማስታወቂያ ክልሎችን ሊሞላው አይችልም። ሲዋቀር ያረጋግጡ
+  እሴቱ ≤ ረሃብን ለማስወገድ የአቅራቢዎች ፍሰት በጀት ድምር ነው።
+- ** የማረጋገጫ መቀየሪያዎች:** `verify_lengths` እና `verify_digests` መቆየት አለባቸው
+  በምርት ላይ የነቃ. የተቀላቀሉ አቅራቢ መርከቦች ሲሆኑ ቆራጥነት ዋስትና ይሰጣሉ
+  በጨዋታ ላይ ናቸው; በገለልተኛ ግራ መጋባት ውስጥ ብቻ ያሰናክሏቸው።
 
-## 4. Transport & Anonymity Staging
+## 4. የትራንስፖርት እና ማንነትን መደበቅ ዝግጅት
 
-Use the `rollout_phase`, `anonymity_policy`, and `transport_policy` fields to
-represent the privacy posture:
+የ `rollout_phase`፣ `anonymity_policy` እና `transport_policy` መስኮችን ይጠቀሙ።
+የግላዊነት አቀማመጥን ይወክላሉ፡-- `rollout_phase="snnet-5"`ን ምረጥ እና ነባሪው የስም ማጥፋት ፖሊሲን ፍቀድ
+  የ SNNet-5 ደረጃዎችን ይከታተሉ። በ`anonymity_policy_override` ብቻ ይሽሩ
+  አስተዳደር የተፈረመ መመሪያ ሲያወጣ.
+- SNNet-4/5/5a/5b/6a/7/8/12/13 ሲሆኑ `transport_policy="soranet-first"` እንደ መነሻ መስመር ያቆዩት 🈺
+  (`roadmap.md` ይመልከቱ)። ለሰነድ ብቻ `transport_policy="direct-only"` ይጠቀሙ
+  የማሳነስ/የማክበር ልምምዶችን፣ እና የPQ ሽፋን ግምገማን ከዚህ በፊት ይጠብቁ
+  ወደ `transport_policy="soranet-strict"` በማስተዋወቅ ላይ - ያ ደረጃ በፍጥነት አይሳካም።
+  ክላሲካል ቅብብሎሽ ብቻ ይቀራል።
+- `write_mode="pq-only"` መተግበር ያለበት እያንዳንዱ የመጻፍ መንገድ (ኤስዲኬ፣
+  ኦርኬስትራ ፣ የአስተዳደር መሣሪያ) የ PQ መስፈርቶችን ማሟላት ይችላል። ወቅት
+  የድንገተኛ ጊዜ ምላሾች ሊታመኑ ስለሚችሉ መልቀቅ `write_mode="allow-downgrade"` ያስቀምጣል።
+  ቴሌሜትሪ የመቀነሱን ምልክት በሚያሳይበት ቀጥታ መንገዶች ላይ።
+- የጥበቃ ምርጫ እና የወረዳ ዝግጅት በሶራኔት ማውጫ ላይ ይመሰረታል። ያቅርቡ
+  የተፈረመ I18NI000001117X ቅጽበታዊ ገጽ እይታ እና የ `guard_set` መሸጎጫውን ይቀጥሉ ስለዚህ ይጠብቁ
+  churn በተስማማው የማቆያ መስኮት ውስጥ ይቆያል። የመሸጎጫ አሻራ ገብቷል።
+  በ`sorafs_cli fetch` የታቀዱ ማስረጃዎችን ይመሰርታል።
 
-- Prefer `rollout_phase="snnet-5"` and allow the default anonymity policy to
-  track the SNNet-5 milestones. Override via `anonymity_policy_override` only
-  when governance issues a signed directive.
-- Keep `transport_policy="soranet-first"` as the baseline while SNNet-4/5/5a/5b/6a/7/8/12/13 are 🈺
-  (see `roadmap.md`). Use `transport_policy="direct-only"` only for documented
-  downgrades/compliance drills, and wait for the PQ coverage review before
-  promoting to `transport_policy="soranet-strict"`—that tier will fail fast if
-  only classical relays remain.
-- `write_mode="pq-only"` should only be enforced when every write path (SDK,
-  orchestrator, governance tooling) can satisfy PQ requirements. During
-  rollouts keep `write_mode="allow-downgrade"` so emergency responses can rely
-  on direct routes while telemetry flags the downgrade.
-- Guard selection and circuit staging rely on the SoraNet directory. Supply the
-  signed `relay_directory` snapshot and persist the `guard_set` cache so guard
-  churn stays within the agreed retention window. The cache fingerprint logged
-  by `sorafs_cli fetch` forms part of the rollout evidence.
+## 5. ዝቅ ማድረግ እና ተገዢነት መንጠቆዎች
 
-## 5. Downgrade & Compliance Hooks
+ሁለት ኦርኬስትራ ንዑስ ስርዓቶች መመሪያን ያለ በእጅ ጣልቃ ገብነት ለማስፈጸም ያግዛሉ፡
 
-Two orchestrator subsystems help enforce policy without manual intervention:
-
-- **Downgrade remediation** (`downgrade_remediation`): monitors
-  `handshake_downgrade_total` events and, after the configured `threshold` is
-  exceeded within `window_secs`, forces the local proxy into the `target_mode`
-  (metadata-only by default). Keep the defaults (`threshold=3`, `window=300`,
-  `cooldown=900`) unless incident reviews show a different pattern. Document any
-  override in the rollout log and ensure dashboards track
+- ** የወረደ ማሻሻያ *** (`downgrade_remediation`): ማሳያዎች
+  `handshake_downgrade_total` ክስተቶች እና, ከተዋቀረ በኋላ `threshold` ነው
+  በ`window_secs` ውስጥ አልፏል፣የአካባቢውን ፕሮክሲ ወደ `target_mode` ያስገድዳል።
+  (ሜታዳታ-ብቻ በነባሪ)። ነባሪዎቹን አቆይ (`threshold=3`፣ `window=300`፣
+  `cooldown=900`) የአደጋ ግምገማዎች የተለየ ስርዓተ-ጥለት እስካላሳዩ ድረስ። ማንኛውም ሰነድ
+  የታቀዱ ምዝግብ ማስታወሻዎችን ይሽሩ እና የዳሽቦርዶችን ዱካ ያረጋግጡ
   `sorafs_proxy_downgrade_state`.
-- **Compliance policy** (`compliance`): jurisdiction and manifest carve-outs
-  flow through governance-managed opt-out lists. Never inline ad-hoc overrides
-  in the configuration bundle; instead, request a signed update to
-  `governance/compliance/soranet_opt_outs.json` and redeploy the generated JSON.
+- ** ተገዢነት ፖሊሲ *** (`compliance`)፡ የስልጣን እና የዝርዝር መግለጫዎች
+  በአስተዳደር የሚተዳደር የመርጦ መውጣት ዝርዝሮች ውስጥ ይፈስሳል። በፍፁም የመስመር ውስጥ ማስታወቂያ አይሽረው
+  በማዋቀሪያው ጥቅል ውስጥ; በምትኩ፣ የተፈረመ ዝማኔ ይጠይቁ
+  `governance/compliance/soranet_opt_outs.json` እና የመነጨውን JSON ን እንደገና ማሰማራት።
 
-For both systems, persist the resulting configuration bundle and include it in
-release evidences so auditors can trace how downshifts were triggered.
+ለሁለቱም ስርዓቶች፣ የተገኘውን የውቅር ቅርቅብ ይቀጥሉ እና ያካትቱት።
+ኦዲተሮች እንዴት ወደታች ፈረቃ እንደተቀሰቀሱ ለማወቅ ማስረጃዎችን ይልቀቁ።
 
-## 6. Telemetry & Dashboards
+## 6. ቴሌሜትሪ እና ዳሽቦርዶች
 
-Before widening the rollout, confirm that the following signals are live in the
-target environment:
+ልቀቱን ከማስፋትዎ በፊት፣ የሚከተሉት ምልክቶች በ ውስጥ ቀጥታ መሆናቸውን ያረጋግጡ
+ኢላማ አካባቢ፡
 
 - `sorafs_orchestrator_fetch_failures_total{reason="no_healthy_providers"}` —
-  should be zero after the canary completes.
-- `sorafs_orchestrator_retries_total` and
-  `sorafs_orchestrator_retry_ratio` — should stabilise below 10 % during the
-  canary and stay below 5 % after GA.
-- `sorafs_orchestrator_policy_events_total` — validates that the expected
-  rollout stage is active (`stage` label) and records brownouts via `outcome`.
+  ካናሪው ከተጠናቀቀ በኋላ ዜሮ መሆን አለበት.
+- `sorafs_orchestrator_retries_total` እና
+  `sorafs_orchestrator_retry_ratio` - ከ 10% በታች መረጋጋት አለበት
+  ካናሪ እና ከጂኤ በኋላ ከ 5% በታች ይቆዩ።
+- `sorafs_orchestrator_policy_events_total` - የሚጠበቀውን ያረጋግጣል
+  የመልቀቅ ደረጃ ንቁ ነው (`stage` መለያ) እና ቡኒ መውጫዎችን በ`outcome` ይመዘግባል።
 - `sorafs_orchestrator_pq_candidate_ratio` /
-  `sorafs_orchestrator_pq_deficit_ratio` — track PQ relay supply against
-  policy expectations.
-- `telemetry::sorafs.fetch.*` log targets — must be streamed to the shared log
-  aggregator with saved searches for `status=failed`.
+  `sorafs_orchestrator_pq_deficit_ratio` - የ PQ ቅብብል አቅርቦትን ይከታተሉ
+  ፖሊሲ የሚጠበቁ.
+- `telemetry::sorafs.fetch.*` የምዝግብ ማስታወሻዎች - ወደ የተጋራው መዝገብ መተላለፍ አለባቸው
+  ለ `status=failed` ከተቀመጡ ፍለጋዎች ጋር ሰብሳቢ።
 
-Load the canonical Grafana dashboard from
-`dashboards/grafana/sorafs_fetch_observability.json` (exported in the portal
-under **SoraFS → Fetch Observability**) so the region/manifest selectors,
-provider retry heatmap, chunk latency histograms, and stall counters match
-what SRE reviews during burn-ins. Wire the Alertmanager rules in
-`dashboards/alerts/sorafs_fetch_rules.yml` and validate the Prometheus syntax
-with `scripts/telemetry/test_sorafs_fetch_alerts.sh` (the helper automatically
-runs `promtool test rules` locally or in Docker). Alert hand-offs require the
-same routing block that the script prints so operators can pin the evidence to
-the rollout ticket.
+ቀኖናዊውን I18NT0000002X ዳሽቦርዱን ከ ይጫኑ
+`dashboards/grafana/sorafs_fetch_observability.json` (በፖርታሉ ውስጥ ወደ ውጭ ተልኳል
+በ **SoraFS → ታዛቢነት አምጣ**) ስለዚህ ክልሉ/መራጮችን አሳይ፣
+አቅራቢው የሙቀት ካርታ፣ የተቆራረጡ መዘግየት ሂስቶግራሞች እና የስቶል ቆጣሪዎች ይዛመዳሉ
+በቃጠሎ ጊዜ SRE ምን ይገመግማል። የ Alertmanager ደንቦችን በሽቦ
+`dashboards/alerts/sorafs_fetch_rules.yml` እና የ I18NT0000001X አገባብ ያረጋግጡ
+በ `scripts/telemetry/test_sorafs_fetch_alerts.sh` (ረዳቱ በራስ-ሰር
+`promtool test rules` በአገር ውስጥ ወይም በI18NT0000006X ይሰራል። ማንቂያ የእጅ ማጥፋት ያስፈልገዋል
+ኦፕሬተሮች ማስረጃውን እንዲሰኩ ስክሪፕቱ የሚያትመው ተመሳሳይ የማዞሪያ እገዳ
+የመልቀቅ ትኬቱ።
 
-### Telemetry burn-in workflow
+### ቴሌሜትሪ የሚቃጠል የስራ ፍሰት
 
-Roadmap item **SF-6e** requires a 30-day telemetry burn-in before flipping the
-multi-source orchestrator to its GA defaults. Use the repository scripts to
-capture a reproducible artefact bundle for every day in the window:
+የመንገድ ካርታ ንጥል **SF-6e** ከመገልበጥዎ በፊት የ30 ቀን ቴሌሜትሪ ማቃጠልን ይጠይቃል።
+ባለብዙ ምንጭ ኦርኬስትራ ወደ GA ነባሪዎቹ። የማከማቻ ስክሪፕቶችን ይጠቀሙ
+በመስኮቱ ውስጥ ለእያንዳንዱ ቀን ሊባዛ የሚችል የቅርስ ቅርቅብ ይያዙ፡
 
-1. Run `ci/check_sorafs_orchestrator_adoption.sh` with the burn-in environment
-   knobs set. Example:
+1. ከተቃጠለው አካባቢ ጋር `ci/check_sorafs_orchestrator_adoption.sh` ን ያሂዱ
+   አንጓዎች ተዘጋጅተዋል. ምሳሌ፡-
 
    ```bash
    SORAFS_BURN_IN_LABEL=canary-week-1 \
@@ -229,40 +229,40 @@ capture a reproducible artefact bundle for every day in the window:
    ci/check_sorafs_orchestrator_adoption.sh
    ```
 
-   The helper replays `fixtures/sorafs_orchestrator/multi_peer_parity_v1`,
-   writes `scoreboard.json`, `summary.json`, `provider_metrics.json`,
-   `chunk_receipts.json`, and `adoption_report.json` under
-   `artifacts/sorafs_orchestrator/<timestamp>/`, and enforces a minimum number
-   of eligible providers via `cargo xtask sorafs-adoption-check`.
-2. When the burn-in variables are present the script also emits
-   `burn_in_note.json`, capturing the label, day index, manifest id, telemetry
-   source, and artefact digests. Attach this JSON to the rollout log so it is
-   obvious which capture satisfied each day in the 30-day window.
-3. Import the updated Grafana board (`dashboards/grafana/sorafs_fetch_observability.json`)
-   into the staging/production workspace, tag it with the burn-in label, and
-   confirm that every panel shows samples for the manifest/region under test.
-4. Run `scripts/telemetry/test_sorafs_fetch_alerts.sh` (or `promtool test rules …`)
-   whenever `dashboards/alerts/sorafs_fetch_rules.yml` changes to document that
-   alert routing matches the metrics exported during the burn-in.
-5. Archive the resulting dashboard snapshot, alert test output, and log tail
-   from the `telemetry::sorafs.fetch.*` searches alongside the orchestrator
-   artefacts so governance can replay the evidence without pulling metrics from
-   live systems.
+   ረዳቱ `fixtures/sorafs_orchestrator/multi_peer_parity_v1` ይደግማል፣
+   ይጽፋል `scoreboard.json`፣ `summary.json`፣ `provider_metrics.json`፣
+   `chunk_receipts.json`፣ እና `adoption_report.json` ስር
+   `artifacts/sorafs_orchestrator/<timestamp>/`፣ እና አነስተኛ ቁጥር ያስፈጽማል
+   በ`cargo xtask sorafs-adoption-check` በኩል ብቁ አቅራቢዎች።
+2. የተቃጠሉ ተለዋዋጮች በሚገኙበት ጊዜ ስክሪፕቱ እንዲሁ ይወጣል
+   `burn_in_note.json`፣ መለያውን፣ የቀን መረጃ ጠቋሚውን፣ የሰነድ መታወቂያውን፣ ቴሌሜትሪውን በመያዝ
+   ምንጭ, እና artefact ተፈጭተው. ይህን JSON ከታቀደ ምዝግብ ማስታወሻ ጋር ያያይዙት።
+   በ30-ቀን መስኮት ውስጥ የትኛው ቀረጻ በየቀኑ እንደሚረካ ግልጽ ነው።
+3. የዘመነውን Grafana ሰሌዳ (`dashboards/grafana/sorafs_fetch_observability.json`) አስመጣ
+   ወደ ስቴጅንግ/ምርት የስራ ቦታ፣ በተቃጠለው መለያ መለያ ይስጡት፣ እና
+   እያንዳንዱ ፓነል በሙከራ ላይ ላለው አንጸባራቂ/ክልል ናሙናዎችን እንደሚያሳይ ያረጋግጡ።
+4. `scripts/telemetry/test_sorafs_fetch_alerts.sh` (ወይም `promtool test rules …`) አሂድ
+   በማንኛውም ጊዜ `dashboards/alerts/sorafs_fetch_rules.yml` ወደ ሰነድ ሲቀየር
+   ማንቂያ ማዘዋወር በተቃጠለው ጊዜ ወደ ውጭ ከተላኩት መለኪያዎች ጋር ይዛመዳል።
+5. የተገኘውን ዳሽቦርድ ቅጽበታዊ ገጽ እይታ፣ የማንቂያ ሙከራ ውጤት እና የሎግ ጅራትን በማህደር ያስቀምጡ
+   ከኦርኬስትራ ጋር ከ `telemetry::sorafs.fetch.*` ፍለጋዎች
+   ቅርሶች ስለዚህ አስተዳደር መለኪያዎችን ከ ሳያስገባ ማስረጃውን እንደገና ማጫወት ይችላል።
+   የቀጥታ ስርዓቶች.
 
-## 7. Rollout Checklist
+## 7. የታቀዱ የማረጋገጫ ዝርዝር
 
-1. Regenerate scoreboards in CI using the candidate configuration and capture
-   artefacts under version control.
-2. Run the deterministic fixture fetch in each environment (lab, staging,
-   canary, production) and attach the `--scoreboard-out` and `--json-out`
-   artefacts to the rollout record.
-3. Review telemetry dashboards with the on-call engineer, ensuring all metrics
-   above have live samples.
-4. Record the final configuration path (usually via `iroha_config`) and the
-   git commit of the governance registry used for adverts and compliance.
-5. Update the rollout tracker and notify SDK teams of new defaults so client
-   integrations stay aligned.
+1. የእጩውን ውቅረት እና ቀረጻ በመጠቀም የውጤት ሰሌዳዎችን በCI ውስጥ ያድሱ
+   በስሪት ቁጥጥር ስር ያሉ ቅርሶች።
+2. በእያንዳንዱ አካባቢ (ላቦራቶሪ፣ ዝግጅት፣
+   ካናሪ፣ ምርት) እና `--scoreboard-out` እና `--json-out` ያያይዙ
+   ወደ የታቀደው መዝገብ ላይ ቅርሶች.
+3. ሁሉንም መለኪያዎች በማረጋገጥ የቴሌሜትሪ ዳሽቦርዶችን ከጥሪ መሐንዲሱ ጋር ይገምግሙ
+   ከላይ የቀጥታ ናሙናዎች አላቸው.
+4. የመጨረሻውን የውቅር መንገድ ይመዝግቡ (ብዙውን ጊዜ በ `iroha_config`) እና
+   ለማስታወቂያ እና ተገዢነት የሚያገለግለው የአስተዳደር መዝገብ ቤት ቁርጠኝነት።
+5. የታቀደውን መከታተያ ያዘምኑ እና ለኤስዲኬ ቡድኖች ደንበኛ እንዲሆኑ አዲስ ነባሪዎች ያሳውቁ
+   ውህደቶች ተስተካክለው ይቆያሉ.
 
-Following this guide keeps orchestrator deployments deterministic and auditable
-while providing clear feedback loops for tuning retry budgets, provider
-capacity, and privacy posture.
+ይህንን መመሪያ በመከተል የኦርኬስትራ ስምምነቶችን የሚወስኑ እና ኦዲት እንዲደረጉ ያደርጋል
+ድጋሚ ሞክር በጀቶችን ለማስተካከል ግልጽ የግብረመልስ ምልከታዎችን በሚሰጥበት ጊዜ፣ አቅራቢ
+አቅም እና የግላዊነት አቀማመጥ።

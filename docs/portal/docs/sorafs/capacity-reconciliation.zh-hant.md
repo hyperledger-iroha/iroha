@@ -10,21 +10,22 @@ translation_last_reviewed: 2026-02-07
 id: capacity-reconciliation
 title: SoraFS Capacity Reconciliation
 description: Nightly workflow for matching capacity fee ledgers to XOR transfer exports.
+translator: machine-google-reviewed
 ---
 
-Roadmap item **SF-2c** mandates that treasury proves the capacity fee ledger
-matches the XOR transfers executed each night. Use the
-`scripts/telemetry/capacity_reconcile.py` helper to compare the
-`/v1/sorafs/capacity/state` snapshot against the executed transfer batch and
-emit Prometheus textfile metrics for Alertmanager.
+路線圖項目 **SF-2c** 要求財務部門證明容量費用分類賬
+匹配每晚執行的 XOR 傳輸。使用
+`scripts/telemetry/capacity_reconcile.py` 幫助程序比較
+`/v1/sorafs/capacity/state` 針對執行的傳輸批次的快照以及
+為 Alertmanager 發出 Prometheus 文本文件指標。
 
-## Prerequisites
-- Capacity state snapshot (`fee_ledger` entries) exported from Torii.
-- Ledger export for the same window (JSON or NDJSON with `provider_id_hex`,
-  `kind` = settlement/penalty, and `amount_nano`).
-- Path to the node_exporter textfile collector if you want alerts.
+## 先決條件
+- 從 Torii 導出的容量狀態快照（`fee_ledger` 條目）。
+- 同一窗口的分類帳導出（帶有 `provider_id_hex` 的 JSON 或 NDJSON，
+  `kind` = 和解/罰款，以及 `amount_nano`)。
+- 如果需要警報，node_exporter 文本文件收集器的路徑。
 
-## Runbook
+## 操作手冊
 ```bash
 python3 scripts/telemetry/capacity_reconcile.py \
   --snapshot artifacts/sorafs/capacity/state_$(date +%F).json \
@@ -34,25 +35,25 @@ python3 scripts/telemetry/capacity_reconcile.py \
   --prom-out "${SORAFS_CAPACITY_RECONCILE_TEXTFILE:-artifacts/sorafs/capacity/reconcile.prom}"
 ```
 
-- Exit codes: `0` on a clean match, `1` when settlements/penalties are missing
-  or overpaid, `2` on invalid inputs.
-- Attach the JSON summary + hashes to the treasury packet in
-  `docs/examples/sorafs_capacity_marketplace_validation/`.
-- When the `.prom` file lands in the textfile collector, the alert
-  `SoraFSCapacityReconciliationMismatch` (see
-  `dashboards/alerts/sorafs_capacity_rules.yml`) fires whenever missing,
-  overpaid, or unexpected provider transfers are detected.
+- 退出代碼：乾淨比賽時為 `0`，結算/處罰缺失時為 `1`
+  或多付，`2` 無效輸入。
+- 將 JSON 摘要 + 哈希值附加到金庫數據包中
+  `docs/examples/sorafs_capacity_marketplace_validation/`。
+- 當 `.prom` 文件進入文本文件收集器時，警報
+  `SoraFSCapacityReconciliationMismatch`（參見
+  `dashboards/alerts/sorafs_capacity_rules.yml`) 丟失時觸發，
+  檢測到支付過高或意外的提供商轉賬。
 
-## Outputs
-- Per-provider statuses with diffs for settlements and penalties.
-- Totals exported as gauges:
+## 輸出
+- 每個提供商的狀態以及和解和處罰方面的差異。
+- 以儀表形式導出的總計：
   - `sorafs_capacity_reconciliation_missing_total{kind}`
   - `sorafs_capacity_reconciliation_overpaid_total{kind}`
   - `sorafs_capacity_reconciliation_unexpected_transfers_total`
   - `sorafs_capacity_reconciliation_expected_nano{kind}`
   - `sorafs_capacity_reconciliation_actual_nano{kind}`
 
-## Expected Ranges and Tolerances
-- Reconciliation is exact: expected vs actual settlement/penalty nanos should match with zero tolerance. Any non-zero diff should page operators.
-- CI pins a 30-day soak digest for the capacity fee ledger (test `capacity_fee_ledger_30_day_soak_deterministic`) to `71db9e1a17f66920cd4fe6d2bb6a1b008f9cfe1acbb3149d727fa9c80eee80d1`. Refresh the digest only when pricing or cooldown semantics change.
-- In the soak profile (`penalty_bond_bps=0`, `strike_threshold=u32::MAX`) penalties stay at zero; production should only emit penalties when utilisation/uptime/PoR floors are breached and respect the configured cooldown before successive slashes.
+## 預期範圍和公差
+- 核對準確：預期與實際結算/罰款納米級應零容忍匹配。任何非零差異都應該分頁運算符。
+- CI 將容量費用分類帳（測試 `capacity_fee_ledger_30_day_soak_deterministic`）的 30 天浸泡摘要固定到 `71db9e1a17f66920cd4fe6d2bb6a1b008f9cfe1acbb3149d727fa9c80eee80d1`。僅當定價或冷卻語義發生變化時刷新摘要。
+- 在浸泡曲線（`penalty_bond_bps=0`、`strike_threshold=u32::MAX`）中，懲罰保持為零；生產只應在利用率/正常運行時間/PoR 底線被破壞時發出懲罰，並在連續削減之前遵守配置的冷卻時間。

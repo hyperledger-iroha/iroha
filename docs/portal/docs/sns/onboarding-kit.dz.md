@@ -9,27 +9,28 @@ source_last_modified: "2025-12-29T18:16:35.174056+00:00"
 translation_last_reviewed: 2026-02-07
 title: SNS metrics & onboarding kit
 description: Dashboard, pricing, and automation artifacts referenced by roadmap item SN-8.
+translator: machine-google-reviewed
 ---
 
-# SNS Metrics & Onboarding Kit
+# ཨེསི་ཨེན་ཨེསི་ མེ་ཊིགསི་དང་ ཨོན་བྷེ་ཌིང་ཀིཊ།
 
-Roadmap item **SN-8** bundles two promises:
+ལམ་སྟོན་རྣམ་གྲངས་ **SN-8** ཁས་བླངས་གཉིས་བསྡམས།
 
-1. Publish dashboards that expose registrations, renewals, ARPU, disputes, and
-   freeze windows for `.sora`, `.nexus`, and `.dao`.
-2. Ship an onboarding kit so registrars and stewards can wire DNS, pricing, and
-   APIs consistently before any suffix goes live.
+༡ ཐོ་བཀོད་དང་ བསྐྱར་གསོ་ ཨེ་ཨར་པི་ཡུ་ རྩོད་རྙོག་ཚུ་ གསལ་སྟོན་འབད་མི་ བརྡ་དོན་བཀོད་སྒྲིག་ཚུ་ དཔར་བསྐྲུན་འབད་ནི།
+   `.sora` དང་ I18NI000000018X, དང་ `.dao` གི་དོན་ལུ་ སྒོ་སྒྲིག་ཚུ་ གྱང་ཤུགས་བཏོན་ཡོདཔ་ཨིན།
+2. གྲུ་གཟིངས་ཀྱི་ཡོ་ཆས་དང་ ཐོ་བཀོད་འབད་མི་ཚུ་གིས་ ཌའི་ཨེན་ཨེསི་ གློག་ཐག་དང་ གོང་ཚད་ དེ་ལས་ དང་།
+   རྗེས་འཇུག་གང་རུང་མ་འགྱོ་བའི་ཧེ་མ་ APIs ཚུ་ རིམ་མཐུན་སྦེ་ཡོདཔ་ཨིན།
 
-This page mirrors the source version
-[`docs/source/sns/onboarding_kit.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sns/onboarding_kit.md)
-so external reviewers can follow the same procedure.
+ཤོག་ལེབ་འདི་གིས་ འབྱུང་ཁུངས་ཐོན་རིམ་འདི་ མེ་ལོང་ནང་སྟོནམ་ཨིན།
+[I18NI0000020X](I18NU0000010X)
+དེ་འབདཝ་ལས་ ཕྱི་ཁའི་བསྐྱར་ཞིབ་འབད་མི་ཚུ་གིས་ བྱ་རིམ་གཅིགཔོ་འདི་ ལག་ལེན་འཐབ་ཚུགས།
 
-## 1. Metric bundle
+## 1. མེཊིག་བསྡམས།
 
-### Grafana dashboard & portal embed
+### Grafana ཌེཤ་བོརཌི་དང་ དྲྭ་ཐོག་བཙུགས་ཡོདཔ།
 
-- Import `dashboards/grafana/sns_suffix_analytics.json` into Grafana (or another
-  analytics host) via the standard API:
+- `dashboards/grafana/sns_suffix_analytics.json` ནང་འདྲེན་ Grafana (ཡང་ན་གཞན་ནང་འདྲེན་འབད།
+  དབྱེ་དཔྱད་ཧོསིཊི་) ཚད་ལྡན་ཨེ་པི་ཨའི་:
 
 ```bash
 curl -H "Content-Type: application/json" \
@@ -38,144 +39,129 @@ curl -H "Content-Type: application/json" \
      --data-binary @dashboards/grafana/sns_suffix_analytics.json
 ```
 
-- The same JSON powers this portal page’s iframe (see **SNS KPI Dashboard**).
-  Whenever you bump the dashboard, run
-  `npm run build && npm run serve-verified-preview` inside `docs/portal` to
-  confirm both Grafana and the embed stay in sync.
+- ཅོག་འཐདཔ་འདི་གིས་ དྲྭ་རྒྱ་ཤོག་ལེབ་འདི་གི་ iframe (**SNS KPI Dashboard** ལུ་བལྟ།)
+  ཁྱོད་ཀྱིས་ ཌེཤ་བོརཌི་འདི་ ག་དུས་འབད་རུང་ གཡོག་བཀོལ།
+  I18NI00000022 ནང་ `docs/portal` ནང་།
+  I18NT000000003X གཉིས་ཆ་ར་ ངེས་གཏན་བཟོ། མཉམ་སྦྲགས་ནང་སྡོད་ནི་འདི་ མཉམ་འབྱུང་ནང་ བཞག་དགོ།
 
-### Panels & evidence
+### པེ་ནཱལ་དང་ བདེན་དཔང་།
 
-| Panel | Metrics | Governance evidence |
-|-------|---------|---------------------|
-| Registrations & renewals | `sns_registrar_status_total` (success + renewal resolver labels) | Per-suffix throughput + SLA tracking. |
-| ARPU / net units | `sns_bulk_release_payment_net_units`, `sns_bulk_release_payment_gross_units` | Finance can match registrar manifests to revenue. |
-| Disputes & freezes | `guardian_freeze_active`, `sns_dispute_outcome_total`, `sns_governance_activation_total` | Shows active freezes, arbitration cadence, and guardian workload. |
-| SLA/error rates | `torii_request_duration_seconds`, `sns_registrar_status_total{status="error"}` | Highlights API regressions before they impact customers. |
-| Bulk manifest tracker | `sns_bulk_release_manifest_total`, payment metrics with `manifest_id` labels | Connects CSV drops to settlement tickets. |
+| པེ་ནཱལ་ | མེ་ཊིག་ | གཞུང་སྐྱོང་གི་སྒྲུབ་བྱེད་ |
+|-----------------------------------------|
+| ཐོ་བཀོད་དང་བསྐྱར་གསོ་ཚུ་ | `sns_registrar_status_total` (མཐར་འཁྱོལ་ + བསྐྱར་གསོ་ཐག་གཅོད་པ་ཁ་ཡིག་ཚུ་) | རྗེས་འཇུག་ཐུན་པུཊི་ + ཨེསི་ཨེལ་ཨེ་རྗེས་འདེད་འབད་ནི། |
+| ARPU / ནེཊི་ཡུ་ནིཊི་ཚུ་ | `sns_bulk_release_payment_net_units`, `sns_bulk_release_payment_gross_units` | དངུལ་འབྲེལ་གྱིས་ ཐོ་བཀོད་འགོ་དཔོན་གྱི་འོང་འབབ་དང་ མཐུན་སྒྲིག་འབད་ཚུགས། |
+| རྩོད་གཞི་དང་ གྱང་ཁོག་ཚུ་ | `guardian_freeze_active`, `sns_dispute_outcome_total`, `sns_governance_activation_total` | ཤུགས་ལྡན་འཁྱགས་སྒམ་དང་ ནང་འགྲིགས་ཀྱི་གདངས་ དེ་ལས་ ལྟ་རྟོག་པ་ལཱ་གི་མངའ་ཁོངས་ཚུ་སྟོནམ་ཨིན། |
+| SLA/ནོར་འཁྲུལ་གྱི་ཚད་གཞི | `torii_request_duration_seconds`, I18NI000000031X | ཚོང་མགྲོན་པ་ཚུ་ལུ་ ཕན་གནོད་མ་བྱུང་པའི་ཧེ་མ་ ཨེ་པི་ཨའི་ ལོག་ལྟ་ཚུ་ གཙོ་བོར་བཏོནམ་ཨིན། |
+| སྦུང་ཚད་གསལ་སྟོན་བརྟག་ཞིབ་པ་ | `sns_bulk_release_manifest_total`, `manifest_id` ཁ་ཡིག་ཚུ་ཡོད་པའི་ དངུལ་སྤྲོད་ཚད་ཀྱི་ཚད་གཞི་ཚུ། | གཞིས་ཆགས་ཀྱི་ཤོག་འཛིན་ཚུ་ལུ་ CSV ཐིགས་པ་མཐུདཔ་ཨིན། |
 
-Export a PDF/CSV from Grafana (or the embedded iframe) during the monthly KPI
-review and attach it to the relevant annex entry under
-`docs/source/sns/regulatory/<suffix>/YYYY-MM.md`. Stewards also capture the SHA-256
-of the exported bundle under `docs/source/sns/reports/` (for example,
-`steward_scorecard_2026q1.md`) so audits can replay the evidence path.
+ཟླ་རིམ་ཀེ་པི་ཨའི་ སྐབས་ Grafana ལས་ PDF/CSV ཕྱིར་འདྲེན་འབད།
+བསྐྱར་ཞིབ་དང་ དེ་ འོག་ལུ་འབྲེལ་ཡོད་ མཉམ་སྦྲགས་ལུ་ མཉམ་སྦྲགས་འབད།
+`docs/source/sns/regulatory/<suffix>/YYYY-MM.md`. སི་ཊི་ཝརཌ་གིས་ཡང་ ཨེསི་ཨེཆ་ཨེ་-༢༥༦ བཟུང་ཡོདཔ་ཨིན།
+I18NI000000035X གི་འོག་ལུ་ ཕྱིར་འདྲེན་འབད་ཡོད་པའི་བཱན་ཌལ་གྱི་ (དཔེར་ན་, .
+`steward_scorecard_2026q1.md`) དེ་འབདཝ་ལས་ རྩིས་ཞིབ་ཚུ་གིས་ སྒྲུབ་བྱེད་ཀྱི་ལམ་འདི་ ལོག་རྩེད་ཚུགས།
 
-### Annex automation
+### ལེགས་བཅོས་འབད་ནི།
 
-Generate annex files directly from the dashboard export so reviewers get a
-consistent digest:
+ཌེཤ་བོརཌི་ཕྱིར་འདྲེན་ལས་ ཐད་ཀར་དུ་ སྦྲེལ་མཐུད་ཡིག་སྣོད་ཚུ་ བཟོ་བསྐྲུན་འབད།
+རིམ་མཐུན་འཇུ་བྱེད་:
 
-```bash
-cargo xtask sns-annex \
-  --suffix .sora \
-  --cycle 2026-03 \
-  --dashboard dashboards/grafana/sns_suffix_analytics.json \
-  --dashboard-artifact artifacts/sns/regulatory/.sora/2026-03/sns_suffix_analytics.json \
-  --output docs/source/sns/reports/.sora/2026-03.md \
-  --regulatory-entry docs/source/sns/regulatory/eu-dsa/2026-03.md \
-  --portal-entry docs/portal/docs/sns/regulatory/eu-dsa-2026-03.md
-```
+I18NF0000008X
 
-- The helper hashes the export, captures the UID/tags/panel count, and writes a
-  Markdown annex under `docs/source/sns/reports/.<suffix>/<cycle>.md` (see the
-  `.sora/2026-03` sample committed alongside this doc).
-- `--dashboard-artifact` copies the export into
-  `artifacts/sns/regulatory/<suffix>/<cycle>/` so the annex references the
-  canonical evidence path; use `--dashboard-label` only when you need to point
-  at an out-of-band archive.
-- `--regulatory-entry` points at the governing memo. The helper inserts (or
-  replaces) a `KPI Dashboard Annex` block that records the annex path, dashboard
-  artefact, digest, and timestamp so evidence stays in sync after re-runs.
-- `--portal-entry` keeps the Docusaurus copy (`docs/portal/docs/sns/regulatory/*.md`)
-  aligned so reviewers do not have to diff separate annex summaries manually.
-- If you skip `--regulatory-entry`/`--portal-entry`, attach the generated file to
-  the memos manually and still upload the PDF/CSV snapshots captured from Grafana.
-- For recurring exports, list the suffix/cycle pairs in
-  `docs/source/sns/regulatory/annex_jobs.json` and run
-  `python3 scripts/run_sns_annex_jobs.py --verbose`. The helper walks every entry,
-  copies the dashboard export (defaulting to `dashboards/grafana/sns_suffix_analytics.json`
-  when unspecified), and refreshes the annex block inside each regulatory (and,
-  when available, portal) memo in one pass.
-- Run `python3 scripts/check_sns_annex_schedule.py --jobs docs/source/sns/regulatory/annex_jobs.json --regulatory-root docs/source/sns/regulatory --report-root docs/source/sns/reports` (or `make check-sns-annex`) to prove the job list stays sorted/deduped, each memo carries the matching `sns-annex` marker, and the annex stub exists. The helper writes `artifacts/sns/annex_schedule_summary.json` beside the locale/hash summaries used in governance packets.
-This removes manual copy/paste steps and keeps SN-8 annex evidence consistent while
-guarding schedule, marker, and localization drift in CI.
+- གྲོགས་རམ་པ་འདི་གིས་ ཕྱིར་འདྲེན་འདི་ ཧ་ལས་ཏེ་ ཡུ་ཨའི་ཌི་/ཊེག་/པེ་ནཱལ་གྱངས་ཁ་འདི་ བཟུང་ཞིནམ་ལས་ a བྲིས།
+  མཱརཀ་ཌའོན་འཐུ། I18NI000000037X (བལྟ།
+  `.sora/2026-03` དཔེ་ཚད་འདི་ ཡིག་ཆ་འདི་དང་གཅིག་ཁར་ འབདཝ་ཨིན།)
+- I18NI000000039X ཕྱིར་འདྲེན་འདི་ ནང་ལུ་འདྲ་བཤུས་རྐྱབ་ཨིན།
+  `artifacts/sns/regulatory/<suffix>/<cycle>/` དེ་འབདཝ་ལས་ མཐུད་རྐྱེན་འདི་གིས་ གཞི་བསྟུན་འབདཝ་ཨིན།
+  ཁྲིམས་ལུགས་ཀྱི་སྒྲུབ་བྱེད་ཀྱི་ལམ་རིམ། `--dashboard-label` འདི་ ཁྱོད་ཀྱིས་ བརྡ་སྟོན་འབད་དགོ་པའི་སྐབས་ལུ་རྐྱངམ་ཅིག་ ལག་ལེན་འཐབ།
+  གཏན་མཛོད་ཅིག་ལུ།
+- `--regulatory-entry` གཞུང་སྐྱོང་དྲན་ཐོ་ནང་ སྐུགས་ཚུ། གྲོགས་རམ་པ་བཙུགས་མི་ཚུ་གིས་ ( ཡང་ཅིན།
+  appens a `KPI Dashboard Annex` སྡེབ་ཚན་ཅིག་ ཟུར་རིམ་འགྲུལ་ལམ་ཐོ་བཀོད་འབད་མི་ ཌེཤ་བོརཌི་ཅིག་ ཐོ་བཀོད་འབདཝ་ཨིན།
+  བཅོས་མ་དང་ བཞུ་བཅོས་ དེ་ལས་ དུས་ཚོད་ཀྱི་རྟགས་མཚན་ཚུ་ ལོག་སྟེ་རང་ གཡོག་བཀོལ་བའི་ཤུལ་ལས་ མཉམ་མཐུན་སྦེ་སྡོད་དོ་ཡོདཔ་ཨིན།
+- `--portal-entry` གིས་ Docusaurus འདྲ་བཤུས་ (I18NI000000045X) བཞགཔ་ཨིན།
+  ཕྲང་སྒྲིག་འབད་དེ་ བསྐྱར་ཞིབ་འབད་མི་ཚུ་གིས་ ལག་ཐོག་ལས་ ཟུར་བཅུད་བཅུད་བསྡུས་ཚུ་ སོ་སོ་སྦེ་ དབྱེ་བ་ཕྱེ་དགོཔ་མེདཔ་ཨིན།
+- ཁྱོད་ཀྱིས་ I18NI000000046X/`--portal-entry` འདི་ གོམ་འགྱོ་བ་ཅིན་ བཟོ་བཏོན་འབད་ཡོད་པའི་ཡིག་སྣོད་འདི་ ལུ་མཉམ་སྦྲགས་འབད།
+  ལག་ཐོག་ལས་ དྲན་ཐོ་ཚུ་ ད་ལྟོ་ཡང་ Grafana ལས་ བཏོན་ཡོད་པའི་ PDF/CSV པར་རིས་ཚུ་ སྐྱེལ་བཙུགས་འབདཝ་ཨིན།
+- བསྐྱར་ལོག་ཕྱིར་འདྲེན་འབད་ནིའི་དོན་ལུ་ རྗེས་འཇུག་/འཁོར་ལོའི་ཆ་ཚུ་ ནང་ཐོ་བཀོད་འབད།
+  `docs/source/sns/regulatory/annex_jobs.json` དང་རྒྱུ།
+  `python3 scripts/run_sns_annex_jobs.py --verbose`. གྲོགས་རམ་པ་དེ་གིས་ འཛུལ་ཞུགས་ག་ར་འགྱོཝ་ཨིན།
+  ཌེཤ་བོརཌ་ཕྱིར་འདྲེན་ (I18NI000000050X ལུ་སྔོན་སྒྲིག་འབད་ནི།
+  གསལ་བཀོད་མ་འབད་བའི་སྐབས་) དེ་ལས་ ཁྲིམས་ལུགས་རེ་རེ་ནང་ མཐུད་རྐྱེན་གྱི་སྡེབ་ཚན་འདི་ གསར་བསྐྲུན་འབདཝ་ཨིན། (དང་,,
+  འཐོབ་ཚུགས་པའི་སྐབས་, portal) བརྒྱུད་དེ་ བརྡ་དོན།
+- ལཱ་གི་ཐོ་ཡིག་འདི་ དབྱེ་སེལ་འབད་དེ་ཡོདཔ་སྦེ་ བདེན་ཁུངས་བཀལ་ནིའི་དོན་ལུ་ I18NI000000051X (ཡང་ན་ `make check-sns-annex`) གཡོག་བཀོལ་ཏེ་ བརྗེད་ཐོ་རེ་རེ་གིས་ `sns-annex` རྟགས་བཀོད་མི་དང་ མཐུད་སྦྲེལ་གྱི་སྦུང་ཚན་འདི་ཡོདཔ་ཨིན། གྲོགས་རམ་པ་གིས་ གཞུང་སྐྱོང་ཐུམ་སྒྲིལ་ཚུ་ནང་ ལག་ལེན་འཐབ་མི་ ས་གནས་ཀྱི་/ཧེ་ཤི་གི་ བཅུད་བསྡུས་ཚུ་ བདའ་སྟེ་ `artifacts/sns/annex_schedule_summary.json` བྲིས།
+འདི་གིས་ ལག་དེབ་འདྲ་བཤུས་/སྦྱར་ནི་རིམ་པ་ཚུ་བཏོན་གཏང་ཞིནམ་ལས་ ཨེསི་ཨེན་-༨ ཟུར་ཐོ་སྒྲུབ་བྱེད་ཚུ་ རིམ་མཐུན་སྦེ་བཞགཔ་ཨིན།
+CI ནང་ སྲུང་སྐྱོབ་ཀྱི་ལས་རིམ་དང་ རྟགས་བཀལ་མི་ དེ་ལས་ ས་གནས་ཀྱི་འགྱུར་བ་ཚུ་ བཀག་འཛིན་འབད་ནི།
 
-## 2. Onboarding kit components
+## 2. འགོ་བཙུགས་ཆས་ཀྱི་ཆ་ཤས།
 
-### Suffix wiring
+### རྗེས་འཇུག གློག་ཐག་།
 
-- Registry schema + selector rules:
-  [`docs/source/sns/registry_schema.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sns/registry_schema.md)
-  and [`docs/source/sns/local_to_global_toolkit.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sns/local_to_global_toolkit.md).
-- DNS skeleton helper:
-  [`scripts/sns_zonefile_skeleton.py`](https://github.com/hyperledger-iroha/iroha/blob/master/scripts/sns_zonefile_skeleton.py)
-  with the rehearsal flow captured in the
+- ཐོ་བཀོད་ལས་འཆར་ + གདམ་ཁའི་སྒྲིག་གཞི།
+  [I18NI0000055X](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sns/registry_schema.md)
+  དང་ [`docs/source/sns/local_to_global_toolkit.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sns/local_to_global_toolkit.md).
+- DNS རུས་སྒྲོམ་གྱི་གྲོགས་རམ་པ།
+  [`scripts/sns_zonefile_skeleton.py`](I18NU0000013X)
+  ནང་དུ་བསྐྱར་སྦྱོང་གི་རྒྱུན་འབབ་དང་མཉམ་དུ།
   [gateway/DNS runbook](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs_gateway_dns_owner_runbook.md).
-- For every registrar launch, file a short note under
-  `docs/source/sns/reports/` summarising selector samples, GAR proofs, and DNS hashes.
+- ཐོ་བཀོད་འགོ་འབྱེད་རེ་རེ་གི་དོན་ལུ་ གཤམ་གྱི་དྲན་འཛིན་ཐུང་ཀུ་ཅིག་ འོག་ལུ་བཙུགས།
+  I18NI000000058X སེལ་འཐུ་འབད་མི་དཔེ་ཚད་དང་ ཇི་ཨེ་ཨར་ བདེན་ཁུངས་ དེ་ལས་ ཌི་ཨེན་ཨེསི་ཧ་ཤེ་ཚུ་ བཅུད་བསྡུས་འབད་དོ།
 
-### Pricing cheatsheet
+### རིན་གོང་གཡོ་སྒྱུའི་ཤོག་ཆ།
 
-| Label length | Base fee (USD equiv) |
-|--------------|---------------------|
+| ཁ་ཡིག་གི་རིང་ཚད་ | གཞི་རྟེན་འཐུས་ (USD equiv) |
+|------------------------------------------ |
 | 3 | $240 |
 | 4 | $90 |
 | 5 | $30 |
-| 6–9 | $12 |
-| 10+ | $8 |
+| ༦–༩ | $12 |
+| ༡༠+ | $8 |
 
-Suffix coefficients: `.sora` = 1.0×, `.nexus` = 0.8×, `.dao` = 1.3×.  
-Term multipliers: 2‑year −5 %, 5‑year −12 %; grace window = 30 days, redemption
-= 60 days (20 % fee, min $5, max $200). Record negotiated deviations in the
-registrar ticket.
+རྗེས་འཇུག་གི་འཇོན་ཚད་: `.sora` = ༡.༠×, `.nexus` = 0.8×, I18NI000000061X = 1.3×.  
+ཊར་མ་བསྒྱུར་བཅོས།: ལོ་ ༢‐ལོ་ −༥%, ༥‐ལོ་ −༡༢%; grace སྒོ་སྒྲིག་ = ༣༠, བསྐྱར་གསོས།
+= ༦༠ ཉིན་ (༢༠% འཐུས་མི། ཌོ་ལར་༥, མཐོ་ཤོས་ ཌོ་ལར་༢༠༠)། ༢༠༢༠ ནང་དྲན་ཐོ་བསྟུན་གྲོས་འབད་ཡོད་པའི་ཐ་དད།
+ཐོ་བཀོད་ཤོག་བྱང་།
 
-### Premium auctions vs renewals
+### མཐོ་རིམ་རིན་བསྡུར་དང་བསྐྱར་གསོ་འབད་ནི།
 
-1. **Premium pool** — sealed-bid commit/reveal (SN-3). Track bids with
-   `sns_premium_commit_total`, and publish the manifest under
-   `docs/source/sns/reports/`.
-2. **Dutch reopen** — after grace + redemption expire, start a 7‑day Dutch sale
-   at 10× that decays 15 % per day. Label manifests with `manifest_id` so the
-   dashboard can surface progress.
-3. **Renewals** — monitor `sns_registrar_status_total{resolver="renewal"}` and
-   capture the autorenew checklist (notifications, SLA, fallback payment rails)
-   inside the registrar ticket.
+1. **Premium ཆུ་རྫིང་** — བསྡམ་བཞག་པའི་ རིན་བསྡུར་ཁས་བླངས་/གསལ་བསྒྲགས། (SN-3). དང་ཅིག་ཁར་ རིན་བསྡུར་འབད་ནི།
+   `sns_premium_commit_total`, དང་ གསལ་སྟོན་འདི་ འོག་ལུ་དཔར་བསྐྲུན་འབད།
+   I18NI000000063X.
+2. **ཌཆ་ རི་ཨོཔ་** — ཐུགས་རྗེ་ + བསྐྱར་གསོའི་དུས་ཡུན་ཚང་བའི་ཤུལ་ལས་ ཉིནམ་ ༧‐ཉིནམ་གྱི་ ཌཆ་ཚོང་འབྲེལ་འགོ་བཙུགས།
+   10× དེ་ཉིན་རེར་ 15% བཤིག་ཡོད། ཁ་ཡིག་འདི་གིས་ `manifest_id` དང་ཅིག་ཁར་ གསལ་སྟོན་འབདཝ་ཨིན།
+   dashbood གིས་ ཁ་ཐོག་གི་ཡར་འཕེལ་འབད་ཚུགས།
+3. **བསྐྱར་གསོ་** — I18NI000000065X དང་།
+   རང་བཞིན་སླར་འབྱུང་ཞིབ་དཔྱད་ཐོ་ཡིག་ཚུ་ བཟུང་ (བརྡ་དོན་, ཨེསི་ཨེལ་ཨེ་, ལོསི་བེག་སྤྲོད་ལེན་རེ་ལི་ཚུ།)
+   ཐོ་བཀོད་ཀྱི་ཤོག་འཛིན་ནང་ལུ།
 
-### Developer APIs & automation
+### གོང་འཕེལ་གཏང་མི་ APIs དང་ རང་འགུལ་
 
-- API contracts: [`docs/source/sns/registrar_api.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sns/registrar_api.md).
-- Bulk helper & CSV schema:
-  [`docs/source/sns/bulk_onboarding_toolkit.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sns/bulk_onboarding_toolkit.md).
-- Example command:
+- ཨེ་པི་ཨའི་ གན་རྒྱ་ཚུ་: [`docs/source/sns/registrar_api.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sns/registrar_api.md).
+- གྲོགས་རམ་ཆེ་བ་དང་ སི་ཨེསི་ཝི་འཆར་གཞི།
+  [`docs/source/sns/bulk_onboarding_toolkit.md`](I18NU0000016X).
+- དཔེར་བརྗོད:
 
-```bash
-python3 scripts/sns_bulk_onboard.py registrations.csv \
-  --ndjson artifacts/sns/releases/2026q2/requests.ndjson \
-  --submission-log artifacts/sns/releases/2026q2/submissions.log \
-  --submit-torii-url https://torii.sora.net \
-  --submit-token-file ~/.config/sora/tokens/registrar.token
-```
+I18NF0000009X
 
-Include the manifest ID (`--submission-log` output) in the KPI dashboard filter
-so finance can reconcile revenue panels per release.
+ཀེ་པི་ཨའི་ ཌེཤ་བོརཌི་ཚགས་མ་ནང་ གསལ་སྟོན་ཨའི་ཌི་ (I18NI0000068X ཐོན་འབྲས་) བཙུགས།
+དེ་འབདཝ་ལས་ མ་དངུལ་གྱིས་ འོང་འབབ་ཀྱི་ པེ་ནཱལ་ཚུ་ གསར་བཏོན་རེ་ལུ་ མཐུན་སྒྲིག་འབད་ཚུགས།
 
-### Evidence bundle
+### བདེན་དཔང་བསྡམས།
 
-1. Registrar ticket with contacts, suffix scope, and payment rails.
-2. DNS/resolver evidence (zonefile skeletons + GAR proofs).
-3. Pricing worksheet + any overrides approved by governance.
-4. API/CLI smoke-test artefacts (`curl` samples, CLI transcripts).
-5. KPI dashboard screenshot + CSV export, attached to the monthly annex.
+༡ འབྲེལ་གཏུག་དང་ རྗེས་འཇུག་གོ་སྐབས་ དེ་ལས་ དངུལ་སྤྲོད་དགོ་པའི་ ཐོ་བཀོད་ཀྱི་ ཤོག་འཛིན་ཚུ།
+2. DNS/resolver སྒྲུབ་བྱེད་ (ས་ཁོངས་ཡིག་གཟུགས་ཀྱི་ཀེང་རུས་ + GAR བདེན་དཔྱད།)
+༣ གོང་ཚད་ཀྱི་ལཱ་ཤོག་ + གཞུང་སྐྱོང་གིས་ ཆ་འཇོག་གྲུབ་པའི་ བཀག་ཆ་གང་རུང་ཅིག།
+༤ ཨེ་པི་ཨའི་/སི་ཨེལ་ཨའི་ དུ་ཁའི་བརྟག་དཔྱད་ཀྱི་ ཅ་ཆས་ཚུ་ (I18NI0000069X དཔེ་ཚད་ CLI ཡིག་ཆ་)
+༥ ཀེ་པི་ཨའི་ ཌེཤ་བོརཌི་གསལ་གཞི་ + སི་ཨེསི་ཝི་ཕྱིར་འདྲེན་ ཟླཝ་རེའི་ ཟུར་ཐོ་ལུ་མཉམ་སྦྲགས་འབད་ཡོདཔ།
 
-## 3. Launch checklist
+## 3. བརྟག་ཞིབ་ཐོ་ཡིག་འགོ་བཙུགས།
 
-| Step | Owner | Artefact |
-|------|-------|----------|
-| Dashboard imported | Product Analytics | Grafana API response + dashboard UID |
-| Portal embed validated | Docs/DevRel | `npm run build` logs + preview screenshot |
-| DNS rehearsal complete | Networking/Ops | `sns_zonefile_skeleton.py` outputs + runbook log |
-| Registrar automation dry run | Registrar Eng | `sns_bulk_onboard.py` submissions log |
-| Governance evidence filed | Governance Council | Annex link + SHA-256 of exported dashboard |
+| གོམ་པ་ | ཇོ་བདག་ | ཅ་ཆས། |
+|-------|---------------------------------
+| ཌེཤ་བོརཌ་ནང་འདྲེན་འབད་ཡོདཔ། | ཐོན་སྐྱེད་དབྱེ་ཞིབ། | Grafana ཨེ་པི་ཨའི་ ལན་ + ཌེཤ་བོརཌ་ ཡུ་ཨའི་ཌི་ |
+| Portal བཙུགས་ཡོད་པའི་བདེན་དཔྱད་འབད་ཡོདཔ། | ཡིག་ཆ་/ཌི་ཝི་རེལ | `npm run build` དྲན་ཐོ་ཚུ་ + སྔོན་ལྟ་གསལ་གཞི་པར་རིས། |
+| DNS བསྐྱར་སྦྱོང་མཇུག་བསྡུ་ཡོདཔ། | ཡོངས་འབྲེལ་/Ops | I18NI000000071X ཐོན་འབྲས་ + རན་བུཀ་དྲན་ཐོ་ |
+| ཐོ་བཀོད་འཕྲུལ་ཆས་སྐམ་རྒྱུག | ཐོ་བཀོད་པ་ Eng | `sns_bulk_onboard.py` བཙུགས་པའི་དྲན་ཐོ་ |
+| གཞུང་སྐྱོང་གི་སྒྲུབ་བྱེད་ | གཞུང་སྐྱོང་ལྷན་ཚོགས། | ཕྱིར་འདྲེན་འབད་ཡོད་པའི་ ཌེཤ་བོརཌི་གི་ ཟུར་དེབ་ ཨེསི་ཨེཆ་ཨེ་-༢༥༦ |
 
-Complete the checklist before activating a registrar or suffix. The signed
-bundle clears the SN-8 roadmap gate and gives auditors a single reference when
-reviewing marketplace launches.
+ཐོ་བཀོད་ཡང་ན་ རྗེས་འཇུག་ཅིག་ ཤུགས་ལྡན་མ་བཟོ་བའི་ཧེ་མ་ ཞིབ་དཔྱད་ཐོ་ཡིག་འདི་ མཇུག་བསྡུ་དགོ། མཚན་རྟགས་བཀོད་པ།
+bundle གིས་ SN-8 ལམ་སྟོན་གྱི་སྒོ་འདི་བསལ་ཞིནམ་ལས་ རྩིས་ཞིབ་པ་ཚུ་ལུ་ གཞི་བསྟུན་གཅིག་བྱིནམ་ཨིན།
+བསྐྱར་ཞིབ་འབད་ནི་ ཁྲོམ་ཁའི་འགོ་བཙུགས་ཚུ།

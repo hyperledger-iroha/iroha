@@ -8,42 +8,44 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: W1 partner feedback & exit summary
 sidebar_label: W1 summary
 description: Findings, actions, and exit evidence for the partner/Torii integrator preview wave.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-| Item | Details |
+| ንጥል | ዝርዝሮች |
 | --- | --- |
-| Wave | W1 — Partners & Torii integrators |
-| Invite window | 2025‑04‑12 → 2025‑04‑26 |
-| Artefact tag | `preview-2025-04-12` |
-| Tracker issue | `DOCS-SORA-Preview-W1` |
-| Participants | sorafs-op-01…03, torii-int-01…02, sdk-partner-01…02, gateway-ops-01 |
+| ማዕበል | W1 - አጋሮች እና I18NT0000001X integrators |
+| የግብዣ መስኮት | 2025-04-12 → 2025-04-26 |
+| Artefact መለያ | `preview-2025-04-12` |
+| የመከታተያ ጉዳይ | `DOCS-SORA-Preview-W1` |
+| ተሳታፊዎች | sorafs-op-01…03፣ torii-int-01…02፣ sdk-partner-01…02፣ ጌትዌይ-ኦፕስ-01 |
 
-## Highlights
+## ድምቀቶች
 
-1. **Checksum workflow** — All reviewers verified the descriptor/archive via `scripts/preview_verify.sh`; logs stored alongside the invite acknowledgements.
-2. **Telemetry** — `docs.preview.integrity`, `TryItProxyErrors`, and `DocsPortal/GatewayRefusals` dashboards stayed green for the entire wave; no incidents or alert pages fired.
-3. **Doc feedback (`docs-preview/w1`)** — Two minor nits filed:
-   - `docs-preview/w1 #1`: clarify nav wording in the Try it section (resolved).
-   - `docs-preview/w1 #2`: update Try it screenshot (resolved).
-4. **Runbook parity** — SoraFS operators confirmed the new cross-links between `orchestrator-ops` and `multi-source-rollout` addressed their W0 concerns.
+1. ** Checksum የስራ ፍሰት *** - ሁሉም ገምጋሚዎች ገላጭውን/ማህደሩን በI18NI0000006X አረጋግጠዋል። ምዝግብ ማስታወሻዎች ከግብዣ እውቅናዎች ጋር ተከማችተዋል።
+2. ** ቴሌሜትሪ *** - `docs.preview.integrity`፣ `TryItProxyErrors`፣ እና `DocsPortal/GatewayRefusals` ዳሽቦርዶች ለጠቅላላው ሞገድ አረንጓዴ ሆነው ቆዩ። ምንም አይነት ክስተቶች ወይም ማንቂያ ገጾች አልተተኮሱም።
+3. ** የሰነድ ግብረመልስ (`docs-preview/w1`)** - ሁለት ጥቃቅን ኒቶች ገብተዋል፡-
+   - `docs-preview/w1 #1`: ይሞክሩት ክፍል (የተፈታ) ውስጥ የናቭ ቃላትን ግልጽ ያድርጉ።
+   - `docs-preview/w1 #2`: አዘምን ቅጽበታዊ ገጽ እይታን ይሞክሩት (የተፈታ)።
+4. ** Runbook ተመሳሳይነት ** — SoraFS ኦፕሬተሮች በ `orchestrator-ops` እና `multi-source-rollout` መካከል ያለውን አዲስ ማቋረጫ የ W0 ስጋታቸውን አረጋግጠዋል።
 
-## Action items
+## የእርምጃ ዕቃዎች
 
-| ID | Description | Owner | Status |
+| መታወቂያ | መግለጫ | ባለቤት | ሁኔታ |
 | --- | --- | --- | --- |
-| W1-A1 | Update Try it nav wording per `docs-preview/w1 #1`. | Docs-core-02 | ✅ Completed (2025‑04‑18). |
-| W1-A2 | Refresh Try it screenshot per `docs-preview/w1 #2`. | Docs-core-03 | ✅ Completed (2025‑04‑19). |
-| W1-A3 | Summarise partner findings + telemetry evidence in roadmap/status. | Docs/DevRel lead | ✅ Completed (see tracker + status.md). |
+| W1-A1 | አዘምን በ `docs-preview/w1 #1` የቃላት አጻጻፍ ይሞክሩት። | ሰነዶች-ኮር-02 | ✅ ተጠናቋል (2025-04-18)። |
+| W1-A2 | አድስ በ`docs-preview/w1 #2` ቅጽበታዊ ገጽ እይታ ይሞክሩት። | ሰነዶች-ኮር-03 | ✅ ተጠናቅቋል (2025-04-19)። |
+| W1-A3 | የመንገድ ካርታ/ሁኔታ ላይ የአጋር ግኝቶችን + የቴሌሜትሪ ማስረጃዎችን ማጠቃለል። | ሰነዶች/DevRel አመራር | ✅ ተጠናቅቋል (tracker + status.md ይመልከቱ)። |
 
-## Exit summary (2025-04-26)
+## የመውጣት ማጠቃለያ (2025-04-26)
 
-- All eight reviewers confirmed completion during the final office hours, purged local artefacts, and had their access revoked.
-- Telemetry remained green through exit; final snapshots attached to `DOCS-SORA-Preview-W1`.
-- Invite log updated with exit acknowledgements; tracker flipped W1 to 🈴 and added the checkpoint entries.
-- Evidence bundle (descriptor, checksum log, probe output, Try it proxy transcript, telemetry screenshots, feedback digest) archived under `artifacts/docs_preview/W1/`.
+- ስምንቱም ገምጋሚዎች በመጨረሻው የስራ ሰዓት መጠናቀቁን አረጋግጠዋል፣ የሀገር ውስጥ ቅርሶችን አጽድተዋል እና መዳረሻቸው ተሰርዟል።
+- ቴሌሜትሪ በመውጣት አረንጓዴ ሆኖ ቆይቷል; የመጨረሻ ቅጽበተ-ፎቶዎች ከ ​​`DOCS-SORA-Preview-W1` ጋር ተያይዘዋል።
+- የግብዣ ምዝግብ ማስታወሻ በመውጫ እውቅናዎች የዘመነ; መከታተያ W1ን ወደ 🈴 ገለበጠ እና የፍተሻ ነጥቡን ጨምሯል።
+-የማስረጃ ጥቅል (ገላጭ፣ የቼክሰም ሎግ፣ የፍተሻ ውፅዓት፣ ይሞክሩት ተኪ ትራንስክሪፕት፣ ቴሌሜትሪ ስክሪፕቶች፣ የግብረ-መልስ መፍጫ) በ`artifacts/docs_preview/W1/` ስር ተቀምጧል።
 
-## Next steps
+## ቀጣይ እርምጃዎች
 
-- Prepare the W2 community intake plan (governance approval + request template tweaks).
-- Refresh the preview artefact tag for the W2 wave and re-run the preflight script once dates are finalised.
-- Port applicable W1 findings into roadmap/status so the community wave has the latest guidance.
+- የW2 ማህበረሰብ ቅበላ እቅድ ያዘጋጁ (የመንግስት ማፅደቅ + የአብነት ማስተካከያዎች)።
+- ለ W2 ሞገድ የቅድመ እይታ አርቲፊክት መለያን ያድሱ እና ቀኖች እንደጨረሱ የቅድመ በረራ ስክሪፕቱን እንደገና ያስጀምሩ።
+- የሚመለከታቸው የW1 ግኝቶች ወደ ፍኖተ ካርታ/ሁኔታ የማህበረሰብ ማዕበል የቅርብ መመሪያ እንዲኖረው።

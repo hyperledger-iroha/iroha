@@ -7,46 +7,47 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 6cd4da7e590d581719ed2607994d7d9eb16d153fbd06f85655d0da37c727853a
 source_last_modified: "2025-12-29T18:16:35.085419+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# SoraNet GAR Intake Template
+# SoraNet GAR მიღების შაბლონი
 
-Use this intake form when requesting a GAR action (purge, ttl override, rate
-ceiling, moderation directive, geofence, or legal hold). The submitted form
-should be pinned alongside the `gar_controller` outputs so audit logs and
-receipts cite the same evidence URIs.
+გამოიყენეთ ეს მიღების ფორმა GAR მოქმედების მოთხოვნისას (გასუფთავება, ttl გადაფარვა, მაჩვენებელი
+ჭერი, ზომიერების დირექტივა, geofence ან ლეგალური შეკავება). წარმოდგენილი ფორმა
+უნდა იყოს მიმაგრებული `gar_controller` გამომავლების გვერდით, რათა შეამოწმოთ ჟურნალი და
+ქვითრებში მოყვანილია იგივე მტკიცებულება URI-ები.
 
-| Field | Value | Notes |
+| ველი | ღირებულება | შენიშვნები |
 |-------|-------|-------|
-| Request ID |  | Guardian/ops ticket id. |
-| Requested by |  | Account + contact. |
-| Date/time (UTC) |  | When the action should start. |
-| GAR name |  | e.g., `docs.sora`. |
-| Canonical host |  | e.g., `docs.gw.sora.net`. |
-| Action |  | `ttl_override` / `rate_limit_override` / `purge_static_zone` / `geo_fence` / `legal_hold` / `moderation`. |
-| TTL override (seconds) |  | Required only for `ttl_override`. |
-| Rate ceiling (RPS) |  | Required only for `rate_limit_override`. |
-| Allowed regions |  | ISO region list when requesting `geo_fence`. |
-| Denied regions |  | ISO region list when requesting `geo_fence`. |
-| Moderation slugs |  | Match the GAR moderation directives. |
-| Purge tags |  | Tags that must be purged before serving. |
-| Labels |  | Machine labels (incident id, drill name, pop scope). |
-| Evidence URIs |  | Logs/dashboards/specs backing the request. |
-| Audit URI |  | Per-pop audit URI if different from defaults. |
-| Requested expiry |  | Unix timestamp or RFC3339; leave blank for default. |
-| Reason |  | User-facing explanation; appears in receipts and dashboards. |
-| Approver |  | Guardian/committee approver for the request. |
+| მოთხოვნის ID |  | Guardian/ops ბილეთის ID. |
+| მოთხოვნილია |  | ანგარიში + კონტაქტი. |
+| თარიღი/დრო (UTC) |  | როდის უნდა დაიწყოს მოქმედება. |
+| GAR სახელი |  | მაგ., `docs.sora`. |
+| კანონიკური მასპინძელი |  | მაგ., `docs.gw.sora.net`. |
+| მოქმედება |  | `ttl_override` / `rate_limit_override` / `purge_static_zone` / `geo_fence` / `legal_hold` / `moderation`. |
+| TTL გადაფარვა (წამი) |  | საჭიროა მხოლოდ `ttl_override`-ისთვის. |
+| განაკვეთის ჭერი (RPS) |  | საჭიროა მხოლოდ `rate_limit_override`-ისთვის. |
+| ნებადართული რეგიონები |  | ISO რეგიონების სია `geo_fence`-ის მოთხოვნისას. |
+| უარყოფილი რეგიონები |  | ISO რეგიონების სია `geo_fence`-ის მოთხოვნისას. |
+| ზომიერება slugs |  | შეასრულეთ GAR მოდერაციის დირექტივები. |
+| ტეგების გასუფთავება |  | ტეგები, რომლებიც უნდა გაიწმინდოს მიწოდებამდე. |
+| ეტიკეტები |  | მანქანების ეტიკეტები (ინციდენტის ID, საბურღი სახელწოდება, პოპ-სკოპი). |
+| მტკიცებულების URIs |  | ჟურნალები/დაფები/სპეციფიკატები, რომლებიც მხარს უჭერენ მოთხოვნას. |
+| აუდიტის URI |  | თითო პოპ აუდიტის URI თუ განსხვავდება ნაგულისხმევისაგან. |
+| მოთხოვნილი ვადის გასვლა |  | Unix დროის შტამპი ან RFC3339; ნაგულისხმევად დატოვეთ ცარიელი. |
+| მიზეზი |  | მომხმარებლის წინაშე მყოფი ახსნა; ჩნდება ქვითრებში და დაფებში. |
+| დამმტკიცებელი |  | მოთხოვნის მეურვე/კომიტეტის დამამტკიცებელი. |
 
-### Submission steps
+### წარდგენის ნაბიჯები
 
-1. Fill the table and attach it to the governance ticket.
-2. Update the GAR controller config (`policies`/`pops`) with matching
+1. შეავსეთ ცხრილი და დაურთოთ მმართველობის ბილეთს.
+2. განაახლეთ GAR კონტროლერის კონფიგურაცია (`policies`/`pops`) შესაბამისობით
    `labels`/`evidence_uris`/`expires_at_unix`.
-3. Run `cargo xtask soranet-gar-controller ...` to emit events/receipts.
-4. Drop `gar_controller_summary.json`, `gar_reconciliation_report.json`,
-   `gar_metrics.prom`, and `gar_audit_log.jsonl` into the same ticket. The
-   approver confirms the receipt count matches the PoP list before dispatch.
+3. გაუშვით `cargo xtask soranet-gar-controller ...` მოვლენების/მიღებების გამოსაცემად.
+4. ჩამოაგდეთ `gar_controller_summary.json`, `gar_reconciliation_report.json`,
+   `gar_metrics.prom` და `gar_audit_log.jsonl` იმავე ბილეთში. The
+   დამმტკიცებელი ადასტურებს, რომ ქვითრების რაოდენობა ემთხვევა PoP სიას გაგზავნამდე.

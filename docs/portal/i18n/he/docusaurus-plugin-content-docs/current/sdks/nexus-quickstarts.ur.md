@@ -4,6 +4,8 @@ direction: rtl
 source: docs/portal/docs/sdks/nexus-quickstarts.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 مکمل quickstart `docs/source/nexus_sdk_quickstarts.md` میں موجود ہے۔ یہ پورٹل خلاصہ مشترکہ پیشگی تقاضوں اور ہر SDK کے کمانڈز کو نمایاں کرتا ہے تاکہ ڈویلپرز اپنی سیٹ اپ جلدی جانچ سکیں۔
@@ -17,9 +19,9 @@ export NEXUS_CHAIN_ID="iroha3"
 export NEXUS_TRUSTED_PUBKEY="<peer-public-key>"
 ```
 
-Nexus کنفیگریشن بنڈل ڈاؤن لوڈ کریں، ہر SDK کی ڈپینڈنسیاں انسٹال کریں، اور یقینی بنائیں کہ TLS سرٹیفکیٹس ریلیز پروفائل سے میل کھاتے ہیں (دیکھیے `docs/source/sora_nexus_operator_onboarding.md`).
+Nexus מתחבר ל-SDK ב-SDK. یقینی بنائیں کہ TLS سرٹیفکیٹس ریلیز پروفائل سے میل کھاتے ہیں (دیکھیے `docs/source/sora_nexus_operator_onboarding.md`).
 
-## Rust
+## חלודה
 
 ```bash
 cargo run --bin nexus_quickstart \
@@ -28,7 +30,7 @@ cargo run --bin nexus_quickstart \
   --chain "${NEXUS_CHAIN_ID}"
 ```
 
-حوالہ: `docs/source/sdk/rust.md`
+מספר: `docs/source/sdk/rust.md`
 
 ## JavaScript / TypeScript
 
@@ -38,7 +40,7 @@ npm run demo:nexus
 
 اسکرپٹ اوپر والی ماحولیات متغیرات کے ساتھ `ToriiClient` بناتا ہے اور تازہ ترین بلاک پرنٹ کرتا ہے۔
 
-## Swift
+## סוויפט
 
 ```bash
 make swift-nexus-demo
@@ -46,7 +48,7 @@ make swift-nexus-demo
 
 `IrohaSwift` کے `Torii.Client` سے `FindNetworkStatus` حاصل کرتا ہے۔
 
-## Android
+## אנדרואיד
 
 ```bash
 ./gradlew :iroha-android:nexusQuickstartTest \

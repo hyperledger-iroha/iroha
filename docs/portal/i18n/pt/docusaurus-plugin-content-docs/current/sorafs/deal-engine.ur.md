@@ -4,68 +4,68 @@ direction: ltr
 source: docs/portal/docs/sorafs/deal-engine.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: deal-engine
-title: SoraFS deal engine
-sidebar_label: Deal engine
-description: SF-8 deal engine، Torii integration اور telemetry surfaces کا جائزہ۔
+id: mecanismo de negociação
+título: mecanismo de negociação SoraFS
+sidebar_label: mecanismo de negociação
+descrição: mecanismo de negociação SF-8, integração Torii e superfícies de telemetria.
 ---
 
-:::note مستند ماخذ
+:::nota مستند ماخذ
 :::
 
-# SoraFS deal engine
+# Mecanismo de negociação SoraFS
 
 SF-8 roadmap track SoraFS deal engine متعارف کراتا ہے، جو
-clients اور providers کے درمیان storage اور retrieval agreements کے لیے
-deterministic accounting فراہم کرتا ہے۔ Agreements کو Norito payloads کے ساتھ
-بیان کیا جاتا ہے جو `crates/sorafs_manifest/src/deal.rs` میں تعریف شدہ ہیں، اور
-deal terms، bond locking، probabilistic micropayments اور settlement records کو کور کرتے ہیں۔
+clientes اور provedores کے درمیان armazenamento اور acordos de recuperação کے لیے
+contabilidade determinística فراہم کرتا ہے۔ Contratos e cargas úteis Norito کے ساتھ
+Você pode usar o `crates/sorafs_manifest/src/deal.rs` para obter mais informações
+termos de negócio, bloqueio de títulos, micropagamentos probabilísticos e registros de liquidação کو کور کرتے ہیں۔
 
-Embedded SoraFS worker (`sorafs_node::NodeHandle`) اب ہر node process کے لیے
-ایک `DealEngine` instance بناتا ہے۔ یہ engine:
+Trabalhador SoraFS incorporado (`sorafs_node::NodeHandle`) no processo do nó کے لیے
+Instância `DealEngine` بناتا ہے۔ یہ motor:
 
-- `DealTermsV1` کے ذریعے deals کو validate اور register کرتا ہے؛
-- replication usage report ہونے پر XOR-denominated charges accumulate کرتا ہے؛
-- deterministic BLAKE3-based sampling کے ذریعے probabilistic micropayment windows evaluate کرتا ہے؛ اور
-- ledger snapshots اور governance publishing کے لیے موزوں settlement payloads بناتا ہے۔
+- `DealTermsV1` کے ذریعے ofertas کو validar اور registrar کرتا ہے؛
+- relatório de uso de replicação ہونے پر cobranças denominadas XOR acumulam کرتا ہے؛
+- amostragem determinística baseada em BLAKE3 کے ذریعے avaliação probabilística de janelas de micropagamento کرتا ہے؛ Mais
+- snapshots do razão e publicação de governança کے لیے موزوں cargas úteis de liquidação بناتا ہے۔
 
-Unit tests validation، micropayment selection اور settlement flows کو cover کرتے ہیں تاکہ
-operators اعتماد کے ساتھ APIs exercise کر سکیں۔ Settlements اب `DealSettlementV1` governance
-payloads emit کرتے ہیں، جو SF-12 publishing pipeline میں براہ راست wire ہوتے ہیں، اور
-OpenTelemetry کی `sorafs.node.deal_*` series
+Validação de testes unitários, seleção de micropagamentos e fluxos de liquidação کو cobertura کرتے ہیں تاکہ
+operadores اعتماد کے ساتھ Exercício de APIs کر سکیں۔ Assentamentos com governança `DealSettlementV1`
+cargas úteis emitem کرتے ہیں، جو Pipeline de publicação SF-12 میں براہ راست fio ہوتے ہیں، اور
+OpenTelemetry کی série `sorafs.node.deal_*`
 (`deal_settlements_total`, `deal_expected_charge_nano`, `deal_client_debit_nano`,
-`deal_outstanding_nano`, `deal_bond_slash_nano`, `deal_publish_total`) کو Torii dashboards اور
-SLO enforcement کے لیے update کرتی ہے۔ Follow-up items auditor-initiated slashing automation اور
-cancellation semantics کو governance policy کے ساتھ coordinate کرنے پر مرکوز ہیں۔
+`deal_outstanding_nano`, `deal_bond_slash_nano`, `deal_publish_total`) e painéis Torii
+Aplicação de SLO کے لیے atualização کرتی ہے۔ Itens de acompanhamento, automação de corte iniciada pelo auditor
+semântica de cancelamento کو política de governança کے ساتھ coordenada کرنے پر مرکوز ہیں۔
 
-Usage telemetry اب `sorafs.node.micropayment_*` metrics set کو بھی feed کرتی ہے:
+Telemetria de uso اب `sorafs.node.micropayment_*` conjunto de métricas کو بھی feed کرتی ہے:
 `micropayment_charge_nano`, `micropayment_credit_generated_nano`,
 `micropayment_credit_applied_nano`, `micropayment_credit_carry_nano`,
-`micropayment_outstanding_nano`, اور ticket counters
+`micropayment_outstanding_nano`, e balcões de ingressos
 (`micropayment_tickets_processed_total`, `micropayment_tickets_won_total`,
-`micropayment_tickets_duplicate_total`). یہ totals probabilistic lottery flow کو ظاہر کرتے ہیں تاکہ
-operators micropayment wins اور credit carry-over کو settlement outcomes کے ساتھ correlate کر سکیں۔
+`micropayment_tickets_duplicate_total`). یہ Fluxo de loteria probabilística total کو ظاہر کرتے ہیں تاکہ
+ganhos de micropagamento de operadores اور transferência de crédito کو resultados de liquidação کے ساتھ correlacionar کر سکیں۔
 
-## Torii integration
+## Integração Torii
 
-Torii dedicated endpoints expose کرتا ہے تاکہ providers usage report کر سکیں اور
-بدون bespoke wiring کے deal lifecycle drive کر سکیں:
+Endpoints dedicados Torii expõem o relatório de uso de provedores de کرتا ہے تاکہ
+A fiação sob medida e a unidade de ciclo de vida do negócio são as seguintes:- `POST /v1/sorafs/deal/usage` `DealUsageReport` telemetria aceita کرتا ہے اور
+  resultados contábeis determinísticos (`UsageOutcome`) retorno کرتا ہے۔
+- `POST /v1/sorafs/deal/settle` finalização da janela atual کرتا ہے، اور
+  نتیجے میں بننے والا `DealSettlementRecord` `DealSettlementV1` codificado em base64 کے ساتھ stream کرتا ہے
+  جو governança publicação DAG کے لیے تیار ہوتا ہے۔
+- Torii کا `/v1/events/sse` feed اب `SorafsGatewayEvent::DealUsage` registra transmissão کرتا ہے
+  جو ہر envio de uso کا خلاصہ دیتے ہیں (época, GiB-horas medidas, balcões de ingressos,
+  encargos determinísticos), registros `SorafsGatewayEvent::DealSettlement` e instantâneo do razão de liquidação canônica کے ساتھ
+  artefato de governança em disco کا BLAKE3 digest/size/base64 شامل کرتے ہیں، اور
+  Alertas `SorafsGatewayEvent::ProofHealth` جب Os limites de PDP/PoTR excedem ہوں (provedor, janela, estado de aviso/recarga, valor da penalidade)۔
+  Provedor de consumidores کے لحاظ سے filtro کر کے نئی telemetria, assentamentos یا alertas de prova de saúde پر
+  votação کے بغیر reagir کر سکتے ہیں۔
 
-- `POST /v1/sorafs/deal/usage` `DealUsageReport` telemetry accept کرتا ہے اور
-  deterministic accounting outcomes (`UsageOutcome`) return کرتا ہے۔
-- `POST /v1/sorafs/deal/settle` current window finalize کرتا ہے، اور
-  نتیجے میں بننے والا `DealSettlementRecord` base64-encoded `DealSettlementV1` کے ساتھ stream کرتا ہے
-  جو governance DAG publication کے لیے تیار ہوتا ہے۔
-- Torii کا `/v1/events/sse` feed اب `SorafsGatewayEvent::DealUsage` records broadcast کرتا ہے
-  جو ہر usage submission کا خلاصہ دیتے ہیں (epoch, metered GiB-hours, ticket counters,
-  deterministic charges)، `SorafsGatewayEvent::DealSettlement` records جو canonical settlement ledger snapshot کے ساتھ
-  on-disk governance artifact کا BLAKE3 digest/size/base64 شامل کرتے ہیں، اور
-  `SorafsGatewayEvent::ProofHealth` alerts جب PDP/PoTR thresholds exceed ہوں (provider, window, strike/cooldown state, penalty amount)۔
-  Consumers provider کے لحاظ سے filter کر کے نئی telemetry، settlements یا proof-health alerts پر
-  polling کے بغیر react کر سکتے ہیں۔
-
-دونوں endpoints SoraFS quota framework میں نئے `torii.sorafs.quota.deal_telemetry` window کے ذریعے
-شامل ہیں، جس سے operators ہر deployment کے لیے allowed submission rate tune کر سکتے ہیں۔
+دونوں endpoints SoraFS estrutura de cota میں نئے janela `torii.sorafs.quota.deal_telemetry` کے ذریعے
+شامل ہیں، جس سے operadores ہر implantação کے لیے ajuste de taxa de envio permitido کر سکتے ہیں۔

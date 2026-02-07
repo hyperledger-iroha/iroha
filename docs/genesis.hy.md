@@ -7,26 +7,27 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 9c2eab4379aa346ab7d111e1c51c0230238f260647187f1a33c1819640b9bf2c
 source_last_modified: "2026-01-28T14:25:37.056140+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Genesis configuration
+# Genesis կոնֆիգուրացիա
 
-A `genesis.json` file defines the first transactions that run when an Iroha network starts. The file is a JSON object with these fields:
+`genesis.json` ֆայլը սահմանում է առաջին գործարքները, որոնք գործարկվում են Iroha ցանցի գործարկման ժամանակ: Ֆայլը JSON օբյեկտ է հետևյալ դաշտերով.
 
-- `chain` – unique chain identifier.
-- `executor` (optional) – path to the executor bytecode (`.to`). If present,
-  genesis includes an Upgrade instruction as the first transaction. If omitted,
-  no upgrade is performed and the built‑in executor is used.
-- `ivm_dir` – directory containing IVM bytecode libraries. Defaults to `"."` if omitted.
-- `consensus_mode` – consensus mode advertised in the manifest. Required; use `"Npos"` for the public Sora Nexus dataspace, or `"Permissioned"`/`"Npos"` for other Iroha3 dataspaces. Iroha2 defaults to `"Permissioned"`.
-- `transactions` – list of genesis transactions executed sequentially. Every entry may contain:
-  - `parameters` – initial network parameters.
-  - `instructions` – structured Norito instructions (e.g., `{ "Register": { "Domain": { "id": "wonderland" }}}`). Raw byte arrays are not accepted, and `SetParameter` instructions are rejected here—seed parameters via the `parameters` block and let normalization/signing inject the instructions.
-  - `ivm_triggers` – triggers with IVM bytecode executables.
-  - `topology` – initial peer topology. Each entry keeps the peer id and PoP together: `{ "peer": "<public_key>", "pop_hex": "<hex>" }`. `pop_hex` may be omitted while composing, but must be present before signing.
-- `crypto` – cryptography snapshot mirrored from `iroha_config.crypto` (`default_hash`, `allowed_signing`, `allowed_curve_ids`, `sm2_distid_default`, `sm_openssl_preview`). `allowed_curve_ids` mirrors `crypto.curves.allowed_curve_ids` so manifests can advertise which controller curves the cluster accepts. Tooling enforces SM combinations: manifests that list `sm2` must also switch the hash to `sm3-256`, while builds compiled without the `sm` feature reject `sm2` entirely. Normalization injects a `crypto_manifest_meta` custom parameter into the signed genesis; nodes refuse to start if the injected payload disagrees with the advertised snapshot.
+- `chain` – շղթայի եզակի նույնացուցիչ:
+- `executor` (ըստ ցանկության) – կատարողի բայթկոդի ուղի (`.to`): Եթե առկա է,
+  genesis ներառում է Upgrade հրահանգը որպես առաջին գործարք: Եթե բաց թողնվի,
+  ոչ մի բարելավում չի իրականացվում, և օգտագործվում է ներկառուցված կատարողը:
+- `ivm_dir` – գրացուցակ, որը պարունակում է IVM բայթկոդի գրադարաններ: Կանխադրված է `"."`, եթե բաց թողնվի:
+- `consensus_mode` – կոնսենսուսի ռեժիմ, որը գովազդվում է մանիֆեստում: Պահանջվում է; օգտագործեք `"Npos"` հանրային Sora Nexus տվյալների տարածության համար, կամ `"Permissioned"`/`"Npos"` այլ Iroha3 տվյալների տարածքների համար: Iroha2-ը կանխադրված է `"Permissioned"`:
+- `transactions` – հաջորդաբար կատարվող ծագման գործարքների ցանկ: Յուրաքանչյուր մուտք կարող է պարունակել.
+  - `parameters` – ցանցի սկզբնական պարամետրեր:
+  - `instructions` – կառուցվածքային Norito հրահանգներ (օրինակ՝ `{ "Register": { "Domain": { "id": "wonderland" }}}`): Հում բայթային զանգվածները չեն ընդունվում, և `SetParameter` հրահանգները մերժվում են այստեղ՝ սերմերի պարամետրերը `parameters` բլոկի միջոցով և թույլ տվեք նորմալացնել/ստորագրել հրահանգները:
+  - `ivm_triggers` – գործարկվում է IVM բայթ կոդի գործադիրներով:
+  - `topology` – սկզբնական գործընկերային տոպոլոգիա: Յուրաքանչյուր մուտքագրում պահվում է գործընկերային ID-ն և PoP-ը միասին՝ `{ "peer": "<public_key>", "pop_hex": "<hex>" }`: `pop_hex`-ը կարող է բաց թողնել ստեղծագործելիս, սակայն պետք է ներկա լինի նախքան ստորագրելը:
+- `crypto` – կրիպտոգրաֆիայի լուսանկար՝ արտացոլված `iroha_config.crypto`-ից (`default_hash`, `allowed_signing`, `allowed_curve_ids`, I18NI000000000059X, `allowed_curve_ids`, I18NI000000000058X): `allowed_curve_ids` հայելիներ `crypto.curves.allowed_curve_ids`, որպեսզի մանիֆեստները կարողանան գովազդել, թե որ կարգավորիչի կորերն է ընդունում կլաստերը: Գործիքավորումն ստիպում է SM կոմբինացիաները. ցույց է տալիս, որ `sm2` ցուցակը պետք է նաև փոխի հեշը `sm3-256`-ի, մինչդեռ առանց `sm` հատկանիշի կազմված կառուցումները ամբողջությամբ մերժում են `sm2`-ը: Նորմալացումը ներարկում է `crypto_manifest_meta` մաքսային պարամետրը ստորագրված ծագման մեջ; հանգույցները հրաժարվում են գործարկել, եթե ներարկված օգտակար բեռը համաձայն չէ գովազդվող նկարի հետ:
 
-Example (`kagami genesis generate default --consensus-mode npos` output, instructions trimmed):
+Օրինակ (`kagami genesis generate default --consensus-mode npos` ելք, հրահանգները կտրված են).
 
 ```json
 {
@@ -58,9 +59,9 @@ Example (`kagami genesis generate default --consensus-mode npos` output, instruc
 }
 ```
 
-### Seed the `crypto` block for SM2/SM3
+### Սերմնացրեք `crypto` բլոկը SM2/SM3-ի համար
 
-Use the xtask helper to produce the key inventory and ready-to-paste configuration snippet in one step:
+Օգտագործեք xtask օգնականը՝ հիմնական գույքագրումը և պատրաստի տեղադրման կոնֆիգուրացիայի հատվածը մեկ քայլով ստեղծելու համար.
 
 ```bash
 cargo xtask sm-operator-snippet \
@@ -69,7 +70,7 @@ cargo xtask sm-operator-snippet \
   --snippet-out client-sm2.toml
 ```
 
-`client-sm2.toml` now contains:
+`client-sm2.toml` այժմ պարունակում է.
 
 ```toml
 # Account key material
@@ -94,11 +95,11 @@ sm2_distid_default = "CN12345678901234"
 # enable_sm_openssl_preview = true  # optional: only when deploying the OpenSSL/Tongsuo path
 ```
 
-Copy the `public_key`/`private_key` values into the account/client configuration and update the `crypto` block of `genesis.json` so it matches the snippet (for example, set `default_hash` to `sm3-256`, add `"sm2"` to `allowed_signing`, and include the right `allowed_curve_ids`). Kagami will refuse manifests where the hash/curve settings and signing list are inconsistent.
+Պատճենեք `public_key`/`private_key` արժեքները հաշվի/հաճախորդի կազմաձևում և թարմացրեք `genesis.json`-ի `crypto` բլոկը, որպեսզի այն համապատասխանի հատվածին (օրինակ՝ սահմանեք I18NI0000000-ին, I18NI00000000-ին ավելացրեք I18NI00000000-ը: `"sm2"`-ից մինչև `allowed_signing`, և ներառում է ճիշտ `allowed_curve_ids`): Kagami-ը կհրաժարվի մանիֆեստներից, որտեղ հեշ/կորի կարգավորումները և ստորագրման ցուցակը անհամապատասխան են:
 
-> **Tip:** Stream the snippet to stdout with `--snippet-out -` when you just want to inspect the output. Use `--json-out -` to emit the key inventory on stdout as well.
+> **Խորհուրդ.** Հաղորդեք հատվածը stdout-ի համար `--snippet-out -`-ով, երբ պարզապես ցանկանում եք ստուգել ելքը: Օգտագործեք `--json-out -` ստեղնաշարի հիմնական գույքագրումը նաև stdout-ում:
 
-If you prefer to drive the lower-level CLI commands manually, the equivalent flow is:
+Եթե նախընտրում եք ձեռքով վարել ստորին մակարդակի CLI հրամանները, ապա համարժեք հոսքը հետևյալն է.
 
 ```bash
 # 1. Produce deterministic key material (writes JSON to disk)
@@ -116,16 +117,16 @@ cargo run -p iroha_cli --features sm -- \
   --emit-json --quiet
 ```
 
-> **Tip:** `jq` is used above to save a manual copy/paste step. If it is not available, open `sm2-key.json`, copy the `private_key_hex` field, and pass it to `crypto sm2 export` directly.
+> **Խորհուրդ.** `jq`-ն օգտագործվում է վերևում` ձեռքով պատճենել/տեղադրել քայլը պահելու համար: Եթե ​​այն հասանելի չէ, բացեք `sm2-key.json`, պատճենեք `private_key_hex` դաշտը և փոխանցեք այն անմիջապես `crypto sm2 export`-ին:
 
-> **Migration guide:** When converting an existing network to SM2/SM3/SM4, follow
+> **Միգրացիոն ուղեցույց. ** Գոյություն ունեցող ցանցը SM2/SM3/SM4-ի փոխարկելիս հետևեք
 > [`docs/source/crypto/sm_config_migration.md`](source/crypto/sm_config_migration.md)
-> for the layered `iroha_config` overrides, manifest regeneration, and rollback
-> planning.
+> շերտավոր `iroha_config` վերափոխումների, բացահայտման վերականգնման և հետադարձի համար
+> պլանավորում.
 
-## Generate and validate
+## Ստեղծեք և հաստատեք
 
-1. Generate a template:
+1. Ստեղծեք ձևանմուշ.
    ```bash
    cargo run -p iroha_kagami -- genesis generate \
      [--executor <path/to/executor.to>] \
@@ -133,8 +134,8 @@ cargo run -p iroha_cli --features sm -- \
      --ivm-dir <ivm/dir> \
      --genesis-public-key <PUBLIC_KEY> > genesis.json
    ```
-`--consensus-mode` controls which consensus parameters Kagami seeds into the `parameters` block. The public Sora Nexus dataspace requires `npos` and does not support staged cutovers; other Iroha3 dataspaces may use permissioned or NPoS. Iroha2 defaults to `permissioned` and may stage `npos` via `--next-consensus-mode`/`--mode-activation-height`. When `npos` is selected, Kagami seeds the `sumeragi_npos_parameters` payload that drives NPoS collector fan-out, election policy, and reconfiguration windows; normalization/signing turns these into `SetParameter` instructions in the signed block.
-2. Optionally edit `genesis.json`, then validate and sign it:
+`--consensus-mode`-ը վերահսկում է, թե որ կոնսենսուսային պարամետրերը Kagami սերմեր են մտնում `parameters` բլոկում: Հանրային Sora Nexus տվյալների տարածությունը պահանջում է `npos` և չի աջակցում փուլային կտրվածքներ; Iroha3 տվյալների այլ տարածքները կարող են օգտագործել թույլտվություն կամ NPoS: Iroha2-ը կանխադրված է `permissioned` և կարող է `npos` բեմադրել `--next-consensus-mode`/`--mode-activation-height`-ի միջոցով: Երբ ընտրվում է `npos`, Kagami-ը սերմանում է `sumeragi_npos_parameters` օգտակար բեռնվածքը, որը մղում է NPoS կոլեկցիոների հեռացումը, ընտրական քաղաքականությունը և վերակազմավորման պատուհանները. նորմալացումը/ստորագրումը դրանք վերածում է `SetParameter` հրահանգների ստորագրված բլոկում:
+2. Ընտրովի խմբագրեք `genesis.json`, ապա վավերացրեք և ստորագրեք այն.
    ```bash
    cargo run -p iroha_kagami -- genesis sign genesis.json \
      --public-key <PUBLIC_KEY> \
@@ -142,65 +143,63 @@ cargo run -p iroha_cli --features sm -- \
      --out-file genesis.signed.nrt
    ```
 
-   To emit SM2/SM3/SM4-ready manifests, pass `--default-hash sm3-256` and include `--allowed-signing sm2` (repeat `--allowed-signing` for additional algorithms). Use `--sm2-distid-default <ID>` if you need to override the default distinguishing identifier.
+   SM2/SM3/SM4 պատրաստ մանիֆեստներ արձակելու համար անցեք `--default-hash sm3-256` և ներառեք `--allowed-signing sm2` (կրկնել `--allowed-signing` լրացուցիչ ալգորիթմների համար): Օգտագործեք `--sm2-distid-default <ID>`, եթե ձեզ անհրաժեշտ է անտեսել լռելյայն տարբերակիչ նույնացուցիչը:
 
-   When you start `irohad` with only `--genesis-manifest-json` (no signed genesis block), the node now seeds its runtime crypto configuration from the manifest automatically; if you also supply a genesis block, the manifest and config still must match exactly.
+   Երբ դուք սկսում եք `irohad`-ը միայն `--genesis-manifest-json`-ով (առանց ստորագրված ծագման բլոկի), հանգույցն այժմ մանիֆեստից ինքնաբերաբար սերտում է իր գործարկման ժամանակի կրիպտո կոնֆիգուրացիան. եթե դուք նաև տրամադրում եք genesis բլոկ, ապա մանիֆեստը և կազմաձևը դեռ պետք է ճիշտ համընկնեն:
 
-- Validation notes:
-  - Kagami injects `consensus_handshake_meta`, `confidential_registry_root`, and `crypto_manifest_meta` as `SetParameter` instructions in the normalized/signed block. `irohad` will recompute the consensus fingerprint from those payloads and fail startup if the handshake metadata or crypto snapshot disagree with the encoded parameters. Keep these out of `instructions` in the manifest; they are generated automatically.
-- Inspect the normalized block:
-  - Run `kagami genesis normalize genesis.json --format text` to see the final ordered transactions (including injected metadata) without providing a keypair.
-  - Use `--format json` to dump a structured view suitable for diffing or reviews.
+- Վավերացման նշումներ.
+  - Kagami-ը ներարկում է `consensus_handshake_meta`, `confidential_registry_root` և `crypto_manifest_meta` որպես `SetParameter` հրահանգներ նորմալացված/ստորագրված բլոկում: `irohad`-ը կվերահաշվարկի կոնսենսուսային մատնահետքը այդ օգտակար բեռներից և ձախողվի գործարկումը, եթե ձեռքսեղմման մետատվյալները կամ կրիպտո պատկերը համաձայն չեն կոդավորված պարամետրերի հետ: Պահպանեք դրանք `instructions`-ից մանիֆեստում; դրանք ստեղծվում են ավտոմատ կերպով:
+- Ստուգեք նորմալացված բլոկը.
+  - Գործարկեք `kagami genesis normalize genesis.json --format text`՝ վերջնական պատվիրված գործարքները (ներառյալ ներարկված մետատվյալները) տեսնելու համար՝ առանց բանալիների զույգ տրամադրելու:
+  - Օգտագործեք `--format json`՝ տարբերելու կամ ակնարկների համար հարմար կառուցվածքային տեսքը թափելու համար:
 
-`kagami genesis sign` checks that the JSON is valid and produces a Norito‑encoded block ready to use via `genesis.file` in the node configuration. The resulting `genesis.signed.nrt` is already in canonical wire form: a version byte followed by a Norito header describing the payload layout. Always distribute this framed output. Prefer the `.nrt` suffix for signed payloads; if you don't need to upgrade the executor at genesis, you can omit the `executor` field and skip providing a `.to` file.
+`kagami genesis sign`-ը ստուգում է, որ JSON-ը վավեր է և արտադրում է Norito կոդավորված բլոկ, որը պատրաստ է օգտագործելու `genesis.file`-ի միջոցով հանգույցի կազմաձևում: Ստացված `genesis.signed.nrt`-ն արդեն կանոնական մետաղալարով է. տարբերակի բայթ, որին հաջորդում է Norito վերնագիրը, որը նկարագրում է օգտակար բեռնվածքի դասավորությունը: Միշտ տարածեք այս շրջանակված արդյունքը: Նախընտրեք `.nrt` վերջածանցը ստորագրված օգտակար բեռների համար; Եթե ​​ձեզ հարկավոր չէ կատարելագործել գենեզիսում, կարող եք բաց թողնել `executor` դաշտը և բաց թողնել `.to` ֆայլի տրամադրումը:
 
-When signing NPoS manifests (`--consensus-mode npos` or Iroha2-only staged cutovers), `kagami genesis sign` requires the `sumeragi_npos_parameters` payload; generate it with `kagami genesis generate --consensus-mode npos` or add the parameter manually.
-By default, `kagami genesis sign` uses the manifest's `consensus_mode`; pass `--consensus-mode` to override it.
+NPoS մանիֆեստներ ստորագրելիս (`--consensus-mode npos` կամ Iroha2 միայն բեմական կտրվածքներ), `kagami genesis sign` պահանջում է `sumeragi_npos_parameters` օգտակար բեռ; ստեղծեք այն `kagami genesis generate --consensus-mode npos`-ով կամ ավելացրեք պարամետրը ձեռքով:
+Լռելյայնորեն, `kagami genesis sign`-ն օգտագործում է մանիֆեստի `consensus_mode`; անցեք `--consensus-mode`՝ այն վերացնելու համար:
 
-## What Genesis Can Do
+## Ինչ կարող է անել Genesis-ը
 
-Genesis supports the following operations. Kagami assembles them into transactions in a well‑defined order so peers deterministically execute the same sequence.
+Ծննդոցն աջակցում է հետևյալ գործողություններին. Kagami-ը դրանք հավաքում է գործարքների մեջ լավ սահմանված կարգով, որպեսզի հասակակիցները վճռականորեն կատարեն նույն հաջորդականությունը:
 
-- Parameters: Set initial values for Sumeragi (block/commit times, drift), Block (max txs), Transaction (max instructions, bytecode size), Executor and Smart Contract limits (fuel, memory, depth), and custom parameters. Kagami seeds `Sumeragi::NextMode` and the `sumeragi_npos_parameters` payload (NPoS election, reconfig) via the `parameters` block so startup can apply consensus knobs from on-chain state; the signed block carries the generated `SetParameter` instructions.
-- Native Instructions: Register/Unregister Domain, Account, Asset Definition; Mint/Burn/Transfer assets; Transfer domain and asset definition ownership; Modify metadata; Grant permissions and roles.
-- IVM Triggers: Register triggers that execute IVM bytecode (see `ivm_triggers`). Triggers’ executables resolve relative to `ivm_dir`.
-- Topology: Provide the initial set of peers via the `topology` array inside any transaction (commonly the first or last one). Each entry is `{ "peer": "<public_key>", "pop_hex": "<hex>" }`; `pop_hex` may be omitted while composing but must be present before signing.
-- Executor Upgrade (optional): If `executor` is present, genesis inserts a single Upgrade instruction as the first transaction; otherwise, genesis starts directly with parameters/instructions.
+- Պարամետրեր. Սահմանեք սկզբնական արժեքները Sumeragi-ի համար (արգելափակման/կատարման ժամանակներ, դրեյֆ), Արգելափակման (առավելագույն txs), Գործարքի (առավելագույն հրահանգներ, բայթկոդի չափ), Կատարողի և Խելացի պայմանագրի սահմանները (վառելիք, հիշողություն, խորություն) և հատուկ պարամետրեր: Kagami սերմեր `Sumeragi::NextMode` և `sumeragi_npos_parameters` օգտակար բեռնվածություն (NPoS ընտրություն, վերակազմավորում) `parameters` բլոկի միջոցով, որպեսզի սկսնակը կարողանա կիրառել կոնսենսուսային կոճակներ շղթայական վիճակից; ստորագրված բլոկը կրում է ստեղծված `SetParameter` հրահանգները:
+- Մայրենի ցուցումներ. գրանցել/չեղարկել տիրույթը, հաշիվը, ակտիվի սահմանումը; Դրամահատարան/Այրում/Ակտիվների փոխանցում; Փոխանցել տիրույթի և ակտիվների սահմանման սեփականության իրավունքը; Փոփոխել մետատվյալները; Տրամադրել թույլտվություններ և դերեր:
+- IVM ձգանիչներ. Գրանցեք գործարկիչներ, որոնք կատարում են IVM բայթկոդ (տես `ivm_triggers`): Գործարկիչների գործարկիչները լուծում են `ivm_dir`-ի համեմատ:
+- Տոպոլոգիա. Տրամադրեք հասակակիցների նախնական հավաքածուն `topology` զանգվածի միջոցով ցանկացած գործարքի ներսում (սովորաբար առաջին կամ վերջին): Յուրաքանչյուր մուտքագրված է `{ "peer": "<public_key>", "pop_hex": "<hex>" }`; `pop_hex`-ը կարող է բաց թողնել ստեղծագործելիս, սակայն պետք է ներկա լինի նախքան ստորագրելը:
+- Կատարողի արդիականացում (ըստ ցանկության). Եթե առկա է `executor`, Genesis-ը զետեղում է մեկ թարմացման հրահանգ՝ որպես առաջին գործարք. հակառակ դեպքում, Ծննդոցը սկսվում է ուղղակիորեն պարամետրերից/հրահանգներից:
 
-### Transaction Ordering
+### Գործարքների պատվիրում
 
-Conceptually, genesis transactions are processed in this order:
+Հայեցակարգային առումով, գենեզի գործարքները մշակվում են հետևյալ հաջորդականությամբ.
 
-1) (Optional) Executor Upgrade
-2) For each transaction in `transactions`:
-   - Parameter updates
-   - Native instructions
-   - IVM trigger registrations
-   - Topology entries
+1) (Ըստ ցանկության) Կատարողի թարմացում
+2) `transactions` յուրաքանչյուր գործարքի համար.
+   - Պարամետրերի թարմացումներ
+   - Մայրենի հրահանգներ
+   - IVM ձգան գրանցումներ
+   - Տոպոլոգիայի գրառումներ
 
-Kagami and the node code ensure this ordering so that, for example, parameters apply before subsequent instructions in the same transaction.
+Kagami-ը և հանգույցի կոդը ապահովում են այս կարգը, որպեսզի, օրինակ, պարամետրերը կիրառվեն նույն գործարքի հաջորդ հրահանգներից առաջ:
 
-## Recommended Workflow
+## Առաջարկվող աշխատանքային հոսք
 
-- Start from a template with Kagami:
-  - Built‑in ISI only: `kagami genesis generate --ivm-dir <dir> --genesis-public-key <PK> --consensus-mode npos > genesis.json` (Sora Nexus public dataspace; use `--consensus-mode permissioned` for Iroha2 or private Iroha3).
-  - With custom executor upgrade (optional): add `--executor <path/to/executor.to>`
-  - Iroha2-only: to stage a future cutover to NPoS, pass `--next-consensus-mode npos --mode-activation-height <HEIGHT>` (keep `--consensus-mode permissioned` for the current mode).
-- `<PK>` is any multihash recognised by `iroha_crypto::Algorithm`, including the TC26 GOST variants when Kagami is built with `--features gost` (for example `gost3410-2012-256-paramset-a:...`).
-- Validate while editing: `kagami genesis validate genesis.json`
-- Sign for deployment: `kagami genesis sign genesis.json --public-key <PK> --private-key <SK> --out-file genesis.signed.nrt`
-- Configure peers: set `genesis.file` to the signed Norito file (e.g., `genesis.signed.nrt`) and `genesis.public_key` to the same `<PK>` used for signing.
+- Սկսեք Kagami կաղապարից.
+  - Միայն ներկառուցված ISI. `kagami genesis generate --ivm-dir <dir> --genesis-public-key <PK> --consensus-mode npos > genesis.json` (Sora Nexus հանրային տվյալների տարածություն; օգտագործեք `--consensus-mode permissioned` Iroha2-ի կամ մասնավոր Iroha3-ի համար):
+  - Պատվերով կատարողի թարմացումով (ըստ ցանկության) ավելացրեք `--executor <path/to/executor.to>`
+  - Միայն Iroha2. NPoS-ի ապագա անջատումը բեմադրելու համար անցեք `--next-consensus-mode npos --mode-activation-height <HEIGHT>` (պահեք `--consensus-mode permissioned` ընթացիկ ռեժիմի համար):
+- `<PK>`-ը `iroha_crypto::Algorithm`-ի կողմից ճանաչված ցանկացած բազմահեշ է, ներառյալ TC26 GOST տարբերակները, երբ Kagami-ը կառուցված է `--features gost`-ով (օրինակ՝ `gost3410-2012-256-paramset-a:...`):
+- Վավերացնել խմբագրելիս՝ `kagami genesis validate genesis.json`
+- Տեղակայման նշան՝ `kagami genesis sign genesis.json --public-key <PK> --private-key <SK> --out-file genesis.signed.nrt`
+- Կարգավորեք գործընկերները. սահմանեք `genesis.file` ստորագրված Norito ֆայլին (օրինակ՝ `genesis.signed.nrt`) և `genesis.public_key` նույն `<PK>`-ին, որն օգտագործվում է ստորագրման համար:Նշումներ:
+- Kagami-ի «լռելյայն» ձևանմուշը գրանցում է նմուշի տիրույթ և հաշիվներ, կտրում է մի քանի ակտիվներ և տրամադրում է նվազագույն թույլտվություններ՝ օգտագործելով միայն ներկառուցված ISI-ները. `.to` չի պահանջվում:
+- Եթե դուք ներառում եք կատարողի թարմացում, դա պետք է լինի առաջին գործարքը: Kagami-ը դա պարտադրում է ստեղծման/ստորագրման ժամանակ:
+- Ստորագրելուց առաջ օգտագործեք `kagami genesis validate`՝ `Name` անվավեր արժեքները (օրինակ՝ բացատ) և սխալ ձևակերպված հրահանգները որսալու համար:
 
-Notes:
-- Kagami’s “default” template registers a sample domain and accounts, mints a few assets, and grants minimal permissions using only built‑in ISIs – no `.to` required.
-- If you do include an executor upgrade, it must be the first transaction. Kagami enforces this when generating/signing.
-- Use `kagami genesis validate` to catch invalid `Name` values (e.g., whitespace) and malformed instructions before signing.
+## Վազում Docker/Swarm-ով
 
-## Running with Docker/Swarm
+Տրամադրված Docker Compose և Swarm գործիքավորումը կարգավորվում են երկու դեպքերում.
 
-The provided Docker Compose and Swarm tooling handle both cases:
+- Առանց կատարողի. compose հրամանը հանում է բացակայող/դատարկ `executor` դաշտը և ստորագրում ֆայլը:
+- Կատարողի հետ. այն լուծում է կատարողի հարաբերական ուղին դեպի կոնտեյների ներսում բացարձակ ճանապարհ և ստորագրում է ֆայլը:
 
-- Without executor: the compose command strips a missing/empty `executor` field and signs the file.
-- With executor: it resolves the relative executor path to an absolute path inside the container and signs the file.
-
-This keeps development simple on machines without prebuilt IVM samples while still allowing executor upgrades when needed.
+Սա հեշտացնում է զարգացումը մեքենաների վրա՝ առանց նախապես կառուցված IVM նմուշների՝ միաժամանակ թույլ տալով կատարողի թարմացումները, երբ անհրաժեշտ է:

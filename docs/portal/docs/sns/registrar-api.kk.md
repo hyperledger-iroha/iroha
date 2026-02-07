@@ -11,33 +11,34 @@ id: registrar-api
 title: Sora Name Service Registrar API & Governance Hooks
 sidebar_label: Registrar API
 description: Torii REST/gRPC surfaces, Norito DTOs, and governance artifacts for SNS registrations (SN-2b).
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
-This page mirrors `docs/source/sns/registrar_api.md` and now serves as the
-canonical portal copy. The source file remains for translation workflows.
+:::ескерту Канондық дереккөз
+Бұл бет `docs/source/sns/registrar_api.md` бейнесін көрсетеді және қазір ол ретінде қызмет етеді
+канондық портал көшірмесі. Бастапқы файл аударма жұмыс үрдістері үшін қалады.
 :::
 
 # SNS Registrar API & Governance Hooks (SN-2b)
 
-**Status:** Drafted 2026-03-24 -- under Nexus Core review  
-**Roadmap link:** SN-2b “Registrar API & governance hooks”  
-**Prerequisites:** Schema definitions in [`registry-schema.md`](./registry-schema.md)
+**Күйі:** 24.03.2026 ж. әзірленген -- Nexus Негізгі шолу бойынша  
+**Жол картасы сілтемесі:** SN-2b «Тіркеуші API және басқару ілмектері»  
+**Алғышарттар:** [`registry-schema.md`](./registry-schema.md) ішіндегі схема анықтамалары
 
-This note specifies the Torii endpoints, gRPC services, request/response DTOs, and governance artifacts required to operate the Sora Name Service (SNS) registrar. It is the authoritative contract for SDKs, wallets, and automation that need to register, renew, or manage SNS names.
+Бұл ескертпе Torii соңғы нүктелерін, gRPC қызметтерін, сұрау/жауап DTOларын және Sora Name Service (SNS) тіркеушісін пайдалану үшін қажетті басқару артефактілерін көрсетеді. Бұл SNS атауларын тіркеуді, жаңартуды немесе басқаруды қажет ететін SDK, әмияндар және автоматтандыруға арналған беделді келісімшарт.
 
-## 1. Transport & Authentication
+## 1. Тасымалдау және аутентификация
 
-| Requirement | Detail |
+| Талап | Толығырақ |
 |-------------|--------|
-| Protocols | REST under `/v1/sns/*` and gRPC service `sns.v1.Registrar`. Both accept Norito-JSON (`application/json`) and Norito-RPC binary (`application/x-norito`). |
-| Auth | `Authorization: Bearer` tokens or mTLS certificates issued per suffix steward. Governance-sensitive endpoints (freeze/unfreeze, reserved assignments) require `scope=sns.admin`. |
-| Rate limits | Registrars share the `torii.preauth_scheme_limits` buckets with JSON callers plus per-suffix burst caps: `sns.register`, `sns.renew`, `sns.controller`, `sns.freeze`. |
-| Telemetry | Torii exposes `torii_request_duration_seconds{scheme}` / `torii_request_failures_total{scheme,code}` for the registrar handlers (filter on `scheme="norito_rpc"`); the API also increments `sns_registrar_status_total{result, suffix_id}`. |
+| Протоколдар | `/v1/sns/*` және gRPC қызметі `sns.v1.Registrar` астында REST. Екеуі де Norito-JSON (`application/json`) және Norito-RPC екілік (`application/x-norito`) қабылдайды. |
+| Auth | `Authorization: Bearer` таңбалауыштары немесе mTLS сертификаттары әр жұрнақ басқарушыға берілген. Басқаруға сезімтал соңғы нүктелер (қаттыру/қаттыру, резервтелген тағайындаулар) `scope=sns.admin` талап етеді. |
+| Тарифтік шектеулер | Тіркеушілер `torii.preauth_scheme_limits` шелектерін JSON қоңырау шалушылармен және әр жұрнақ үшін басылған шектеулермен бөліседі: `sns.register`, `sns.renew`, `sns.controller`, `sns.freeze`. |
+| Телеметрия | Torii тіркеуші өңдеушілері үшін `torii_request_duration_seconds{scheme}` / `torii_request_failures_total{scheme,code}` көрсетеді (`scheme="norito_rpc"` бойынша сүзгі); API сонымен қатар `sns_registrar_status_total{result, suffix_id}` көбейтеді. |
 
-## 2. DTO Overview
+## 2. DTO шолуы
 
-Fields reference the canonical structs defined in [`registry-schema.md`](./registry-schema.md). All payloads embed `NameSelectorV1` + `SuffixId` to avoid ambiguous routing.
+Өрістер [`registry-schema.md`](./registry-schema.md) ішінде анықталған канондық құрылымдарға сілтеме жасайды. Барлық пайдалы жүктемелер анық емес бағыттауды болдырмау үшін `NameSelectorV1` + `SuffixId` кірістіреді.
 
 ```text
 Struct RegisterNameRequestV1 {
@@ -105,27 +106,27 @@ Struct ReservedAssignmentRequestV1 {
 }
 ```
 
-## 3. REST Endpoints
+## 3. REST соңғы нүктелері
 
-| Endpoint | Method | Payload | Description |
+| Соңғы нүкте | Әдіс | Жүктеме | Сипаттама |
 |----------|--------|---------|-------------|
-| `/v1/sns/registrations` | POST | `RegisterNameRequestV1` | Register or reopen a name. Resolves pricing tier, validates payment/governance proofs, emits registry events. |
-| `/v1/sns/registrations/{selector}/renew` | POST | `RenewNameRequestV1` | Extend term. Enforces grace/redemption windows from policy. |
-| `/v1/sns/registrations/{selector}/transfer` | POST | `TransferNameRequestV1` | Transfer ownership once governance approvals attach. |
-| `/v1/sns/registrations/{selector}/controllers` | PUT | `UpdateControllersRequestV1` | Replace controller set; validates signed account addresses. |
-| `/v1/sns/registrations/{selector}/freeze` | POST | `FreezeNameRequestV1` | Guardian/council freeze. Requires guardian ticket and reference to governance docket. |
-| `/v1/sns/registrations/{selector}/freeze` | DELETE | `GovernanceHookV1` | Unfreeze after remediation; ensures council override recorded. |
-| `/v1/sns/reserved/{selector}` | POST | `ReservedAssignmentRequestV1` | Steward/council assignment of reserved names. |
-| `/v1/sns/policies/{suffix_id}` | GET | — | Fetch current `SuffixPolicyV1` (cacheable). |
-| `/v1/sns/registrations/{selector}` | GET | — | Returns current `NameRecordV1` + effective state (Active, Grace, etc.). |
+| `/v1/sns/registrations` | POST | `RegisterNameRequestV1` | Тіркеу немесе атауды қайта ашыңыз. Баға деңгейін шешеді, төлем/басқару дәлелдерін тексереді, тізілім оқиғаларын шығарады. |
+| `/v1/sns/registrations/{selector}/renew` | POST | `RenewNameRequestV1` | Мерзімді ұзарту. Саясаттан жеңілдіктер/өткізу терезелерін қолданады. |
+| `/v1/sns/registrations/{selector}/transfer` | POST | `TransferNameRequestV1` | Басқару мақұлдаулары тіркелгеннен кейін меншік құқығын беріңіз. |
+| `/v1/sns/registrations/{selector}/controllers` | PUT | `UpdateControllersRequestV1` | Контроллер жинағын ауыстырыңыз; қол қойылған тіркелгі мекенжайларын растайды. |
+| `/v1/sns/registrations/{selector}/freeze` | POST | `FreezeNameRequestV1` | Қамқоршы/кеңес қатып қалады. Қамқоршы билеті мен басқару құжатына сілтеме қажет. |
+| `/v1/sns/registrations/{selector}/freeze` | ЖОЮ | `GovernanceHookV1` | Қалпына келтіруден кейін мұздатыңыз; кеңестің алдын ала жазылуын қамтамасыз етеді. |
+| `/v1/sns/reserved/{selector}` | POST | `ReservedAssignmentRequestV1` | Сақталған атауларды басқарушы/кеңес тағайындау. |
+| `/v1/sns/policies/{suffix_id}` | АЛУ | — | `SuffixPolicyV1` токты алу (кэштеуге болады). |
+| `/v1/sns/registrations/{selector}` | АЛУ | — | Ағымдағы `NameRecordV1` + тиімді күйді қайтарады (Белсенді, Grace, т.б.). |
 
-**Selector encoding:** the `{selector}` path segment accepts IH58 (preferred), compressed (`sora`, second-best), or canonical hex per ADDR-5; Torii normalises it via `NameSelectorV1`.
+**Таңдаушы кодтауы:** `{selector}` жол сегменті ADDR-5 үшін IH58 (қалаулы), қысылған (`sora`, екінші ең жақсы) немесе канондық он алтылықты қабылдайды; Torii оны `NameSelectorV1` арқылы қалыпқа келтіреді.
 
-**Error model:** all endpoints return Norito JSON with `code`, `message`, `details`. Codes include `sns_err_reserved`, `sns_err_payment_mismatch`, `sns_err_policy_violation`, `sns_err_governance_missing`.
+**Қате үлгісі:** барлық соңғы нүктелер `code`, `message`, `details` бар Norito JSON қайтарады. Кодтарға `sns_err_reserved`, `sns_err_payment_mismatch`, `sns_err_policy_violation`, `sns_err_governance_missing` кіреді.
 
-### 3.1 CLI helpers (N0 manual registrar requirement)
+### 3.1 CLI көмекшілері (N0 қолмен тіркеуші талабы)
 
-Closed-beta stewards can now exercise the registrar via the CLI without hand-crafting JSON:
+Жабық бета стюардтары енді тіркеушіні CLI арқылы қолмен JSON жасамай-ақ пайдалана алады:
 
 ```bash
 iroha sns register \
@@ -138,19 +139,19 @@ iroha sns register \
   --payment-signature '"steward-signature"'
 ```
 
-- `--owner` defaults to the CLI config account; repeat `--controller` to attach additional controller accounts (default `[owner]`).
-- Inline payment flags map directly to `PaymentProofV1`; pass `--payment-json PATH` when you already have a structured receipt. Metadata (`--metadata-json`) and governance hooks (`--governance-json`) follow the same pattern.
+- `--owner` әдепкі бойынша CLI конфигурация тіркелгісі; Қосымша контроллер тіркелгілерін тіркеу үшін `--controller` қайталаңыз (әдепкі `[owner]`).
+- Inline төлем жалаулары тікелей `PaymentProofV1` картасына; құрылымдық түбіртек болған кезде `--payment-json PATH` өтіңіз. Метадеректер (`--metadata-json`) және басқару ілгектері (`--governance-json`) бірдей үлгі бойынша жүреді.
 
-Read-only helpers round out rehearsals:
+Тек оқуға арналған көмекшілер жаттығуларды аяқтайды:
 
 ```bash
 iroha sns registration --selector makoto.sora
 iroha sns policy --suffix-id 1
 ```
 
-See `crates/iroha_cli/src/commands/sns.rs` for the implementation; the commands reuse the Norito DTOs described in this document so CLI output matches Torii responses byte-for-byte.
+Іске асыру үшін `crates/iroha_cli/src/commands/sns.rs` қараңыз; пәрмендер осы құжатта сипатталған Norito DTO файлдарын қайта пайдаланады, осылайша CLI шығысы Torii жауаптарына байт байт сәйкес келеді.
 
-Additional helpers cover renewals, transfers, and guardian actions:
+Қосымша көмекшілер жаңартуларды, аударымдарды және қамқоршылық әрекеттерді қамтиды:
 
 ```bash
 # Renew an expiring name
@@ -180,9 +181,9 @@ iroha sns unfreeze \
   --governance-json /path/to/unfreeze_hook.json
 ```
 
-`--governance-json` must contain a valid `GovernanceHookV1` record (proposal id, vote hashes, steward/guardian signatures). Each command simply mirrors the corresponding `/v1/sns/registrations/{selector}/…` endpoint so beta operators can rehearse the exact Torii surfaces SDKs will call.
+`--governance-json` жарамды `GovernanceHookV1` жазбасын қамтуы керек (ұсыныс идентификаторы, дауыс хэштері, басқарушы/қамқоршы қолдары). Әрбір пәрмен жай ғана сәйкес `/v1/sns/registrations/{selector}/…` соңғы нүктесін көрсетеді, осылайша бета операторлары SDK шақыратын нақты Torii беттерін қайталай алады.
 
-## 4. gRPC Service
+## 4. gRPC қызметі
 
 ```text
 service Registrar {
@@ -198,83 +199,83 @@ service Registrar {
 }
 ```
 
-Wire-format: compile-time Norito schema hash recorded under
-`fixtures/norito_rpc/schema_hashes.json` (rows `RegisterNameRequestV1`,
-`RegisterNameResponseV1`, `NameRecordV1`, etc.).
+Сым пішімі: компиляция уақыты Norito схема хэші астында жазылған
+`fixtures/norito_rpc/schema_hashes.json` (`RegisterNameRequestV1` жолдары,
+`RegisterNameResponseV1`, `NameRecordV1`, т.б.).
 
 ## 5. Governance Hooks & Evidence
 
-Every mutating call must attach evidence suitable for replay:
+Әрбір мутацияға ұшыраған қоңырау қайталау үшін жарамды дәлелдерді қосуы керек:
 
-| Action | Required governance data |
+| Әрекет | Қажетті басқару деректері |
 |--------|-------------------------|
-| Standard register/renew | Payment proof referencing a settlement instruction; no council vote needed unless tier requires steward approval. |
-| Premium tier register / reserved assignment | `GovernanceHookV1` referencing proposal id + steward acknowledgement. |
-| Transfer | Council vote hash + DAO signal hash; guardian clearance when transfer triggered by dispute resolution. |
-| Freeze/Unfreeze | Guardian ticket signature plus council override (unfreeze). |
+| Стандартты тіркеу/жаңарту | Есеп айырысу нұсқауына сілтеме жасайтын төлемді растайтын құжат; деңгей басқарушы мақұлдауын талап етпесе, кеңес дауысы қажет емес. |
+| Премиум деңгей тізілімі / резервтелген тапсырма | `GovernanceHookV1` ұсыныс идентификаторына сілтеме + басқарушының растауы. |
+| Тасымалдау | Кеңес дауыс хэш + DAO сигнал хэш; дауды шешуге байланысты ауыстыру кезінде қамқоршыны босату. |
+| Мұздату/Мұздату | Қамқоршы билетінің қолы және кеңестің қайта анықтауы (мұздатуды босату). |
 
-Torii verifies proofs by checking:
+Torii мыналарды тексеру арқылы дәлелдемелерді тексереді:
 
-1. Proposal id exists in governance ledger (`/v1/governance/proposals/{id}`) and status is `Approved`.
-2. Hashes match the recorded vote artifacts.
-3. Steward/guardian signatures reference the expected public keys from `SuffixPolicyV1`.
+1. Ұсыныс идентификаторы басқару кітапшасында (`/v1/governance/proposals/{id}`) бар және күйі `Approved`.
+2. Хэштер жазылған дауыс артефактілеріне сәйкес келеді.
+3. Басқарушы/қамқоршы қолдары `SuffixPolicyV1` күтілетін ашық кілттерге сілтеме жасайды.
 
-Failed checks return `sns_err_governance_missing`.
+Сәтсіз тексерулер `sns_err_governance_missing` қайтарады.
 
-## 6. Workflow Examples
+## 6. Жұмыс үрдісінің мысалдары
 
-### 6.1 Standard Registration
+### 6.1 Стандартты тіркеу
 
-1. Client queries `/v1/sns/policies/{suffix_id}` to fetch pricing, grace, and available tiers.
-2. Client builds `RegisterNameRequestV1`:
-   - `selector` derived from the preferred IH58 or second-best compressed (`sora`) label.
-   - `term_years` within policy bounds.
-   - `payment` referencing the treasury/steward splitter transfer.
-3. Torii validates:
-   - Label normalisation + reserved list.
-   - Term/gross price vs `PriceTierV1`.
-   - Payment proof amount >= computed price + fees.
-4. On success Torii:
-   - Persists `NameRecordV1`.
-   - Emits `RegistryEventV1::NameRegistered`.
-   - Emits `RevenueAccrualEventV1`.
-   - Returns the new record + events.
+1. Клиент бағаны, жеңілдікті және қолжетімді деңгейлерді алу үшін `/v1/sns/policies/{suffix_id}` сұрайды.
+2. Клиент `RegisterNameRequestV1` құрастырады:
+   - `selector` таңдаулы IH58 немесе екінші ең жақсы қысылған (`sora`) жапсырмасынан алынған.
+   - `term_years` саясат шегінде.
+   - `payment` қазынашылық/басқарушы сплиттерді аударуға сілтеме жасайды.
+3. Torii растайды:
+   - Белгіні қалыпқа келтіру + сақталған тізім.
+   - `PriceTierV1` қарсы мерзімді/жалпы баға.
+   - Төлемді растайтын сома >= есептелген баға + алымдар.
+4. Сәттілік туралы Torii:
+   - `NameRecordV1` сақталады.
+   - `RegistryEventV1::NameRegistered` шығарады.
+   - `RevenueAccrualEventV1` шығарады.
+   - Жаңа жазба + оқиғаларды қайтарады.
 
-### 6.2 Renewal During Grace
+### 6.2 Грант кезінде жаңарту
 
-Grace renewals include the standard request plus penalty detection:
+Жеңілдікті жаңарту стандартты сұрауды және айыппұлды анықтауды қамтиды:
 
-- Torii checks `now` vs `grace_expires_at` and adds surcharge tables from `SuffixPolicyV1`.
-- Payment proof must cover surcharge. Failure => `sns_err_payment_mismatch`.
-- `RegistryEventV1::NameRenewed` records the new `expires_at`.
+- Torii `now` және `grace_expires_at` тексереді және `SuffixPolicyV1` қосымша ақы кестелерін қосады.
+- Төлемді растау қосымша төлемді қамтуы керек. Сәтсіздік => `sns_err_payment_mismatch`.
+- `RegistryEventV1::NameRenewed` жаңа `expires_at` жазады.
 
-### 6.3 Guardian Freeze & Council Override
+### 6.3 Guardian Freeze & Council override
 
-1. Guardian submits `FreezeNameRequestV1` with ticket referencing incident id.
-2. Torii moves record to `NameStatus::Frozen`, emits `NameFrozen`.
-3. After remediation, council issues override; operator sends DELETE `/v1/sns/registrations/{selector}/freeze` with `GovernanceHookV1`.
-4. Torii validates override, emits `NameUnfrozen`.
+1. Қамқоршы билет сілтемесі оқиға идентификаторымен `FreezeNameRequestV1` жібереді.
+2. Torii жазбаны `NameStatus::Frozen` параметріне жылжытады, `NameFrozen` шығарады.
+3. Түзеткеннен кейін кеңестің мәселелері шешіледі; оператор DELETE `/v1/sns/registrations/{selector}/freeze` жолын `GovernanceHookV1` арқылы жібереді.
+4. Torii қайта анықтауды растайды, `NameUnfrozen` шығарады.
 
-## 7. Validation & Error Codes
+## 7. Тексеру және қате кодтары
 
-| Code | Description | HTTP |
+| Код | Сипаттама | HTTP |
 |------|-------------|------|
-| `sns_err_reserved` | Label is reserved or blocked. | 409 |
-| `sns_err_policy_violation` | Term, tier, or controller set violates policy. | 422 |
-| `sns_err_payment_mismatch` | Payment proof value or asset mismatch. | 402 |
-| `sns_err_governance_missing` | Required governance artifacts absent/invalid. | 403 |
-| `sns_err_state_conflict` | Operation not allowed in current lifecycle state. | 409 |
+| `sns_err_reserved` | Белгі сақталған немесе блокталған. | 409 |
+| `sns_err_policy_violation` | Термин, деңгей немесе контроллер жинағы саясатты бұзады. | 422 |
+| `sns_err_payment_mismatch` | Төлемді растайтын мән немесе актив сәйкессіздігі. | 402 |
+| `sns_err_governance_missing` | Қажетті басқару артефактілері жоқ/жарамсыз. | 403 |
+| `sns_err_state_conflict` | Ағымдағы өмірлік цикл күйінде операцияға рұқсат етілмейді. | 409 |
 
-All codes surface via `X-Iroha-Error-Code` and structured Norito JSON/NRPC envelopes.
+Барлық кодтар `X-Iroha-Error-Code` және құрылымдық Norito JSON/NRPC конверттері арқылы шығады.
 
-## 8. Implementation Notes
+## 8. Іске асыру туралы ескертпелер
 
-- Torii stores pending auctions under `NameRecordV1.auction` and rejects direct registration attempts while `PendingAuction`.
-- Payment proofs reuse Norito ledger receipts; treasury services provide helper APIs (`/v1/finance/sns/payments`).
-- SDKs should wrap these endpoints with strongly typed helpers so wallets can present clear error reasons (`ERR_SNS_RESERVED`, etc.).
+- Torii `NameRecordV1.auction` бойынша күтудегі аукциондарды сақтайды және `PendingAuction` кезінде тікелей тіркеу әрекеттерін қабылдамайды.
+- Төлем дәлелдері Norito бухгалтерлік түбіртектерді қайта пайдаланады; қазынашылық қызметтер көмекші API (`/v1/finance/sns/payments`) ұсынады.
+- SDK бұл соңғы нүктелерді қатты терілген көмекшілермен орау керек, осылайша әмияндар қатенің анық себептерін көрсете алады (`ERR_SNS_RESERVED`, т.б.).
 
-## 9. Next Steps
+## 9. Келесі қадамдар
 
-- Wire the Torii handlers to the actual registry contract once SN-3 auctions land.
-- Publish SDK-specific guides (Rust/JS/Swift) referencing this API.
-- Extend [`sns_suffix_governance_charter.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sns_suffix_governance_charter.md) with cross-links to the governance hook evidence fields.
+- SN-3 аукционына түскеннен кейін Torii өңдеушілерін нақты тізілім келісімшартына қосыңыз.
+- Осы API-ге сілтеме жасайтын SDK-арнайы нұсқаулықтарды (Rust/JS/Swift) жариялаңыз.
+- [`sns_suffix_governance_charter.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sns_suffix_governance_charter.md) басқару ілгегі дәлел өрістеріне көлденең сілтемелермен кеңейтіңіз.

@@ -4,26 +4,28 @@ direction: ltr
 source: docs/portal/docs/sorafs/developer-sdk-rust.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: developer-sdk-rust
-title: Snippets de SDK Rust
-sidebar_label: Snippets de Rust
-description: Exemplos Rust minimos para consumir proof streams e manifests.
+ID: 開発者-sdk-rust
+title: SDK Rustのスニペット
+Sidebar_label: Rust のスニペット
+説明: 消費者証明ストリームとマニフェストに関する Rust ミニモスの例。
 ---
 
-:::note Fonte canonica
-Esta pagina espelha `docs/source/sorafs/developer/sdk/rust.md`. Mantenha ambas as copias sincronizadas.
+:::note フォンテ カノニカ
+エスタ・ページナ・エスペルハ`docs/source/sorafs/developer/sdk/rust.md`。マンテンハ・アンバスはコピア・シンクロニザダスとして。
 :::
 
-Os crates Rust neste repositorio alimentam o CLI e podem ser embutidos em
-orquestradores ou servicos customizados. Os snippets abaixo destacam os helpers que
-mais aparecem nas solicitacoes dos desenvolvedores.
+OS クレート Rust ネスト リポジトリの管理、CLI およびポデム サーバーの管理
+オルケストラドールやサービスのカスタマイズ。 OS スニペット abaixo destacam os ヘルパー クエリ
+あなたの要求はデセンボルベドーレスにあります。
 
-## Helper de proof stream
+## 証明ストリームのヘルパー
 
-Reutilize o parser de proof stream existente para agregar metricas de uma resposta HTTP:
+HTTP レポートの集計メトリクスに存在する証明ストリームのパーサーを再利用します。
 
 ```rust
 use std::error::Error;
@@ -61,50 +63,50 @@ pub fn collect_proof_metrics(response: Response) -> Result<ProofStreamSummary, B
 }
 ```
 
-A versao completa (com testes) vive em `docs/examples/sorafs_rust_proof_stream.rs`.
-`ProofStreamSummary::to_json()` renderiza o mesmo JSON de metricas do CLI, facilitando
-alimentar backends de observabilidade ou assertions de CI.
+A versao completa (com testes) は `docs/examples/sorafs_rust_proof_stream.rs` で生き続けます。
+`ProofStreamSummary::to_json()` CLI を実行するための JSON メトリクスのレンダリング、容易化
+CI のアサーションを観察するための食品バックエンド。
 
-## Scoring de fetch multi-source
+## マルチソースフェッチのスコアリング
 
 O modulo `sorafs_car::multi_fetch` expoe o scheduler de fetch assincrono usado pelo
-CLI. Implemente `sorafs_car::multi_fetch::ScorePolicy` e passe via
-`FetchOptions::score_policy` para ajustar a ordenacao de provedores. O teste unitario
-`multi_fetch::tests::score_policy_can_filter_providers` mostra como impor preferencias
-customizadas.
+CLI。 `sorafs_car::multi_fetch::ScorePolicy` を経由して実装します
+`FetchOptions::score_policy` 裁判官の権限を証明します。ああ、テスト・ユニタリオ
+`multi_fetch::tests::score_policy_can_filter_providers` 最も重要な優遇措置
+カスタマイズ。
 
-Outros knobs espelham flags do CLI:
+Outros ノブ espelham flags は CLI を実行します。
 
-- `FetchOptions::per_chunk_retry_limit` corresponde ao flag `--retry-budget` para runs
-  de CI que restringem tentativas propositalmente.
-- Combine `FetchOptions::global_parallel_limit` com `--max-peers` para limitar o numero
-  de provedores concorrentes.
-- `OrchestratorConfig::with_telemetry_region("region")` marca as metricas
-  `sorafs_orchestrator_*`, enquanto `OrchestratorConfig::with_transport_policy` espelha
-  o flag CLI `--transport-policy`. `TransportPolicy::SoranetPreferred` e o default nas
-  superficies CLI/SDK; use `TransportPolicy::DirectOnly` apenas ao preparar um downgrade
-  ou seguir uma diretiva de compliance, e reserve `SoranetStrict` para pilotos PQ-only
-  com aprovacao explicita.
-- Defina `SorafsGatewayFetchOptions::write_mode_hint =
-  Some(WriteModeHint::UploadPqOnly)` para forcar uploads PQ-only; o helper promove
-  automaticamente as politicas de transporte/anonymity a menos que sejam explicitamente
-  sobrescritas.
-- Use `SorafsGatewayFetchOptions::policy_override` para fixar um tier temporario de
-  transporte ou anonimato para um unico request; fornecer qualquer um dos campos pula
-  o brownout demotion e falha quando o tier solicitado nao pode ser atendido.
-- Os bindings Python (`sorafs_multi_fetch_local` / `sorafs_gateway_fetch`) e
-  JavaScript (`sorafsMultiFetchLocal`) reutilizam o mesmo scheduler, entao defina
+- `FetchOptions::per_chunk_retry_limit` は、ao フラグに対応します。 `--retry-budget` パラ実行
+  提案された CI の制限を解除します。
+- `FetchOptions::global_parallel_limit` com `--max-peers` パラメーターの数値を結合します。
+  デ・プロヴェドール・コンコルレンテス。
+- メトリカとしての `OrchestratorConfig::with_telemetry_region("region")` マルカ
+  `sorafs_orchestrator_*`、エンクアント `OrchestratorConfig::with_transport_policy` エスペルハ
+  o フラグ CLI `--transport-policy`。 `TransportPolicy::SoranetPreferred` e o デフォルトの nas
+  表面機能 CLI/SDK。 `TransportPolicy::DirectOnly` を使用してダウングレードの準備をします
+  コンプライアンスの遵守、電子予約 `SoranetStrict` パラ パイロット PQ のみ
+  com aprovacao明示的。
+- `SorafsGatewayFetchOptions::write_mode_hint = を定義します。
+  Some(WriteModeHint::UploadPqOnly)` パラは、PQ のみをアップロードします。 o 促進するヘルパー
+  交通機関の政治としての自動管理/匿名性による明示的な管理
+  ソブレスクリタス。
+- 一時的な固定層として `SorafsGatewayFetchOptions::policy_override` を使用します
+  ユニコのリクエストに応じて輸送します。フォーネセル クアルケル ウム ドス カンポス プーラ
+  ブラウンアウト降格とファルハ・クアンド、ティア・ソリシタド・ナオ・ポデ・サー・テンディド。
+- OS バインディング Python (`sorafs_multi_fetch_local` / `sorafs_gateway_fetch`)
+  JavaScript (`sorafsMultiFetchLocal`) 再利用または管理スケジューラ、定義済み
   `return_scoreboard=true` nesses helpers para recuperar os pesos calculados junto com
-  chunk receipts.
-- `SorafsGatewayScoreboardOptions::telemetry_source_label` registra o stream OTLP que
-  produziu um adoption bundle. Quando omitido, o cliente deriva automaticamente
-  `region:<telemetry_region>` (ou `chain:<chain_id>`) para que o metadata sempre
-  carregue um rotulo descritivo.
+  塊の領収書。
+- `SorafsGatewayScoreboardOptions::telemetry_source_label` レジストラ ストリーム OTLP キュー
+  製品採用バンドル。自動的にクライアントを削除します
+  `region:<telemetry_region>` (ou `chain:<chain_id>`) メタデータのパラメータ
+  カレーグ・ウム・ロトゥーロ・ディスクリティーヴォ。
 
-## Fetch via `iroha::Client`
+## `iroha::Client` 経由で取得
 
-O SDK Rust inclui o helper de gateway fetch; forneca um manifest mais descritores de
-provedores (incluindo stream tokens) e deixe o cliente conduzir o fetch multi-source:
+O SDK Rustにはゲートウェイフェッチのヘルパーが含まれています。マニフェストには記述があります
+プローベドア (インクルード ストリーム トークンを含む)、デシェ、クライアント、マルチソースのフェッチを実行します。
 
 ```rust
 use eyre::Result;
@@ -153,23 +155,23 @@ pub async fn fetch_payload(
 }
 ```
 
-Defina `transport_policy` como `Some(TransportPolicy::SoranetStrict)` quando uploads
-precisarem recusar relays classicos, ou `Some(TransportPolicy::DirectOnly)` quando
-SoraNet precisar ser totalmente bypassada. Aponte `scoreboard.persist_path` para o
-diretorio de artefatos de release, opcionalmente fixe `scoreboard.now_unix_secs` e preencha
-`scoreboard.metadata` com contexto de captura (labels de fixtures, alvo Torii, etc.)
-para que `cargo xtask sorafs-adoption-check` consuma JSON deterministico entre SDKs
-com o blob de provenance que SF-6c espera.
-`Client::sorafs_fetch_via_gateway` agora aumenta esse metadata com o identificador de
-manifest, a expectativa opcional de manifest CID e o flag `gateway_manifest_provided`
-inspecionando o `GatewayFetchConfig` fornecido, para que capturas que incluem um
-manifest envelope assinado atendam ao requisito de evidencia SF-6c sem duplicar esses
-campos manualmente.
+Defina `transport_policy` コモ `Some(TransportPolicy::SoranetStrict)` Quando アップロード
+プレシサレム レキュサー リレー クラシコ、OU `Some(TransportPolicy::DirectOnly)` Quando
+SoraNet は完全に回避できます。アポンテ `scoreboard.persist_path` パラ o
+`scoreboard.now_unix_secs` のリリース管理、オプションの修正
+`scoreboard.metadata` com contexto de captura (ラベルとフィクスチャ、alvo Torii など)
+`cargo xtask sorafs-adoption-check` consuma JSON の決定的な SDK のパラメータ
+SF-6c espera の起源を示すブロブ。
+`Client::sorafs_fetch_via_gateway` 識別情報のメタデータを確認する
+マニフェスト、マニフェスト CID およびフラグ `gateway_manifest_provided` の予想オプション
+検査を行ってください `GatewayFetchConfig` フォルネシド、キャプチャーを含めてください
+マニフェストエンベロープアシナドアテンダム青証拠証明要求 SF-6c sem duplicar esses
+カンポスマニュアルメンテ。
 
-## Helpers de manifest
+## マニフェストのヘルパー
 
-`ManifestBuilder` continua sendo a forma canonica de montar payloads Norito de forma
-programatica:
+`ManifestBuilder` 形式の正規ペイロードを送信し続ける Norito 形式
+プログラマティカ:
 
 ```rust
 use sorafs_manifest::{ManifestBuilder, ManifestV1, PinPolicy, StorageClass};
@@ -186,5 +188,5 @@ fn build_manifest(bytes: &[u8]) -> Result<ManifestV1, Box<dyn std::error::Error>
 }
 ```
 
-Incorpore o builder sempre que servicos precisarem gerar manifests em tempo real; o
-CLI segue sendo o caminho recomendado para pipelines deterministicos.
+正確なサービスを構築するために、実際のテンポを明示します。ああ
+CLI は、パイプラインの決定性に関する推奨事項を送信します。

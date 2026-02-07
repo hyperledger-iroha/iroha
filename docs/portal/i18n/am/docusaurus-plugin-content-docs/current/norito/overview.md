@@ -4,61 +4,63 @@ direction: ltr
 source: docs/portal/docs/norito/overview.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Norito Overview
+# Norito አጠቃላይ እይታ
 
-Norito is the binary serialization layer used across Iroha: it defines how data
-structures are encoded on the wire, persisted on disk, and exchanged between
-contracts and hosts. Every crate in the workspace relies on Norito instead of
-`serde` so peers on different hardware produce identical bytes.
+Norito በ Iroha ላይ ጥቅም ላይ የሚውለው ባለ ሁለትዮሽ ተከታታይ ንብርብር ነው፡ እንዴት ውሂብን ይገልጻል
+አወቃቀሮች በሽቦው ላይ ተቀምጠዋል, በዲስክ ላይ ይቆያሉ እና በመካከላቸው ይለዋወጣሉ
+ኮንትራቶች እና አስተናጋጆች. በስራ ቦታ ላይ ያለ እያንዳንዱ ሳጥን በNorito ፈንታ ይተማመናል።
+`serde` ስለዚህ በተለያየ ሃርድዌር ላይ ያሉ እኩዮች ተመሳሳይ ባይት ያመርታሉ።
 
-This overview summarises the core pieces and links to the canonical references.
+ይህ አጠቃላይ እይታ ዋናዎቹን ክፍሎች እና ከቀኖናዊ ማጣቀሻዎች ጋር አገናኞችን ያጠቃልላል።
 
-## Architecture at a glance
+## አርክቴክቸር በጨረፍታ
 
-- **Header + payload** – Each Norito message begins with a feature-negotiation
-  header (flags, checksum) followed by the bare payload. Packed layouts and
-  compression are negotiated via header bits.
-- **Deterministic encoding** – `norito::codec::{Encode, Decode}` implement the
-  bare encoding. The same layout is reused when wrapping payloads in headers so
-  hashing and signing remain deterministic.
-- **Schema + derives** – `norito_derive` generates `Encode`, `Decode`, and
-  `IntoSchema` implementations. Packed structs/sequences are enabled by default
-  and documented in `norito.md`.
-- **Multicodec registry** – Identifiers for hashes, key types, and payload
-  descriptors live in `norito::multicodec`. The authoritative table is
-  maintained in `multicodec.md`.
+- ** አርእስት + ክፍያ ** - እያንዳንዱ Norito መልእክት በባህሪ-ድርድር ይጀምራል
+  ራስጌ (ባንዲራዎች፣ ቼክተም) የተከተለ ባዶ ጭነት። የታሸጉ አቀማመጦች እና
+  መጭመቅ በርዕስ ቢትስ በኩል ይደራደራል።
+- ** ቆራጥ ኢንኮዲንግ *** - `norito::codec::{Encode, Decode}` ተግባራዊ ያድርጉ
+  ባዶ ኢንኮዲንግ. ተመሳሳዩን አቀማመጥ እንደገና ጥቅም ላይ የሚውለው የተጫኑ ጭነቶችን በራስጌዎች ውስጥ በሚጠቅልበት ጊዜ ነው።
+  ማሽኮርመም እና መፈረም ቆራጥነት ይቀራል።
+- ** Schema + የሚያመነጨው *** - `norito_derive` `Encode`፣ `Decode`ን፣ እና ያመነጫል።
+  `IntoSchema` አተገባበር። የታሸጉ መዋቅሮች/ተከታታይ በነባሪ ነቅተዋል።
+  እና በ `norito.md` ውስጥ ተመዝግቧል.
+- ** መልቲኮዴክ መዝገብ *** - ለሃሽ ፣ ለቁልፍ ዓይነቶች እና ለክፍያ መለያዎች
+  ገላጭዎች በ `norito::multicodec` ይኖራሉ። ስልጣን ያለው ሰንጠረዥ ነው።
+  በ `multicodec.md` ውስጥ ተጠብቆ ቆይቷል።
 
-## Tooling
+## መሳሪያ
 
-| Task | Command / API | Notes |
+| ተግባር | ትዕዛዝ / API | ማስታወሻ |
 | --- | --- | --- |
-| Inspect header/sections | `ivm_tool inspect <file>.to` | Shows ABI version, flags, and entrypoints. |
-| Encode/decode in Rust | `norito::codec::{Encode, Decode}` | Implemented for all core data-model types. |
-| JSON interop | `norito::json::{to_json_pretty, from_json}` | Deterministic JSON backed by Norito values. |
-| Generate docs/specs | `norito.md`, `multicodec.md` | Source-of-truth documentation in the repo root. |
+| ራስጌ/ክፍል መርምር | `ivm_tool inspect <file>.to` | ABI ስሪትን፣ ባንዲራዎችን እና የመግቢያ ነጥቦችን ያሳያል። |
+| ዝገት ውስጥ ኢንኮድ/ዲኮድ | `norito::codec::{Encode, Decode}` | ለሁሉም ዋና የውሂብ-ሞዴል ዓይነቶች የተተገበረ። |
+| JSON interop | `norito::json::{to_json_pretty, from_json}` | ቆራጥ JSON በNorito እሴቶች የተደገፈ። |
+| ሰነዶችን/መግለጫዎችን ፍጠር | `norito.md`, `multicodec.md` | በሪፖ ሥር ውስጥ ያለው የእውነት ምንጭ ሰነድ። |
 
-## Development workflow
+##የልማት የስራ ሂደት
 
-1. **Add derives** – Prefer `#[derive(Encode, Decode, IntoSchema)]` for new data
-   structures. Avoid hand-written serializers unless absolutely necessary.
-2. **Validate packed layouts** – Use `cargo test -p norito` (and the packed
-   feature matrix in `scripts/run_norito_feature_matrix.sh`) to ensure new
-   layouts remain stable.
-3. **Regenerate docs** – When the encoding changes, update `norito.md` and the
-   multicodec table, then refresh the portal pages (`/reference/norito-codec`
-   and this overview).
-4. **Keep tests Norito-first** – Integration tests should use the Norito JSON
-   helpers instead of `serde_json` so they exercise the same paths as production.
+1. ** ጥቅማጥቅሞችን ያክሉ *** - ለአዲስ መረጃ `#[derive(Encode, Decode, IntoSchema)]` ይምረጡ
+   መዋቅሮች. በጣም አስፈላጊ ካልሆነ በስተቀር በእጅ የተጻፉ ተከታታይ ፊልሞችን ያስወግዱ።
+2. ** የታሸጉ አቀማመጦችን ያረጋግጡ *** - `cargo test -p norito` (እና የታሸገውን ይጠቀሙ)
+   ባህሪ ማትሪክስ በ I18NI0000027X) አዲስ ለማረጋገጥ
+   አቀማመጦች ተረጋግተው ይቆያሉ።
+3. ** ሰነዶችን ያድሱ *** - ኢንኮዲንግ ሲቀየር፣ `norito.md` ያዘምኑ እና
+   የመልቲኮድ ሠንጠረዥ፣ ከዚያ የፖርታል ገጾቹን ያድሱ (`/reference/norito-codec`
+   እና ይህ አጠቃላይ እይታ).
+4. ** ሙከራዎችን አቆይ Norito-መጀመሪያ ** - የውህደት ፈተናዎች Norito JSON መጠቀም አለባቸው
+   ከ `serde_json` ይልቅ ረዳቶች ስለዚህ እንደ ምርት ተመሳሳይ መንገዶችን ይጠቀማሉ።
 
-## Quick links
+## ፈጣን አገናኞች
 
-- Specification: [`norito.md`](https://github.com/hyperledger-iroha/iroha/blob/master/norito.md)
-- Multicodec assignments: [`multicodec.md`](https://github.com/hyperledger-iroha/iroha/blob/master/multicodec.md)
-- Feature matrix script: `scripts/run_norito_feature_matrix.sh`
-- Packed-layout examples: `crates/norito/tests/`
+- ዝርዝር፡ [`norito.md`](https://github.com/hyperledger-iroha/iroha/blob/master/norito.md)
+- መልቲኮድ ስራዎች፡ [`multicodec.md`](https://github.com/hyperledger-iroha/iroha/blob/master/multicodec.md)
+- የባህሪ ማትሪክስ ስክሪፕት: `scripts/run_norito_feature_matrix.sh`
+- የታሸጉ-አቀማመጥ ምሳሌዎች: `crates/norito/tests/`
 
-Pair this overview with the quickstart guide (`/norito/getting-started`) for a
-hands-on walkthrough of compiling and running bytecode that uses Norito
-payloads.
+ይህንን አጠቃላይ እይታ ከፈጣን ጅምር መመሪያ (`/norito/getting-started`) ጋር ያጣምሩ
+Norito የሚጠቀም ባይትኮድ የማጠናቀር እና የማስኬድ ሂደት
+ሸክሞች.

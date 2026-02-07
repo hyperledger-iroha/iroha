@@ -4,20 +4,22 @@ direction: ltr
 source: docs/portal/docs/sorafs/developer-index.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: developer-index
+идентификатор: индекс разработчика
 title: Guías para desarrolladores de SoraFS
-description: Página de inicio para la documentación de desarrolladores de SoraFS, ejemplos y referencias de automatización.
-sidebar_label: Resumen para desarrolladores
+описание: Начальная страница с документацией по SoraFS, примерами и справочными материалами по автоматизации.
+Sidebar_label: Резюме для желающих
 ---
 
-:::note Fuente canónica
-Esta página refleja `docs/source/sorafs/developer/index.md`. Mantén ambas versiones sincronizadas hasta que los docs heredados se retiren.
+:::примечание Фуэнте каноника
+Эта страница отражает `docs/source/sorafs/developer/index.md`. Многие версии синхронизируются, потому что документы ушли в отставку.
 :::
 
-# Guías para desarrolladores de SoraFS
+# Советы по удалению SoraFS
 
 ```{toctree}
 :caption: Primeros pasos

@@ -4,62 +4,60 @@ direction: rtl
 source: docs/portal/docs/sns/registry-schema.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note المصدر القياسي
-تعكس `docs/source/sns/registry_schema.md` وتعمل الان كنسخة البوابة القياسية. يبقى ملف المصدر لتحديثات الترجمة.
+:::ملاحظة المصدر القياسي
+احترام `docs/source/sns/registry_schema.md` المعتمد الان كنسخة البوابة القياسية. يبقى ملف المصدر لتحديثات الترجمة.
 :::
 
 # مخطط سجل Sora Name Service (SN-2a)
 
 **الحالة:** مسودة 2026-03-24 -- مقدمة لمراجعة برنامج SNS  
-**رابط خارطة الطريق:** SN-2a "Registry schema & storage layout"  
-**النطاق:** تعريف هياكل Norito القياسية وحالات دورة الحياة والاحداث المنبعثة لخدمة Sora Name Service (SNS) لضمان ان تنفيذات السجل والـ registrar تبقى حتمية عبر العقود و SDKs و gateways.
+**رابط خريطة الطريق:** SN-2a "مخطط التسجيل وتخطيط التخزين"  
+**النطاق:** تعريف هياكل Norito القياسية وحالات دورة الحياة والأحداث المنبعثة لخدمة Sora Name Service (SNS) دائمًا ان تنفيذات السجل والـ المسجل تستمر حتمية عبر العقود و SDKs و gates.
 
-يكمل هذا المستند تسليم المخطط لـ SN-2a عبر تحديد:
+يكمل هذا الإيمان بالثقة لـ SN-2a عبر التحديد:
 
-1. المعرفات وقواعد hashing (`SuffixId`, `NameHash`, اشتقاق selector).
-2. Norito structs/enums لسجلات الاسماء، سياسات suffix، tiers التسعير، توزيعات الايراد، واحداث السجل.
-3. تخطيط التخزين وبوادئ الفهارس لضمان replay حتمي.
-4. الة حالات تغطي التسجيل، التجديد، grace/redemption، التجميد و tombstone.
-5. الاحداث القياسية التي تستهلكها اتمتة DNS/gateway.
+1. المعرفات وقواعد التجزئة (`SuffixId`, `NameHash`, اشتقاق محدد).
+2. Norito الهياكل/التعدادات لسجلات الاسماء، السياسات اللاحقة، مستويات التسعير، توزيعات الايراد، وأحداث السجل.
+3. تخطيط التخزين وبوائئ الفهارس واعادتها حتمي.
+4. حالات تغطية التسجيل، النعمة/الفداء، التجميد و شاهد القبر.
+5. الاحداث القياسية التي تستهلكها DNS/gateway.
 
-## 1. المعرفات و hashing
-
-| المعرف | الوصف | الاشتقاق |
+## 1. المعرفات و التجزئة| المعرف | الوصف | الاشتقاق |
 |------------|-------------|------------|
-| `SuffixId` (`u16`) | معرف السجل للسوفكسات العليا (`.sora`, `.nexus`, `.dao`). متوافق مع كتالوج السوفكس في [`sns_suffix_governance_charter.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sns_suffix_governance_charter.md). | يعين بتصويت الحوكمة; يخزن في `SuffixPolicyV1`. |
-| `SuffixSelector` | الشكل النصي القياسي للسوفكس (ASCII, lower-case). | مثال: `.sora` -> `sora`. |
-| `NameSelectorV1` | selector ثنائي للوسم المسجل. | `struct NameSelectorV1 { version:u8 (=1); suffix_id:u16; label_len:u16; label_bytes:Vec<u8> }`. الوسم NFC + lower-case حسب Norm v1. |
-| `NameHash` (`[u8;32]`) | مفتاح البحث الاساسي المستخدم في العقود والاحداث والكاشات. | `blake3(NameSelectorV1_bytes)`. |
+| `SuffixId` (`u16`) | معرف السجل للسوفكسات العليا (`.sora`, `.nexus`, `.dao`). متوافق مع كتالوج السوفكس في [`sns_suffix_governance_charter.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sns_suffix_governance_charter.md). | يعين بتصويت الغزو; يخزن في `SuffixPolicyV1`. |
+| `SuffixSelector` | الشكل النصي القياسي للسوفكس (ASCII، أحرف صغيرة). | مثال: `.sora` -> `sora`. |
+| `NameSelectorV1` | محدد ثنائي الوسم الموزع. | `struct NameSelectorV1 { version:u8 (=1); suffix_id:u16; label_len:u16; label_bytes:Vec<u8> }`. الوسم NFC + أحرف صغيرة حسب Norm v1. |
+| `NameHash` (`[u8;32]`) | مفتاح البحث الأساسي المستخدم في والعقود حداث والكاشات. | `blake3(NameSelectorV1_bytes)`. |
 
-متطلبات الحتمية:
+المتطلبات الحتمية:
 
-- يتم تطبيع الوسوم عبر Norm v1 (UTS-46 strict, STD3 ASCII, NFC). يجب تطبيع سلاسل المستخدم قبل hashing.
-- الوسوم المحجوزة (من `SuffixPolicyV1.reserved_labels`) لا تدخل السجل ابدا; التجاوزات الخاصة بالحوكمة فقط تصدر احداث `ReservedNameAssigned`.
+- يتم تطبيع الوسوم عبر Norm v1 (UTS-46 الصارم، STD3 ASCII، NFC). يجب تطبيع سلاسل المستخدم قبل التجزئة.
+- الوسوم المحجوزة (من `SuffixPolicyV1.reserved_labels`) لا تسجل أبدا; التجاوزات الخاصة بالتحكم فقط في احداث `ReservedNameAssigned`.
 
-## 2. هياكل Norito
+## 2. الهياكل Norito
 
-### 2.1 NameRecordV1
-
-| الحقل | النوع | الملاحظات |
+### 2.1 NameRecordV1| الحقل | النوع | مذكرة |
 |-------|------|-----------|
 | `suffix_id` | `u16` | مرجع `SuffixPolicyV1`. |
-| `selector` | `NameSelectorV1` | بايتات selector الخام للتدقيق/debug. |
+| `selector` | `NameSelectorV1` | بايتات محدد برايد للتدقيق/debug. |
 | `name_hash` | `[u8; 32]` | مفتاح للخرائط/الاحداث. |
-| `normalized_label` | `AsciiString` | وسم قابل للقراءة (بعد Norm v1). |
-| `display_label` | `AsciiString` | تنسيق احرف يقدمه steward; تجميلي. |
-| `owner` | `AccountId` | يتحكم في التجديدات/التحويلات. |
-| `controllers` | `Vec<NameControllerV1>` | مراجع لعناوين الحساب او resolvers او metadata للتطبيق. |
+| `normalized_label` | `AsciiString` | إشارة قابلة للقراءة (بعد Norm v1). |
+| `display_label` | `AsciiString` | لاحرف ارسله ستيوارد; مستحضرات التجميل. |
+| `owner` | `AccountId` | يتحكم في التعديلات/التحويلات. |
+| `controllers` | `Vec<NameControllerV1>` | المراجع لاناوين الحساب او المحللين او البيانات الوصفية. |
 | `status` | `NameStatus` | حالة دورة الحياة (انظر القسم 4). |
-| `pricing_class` | `u8` | فهرس tiers التسعير للسوفكس (standard, premium, reserved). |
+| `pricing_class` | `u8` | فهرس مستويات التسعير للسوفكس (قياسي، مميز، محجوز). |
 | `registered_at` | `Timestamp` | وقت تفعيل التسجيل الاول. |
-| `expires_at` | `Timestamp` | نهاية المدة المدفوعة. |
-| `grace_expires_at` | `Timestamp` | نهاية grace للتجديد التلقائي (default +30 يوما). |
-| `redemption_expires_at` | `Timestamp` | نهاية نافذة redemption (default +60 يوما). |
-| `auction` | `Option<NameAuctionStateV1>` | يظهر عند Dutch reopen او مزادات premium النشطة. |
-| `last_tx_hash` | `Hash` | مؤشر حتمي على المعاملة التي انتجت هذه النسخة. |
-| `metadata` | `Metadata` | metadata اختيارية للـ registrar (text records, proofs). |
+| `expires_at` | `Timestamp` | نهاية المدة ل. |
+| `grace_expires_at` | `Timestamp` | نهاية Grace للتجديد التلقائي (افتراضي +30 يومًا). |
+| `redemption_expires_at` | `Timestamp` | نهاية فداء النافذة (افتراضي +60 يومًا). |
+| `auction` | `Option<NameAuctionStateV1>` | يظهر عند فتح الهولندية او المزادات المميزة العضوية. |
+| `last_tx_hash` | `Hash` | حتمي على القياس الذي انتجت هذه النسخة. |
+| `metadata` | `Metadata` | البيانات الوصفية اختيارية للمسجل (السجلات النصية، البراهين). |
 
 هياكل مساندة:
 
@@ -117,26 +115,24 @@ Enum AuctionKind {
 }
 ```
 
-### 2.2 SuffixPolicyV1
-
-| الحقل | النوع | الملاحظات |
+### 2.2 SuffixPolicyV1| الحقل | النوع | مذكرة |
 |-------|------|-----------|
-| `suffix_id` | `u16` | مفتاح اساسي ثابت عبر نسخ السياسة. |
+| `suffix_id` | `u16` | المفتاح الأساسي الثابت عبر نسخة السياسة. |
 | `suffix` | `AsciiString` | مثلا `sora`. |
-| `steward` | `AccountId` | steward معرف في charter الحوكمة. |
-| `status` | `SuffixStatus` | `Active`, `Paused`, `Revoked`. |
-| `payment_asset_id` | `AsciiString` | معرف اصل settlement الافتراضي (مثلا `xor#sora`). |
-| `pricing` | `Vec<PriceTierV1>` | معاملات التسعير حسب tiers وقواعد المدة. |
-| `min_term_years` | `u8` | حد ادنى لمدة الشراء بغض النظر عن overrides. |
-| `grace_period_days` | `u16` | Default 30. |
-| `redemption_period_days` | `u16` | Default 60. |
+| `steward` | `AccountId` | ستيوارد معرف في ميثاق ال تور. |
+| `status` | `SuffixStatus` | `Active`، `Paused`، `Revoked`. |
+| `payment_asset_id` | `AsciiString` | معرف اصل التسوية الافتراضية (مثلا `xor#sora`). |
+| `pricing` | `Vec<PriceTierV1>` | اتفاقيات التسعير حسب المستويات والقواعد المدة. |
+| `min_term_years` | `u8` | حد ادنى للشراء بغض النظر عن التجاوزات. |
+| `grace_period_days` | `u16` | الافتراضي 30. |
+| `redemption_period_days` | `u16` | الافتراضي 60. |
 | `max_term_years` | `u8` | الحد الاقصى للتجديد المسبق. |
-| `referral_cap_bps` | `u16` | <=1000 (10%) حسب charter. |
-| `reserved_labels` | `Vec<ReservedNameV1>` | قائمة من الحوكمة مع تعليمات التخصيص. |
-| `fee_split` | `SuffixFeeSplitV1` | حصص treasury / steward / referral (basis points). |
-| `fund_splitter_account` | `AccountId` | حساب يمسك escrow ويقسم الاموال. |
+| `referral_cap_bps` | `u16` | <=1000 (10%) حسب الميثاق. |
+| `reserved_labels` | `Vec<ReservedNameV1>` | قائمة من التورم مع تعليمات التخصيص. |
+| `fee_split` | `SuffixFeeSplitV1` | حصص الخزينة / الوكيل / الإحالة (نقاط الأساس). |
+| `fund_splitter_account` | `AccountId` | حساب يمسك الضمان ويقسم الاموال. |
 | `policy_version` | `u16` | يزيد مع كل تغيير. |
-| `metadata` | `Metadata` | ملاحظات موسعة (KPI covenant, hashes لوثائق compliance). |
+| `metadata` | `Metadata` | ملاحظات موسعة (ميثاق مؤشرات الأداء الرئيسية، التجزئات للامتثال للوثائق). |
 
 ```text
 Struct PriceTierV1 {
@@ -164,18 +160,16 @@ Struct SuffixFeeSplitV1 {
 }
 ```
 
-### 2.3 سجلات الايرادات و settlement
-
-| Struct | الحقول | الغرض |
+### 2.3 سجلات الطيران والتسوية| هيكل | بمعنى | اللحوم |
 |--------|--------|-------|
-| `RevenueShareRecordV1` | `suffix_id`, `epoch_id`, `treasury_amount`, `steward_amount`, `referral_amount`, `escrow_amount`, `settled_at`, `tx_hash`. | سجل حتمي لمدفوعات موزعة حسب حقبة settlement (اسبوعيا). |
-| `RevenueAccrualEventV1` | `name_hash`, `suffix_id`, `event`, `gross_amount`, `net_amount`, `referral_account`. | يصدر عند تسجيل كل دفعة (تسجيل، تجديد، مزاد). |
+| `RevenueShareRecordV1` | `suffix_id`، `epoch_id`، `treasury_amount`، `steward_amount`، `referral_amount`، `escrow_amount`، `settled_at`، `tx_hash`. | سجل حتمي لمدفوعات موزعة حسب حقبة التسوية (اسبوعيا). |
+| `RevenueAccrualEventV1` | `name_hash`، `suffix_id`، `event`، `gross_amount`، `net_amount`، `referral_account`. | يصدر عند تسجيل كل دفعة (تسجيل، تجديد، مزاد). |
 
-جميع حقول `TokenValue` تستخدم الترميز الثابت القياسي لنوريتو مع كود العملة المعلن في `SuffixPolicyV1` المرتبط.
+شامل `TokenValue` يستخدم الترميز الثابت القياسي لنوريتو مع رمز العملة البائع في `SuffixPolicyV1` غير.
 
-### 2.4 احداث السجل
+### 2.4 احدث السجل
 
-الاحداث القياسية توفر replay log لعمليات DNS/gateway والقياس.
+الاحداث القياسية متوفرة replay log DNS/gateway والقياس.
 
 ```text
 Struct RegistryEventV1 {
@@ -204,50 +198,46 @@ Enum RegistryEventKind {
 }
 ```
 
-يجب اضافة الاحداث الى log قابل للاعادة (مثل نطاق `RegistryEvents`) وعكسها الى feeds الخاصة بالبوابة حتى تنتهي صلاحية caches DNS ضمن SLA.
+يجب إضافة الاحداث الى سجل قابل للاعادة (مثل نطاق `RegistryEvents`) وعكسها الى الخلاصات الخاصة بالبوابة حتى انتهاء صلاحية ذاكرة التخزين المؤقت DNS ضمن SLA.
 
-## 3. تخطيط التخزين والفهارس
+## 3. تخطيط التخطيط و الفهارس
 
 | المفتاح | الوصف |
-|-----|-------------|
-| `Names::<name_hash>` | خريطة اساسية من `name_hash` الى `NameRecordV1`. |
-| `NamesByOwner::<AccountId, suffix_id>` | فهرس ثانوي لواجهة wallet (pagination friendly). |
-| `NamesByLabel::<suffix_id, normalized_label>` | كشف التعارضات وتمكين البحث الحتمي. |
+|-----|------------|
+| `Names::<name_hash>` | الخريطة الأساسية من `name_hash` إلى `NameRecordV1`. |
+| `NamesByOwner::<AccountId, suffix_id>` | فهرس ثانية لمحفظة الواجهة (صديقة للصفحات). |
+| `NamesByLabel::<suffix_id, normalized_label>` | كشف العارضات وتمكين البحث الهتمي. |
 | `SuffixPolicies::<suffix_id>` | اخر `SuffixPolicyV1`. |
 | `RevenueShare::<suffix_id, epoch_id>` | سجل `RevenueShareRecordV1`. |
-| `RegistryEvents::<u64>` | log append-only بمفتاح تسلسل احادي. |
+| `RegistryEvents::<u64>` | سجل إلحاق فقط بمفتاح سلسلة الاحادي. |
 
-كل المفاتيح تتسلسل عبر Norito tuples للحفاظ على hashing الحتمي عبر المضيفات. تحديثات الفهرس تتم بشكل ذري مع السجل الاساسي.
+كل لوحة المفاتيح تتسلسل عبر Norito tuples حطمي على تجزئة حطمي عبر المسرحيات. تحديثات الفهرس تتم بشكل ذري مع السجل الأساسي.
 
-## 4. الة حالات دورة الحياة
+## 4. حالات دورة الحياة| الحالة | شروط الدخول | الانتقالات الإضافية | مذكرة |
+|-------|----------------|---------------------|-----------|
+| متاح | مشغلة عند غياب `NameRecord`. | `PendingAuction` (ممتاز)، `Active` (تسجيل قياسي). | ابحث عن المتوفرة لفيلم الفهارس فقط. |
+| في انتظار المزاد | لسبب عندما `PriceTierV1.auction_kind` != none. | `Active` (تسوية المزاد), `Tombstoned` (بدون عروض). | المزادات `AuctionOpened` و `AuctionSettled`. |
+| نشط | تسجيل او تجديد ناجح. | `GracePeriod`، `Frozen`، `Tombstoned`. | `expires_at` قادم. |
+| فترة النعمة | تلقائي عند `now > expires_at`. | `Active` (تجديد في الوقت)، `Redemption`، `Tombstoned`. | الافتراضي +30 يومًا؛ ما يحل يحل معلّم. |
+| فداء | `now > grace_expires_at` لكن `< redemption_expires_at`. | `Active` (تجديد متاخر), `Tombstoned`. | اوامر تتطلب جرح. |
+| مجمدة | تجميد او الوصي. | `Active` (بعد المعالجة المركزية)، `Tombstoned`. | لا يمكن نقل الاسم او تحديث وحدات التحكم. |
+| شاهد القبر | تنازل طوعي، نتيجة لنتيجة دائمة، او انتهاء الفداء. | `PendingAuction` (إعادة فتح الهولندية) أو يظل محفورًا. | الحدث `NameTombstoned` يجب ان يشمل المبدع. |
 
-| الحالة | شروط الدخول | الانتقالات المسموحة | الملاحظات |
-|-------|----------------|---------------------|------------|
-| Available | مشتقة عند غياب `NameRecord`. | `PendingAuction` (premium), `Active` (standard registration). | البحث عن التوفر يقرأ الفهارس فقط. |
-| PendingAuction | تنشأ عندما `PriceTierV1.auction_kind` != none. | `Active` (تسوية المزاد), `Tombstoned` (بدون عروض). | المزادات تصدر `AuctionOpened` و `AuctionSettled`. |
-| Active | تسجيل او تجديد ناجح. | `GracePeriod`, `Frozen`, `Tombstoned`. | `expires_at` يقود الانتقال. |
-| GracePeriod | تلقائي عند `now > expires_at`. | `Active` (تجديد في الوقت), `Redemption`, `Tombstoned`. | Default +30 يوما; ما زال يحل لكنه معلّم. |
-| Redemption | `now > grace_expires_at` لكن `< redemption_expires_at`. | `Active` (تجديد متاخر), `Tombstoned`. | الاوامر تتطلب رسوم عقوبة. |
-| Frozen | تجميد حوكمة او guardian. | `Active` (بعد المعالجة), `Tombstoned`. | لا يمكن نقل الاسم او تحديث controllers. |
-| Tombstoned | تنازل طوعي، نتيجة نزاع دائم، او انتهاء redemption. | `PendingAuction` (Dutch reopen) او يبقى tombstoned. | حدث `NameTombstoned` يجب ان يتضمن السبب. |
+يجب ان يتم فحص انتقالات الحالة `RegistryEventKind` بشكل جيد حتى تبقى ذاكرات التخزين المؤقت النهائية متسقة. الاسماء Tombstoned التي أثرت على مزادات هولندية أعيد فتحها ترفق الحمولة النافعة `AuctionKind::DutchReopen`.
 
-يجب ان تصدر انتقالات الحالة `RegistryEventKind` الموافق حتى تبقى caches downstream متسقة. الاسماء tombstoned التي تدخل مزادات Dutch reopen ترفق payload `AuctionKind::DutchReopen`.
+##5.الاحداث القياسية و المزامنة للبوابات
 
-## 5. الاحداث القياسية و sync للبوابات
-
-تشترك البوابات في `RegistryEventV1` وتزامن DNS/SoraFS عبر:
-
-1. جلب اخر `NameRecordV1` المشار اليه في تسلسل الاحداث.
-2. اعادة توليد resolver templates (عناوين IH58 المفضلة + compressed (`sora`) كخيار ثانٍ، text records).
+اشترك البوابات في `RegistryEventV1` وتزامن DNS/SoraFS عبر:1. اخر جلب `NameRecordV1` ما اليه في سلسلة الاحداث.
+2. إعادة توليد قوالب المحلل (عناوين IH58 المفضلة + المضغوطة (`sora`) كخيار ثانٍ، السجلات النصية).
 3. تثبيت بيانات المنطقة عبر تدفق SoraDNS الموضح في [`soradns_registry_rfc.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/soradns/soradns_registry_rfc.md).
 
 ضمانات تسليم الاحداث:
 
-- كل معاملة تؤثر على `NameRecordV1` *يجب* ان تضيف حدثا واحدا فقط مع `version` متزايد بصرامة.
-- احداث `RevenueSharePosted` تشير الى التسويات الصادرة من `RevenueShareRecordV1`.
-- احداث freeze/unfreeze/tombstone تتضمن hashes لقطع الحوكمة داخل `metadata` لاعادة تدقيق الاحداث.
+- كل ما تريده على `NameRecordV1` *يجب* ان تحميل حدث واحدا فقط مع `version` المزيد بصرامة.
+- احداث `RevenueSharePosted` شاهد الى التسويقيات الصادرة من `RevenueShareRecordV1`.
+- احداثتجميد/unfreeze/علامة مميزة تتضمن تجزئات لقطع التصفح الداخلي `metadata` لاعادة تدقيق الاحداث.
 
-## 6. امثلة على Norito payloads
+## 6.مثلة على الحمولات Norito
 
 ### 6.1 مثال NameRecord
 
@@ -309,8 +299,8 @@ SuffixPolicyV1 {
 
 ## 7. الخطوات التالية
 
-- **SN-2b (Registrar API & governance hooks):** عرض هذه structs عبر Torii (Norito و JSON bindings) وربط admission checks بقطع الحوكمة.
-- **SN-3 (Auction & registration engine):** اعادة استخدام `NameAuctionStateV1` لتنفيذ منطق commit/reveal و Dutch reopen.
-- **SN-5 (Payment & settlement):** استخدام `RevenueShareRecordV1` للتسوية المالية واتوتمة التقارير.
+- **SN-2b (واجهة برمجة تطبيقات المسجل وخطافات الإدارة):** عرض هذه البنيات عبر Torii (Norito وروابط JSON) وربط فحوصات القبول التي يمكنك التحكم بها.
+- **SN-3 (محرك المزاد والتسجيل):** إعادة استخدام `NameAuctionStateV1` منطقة الالتزام/الكشف وإعادة فتح الهولندية.
+- **SN-5 (الدفع والتسوية):** استخدام `RevenueShareRecordV1` للتسويق المالي واتمة التقدير.
 
-يجب تقديم الاسئلة او طلبات التغيير مع تحديثات خارطة طريق SNS في `roadmap.md` وعكسها في `status.md` عند الدمج.
+يجب تقديم الاسئلة او طلبات الغد مع تحديثات الكهرباء طريق SNS في `roadmap.md` وعكسها في `status.md` عند المدمج.

@@ -8,80 +8,82 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: W1 feedback & telemetry log
 sidebar_label: W1 feedback log
 description: Aggregate roster, telemetry checkpoints, and reviewer notes for the first partner preview wave.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-This log keeps the invite roster, telemetry checkpoints, and reviewer feedback for the
-**W1 partner preview** that accompanies the acceptance tasks in
-[`preview-feedback/w1/plan.md`](./plan.md) and the wave tracker entry in
-[`../../preview-invite-tracker.md`](../../preview-invite-tracker.md). Update it whenever an invite
-is sent, telemetry snapshot recorded, or feedback item triaged so governance reviewers can replay
-the evidence without chasing external tickets.
+Bu jurnal dəvət siyahısı, telemetriya yoxlama məntəqələri və rəyçi rəyini saxlayır
+Qəbul tapşırıqlarını müşayiət edən **W1 tərəfdaş önizləməsi**
+[`preview-feedback/w1/plan.md`](./plan.md) və dalğa izləyicisi girişi
+[`../../preview-invite-tracker.md`](../../preview-invite-tracker.md). Dəvət olanda onu yeniləyin
+göndərilir, telemetriya snapshot qeydə alınır və ya rəy elementi triajlanır ki, idarəetmə rəyçiləri təkrar oxuya bilsinlər
+xarici biletləri təqib etmədən sübut.
 
-## Cohort roster
+## Kohort siyahısı
 
-| Partner ID | Request ticket | NDA received | Invite sent (UTC) | Ack/first login (UTC) | Status | Notes |
+| Partnyor ID | Bilet tələb | NDA qəbul | Dəvət göndərildi (UTC) | Ack/ilk giriş (UTC) | Status | Qeydlər |
 | --- | --- | --- | --- | --- | --- | --- |
-| partner-w1-01 | `DOCS-SORA-Preview-REQ-P01` | ✅ 2025-04-03 | 2025-04-12 15:00 | 2025-04-12 15:11 | ✅ Completed 2025-04-26 | sorafs-op-01; focused on orchestrator doc parity evidence. |
-| partner-w1-02 | `DOCS-SORA-Preview-REQ-P02` | ✅ 2025-04-03 | 2025-04-12 15:03 | 2025-04-12 15:15 | ✅ Completed 2025-04-26 | sorafs-op-02; validated Norito/telemetry cross-links. |
-| partner-w1-03 | `DOCS-SORA-Preview-REQ-P03` | ✅ 2025-04-04 | 2025-04-12 15:06 | 2025-04-12 15:18 | ✅ Completed 2025-04-26 | sorafs-op-03; ran multi-source failover drills. |
-| partner-w1-04 | `DOCS-SORA-Preview-REQ-P04` | ✅ 2025-04-04 | 2025-04-12 15:09 | 2025-04-12 15:21 | ✅ Completed 2025-04-26 | torii-int-01; Torii `/v1/pipeline` + Try it cookbook review. |
-| partner-w1-05 | `DOCS-SORA-Preview-REQ-P05` | ✅ 2025-04-05 | 2025-04-12 15:12 | 2025-04-12 15:23 | ✅ Completed 2025-04-26 | torii-int-02; paired on Try it screenshot update (docs-preview/w1 #2). |
-| partner-w1-06 | `DOCS-SORA-Preview-REQ-P06` | ✅ 2025-04-05 | 2025-04-12 15:15 | 2025-04-12 15:26 | ✅ Completed 2025-04-26 | sdk-partner-01; JS/Swift cookbook feedback + ISO bridge sanity checks. |
-| partner-w1-07 | `DOCS-SORA-Preview-REQ-P07` | ✅ 2025-04-11 | 2025-04-12 15:18 | 2025-04-12 15:29 | ✅ Completed 2025-04-26 | sdk-partner-02; compliance cleared 2025-04-11, focused on Connect/telemetry notes. |
-| partner-w1-08 | `DOCS-SORA-Preview-REQ-P08` | ✅ 2025-04-11 | 2025-04-12 15:21 | 2025-04-12 15:33 | ✅ Completed 2025-04-26 | gateway-ops-01; audited gateway ops guide + anonymised Try it proxy flow. |
+| partnyor-w1-01 | `DOCS-SORA-Preview-REQ-P01` | ✅ 04-03-2025 | 2025-04-12 15:00 | 2025-04-12 15:11 | ✅ Tamamlanıb 26.04.2025 | sorafs-op-01; orchestrator doc parite sübutlarına diqqət yetirir. |
+| partnyor-w1-02 | `DOCS-SORA-Preview-REQ-P02` | ✅ 04-03-2025 | 2025-04-12 15:03 | 2025-04-12 15:15 | ✅ Tamamlanıb 26.04.2025 | sorafs-op-02; təsdiqlənmiş Norito/temetrik keçidlər. |
+| partnyor-w1-03 | `DOCS-SORA-Preview-REQ-P03` | ✅ 04-04-2025 | 2025-04-12 15:06 | 2025-04-12 15:18 | ✅ Tamamlanıb 26.04.2025 | sorafs-op-03; çoxmənbəli əvəzetmə təlimlərini həyata keçirdi. |
+| partnyor-w1-04 | `DOCS-SORA-Preview-REQ-P04` | ✅ 04-04-2025 | 2025-04-12 15:09 | 2025-04-12 15:21 | ✅ Tamamlanıb 26.04.2025 | torii-int-01; Torii `/v1/pipeline` + Kulinariya kitabını nəzərdən keçirin. |
+| partnyor-w1-05 | `DOCS-SORA-Preview-REQ-P05` | ✅ 04-05-2025 | 2025-04-12 15:12 | 2025-04-12 15:23 | ✅ Tamamlanıb 26.04.2025 | torii-int-02; Cütlənmiş Skrinşot yeniləməsini sınaqdan keçirin (docs-preview/w1 #2). |
+| partnyor-w1-06 | `DOCS-SORA-Preview-REQ-P06` | ✅ 04-05-2025 | 2025-04-12 15:15 | 2025-04-12 15:26 | ✅ Tamamlanıb 26.04.2025 | sdk-partner-01; JS/Swift yemək kitabı rəyi + ISO körpü ağlını yoxlayır. |
+| partnyor-w1-07 | `DOCS-SORA-Preview-REQ-P07` | ✅ 11.04.2025 | 2025-04-12 15:18 | 2025-04-12 15:29 | ✅ Tamamlanıb 26.04.2025 | sdk-partner-02; uyğunluq 2025-04-11 tarixində təmizləndi, Connect/telemetri qeydlərinə fokuslanıb. |
+| partnyor-w1-08 | `DOCS-SORA-Preview-REQ-P08` | ✅ 11.04.2025 | 2025-04-12 15:21 | 2025-04-12 15:33 | ✅ Tamamlanıb 26.04.2025 | Gateway-ops-01; yoxlanılmış şlüz əməliyyat təlimatı + anonim Proksi axınını sınayın. |
 
-Populate the **Invite sent** and **Ack** timestamps as soon as the outbound email is issued.
-Anchor the times to the UTC schedule defined in the W1 plan.
+Gedən e-poçt göndərilən kimi **Dəvət göndərildi** və **Ack** vaxt ştamplarını doldurun.
+Vaxtları W1 planında müəyyən edilmiş UTC cədvəlinə bağlayın.
 
-## Telemetry checkpoints
+## Telemetriya nəzarət məntəqələri
 
-| Timestamp (UTC) | Dashboards / probes | Owner | Result | Artefact |
+| Vaxt möhürü (UTC) | Tablolar / zondlar | Sahibi | Nəticə | Artefakt |
 | --- | --- | --- | --- | --- |
-| 2025-04-06 18:05 | `docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals` | Docs/DevRel + Ops | ✅ All green | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250406` |
-| 2025-04-06 18:20 | `npm run manage:tryit-proxy -- --stage preview-w1` transcript | Ops | ✅ Staged | `artifacts/docs_preview/W1/preview-2025-04-12/tryit/OPS-TRYIT-147.log` |
-| 2025-04-12 14:45 | `docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals`, `probe:portal` | Docs/DevRel + Ops | ✅ Pre-invite snapshot, no regressions | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250412` |
-| 2025-04-19 17:55 | Dashboards above + Try it proxy latency diff | Docs/DevRel lead | ✅ Midpoint check passed (0 alerts; Try it latency p95=410 ms) | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250419` |
-| 2025-04-26 16:25 | Dashboards above + exit probe | Docs/DevRel + Governance liaison | ✅ Exit snapshot, zero outstanding alerts | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250426` |
+| 2025-04-06 18:05 | `docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals` | Sənədlər/DevRel + Əməliyyatlar | ✅ Bütün yaşıl | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250406` |
+| 2025-04-06 18:20 | `npm run manage:tryit-proxy -- --stage preview-w1` transkript | Əməliyyat | ✅ Mərhələli | `artifacts/docs_preview/W1/preview-2025-04-12/tryit/OPS-TRYIT-147.log` |
+| 2025-04-12 14:45 | `docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals`, `probe:portal` | Sənədlər/DevRel + Əməliyyatlar | ✅ Əvvəlcədən dəvət snapshot, heç bir reqressiya | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250412` |
+| 2025-04-19 17:55 | Yuxarıdakı panellər + Bunu sınayın proxy gecikmə fərqi | Sənədlər/DevRel aparıcı | ✅ Orta nöqtə yoxlanışı keçdi (0 xəbərdarlıq; Bunu sınayın gecikmə p95=410ms) | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250419` |
+| 26-04-2025 16:25 | Yuxarıdakı idarə panelləri + çıxış zondu | Sənədlər/DevRel + İdarəetmə əlaqəsi | ✅ Snapshotdan çıxın, sıfır əlamətdar xəbərdarlıq | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250426` |
 
-Daily office-hour samples (2025-04-13 → 2025-04-25) are bundled as NDJSON + PNG exports under
-`artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/` with filenames
-`docs-preview-integrity-<date>.json` and corresponding screenshots.
+Gündəlik iş saatı nümunələri (2025-04-13 → 2025-04-25) NDJSON + PNG ixracı kimi paketlənir.
+Fayl adları ilə `artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/`
+`docs-preview-integrity-<date>.json` və müvafiq ekran görüntüləri.
 
-## Feedback & issue log
+## Rəy və problem jurnalı
 
-Use this table to summarise reviewer-submitted findings. Link each entry to the GitHub/discuss
-ticket plus the structured form captured via
+Rəyçi tərəfindən təqdim edilən nəticələri ümumiləşdirmək üçün bu cədvəldən istifadə edin. Hər girişi GitHub/müzakirə ilə əlaqələndirin
+bilet plus vasitəsilə ələ strukturlaşdırılmış forma
 [`docs/examples/docs_preview_feedback_form.md`](../../../../../examples/docs_preview_feedback_form.md).
 
-| Reference | Severity | Owner | Status | Notes |
+| İstinad | Ciddilik | Sahibi | Status | Qeydlər |
 | --- | --- | --- | --- | --- |
-| `docs-preview/w1 #1` | Low | Docs-core-02 | ✅ Resolved 2025-04-18 | Clarified Try it nav wording + sidebar anchor (`docs/source/sorafs/tryit.md` updated with new label). |
-| `docs-preview/w1 #2` | Low | Docs-core-03 | ✅ Resolved 2025-04-19 | Refreshed Try it screenshot + caption per reviewer request; artefact `artifacts/docs_preview/W1/preview-2025-04-12/feedback/partner-w1-05/screenshot-diff.png`. |
-| — | Info | Docs/DevRel lead | 🟢 Closed | Remaining comments were Q&A-only; captured in each partner’s feedback form under `artifacts/docs_preview/W1/preview-2025-04-12/feedback/`. |
+| `docs-preview/w1 #1` | Aşağı | Docs-core-02 | ✅ Qərar verilib 2025-04-18 | Aydınlaşdırıldı Bunu cəhd edin naviqasiya mətni + yan panel ankeri (`docs/source/sorafs/tryit.md` yeni etiketlə yeniləndi). |
+| `docs-preview/w1 #2` | Aşağı | Docs-core-03 | ✅ Qərar verilib 2025-04-19 | Yeniləndi Sınayın skrinşot + hər rəyçinin sorğusuna görə başlıq; artefakt `artifacts/docs_preview/W1/preview-2025-04-12/feedback/partner-w1-05/screenshot-diff.png`. |
+| — | Məlumat | Sənədlər/DevRel aparıcı | 🢢 Bağlıdır | Qalan şərhlər yalnız sual-cavab idi; `artifacts/docs_preview/W1/preview-2025-04-12/feedback/` altında hər bir tərəfdaşın rəy formasında qeyd olunur. |
 
-## Knowledge check & survey tracking
+## Biliyin yoxlanılması və sorğunun izlənməsi
 
-1. Record quiz scores (target ≥90 %) for every reviewer; attach the exported CSV alongside the
-   invite artefacts.
-2. Collect the qualitative survey answers captured with the feedback form template and mirror them
-   under `artifacts/docs_preview/W1/preview-2025-04-12/surveys/`.
-3. Schedule remediation calls for anyone scoring below threshold and log them in this file.
+1. Hər rəyçi üçün viktorina xallarını qeyd edin (hədəf ≥90%); ilə yanaşı ixrac edilmiş CSV-ni əlavə edin
+   artefaktları dəvət edin.
+2. Əlaqə forması şablonu ilə əldə edilmiş keyfiyyətli sorğu cavablarını toplayın və onları əks etdirin
+   `artifacts/docs_preview/W1/preview-2025-04-12/surveys/` altında.
+3. Həddən aşağı bal toplayan hər kəs üçün düzəliş çağırışlarını planlaşdırın və onları bu fayla daxil edin.
 
-All eight reviewers scored ≥94 % on the knowledge check (CSV:
-`artifacts/docs_preview/W1/preview-2025-04-12/feedback/w1-quiz-scores.csv`). No remediation calls
-were required; survey exports for each partner live under
+Bütün səkkiz rəyçi bilik yoxlamasında ≥94% bal toplayıb (CSV:
+`artifacts/docs_preview/W1/preview-2025-04-12/feedback/w1-quiz-scores.csv`). Təmizləmə zəngləri yoxdur
+tələb olunurdu; Hər bir tərəfdaş üçün ixrac anketi altında yaşayır
 `artifacts/docs_preview/W1/preview-2025-04-12/surveys/<partner-id>/summary.json`.
 
-## Artefact inventory
+## Artefakt inventar
 
-- Preview descriptor/checksum bundle: `artifacts/docs_preview/W1/preview-2025-04-12/descriptor.json`
-- Probe + link-check summary: `artifacts/docs_preview/W1/preview-2025-04-12/preflight-summary.json`
-- Try it proxy change log: `artifacts/docs_preview/W1/preview-2025-04-12/tryit/OPS-TRYIT-147.log`
-- Telemetry exports: `artifacts/docs_preview/W1/preview-2025-04-12/grafana/<date>/`
-- Daily office-hour telemetry bundle: `artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/`
-- Feedback + survey exports: place reviewer-specific folders under
+- İlkin baxış deskriptoru/yoxlama məbləği paketi: `artifacts/docs_preview/W1/preview-2025-04-12/descriptor.json`
+- Prob + keçid-yoxlama xülasəsi: `artifacts/docs_preview/W1/preview-2025-04-12/preflight-summary.json`
+- Proksi dəyişdirmə jurnalını sınayın: `artifacts/docs_preview/W1/preview-2025-04-12/tryit/OPS-TRYIT-147.log`
+- Telemetriya ixracı: `artifacts/docs_preview/W1/preview-2025-04-12/grafana/<date>/`
+- Gündəlik iş saatı telemetriya paketi: `artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/`
+- Rəy + sorğu ixracı: rəyçi üçün xüsusi qovluqları altında yerləşdirin
   `artifacts/docs_preview/W1/preview-2025-04-12/feedback/<partner-id>/`
-- Knowledge check CSV and summary: `artifacts/docs_preview/W1/preview-2025-04-12/feedback/w1-quiz-scores.csv`
+- Bilik yoxlaması CSV və xülasə: `artifacts/docs_preview/W1/preview-2025-04-12/feedback/w1-quiz-scores.csv`
 
-Keep the inventory in sync with the tracker issue. Attach hashes when copying artefacts to the
-governance ticket so auditors can verify the files without shell access.
+İnventarizasiyanı izləyici problemi ilə sinxronlaşdırın. Artefaktları kopyalayarkən heşlər əlavə edin
+idarəetmə bileti beləliklə, auditorlar qabıq girişi olmadan faylları yoxlaya bilsinlər.

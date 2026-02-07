@@ -16840,6 +16840,7 @@ impl<'state> StateBlock<'state> {
         self.refresh_merge_metadata_from_latest_entry();
 
         let prev_topology = self.commit_topology.take_vec();
+        let prev_topology_for_derivation = prev_topology.clone();
         self.prev_commit_topology
             .mutate_vec(|vec| *vec = prev_topology);
         let checkpoint_topology = topology;
@@ -16882,7 +16883,14 @@ impl<'state> StateBlock<'state> {
         } else {
             // Always derive commit topology from a deterministic roster source to avoid
             // clearing the roster when commit QC metadata is unavailable.
-            let mut topo = crate::sumeragi::network_topology::Topology::new(roster_source.clone());
+            let rotation_base = if !prev_topology_for_derivation.is_empty() {
+                prev_topology_for_derivation
+            } else if !checkpoint_topology.is_empty() {
+                checkpoint_topology.clone()
+            } else {
+                roster_source.clone()
+            };
+            let mut topo = crate::sumeragi::network_topology::Topology::new(rotation_base);
             topo.block_committed(roster_source, block_hash);
             topo.as_ref().to_vec()
         };

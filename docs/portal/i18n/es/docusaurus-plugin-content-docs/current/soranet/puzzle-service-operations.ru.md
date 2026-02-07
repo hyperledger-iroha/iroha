@@ -4,49 +4,49 @@ direction: ltr
 source: docs/portal/docs/soranet/puzzle-service-operations.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: puzzle-service-operations
-title: Руководство по эксплуатации Puzzle Service
-sidebar_label: Puzzle Service Ops
-description: Эксплуатация daemon `soranet-puzzle-service` для Argon2/ML-DSA admission tickets.
+id: operaciones-de-servicio-de-rompecabezas
+título: Руководство по эксплуатации Servicio de rompecabezas
+sidebar_label: Operaciones de servicio de rompecabezas
+descripción: Эксплуатация daemon `soranet-puzzle-service` para boletos de admisión Argon2/ML-DSA.
 ---
 
-:::note Канонический источник
+:::nota Канонический источник
 :::
 
-# Руководство по эксплуатации Puzzle Service
+# Руководство по эксплуатации Servicio de rompecabezas
 
 Daemon `soranet-puzzle-service` (`tools/soranet-puzzle-service/`) выпускает
-Argon2-backed admission tickets, которые отражают policy `pow.puzzle.*` у relay
-и, когда настроено, брокерит ML-DSA admission tokens от имени edge relays.
-Он предоставляет пять HTTP endpoints:
+Boletos de admisión respaldados por Argon2, según la política `pow.puzzle.*` у retransmisión
+Y, por lo general, bloquea los tokens de admisión ML-DSA o los relés de borde.
+Cómo configurar puntos finales HTTP:
 
-- `GET /healthz` - liveness probe.
+- `GET /healthz` - sonda de vida.
 - `GET /v1/puzzle/config` - возвращает эффективные параметры PoW/puzzle,
-  считанные из relay JSON (`handshake.descriptor_commit_hex`, `pow.*`).
-- `POST /v1/puzzle/mint` - выпускает Argon2 ticket; optional JSON body
+  Utilice el relé JSON (`handshake.descriptor_commit_hex`, `pow.*`).
+- `POST /v1/puzzle/mint` - выпускает billete Argon2; cuerpo JSON opcional
   `{ "ttl_secs": <u64>, "transcript_hash_hex": "<32-byte hex>", "signed": true }`
-  запрашивает более короткий TTL (clamped к policy window), привязывает ticket
-  к transcript hash и возвращает relay-signed ticket + signature fingerprint
-  при наличии signing keys.
+  запрашивает более короткий TTL (ventana de política sujeta k), привязывает ticket
+  к hash de transcripción и возвращает boleto firmado por retransmisión + huella digital de firma
+  при наличии firma de claves.
 - `GET /v1/token/config` - когда `pow.token.enabled = true`, возвращает активную
-  admission-token policy (issuer fingerprint, TTL/clock-skew bounds, relay ID,
-  и merged revocation set).
-- `POST /v1/token/mint` - выпускает ML-DSA admission token, связанный с supplied
-  resume hash; body принимает `{ "transcript_hash_hex": "...", "ttl_secs": <u64>, "flags": <u8> }`.
-
-Tickets, выпущенные сервисом, проверяются в интеграционном тесте
+  política de token de admisión (huella digital del emisor, límites TTL/desviación del reloj, ID de retransmisión,
+  y conjunto de revocación fusionado).
+- `POST /v1/token/mint` - token de admisión ML-DSA de выпускает, incluido en el suministro
+  reanudar el hash; cuerpo принимает `{ "transcript_hash_hex": "...", "ttl_secs": <u64>, "flags": <u8> }`.Entradas, servicios exclusivos, pruebas integradas
 `volumetric_dos_soak_preserves_puzzle_and_latency_slo`, который также
-упражняет relay throttles во время volumetric DoS сценариев.【tools/soranet-relay/tests/adaptive_and_puzzle.rs:337】
+упражняет aceleradores de relé во время volumétricos DoS сценариев.【tools/soranet-relay/tests/adaptive_and_puzzle.rs:337】
 
 ## Настройка выпуска токенов
 
-Задайте поля relay JSON под `pow.token.*` (см.
-`tools/soranet-relay/deploy/config/relay.entry.json` как пример), чтобы
-включить ML-DSA tokens. Минимально предоставьте issuer public key и optional
-revocation list:
+Задайте поля rele JSON под `pow.token.*` (см.
+`tools/soranet-relay/deploy/config/relay.entry.json` (primero), чтобы
+включить tokens ML-DSA. Clave pública del emisor mínima previa y opcional
+lista de revocación:
 
 ```json
 "pow": {
@@ -59,13 +59,13 @@ revocation list:
 }
 ```
 
-Puzzle service повторно использует эти значения и автоматически перезагружает
-Norito JSON файл revocation в runtime. Используйте CLI `soranet-admission-token`
+Servicio de rompecabezas повторно использует эти значения автоматически перезагружает
+Norito Revocación de archivo JSON en tiempo de ejecución. Utilice CLI `soranet-admission-token`
 (`cargo run -p soranet-relay --bin soranet_admission_token`) чтобы выпускать и
-проверять tokens offline, добавлять `token_id_hex` entries в revocation файл и
-проводить audit существующих credentials до публикации updates в production.
+verificar tokens fuera de línea, agregar entradas `token_id_hex` en un archivo de revocación y
+Proporcionar credenciales de auditoría para actualizaciones de publicaciones en producción.
 
-Передайте issuer secret key в puzzle service через CLI flags:
+Consulte la clave secreta del emisor en el servicio de rompecabezas con las banderas CLI:
 
 ```bash
 cargo run -p soranet-puzzle-service -- \
@@ -75,81 +75,71 @@ cargo run -p soranet-puzzle-service -- \
   --token-revocation-refresh-secs 60
 ```
 
-`--token-secret-hex` доступен, когда secret управляется out-of-band tooling
-pipeline. Revocation file watcher держит `/v1/token/config` актуальным;
+`--token-secret-hex` доступен, когда secret управляется herramientas fuera de banda
+tubería. Vigilante de archivos de revocación держит `/v1/token/config` актуальным;
 координируйте обновления с командой `soranet-admission-token revoke`, чтобы
-избежать отставания revocation state.
-
-Установите `pow.signed_ticket_public_key_hex` в relay JSON, чтобы объявить
-ML-DSA-44 public key для проверки signed PoW tickets; `/v1/puzzle/config` эхо
-возвращает key и его BLAKE3 fingerprint (`signed_ticket_public_key_fingerprint_hex`),
-чтобы clients могли pin-ить verifier. Signed tickets проверяются по relay ID и
-transcript bindings и используют тот же revocation store; raw 74-byte PoW tickets
-остаются валидными при настроенном signed-ticket verifier. Передайте signer secret
-через `--signed-ticket-secret-hex` или `--signed-ticket-secret-path` при запуске
-puzzle service; старт отклонит несоответствующие keypairs, если secret не валидируется
-против `pow.signed_ticket_public_key_hex`. `POST /v1/puzzle/mint` принимает
-`"signed": true` (и optional `"transcript_hash_hex"`) чтобы вернуть
-Norito-encoded signed ticket вместе с raw ticket bytes; ответы включают
-`signed_ticket_b64` и `signed_ticket_fingerprint_hex` для отслеживания replay fingerprints.
+избежать отставания estado de revocación.Instale `pow.signed_ticket_public_key_hex` en el relé JSON, чтобы объявить
+Clave pública ML-DSA-44 para tickets PoW firmados; `/v1/puzzle/config` эхо
+llave de voz y huella digital BLAKE3 (`signed_ticket_public_key_fingerprint_hex`),
+чтобы clientes могли pin-ить verificador. Boletos firmados проверяются по ID de retransmisión и
+enlaces de transcripciones y aplicaciones en el almacén de revocación; tickets PoW sin procesar de 74 bytes
+остаются валидными при настроенном verificador de boletos firmados. Передайте secreto del firmante
+por `--signed-ticket-secret-hex` o `--signed-ticket-secret-path` por cierre
+servicio de rompecabezas; START отклонит несоответствующие keypairs, если secret не валидируется
+против `pow.signed_ticket_public_key_hex`. `POST /v1/puzzle/mint` modelo
+`"signed": true` (y opcional `"transcript_hash_hex"`) чтобы вернуть
+El ticket firmado con codificación Norito contiene bytes del ticket sin procesar; ответы включают
+`signed_ticket_b64` y `signed_ticket_fingerprint_hex` para reproducir huellas dactilares.
 Запросы с `signed = true` отклоняются, если signer secret не настроен.
 
-## Playbook ротации ключей
-
-1. **Соберите новый descriptor commit.** Governance публикует relay descriptor
-   commit в directory bundle. Скопируйте hex string в `handshake.descriptor_commit_hex`
-   внутри relay JSON конфигурации, которой пользуется puzzle service.
-2. **Проверьте bounds policy puzzle.** Подтвердите, что обновленные значения
-   `pow.puzzle.{memory_kib,time_cost,lanes}` соответствуют release плану. Операторы
-   должны держать Argon2 конфигурацию детерминированной между relays (минимум 4 MiB
-   памяти, 1 <= lanes <= 16).
-3. **Подготовьте рестарт.** Перезагрузите systemd unit или container после того, как
-   governance объявит rotation cutover. Сервис не поддерживает hot-reload; для
-   применения нового descriptor commit требуется restart.
-4. **Провалидируйте.** Выпустите ticket через `POST /v1/puzzle/mint` и подтвердите,
-   что `difficulty` и `expires_at` соответствуют новой policy. Soak report
-   (`docs/source/soranet/reports/pow_resilience.md`) содержит ожидаемые latency bounds
+## Libro de jugadas ротации ключей1. ** Соберите новый confirmación del descriptor. ** Descriptor de retransmisión de gobernanza pública
+   confirmar en paquete de directorio. Скопируйте cadena hexadecimal en `handshake.descriptor_commit_hex`
+   внутри retransmisión JSON конфигурации, которой пользуется servicio de rompecabezas.
+2. **Acertijo de política de límites.** Подтвердите, что обновленные значения
+   `pow.puzzle.{memory_kib,time_cost,lanes}` соответствуют plan de lanzamiento. Operadores
+   должны держать Argon2 конфигурацию детерминированной между relés (mínimo 4 MiB
+   памяти, 1 <= carriles <= 16).
+3. **Reiniciar.** Coloque la unidad systemd o el contenedor después de esto, como
+   gobernanza объявит corte de rotación. Сервис не поддерживает hot-reload; для
+   применения нового descriptor commit требуется reiniciar.
+4. **Провалидируйте.** Compre el billete con `POST /v1/puzzle/mint` y envíelo,
+   что `difficulty` e `expires_at` son nuevas políticas. Informe de remojo
+   (`docs/source/soranet/reports/pow_resilience.md`) содержит ожидаемые límites de latencia
    для справки. Когда tokens включены, запросите `/v1/token/config`, чтобы убедиться,
-   что advertised issuer fingerprint и revocation count соответствуют ожидаемым значениям.
+   что la huella digital del emisor anunciado y el recuento de revocación соответствуют ожидаемым значениям.
 
-## Emergency disable процедура
-
-1. Установите `pow.puzzle.enabled = false` в общей relay конфигурации. Оставьте
-   `pow.required = true`, если hashcash fallback tickets должны оставаться обязательными.
-2. Опционально примените `pow.emergency` entries, чтобы отклонять устаревшие
-   descriptors пока Argon2 gate offline.
-3. Перезапустите relay и puzzle service, чтобы применить изменение.
-4. Мониторьте `soranet_handshake_pow_difficulty`, чтобы убедиться, что сложность
-   упала до ожидаемого hashcash значения, и проверьте, что `/v1/puzzle/config`
+## Procedimiento de desactivación de emergencia1. Instale `pow.puzzle.enabled = false` en otras configuraciones de relé. Оставьте
+   `pow.required = true`, otros tickets de reserva de hashcash que están disponibles.
+2. Opcionalmente, introduzca las entradas `pow.emergency`, para evitar el uso de usuarios.
+   descriptores пока Puerta Argon2 fuera de línea.
+3. Перезапустите retransmisión y servicio de rompecabezas, чтобы применить изменение.
+4. Monitoree `soranet_handshake_pow_difficulty`, чтобы убедиться, что сложность
+   упала до ожидаемого hashcash значения, and проверьте, что `/v1/puzzle/config`
    сообщает `puzzle = null`.
 
-## Monitoring и alerting
-
-- **Latency SLO:** Отслеживайте `soranet_handshake_latency_seconds` и держите P95
-  ниже 300 ms. Soak test offsets дают calibration data для guard throttles.
+## Monitoreo y alerta- **Latencia SLO:** Seleccione `soranet_handshake_latency_seconds` y deje P95.
+  menos de 300 ms. Compensaciones de prueba de remojo de datos de calibración de aceleradores de protección.
   【docs/source/soranet/reports/pow_resilience.md:1】
-- **Quota pressure:** Используйте `soranet_guard_capacity_report.py` с relay metrics
-  для настройки `pow.quotas` cooldowns (`soranet_abuse_remote_cooldowns`,
+- **Presión de cuota:** Используйте `soranet_guard_capacity_report.py` con métricas de relé
+  для настройки `pow.quotas` tiempos de reutilización (`soranet_abuse_remote_cooldowns`,
   `soranet_handshake_throttled_remote_quota_total`).【docs/source/soranet/relay_audit_pipeline.md:68】
-- **Puzzle alignment:** `soranet_handshake_pow_difficulty` должен совпадать с
-  difficulty из `/v1/puzzle/config`. Дивергенция указывает на stale relay config
-  или неудачный restart.
-- **Token readiness:** Alert, если `/v1/token/config` неожиданно падает до
-  `enabled = false` или `revocation_source` сообщает stale timestamps. Операторы
-  должны ротировать Norito revocation file через CLI при выводе токена, чтобы
-  endpoint оставался точным.
-- **Service health:** Пробуйте `/healthz` в обычной liveness cadence и alert,
-  если `/v1/puzzle/mint` возвращает HTTP 500 (указывает на Argon2 parameter mismatch
-  или RNG failures). Ошибки token minting проявляются как HTTP 4xx/5xx на
-  `/v1/token/mint`; повторяющиеся сбои следует считать paging condition.
+- **Alineación del rompecabezas:** `soranet_handshake_pow_difficulty` должен совпадать с
+  dificultad из `/v1/puzzle/config`. Divergente configuración de retransmisión obsoleta
+  или неудачный reiniciar.
+- **Preparación del token:** Alerta, если `/v1/token/config` неожиданно падает до
+  `enabled = false` o `revocation_source` incluyen marcas de tiempo obsoletas. Operadores
+  должны ротировать Norito archivo de revocación через CLI при выводе токена, чтобы
+  punto final оставался точным.
+- **Estado del servicio:** Pruebe `/healthz` en cadencia de vida y alerta,
+  o `/v1/puzzle/mint` envía HTTP 500 (desajustado por falta de coincidencia de parámetros de Argon2)
+  o fallos del RNG). Ошибки token acuñación проявляются как HTTP 4xx/5xx en
+  `/v1/token/mint`; повторяющиеся сбои следует считать condición de paginación.
 
-## Compliance и audit logging
-
-Relays публикуют структурированные `handshake` events, включающие throttle reasons
-и cooldown durations. Убедитесь, что compliance pipeline из
-`docs/source/soranet/relay_audit_pipeline.md` поглощает эти logs, чтобы изменения
-puzzle policy оставались auditables. Когда puzzle gate включен, архивируйте
-образцы minted tickets и Norito configuration snapshot вместе с rollout ticket
-для будущих audits. Admission tokens, выпущенные перед maintenance windows,
-следует отслеживать по `token_id_hex` и добавлять в revocation файл после
+## Cumplimiento y registro de auditoríaRelés публикуют структурированные `handshake` eventos, включающие razones del acelerador
+y duraciones de enfriamiento. Убедитесь, что proceso de cumplimiento из
+`docs/source/soranet/relay_audit_pipeline.md` registra estos registros y características
+política de rompecabezas оставались auditables. Когда puzzle gate включен, архивируйте
+образцы tickets acuñados y instantánea de configuración Norito junto con ticket de implementación
+для будущих auditorías. Fichas de admisión, ventanas de mantenimiento previas,
+cerrar el archivo de revocación `token_id_hex` y agregarlo al archivo de revocación
 истечения или отзыва.

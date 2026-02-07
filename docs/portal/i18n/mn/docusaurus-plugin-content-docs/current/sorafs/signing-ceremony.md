@@ -8,61 +8,63 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: Signing Ceremony Replacement
 description: How the Sora Parliament approves and distributes SoraFS chunker fixtures (SF-1b).
 sidebar_label: Signing Ceremony
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-> Roadmap: **SF-1b — Sora Parliament fixture approvals.**
+> Замын зураг: **SF-1b — Сора Парламентын хуралдааны батламж.**
 
-The manual signing ritual used for SoraFS chunker fixtures is retired. All
-approvals now flow through the **Sora Parliament**, the sortition-based DAO that
-governs Nexus. Parliament members bond XOR to gain citizenship, rotate across
-panels, and cast on-chain votes that approve, reject, or roll back fixture
-releases. This guide explains the process and developer tooling.
+SoraFS chunker бэхэлгээнд ашигладаг гарын үсэг зурах зан үйлийг зогсоосон. Бүгд
+Зөвшөөрөл нь одоо **Сора Парламент**-аар дамждаг бөгөөд энэ нь ангилалд суурилсан DAO юм
+Nexus удирддаг. УИХ-ын гишүүд иргэншилтэй болохын тулд XOR-ыг бонд, эргүүлэх
+самбар, мөн бэхэлгээг батлах, няцаах эсвэл буцаах гинжин санал өгөх
+гаргадаг. Энэхүү гарын авлага нь процесс болон хөгжүүлэгчийн хэрэгслийг тайлбарладаг.
 
-## Parliament overview
+## Парламентын тойм
 
-- **Citizenship** — Operators bond the required XOR to enrol as citizens and
-  become eligible for sortition.
-- **Panels** — Responsibilities are split across rotating panels (Infrastructure,
-  Moderation, Treasury, …). The Infrastructure Panel owns SoraFS fixture
-  approvals.
-- **Sortition & rotation** — Panel seats are re-drawn at the cadence specified in
-  the Parliament constitution so no single group monopolises approvals.
+- **Иргэншил** — Операторууд иргэн болон элсэхийн тулд шаардлагатай XOR-г баталгаажуулдаг
+  ангилах эрхтэй болно.
+- ** Самбар** - Хариуцлагыг эргэдэг самбаруудад хуваадаг (Дэд бүтэц,
+  Зохицуулалт, Төрийн сан, ...). Дэд бүтцийн самбар нь SoraFS төхөөрөмжийг эзэмшдэг
+  зөвшөөрөл.
+- **Ангилах & эргүүлэх** — Самбарын суудлуудыг заасан хэмжүүрээр дахин зурна
+  УИХ-ын үндсэн хууль болохоор нэг ч бүлэг дангаараа батлахгүй.
 
-## Fixture approval flow
+## Бэхэлгээний зөвшөөрлийн урсгал
 
-1. **Proposal submission**
-   - The Tooling WG uploads the candidate `manifest_blake3.json` bundle plus
-     fixture diff to the on-chain registry via `sorafs.fixtureProposal`.
-   - The proposal records the BLAKE3 digest, semantic version, and change notes.
-2. **Review & voting**
-   - The Infrastructure Panel receives the assignment through the Parliament task
-     queue.
-   - Panel members inspect CI artefacts, run parity tests, and cast weighted
-     votes on-chain.
-3. **Finalisation**
-   - Once quorum is met, the runtime emits an approval event that includes the
-     canonical manifest digest and Merkle commitment to the fixture payload.
-   - The event is mirrored into the SoraFS registry so clients can fetch the
-     latest Parliament-approved manifest.
-4. **Distribution**
-   - CLI helpers (`cargo xtask sorafs-fetch-fixture`) pull the approved manifest
-     from Nexus RPC. The repository’s JSON/TS/Go constants stay in sync by
-     re-running `export_vectors` and validating the digest against the on-chain
-     record.
+1. **Санал оруулах**
+   - Багажны АЖ нь нэр дэвшигч `manifest_blake3.json` багц нэмэхийг байршуулдаг
+     бэхэлгээ нь `sorafs.fixtureProposal`-ээр дамжуулан сүлжээний бүртгэлээс ялгаатай.
+   - Санал нь BLAKE3 тойм, семантик хувилбар, өөрчлөлтийн тэмдэглэлийг бүртгэдэг.
+2. **Хяналт, санал хураалт**
+   - УИХ-ын даалгавраар дамжуулан Дэд бүтцийн зөвлөл даалгавар авдаг
+     дараалал.
+   - Самбарын гишүүд CI олдворуудыг шалгаж, паритет тест хийж, жигнэсэн цутгамал хийдэг
+     гинжин хэлхээнд санал өгдөг.
+3. **Төгсгөл**
+   - Чуулга хангагдсаны дараа ажиллах хугацаа нь зөвшөөрлийн үйл явдлыг гаргадаг
+     каноник манифест дижест ба бэхэлгээний ачааллын Merkle амлалт.
+   - Үйл явдал нь SoraFS бүртгэлд тусгагдсан тул үйлчлүүлэгчид
+     Хамгийн сүүлд УИХ-аас баталсан манифест.
+4. **Хуваарилалт**
+   - CLI туслахууд (`cargo xtask sorafs-fetch-fixture`) батлагдсан манифестийг татдаг
+     Nexus RPC-ээс. Хадгалах сангийн JSON/TS/Go тогтмолууд нь синхрончлолд үлддэг
+     `export_vectors`-г дахин ажиллуулж, гинжин хэлхээний дагуу боловсруулалтыг баталгаажуулж байна
+     бичлэг.
 
-## Developer workflow
+## Хөгжүүлэгчийн ажлын урсгал
 
-- Regenerate fixtures with:
+- Дараахын тусламжтайгаар бэхэлгээг сэргээнэ үү.
 
 ```bash
 cargo run -p sorafs_chunker --bin export_vectors
 ```
 
-- Use the Parliament fetch helper to download the approved envelope, verify
-  signatures, and refresh local fixtures. Point `--signatures` at the
-  Parliament-published envelope; the helper resolves the accompanying manifest,
-  recomputes the BLAKE3 digest, and enforces the canonical
-  `sorafs.sf1@1.0.0` profile.
+- Зөвшөөрөгдсөн дугтуйг татаж авахын тулд УИХ-ын татах туслахыг ашиглана уу
+  гарын үсэг зурж, орон нутгийн бэхэлгээг шинэчлэх. `--signatures` цэг дээр
+  УИХ-аас хэвлэсэн дугтуй; Туслагч нь дагалдах манифестийг шийдэж,
+  BLAKE3 дижестийг дахин тооцоолж, каноникийг хэрэгжүүлдэг
+  `sorafs.sf1@1.0.0` профайл.
 
 ```bash
 cargo xtask sorafs-fetch-fixture \
@@ -70,11 +72,11 @@ cargo xtask sorafs-fetch-fixture \
   --out fixtures/sorafs_chunker
 ```
 
-Pass `--manifest` if the manifest lives at a different URL. Unsigned envelopes
-are refused unless `--allow-unsigned` is set for local smoke runs.
+Хэрэв манифест өөр URL дээр амьдардаг бол `--manifest`-г дамжуулна уу. Гарын үсэг зураагүй дугтуйнууд
+`--allow-unsigned`-г орон нутгийн утааны урсгалд тохируулаагүй тохиолдолд татгалзана.
 
-- When validating a manifest through a staging gateway, target Torii instead of
-  local payloads:
+- Тайлбарын гарцаар дамжуулан манифестийг баталгаажуулахдаа Torii-ийн оронд зорилтот
+  орон нутгийн ачаалал:
 
 ```bash
 sorafs-fetch \
@@ -85,31 +87,31 @@ sorafs-fetch \
   --json-out=reports/staging_gateway.json
 ```
 
-- Local CI no longer requires a `signer.json` roster.
-  `ci/check_sorafs_fixtures.sh` compares the repo state against the latest
-  on-chain commitment and fails when they diverge.
+- Орон нутгийн CI-д `signer.json` жагсаалт шаардлагагүй болсон.
+  `ci/check_sorafs_fixtures.sh` репо төлөвийг хамгийн сүүлийн үеийнхтэй харьцуулдаг
+  гинжин хэлхээн дэх амлалт ба тэд зөрөх үед бүтэлгүйтдэг.
 
-## Governance notes
+## Засаглалын тэмдэглэл
 
-- The Parliament constitution governs quorum, rotation, and escalation—no
-  crate-level configuration is needed.
-- Emergency rollbacks are handled through the Parliament moderation panel. The
-  Infrastructure Panel files a revert proposal referencing the prior manifest
-  digest, which replaces the release once approved.
-- Historical approvals remain available in the SoraFS registry for forensic
-  replay.
+- УИХ-ын үндсэн хууль нь ирц, ротаци, хурцадмал байдлыг зохицуулдаг—үгүй
+  хайрцагны түвшний тохиргоо шаардлагатай.
+- Яаралтай буцаах асуудлыг УИХ-ын зохицуулах зөвлөлөөр дамжуулан шийдвэрлэдэг. The
+  Дэд бүтцийн самбар нь өмнөх манифестийг иш татсан буцаах саналыг илгээдэг
+  батлагдсаны дараа хувилбарыг орлуулдаг digest.
+- Шүүхийн шинжилгээний SoraFS бүртгэлийн түүхэн зөвшөөрлүүд хэвээр байна.
+  дахин тоглуулах.
 
-## FAQ
+## Түгээмэл асуултууд
 
-- **Where did `signer.json` go?**  
-  It was removed. All signer attribution lives on-chain; `manifest_signatures.json`
-  in the repository is only a developer fixture that must match the latest
-  approval event.
+- **`signer.json` хаашаа явсан бэ?**  
+  Үүнийг хассан. Бүх гарын үсэг зурсан аттрибутууд гинжин хэлхээнд амьдардаг; `manifest_signatures.json`
+  репозитор нь зөвхөн хамгийн сүүлийн үеийнхтэй тохирч байх ёстой хөгжүүлэгчийн хэрэгсэл юм
+  батлах үйл явдал.
 
-- **Do we still require local Ed25519 signatures?**  
-  No. Parliament approvals are stored as on-chain artefacts. Local fixtures exist
-  for reproducibility but are validated against the Parliament digest.
+- **Бидэнд орон нутгийн Ed25519 гарын үсэг шаардлагатай хэвээр байна уу?**  
+  Үгүй УИХ-ын зөвшөөрлийг гинжин хэлхээний олдвор болгон хадгалдаг. Орон нутгийн бэхэлгээ байдаг
+  хуулбарлах боломжтой боловч УИХ-ын тоймтой нийцүүлэн баталгаажуулсан.
 
-- **How do teams monitor approvals?**  
-  Subscribe to the `ParliamentFixtureApproved` event or query the registry via
-  Nexus RPC to retrieve the current manifest digest and panel roll call.
+- **Багууд зөвшөөрлийг хэрхэн хянадаг вэ?**  
+  `ParliamentFixtureApproved` арга хэмжээнд бүртгүүлэх эсвэл бүртгэлээс лавлана уу
+  Nexus RPC одоогийн манифест дижест болон самбарын дуудлагыг сэргээх.

@@ -4,49 +4,51 @@ direction: ltr
 source: docs/portal/docs/devportal/preview-feedback/w1/summary.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: preview-feedback-w1-summary
-title: Resumen de feedback y cierre W1
-sidebar_label: Resumen W1
-description: Hallazgos, acciones y evidencia de cierre para la ola de preview de partners e integradores Torii.
+идентификатор: предварительный просмотр-обратная связь-w1-сводка
+title: Резюме отзывов и сообщений W1
+Sidebar_label: Резюме W1
+описание: Hallazgos, акции и доказательства cierre для предварительного просмотра партнеров и интеграторов Torii.
 ---
 
-| Item | Detalles |
+| Товар | Подробности |
 | --- | --- |
-| Ola | W1 - Partners e integradores de Torii |
-| Ventana de invitacion | 2025-04-12 -> 2025-04-26 |
-| Tag de artefacto | `preview-2025-04-12` |
-| Issue del tracker | `DOCS-SORA-Preview-W1` |
-| Participantes | sorafs-op-01...03, torii-int-01...02, sdk-partner-01...02, gateway-ops-01 |
+| Ола | W1 - Партнеры и интеграторы Torii |
+| Приглашение | 12.04.2025 -> 26.04.2025 |
+| Тег артефакта | `preview-2025-04-12` |
+| Проблема с трекером | `DOCS-SORA-Preview-W1` |
+| Участники | sorafs-op-01...03, torii-int-01...02, sdk-partner-01...02, шлюз-ops-01 |
 
-## Destacados
+## Дестакадос
 
-1. **Flujo de checksum** - Todos los reviewers verificaron el descriptor/archive via `scripts/preview_verify.sh`; los logs se guardaron junto a los acuses de invitacion.
-2. **Telemetria** - Los dashboards `docs.preview.integrity`, `TryItProxyErrors` y `DocsPortal/GatewayRefusals` se mantuvieron en verde durante toda la ola; no hubo incidentes ni paginas de alerta.
-3. **Feedback de docs (`docs-preview/w1`)** - Se registraron dos nits menores:
-   - `docs-preview/w1 #1`: aclarar wording de navegacion en la seccion Try it (resuelto).
-   - `docs-preview/w1 #2`: actualizar screenshot de Try it (resuelto).
-4. **Paridad de runbooks** - Operadores de SoraFS confirmaron que los nuevos cross-links entre `orchestrator-ops` y `multi-source-rollout` resolvieron sus preocupaciones de W0.
+1. **Flujo de checksum** — все рецензенты проверяют дескриптор/архив через `scripts/preview_verify.sh`; Лос-логи будут охраняться вместе с поводами для приглашения.
+2. **Телеметрия** — панели мониторинга `docs.preview.integrity`, `TryItProxyErrors` и `DocsPortal/GatewayRefusals` будут работать в течение всего времени; никаких инцидентов и страниц оповещения.
+3. **Отзыв о документах (`docs-preview/w1`)** – При регистрации следующих сообщений:
+   - `docs-preview/w1 #1`: ясная формулировка навигации в разделе Попробуйте (результат).
+   - `docs-preview/w1 #2`: актуализировать скриншот «Попробуй» (результат).
+4. **Paridad de runbooks** — операции SoraFS подтверждают новые перекрестные ссылки между `orchestrator-ops` и `multi-source-rollout`, разрешающие проблемы W0.
 
-## Acciones
+## Действия
 
-| ID | Descripcion | Responsable | Estado |
+| удостоверение личности | Описание | Ответственный | Эстадо |
 | --- | --- | --- | --- |
-| W1-A1 | Actualizar wording de navegacion de Try it segun `docs-preview/w1 #1`. | Docs-core-02 | Completado (2025-04-18). |
-| W1-A2 | Actualizar screenshot de Try it segun `docs-preview/w1 #2`. | Docs-core-03 | Completado (2025-04-19). |
-| W1-A3 | Resumir hallazgos de partners y evidencia de telemetria en roadmap/status. | Docs/DevRel lead | Completado (ver tracker + status.md). |
+| W1-A1 | Актуализирована формулировка навигации «Попробуйте в следующем `docs-preview/w1 #1`». | Документы-core-02 | Завершено (18 апреля 2025 г.). |
+| W1-A2 | Обновить скриншот Try it segun `docs-preview/w1 #2`. | Документы-core-03 | Завершено (19 апреля 2025 г.). |
+| W1-A3 | Резюме партнеров и доказательств телеметрии в дорожной карте/статусе. | Руководитель отдела документации и разработки | Завершено (версия трекера + status.md). |
 
-## Resumen de cierre (2025-04-26)
+## Резюме cierre (26 апреля 2025 г.)
 
-- Los ocho reviewers confirmaron finalizacion durante las office hours finales, limpiaron artefactos locales y se revoco su acceso.
-- La telemetria se mantuvo en verde hasta el cierre; snapshots finales adjuntos a `DOCS-SORA-Preview-W1`.
-- El log de invitaciones se actualizo con acuses de salida; el tracker marco W1 como completado y agrego los checkpoints.
-- Paquete de evidencia (descriptor, checksum log, probe output, transcript del proxy Try it, screenshots de telemetria, feedback digest) archivado bajo `artifacts/docs_preview/W1/`.
+- Многие рецензенты подтверждают завершение работы в течение последних рабочих часов, устраняют локальные артефакты и отменяют доступ.
+- Телеметрия скрывается в верде хаста эль сьерре; финальные снимки, дополнения к `DOCS-SORA-Preview-W1`.
+- Журнал приглашений актуализируется с обвинениями в сговоре; el tracker Marco W1 как завершенный и объединенный контрольно-пропускные пункты.
+- Пакет доказательств (дескриптор, журнал контрольной суммы, выходные данные зонда, расшифровка прокси-сервера «Попробуй», снимки экрана телеметрии, дайджест обратной связи) archivedo bajo `artifacts/docs_preview/W1/`.
 
-## Siguientes pasos
+## Сигиентес Пасос
 
-- Preparar el plan de intake comunitario W2 (aprobacion de gobernanza + ajustes de template de solicitud).
-- Refrescar el tag de artefacto de preview para la ola W2 y reejecutar el script de preflight cuando se finalicen fechas.
-- Volcar hallazgos aplicables de W1 en roadmap/status para que la ola comunitaria tenga la guia mas reciente.
+- Подготовьте план приема коммунальных услуг W2 (апробация правительства + настройка шаблона запроса).
+- Обновите тег артефакта предварительного просмотра для W2 и запустите предполетный сценарий, когда он будет завершен.
+- Volcar Hallazgos применимы к W1 в дорожной карте/статусе, который нужен обществу, чтобы узнать больше.

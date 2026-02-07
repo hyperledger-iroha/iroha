@@ -4,24 +4,26 @@ direction: rtl
 source: docs/portal/docs/nexus/nexus-default-lane-quickstart.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: nexus-default-lane-quickstart
-title: default lane کوئیک اسٹارٹ (NX-5)
+מזהה: nexus-default-lane-quickstart
+כותרת: מסלול ברירת מחדל.
 sidebar_label: default lane کوئیک اسٹارٹ
 description: Nexus کے default lane fallback کو configure اور verify کریں تاکہ Torii اور SDKs public lanes میں lane_id omit کر سکیں۔
 ---
 
-:::note Canonical Source
+:::הערה מקור קנוני
 یہ صفحہ `docs/source/quickstart/default_lane.md` کی عکاسی کرتا ہے۔ جب تک localization sweep پورٹل تک نہیں پہنچتی، دونوں کاپیوں کو aligned رکھیں۔
 :::
 
 # default lane کوئیک اسٹارٹ (NX-5)
 
-> **Roadmap context:** NX-5 - default public lane integration۔ runtime اب `nexus.routing_policy.default_lane` fallback ظاہر کرتا ہے تاکہ Torii REST/gRPC endpoints اور ہر SDK اس وقت `lane_id` محفوظ طریقے سے omit کر سکیں جب ٹریفک canonical public lane سے تعلق رکھتا ہو۔ یہ گائیڈ operators کو catalog configure کرنے، `/status` میں fallback verify کرنے، اور end-to-end client behavior exercise کرنے میں رہنمائی کرتی ہے۔
+> **הקשר של מפת דרכים:** NX-5 - שילוב ברירת מחדל של נתיב ציבורי. runtime اب `nexus.routing_policy.default_lane` fallback ظاہر کرتا ہے تاکہ Torii REST/gRPC endpoints اور ہر SDK اس وقت `lane_id` محفوظ طریقے سے omit کر سکیں جب ٹریفک canonical public lane سے تعلق رکھتا ہو۔ תרגיל התנהגות לקוח מקצה לקצה.
 
-## Prerequisites
+## דרישות מוקדמות
 
 - `irohad` کا Sora/Nexus build ( `irohad --sora --config ...` چلائیں ).
 - configuration repository تک رسائی تاکہ `nexus.*` sections edit کیے جا سکیں۔
@@ -73,7 +75,7 @@ description = "Zero-knowledge proofs and attachments"
 fault_tolerance = 1
 ```
 
-ہر `index` منفرد اور contiguous ہونا چاہیے۔ Dataspace ids 64-bit values ہیں؛ اوپر والے مثالیں وضاحت کے لئے lane indexes کے برابر numeric values استعمال کرتی ہیں۔
+ہر `index` منفرد اور contiguous ہونا چاہیے۔ ערכים של מזהי מרחב נתונים של 64 סיביות اوپر والے مثالیں وضاحت کے لئے lane indexes کے برابر numeric values ​​استعمال کرتی ہیں۔
 
 ## 2. routing defaults اور optional overrides سیٹ کریں
 
@@ -117,7 +119,7 @@ node online ہونے کے بعد، CLI helper استعمال کریں تاکہ d
 iroha_cli app nexus lane-report --summary
 ```
 
-Example output:
+פלט לדוגמה:
 
 ```
 Lane  Alias            Module           Status  Quorum  Validators  Detail
@@ -128,15 +130,13 @@ Lane  Alias            Module           Status  Quorum  Validators  Detail
 
 اگر default lane `sealed` دکھائے تو external traffic allow کرنے سے پہلے lane governance runbook فالو کریں۔ `--fail-on-sealed` flag CI کے لئے مفید ہے۔
 
-## 5. Torii status payloads inspect کریں
-
-`/status` response routing policy اور فی-lane scheduler snapshot دونوں expose کرتا ہے۔ `curl`/`jq` استعمال کر کے configured defaults کی تصدیق کریں اور چیک کریں کہ fallback lane telemetery produce کر رہا ہے:
+## 5. Torii מצב מטענים בדוק`/status` response routing policy اور فی-lane scheduler snapshot دونوں expose کرتا ہے۔ `curl`/`jq` ברירות מחדל מוגדרות הגדרות ברירות מחדל. 2:
 
 ```bash
 curl -s http://127.0.0.1:8080/status | jq '.nexus.routing_policy'
 ```
 
-Sample output:
+פלט לדוגמה:
 
 ```json
 {
@@ -165,9 +165,8 @@ curl -s http://127.0.0.1:8080/status \
 - **JS/Swift/Android.** تازہ SDK releases `laneId`/`lane_id` کو optional مانتے ہیں اور `/status` میں اعلان کردہ value پر fallback کرتے ہیں۔ Routing policy کو staging اور production میں sync رکھیں تاکہ mobile apps کو emergency reconfigurations نہ کرنی پڑیں۔
 - **Pipeline/SSE tests.** transaction event filters `tx_lane_id == <u32>` predicates قبول کرتے ہیں (دیکھیں `docs/source/pipeline.md`). `/v1/pipeline/events/transactions` کو اس filter کے ساتھ subscribe کریں تاکہ یہ ثابت ہو کہ explicit lane کے بغیر بھیجی گئی writes fallback lane id کے تحت پہنچتی ہیں۔
 
-## 7. Observability اور governance hooks
+## 7. התבוננות או משילות ווים
 
 - `/status` `nexus_lane_governance_sealed_total` اور `nexus_lane_governance_sealed_aliases` بھی publish کرتا ہے تاکہ Alertmanager warn کر سکے جب کوئی lane اپنا manifest کھو دے۔ ان alerts کو devnets میں بھی enabled رکھیں۔
 - scheduler telemetry map اور lane governance dashboard (`dashboards/grafana/nexus_lanes.json`) catalog کے alias/slug fields expect کرتے ہیں۔ اگر آپ alias rename کریں تو متعلقہ Kura directories کو relabel کریں تاکہ auditors deterministic paths رکھ سکیں (NX-1 کے تحت track ہوتا ہے)۔
 - default lanes کے لئے parliament approvals میں rollback plan شامل ہونا چاہیے۔ manifest hash اور governance evidence کو اس quickstart کے ساتھ اپنے operator runbook میں record کریں تاکہ future rotations مطلوبہ state کا اندازہ نہ لگائیں۔
-

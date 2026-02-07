@@ -4,113 +4,103 @@ direction: ltr
 source: docs/portal/docs/sorafs/node-plan.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: node-plan
-title: Plan de implementación del nodo SoraFS
-sidebar_label: Plan de implementación del nodo
-description: Convierte la hoja de ruta de almacenamiento SF-3 en trabajo de ingeniería accionable con hitos, tareas y cobertura de pruebas.
+identifiant : plan de nœud
+titre : Plan de mise en œuvre du nœud SoraFS
+sidebar_label : Plan de mise en œuvre du nœud
+description : Convierte la hoja de ruta de almacenamiento SF-3 en trabajo de ingeniería accionable con hitos, tareaes and cobertura de pruebas.
 ---
 
-:::note Fuente canónica
-Esta página refleja `docs/source/sorafs/sorafs_node_plan.md`. Mantén ambas copias sincronizadas hasta que la documentación heredada de Sphinx se retire.
+:::note Source canonique
+Cette page reflète `docs/source/sorafs/sorafs_node_plan.md`. Assurez-vous d'avoir des copies synchronisées jusqu'à ce que la documentation héritée de Sphinx soit retirée.
 :::
 
-SF-3 entrega el primer crate ejecutable `sorafs-node` que convierte un proceso Iroha/Torii en un proveedor de almacenamiento SoraFS. Usa este plan junto con la [guía de almacenamiento del nodo](node-storage.md), la [política de admisión de proveedores](provider-admission-policy.md) y la [hoja de ruta del marketplace de capacidad de almacenamiento](storage-capacity-marketplace.md) al secuenciar entregables.
+SF-3 entre la caisse d'amorce exécutable `sorafs-node` qui convertit un processus Iroha/Torii dans un fournisseur de stockage SoraFS. Utilisez ce plan conjointement avec le [guide de stockage du nœud](node-storage.md), la [politique d'admission des fournisseurs](provider-admission-policy.md) et la [heure de route du marché de capacité de stockage](storage-capacity-marketplace.md) pour sécuriser les échanges.
 
-## Alcance objetivo (Hito M1)
+## Alcance objetivo (Hito M1)1. **Intégration de l'ensemble des chunks.** Envoyez `sorafs_car::ChunkStore` avec un backend persistant qui garde les octets du chunk, les manifestes et les arbres PoR dans le répertoire de données configuré.
+2. **Points de terminaison de la passerelle.** Exposez les points de terminaison HTTP Norito pour l'envoi de broches, la récupération de morceaux, l'affichage de PoR et la télémétrie dans le processus Torii.
+3. **Plomería de configuración.** Ajoutez une structure de configuration `SoraFsStorage` (drapeau autorisé, capacité, répertoires, limites de concurrence) câblée aux passages de `iroha_config`, `iroha_core` et `iroha_torii`.
+4. **Cuotas/planificación.** Imone límites de disco/paralelismo définies par l'opérateur et encola sollicitudes con contre-pression.
+5. **Télémétrie.** Émettre des données/logs pour l'exécution des broches, la latence de récupération des morceaux, l'utilisation de la capacité et les résultats du muestreo PoR.
 
-1. **Integración del almacén de chunks.** Envuelve `sorafs_car::ChunkStore` con un backend persistente que guarde bytes de chunk, manifests y árboles PoR en el directorio de datos configurado.
-2. **Endpoints de gateway.** Expone endpoints HTTP Norito para envío de pins, fetch de chunks, muestreo PoR y telemetría de almacenamiento dentro del proceso Torii.
-3. **Plomería de configuración.** Agrega una estructura de config `SoraFsStorage` (flag habilitado, capacidad, directorios, límites de concurrencia) cableada a través de `iroha_config`, `iroha_core` y `iroha_torii`.
-4. **Cuotas/planificación.** Impone límites de disco/paralelismo definidos por el operador y encola solicitudes con back-pressure.
-5. **Telemetría.** Emite métricas/logs para éxito de pins, latencia de fetch de chunks, utilización de capacidad y resultados de muestreo PoR.
+## Desglose du travail
 
-## Desglose del trabajo
-
-### A. Estructura de crate y módulos
-
-| Tarea | Responsable(s) | Notas |
+### A. Structure de la caisse et des modules| Tarée | Responsable(s) | Notes |
 |------|---------------|------|
-| Crear `crates/sorafs_node` con módulos: `config`, `store`, `gateway`, `scheduler`, `telemetry`. | Equipo de Storage | Reexporta tipos reutilizables para integración con Torii. |
-| Implementar `StorageConfig` mapeado desde `SoraFsStorage` (usuario → real → defaults). | Equipo de Storage / Config WG | Asegura que las capas Norito/`iroha_config` permanezcan deterministas. |
-| Proveer una fachada `NodeHandle` que Torii use para enviar pins/fetches. | Equipo de Storage | Encapsula internos de almacenamiento y plomería async. |
+| Créez `crates/sorafs_node` avec les modules : `config`, `store`, `gateway`, `scheduler`, `telemetry`. | Équipement de stockage | Réexporter des types réutilisables pour l'intégration avec Torii. |
+| Implémenter `StorageConfig` mapeado à partir de `SoraFsStorage` (utilisateur → réel → valeurs par défaut). | Equipe de stockage / Config WG | Assurez-vous que les capacités Norito/`iroha_config` peuvent être déterminées de manière permanente. |
+| Prouvez une méthode `NodeHandle` que Torii utilise pour envoyer des broches/récupérations. | Équipement de stockage | Encapsula interne de stockage et de plomberie asynchrone. |
 
-### B. Almacén de chunks persistente
+### B. Almacén de chunks persistants
 
-| Tarea | Responsable(s) | Notas |
+| Tarée | Responsable(s) | Notes |
 |------|---------------|------|
-| Construir un backend en disco que envuelva `sorafs_car::ChunkStore` con un índice de manifests en disco (`sled`/`sqlite`). | Equipo de Storage | Layout determinista: `<data_dir>/<manifest_cid>/chunk_{idx}.bin`. |
-| Mantener metadatos PoR (árboles de 64 KiB/4 KiB) usando `ChunkStore::sample_leaves`. | Equipo de Storage | Soporta replay tras reinicios; falla rápido ante corrupción. |
-| Implementar replay de integridad al inicio (rehash de manifests, podar pins incompletos). | Equipo de Storage | Bloquea el arranque de Torii hasta completar el replay. |
+| Construisez un backend en discothèque qui envoie `sorafs_car::ChunkStore` avec un indice de manifestes en discothèque (`sled`/`sqlite`). | Équipement de stockage | Déterministe de mise en page : `<data_dir>/<manifest_cid>/chunk_{idx}.bin`. |
+| Garder les métadonnées PoR (arbres de 64 KiB/4 KiB) en utilisant `ChunkStore::sample_leaves`. | Équipement de stockage | Soporta replay tras reinicios ; falla rapido ante corrupción. |
+| Implémenter la relecture de l'intégrité au début (rehash des manifestes, podar pins incompletos). | Équipement de stockage | Bloquea l'arranque de Torii jusqu'à ce que la relecture soit terminée. |
 
-### C. Endpoints de gateway
+### C. Points de terminaison de la passerelle| Point de terminaison | Comportement | Zones |
+|--------------|----------------|--------|
+| `POST /sorafs/pin` | Accepter `PinProposalV1`, valider les manifestes, inclure l'ingestion, répondre au CID du manifeste. | Validez le profil du chunker, imponez des cuotas, diffusez des données via le chunk store. |
+| `GET /sorafs/chunks/{cid}` + consulter par rango | Sirve octets du chunk avec en-têtes `Content-Chunker` ; respectez les spécifications de capacité de portée. | Planificateur américain + présupposés de flux (vinculaire à capacité de rang SF-2d). |
+| `POST /sorafs/por/sample` | Ejecuta muestreo PoR para un manifest y devuelve bundle de pruebas. | Réutilisez le magasin de morceaux, répondez avec les charges utiles Norito JSON. |
+| `GET /sorafs/telemetry` | Résumé : capacité, succès de PoR, conteos d'erreurs de récupération. | Fournir des données pour les tableaux de bord/opérateurs. |
 
-| Endpoint | Comportamiento | Tareas |
-|----------|----------------|--------|
-| `POST /sorafs/pin` | Acepta `PinProposalV1`, valida manifests, encola la ingestión, responde con el CID del manifest. | Valida el perfil de chunker, impone cuotas, streamea datos vía chunk store. |
-| `GET /sorafs/chunks/{cid}` + consulta por rango | Sirve bytes de chunk con headers `Content-Chunker`; respeta la especificación de capacidad de rango. | Usa scheduler + presupuestos de stream (vincular a capacidad de rango SF-2d). |
-| `POST /sorafs/por/sample` | Ejecuta muestreo PoR para un manifest y devuelve bundle de pruebas. | Reusa el muestreo del chunk store, responde con payloads Norito JSON. |
-| `GET /sorafs/telemetry` | Resúmenes: capacidad, éxito de PoR, conteos de errores de fetch. | Proporciona datos para dashboards/operadores. |
+La surveillance au moment de l'exécution active les interactions pour les passages de `sorafs_node::por` : le tracker enregistre chaque `PorChallengeV1`, `PorProofV1` et `AuditVerdictV1` pour que les paramètres de `CapacityMeter` reflètent les décrets d'administration sans logique Torii personnalisés.【crates/sorafs_node/src/scheduler.rs#L147】
 
-La plomería en runtime enlaza las interacciones PoR a través de `sorafs_node::por`: el tracker registra cada `PorChallengeV1`, `PorProofV1` y `AuditVerdictV1` para que las métricas de `CapacityMeter` reflejen los veredictos de gobernanza sin lógica Torii personalizada.【crates/sorafs_node/src/scheduler.rs#L147】
+Notes de mise en œuvre :
 
-Notas de implementación:
+- Utilisez la pile Axum de Torii avec les charges utiles `norito::json`.
+- Ajoutez les codes Norito pour les réponses (`PinResultV1`, `FetchErrorV1`, structures de télémétrie).- ✅ `/v1/sorafs/por/ingestion/{manifest_digest_hex}` expose désormais la profondeur du retard plus l'époque/limite la plus ancienne et les horodatages d'éxito/fallo plus récents par le fournisseur, poussé par `sorafs_node::NodeHandle::por_ingestion_status`, et Torii enregistrent les jauges `torii_sorafs_por_ingest_backlog`/`torii_sorafs_por_ingest_failures_total` pour tableaux de bord.【crates/sorafs_node/src/lib.rs:510】【crates/iroha_torii/src/sorafs/api.rs:1883】【crates/iroha_torii/src/routing.rs:7244】【crates/iroha_telemetry/src/metrics.rs:5390】
 
-- Usa el stack Axum de Torii con payloads `norito::json`.
-- Agrega esquemas Norito para respuestas (`PinResultV1`, `FetchErrorV1`, estructuras de telemetría).
+### D. Planificateur et cumul de commandes
 
-- ✅ `/v1/sorafs/por/ingestion/{manifest_digest_hex}` ahora expone la profundidad del backlog más la época/límite más antiguos y los timestamps de éxito/fallo más recientes por proveedor, impulsado por `sorafs_node::NodeHandle::por_ingestion_status`, y Torii registra los gauges `torii_sorafs_por_ingest_backlog`/`torii_sorafs_por_ingest_failures_total` para dashboards.【crates/sorafs_node/src/lib.rs:510】【crates/iroha_torii/src/sorafs/api.rs:1883】【crates/iroha_torii/src/routing.rs:7244】【crates/iroha_telemetry/src/metrics.rs:5390】
-
-### D. Scheduler y cumplimiento de cuotas
-
-| Tarea | Detalles |
+| Tarée | Détails |
 |------|----------|
-| Cuota de disco | Seguimiento de bytes en disco; rechaza nuevos pins al superar `max_capacity_bytes`. Provee hooks de expulsión para políticas futuras. |
-| Concurrencia de fetch | Semáforo global (`max_parallel_fetches`) más presupuestos por proveedor obtenidos de los límites de rango SF-2d. |
-| Cola de pins | Limita los trabajos de ingestión pendientes; expone endpoints Norito de estado para profundidad de cola. |
-| Cadencia PoR | Worker en segundo plano impulsado por `por_sample_interval_secs`. |
+| Table de discothèque | Suite de bytes en discothèque ; rechaza nouvelles broches al superar `max_capacity_bytes`. Prouvez des crochets d’expulsion pour des politiques futures. |
+| Concurrence de récupération | Semáforo global (`max_parallel_fetches`) plus présupposé par le fournisseur obtenu des limites de portée SF-2d. |
+| Cola de pins | Limiter les tâches d'ingestion pendantes ; expose les points finaux Norito de l'état pour la profondeur du cola. |
+| Cadence PoR | Travailleur en deuxième plan impulsé par `por_sample_interval_secs`. |
 
-### E. Telemetría y logging
+### E. Télémétrie et journalisation
 
-Métricas (Prometheus):
+Métriques (Prometheus) :
 
-- `sorafs_pin_success_total`, `sorafs_pin_failure_total`
-- `sorafs_chunk_fetch_duration_seconds` (histograma con etiquetas `result`)
-- `torii_sorafs_storage_bytes_used`, `torii_sorafs_storage_bytes_capacity`
+-`sorafs_pin_success_total`, `sorafs_pin_failure_total`
+- `sorafs_chunk_fetch_duration_seconds` (histogramme avec étiquettes `result`)
+-`torii_sorafs_storage_bytes_used`, `torii_sorafs_storage_bytes_capacity`
 - `torii_sorafs_storage_pin_queue_depth`, `torii_sorafs_storage_fetch_inflight`
-- `torii_sorafs_storage_fetch_bytes_per_sec`
-- `torii_sorafs_storage_por_inflight`
-- `torii_sorafs_storage_por_samples_success_total`, `torii_sorafs_storage_por_samples_failed_total`
+-`torii_sorafs_storage_fetch_bytes_per_sec`
+-`torii_sorafs_storage_por_inflight`
+-`torii_sorafs_storage_por_samples_success_total`, `torii_sorafs_storage_por_samples_failed_total`
 
-Logs / eventos:
+Journaux/événements :- Télémétrie Norito structurée pour l'ingestion de gouvernance (`StorageTelemetryV1`).
+- Alertes lorsque l'utilisation est > 90 % ou la fin des chutes est supérieure à l'ombre.
 
-- Telemetría Norito estructurada para ingestión de gobernanza (`StorageTelemetryV1`).
-- Alertas cuando la utilización > 90% o la racha de fallos PoR supera el umbral.
+### F. Stratégie de test
 
-### F. Estrategia de pruebas
+1. **Évaluations unitaires.** Persistance du magasin de morceaux, calculs de chaque, variables du planificateur (version `crates/sorafs_node/src/scheduler.rs`).
+2. **Projets d'intégration** (`crates/sorafs_node/tests`). Pin → fetch round trip, recuperación tras reinicio, rechazo por cuota, verificación de pruebas de muestreo PoR.
+3. **Études d'intégration de Torii.** Exécutez Torii avec un stockage autorisé, en éjectant les points de terminaison HTTP via `assert_cmd`.
+4. **Hoja de ruta de caos.** Futuros s'entraîne simultanément à l'agotamiento de disco, IO lento, retiro de provenedores.
 
-1. **Pruebas unitarias.** Persistencia del chunk store, cálculos de cuota, invariantes del scheduler (ver `crates/sorafs_node/src/scheduler.rs`).
-2. **Pruebas de integración** (`crates/sorafs_node/tests`). Pin → fetch round trip, recuperación tras reinicio, rechazo por cuota, verificación de pruebas de muestreo PoR.
-3. **Pruebas de integración de Torii.** Ejecuta Torii con almacenamiento habilitado, ejercita endpoints HTTP vía `assert_cmd`.
-4. **Hoja de ruta de caos.** Futuros drills simulan agotamiento de disco, IO lento, retiro de proveedores.
+## Dépendances
 
-## Dependencias
+- Politique d'admission SF-2b — s'assurer que les nœuds vérifient les enveloppes d'admission avant l'annonce.
+- Marketplace de capacité SF-2c — faire la télémétrie de vuelta aux déclarations de capacité.
+- Extensions de publicité SF-2d — capacité de consommation de portée + présupposés de flux lorsqu'ils sont disponibles.
 
-- Política de admisión SF-2b — asegurar que los nodos verifiquen envelopes de admisión antes de anunciarse.
-- Marketplace de capacidad SF-2c — vincular la telemetría de vuelta a las declaraciones de capacidad.
-- Extensiones de advert SF-2d — consumir capacidad de rango + presupuestos de stream cuando estén disponibles.
+## Critères de sortie du hito- `cargo run -p sorafs_node --example pin_fetch` fonctionne contre les luminaires locaux.
+- Torii compilé avec `--features sorafs-storage` et passa tests d'intégration.
+- Documentation ([guide d'installation du nœud](node-storage.md)) actualisée avec les paramètres de configuration par défaut + exemples de CLI ; runbook de l'opérateur disponible.
+- Télémétrie visible sur les tableaux de bord de mise en scène ; alertes configurées pour la saturation de la capacité et les chutes PoR.
 
-## Criterios de salida del hito
+## Entregables de documentation et d'opérations
 
-- `cargo run -p sorafs_node --example pin_fetch` funciona contra fixtures locales.
-- Torii compila con `--features sorafs-storage` y pasa pruebas de integración.
-- Documentación ([guía de almacenamiento del nodo](node-storage.md)) actualizada con defaults de configuración + ejemplos de CLI; runbook de operador disponible.
-- Telemetría visible en dashboards de staging; alertas configuradas para saturación de capacidad y fallos PoR.
-
-## Entregables de documentación y operaciones
-
-- Actualizar la [referencia de almacenamiento del nodo](node-storage.md) con defaults de configuración, uso de CLI y pasos de troubleshooting.
-- Mantener el [runbook de operaciones de nodo](node-operations.md) alineado con la implementación conforme evoluciona SF-3.
-- Publicar referencias de API para endpoints `/sorafs/*` dentro del portal de desarrolladores y conectarlas al manifiesto OpenAPI una vez que los handlers de Torii estén listos.
+- Actualiser la [référence de stockage du nœud](node-storage.md) avec les paramètres de configuration par défaut, l'utilisation de la CLI et les étapes de dépannage.
+- Garder le [runbook des opérations de nœud](node-operations.md) aligné avec la mise en œuvre conforme à l'évolution de SF-3.
+- Publier les références de l'API pour les points de terminaison `/sorafs/*` dans le portail des développeurs et se connecter au manifeste OpenAPI une fois que les gestionnaires de Torii sont répertoriés.

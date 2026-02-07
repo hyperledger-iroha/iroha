@@ -7,61 +7,62 @@ generator: scripts/sync_docs_i18n.py
 source_hash: c28a429f0ade5a5e93c063dc7eda4b95fd0c379a7598b72f19367ca13734e443
 source_last_modified: "2025-12-29T18:16:35.153135+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Norito Overview
+# Norito Baxış
 
-Norito is the binary serialization layer used across Iroha: it defines how data
-structures are encoded on the wire, persisted on disk, and exchanged between
-contracts and hosts. Every crate in the workspace relies on Norito instead of
-`serde` so peers on different hardware produce identical bytes.
+Norito Iroha-də istifadə olunan ikili serializasiya qatıdır: o, verilənlərin necə olduğunu müəyyən edir.
+strukturlar naqildə kodlanır, diskdə saxlanılır və onlar arasında mübadilə edilir
+müqavilələr və ev sahibləri. İş yerindəki hər qutu əvəzinə Norito-ə əsaslanır
+`serde` beləliklə, müxtəlif aparatdakı həmyaşıdlar eyni bayt istehsal edir.
 
-This overview summarises the core pieces and links to the canonical references.
+Bu icmal əsas hissələri ümumiləşdirir və kanonik istinadlara keçid verir.
 
-## Architecture at a glance
+## Bir baxışda memarlıq
 
-- **Header + payload** – Each Norito message begins with a feature-negotiation
-  header (flags, checksum) followed by the bare payload. Packed layouts and
-  compression are negotiated via header bits.
-- **Deterministic encoding** – `norito::codec::{Encode, Decode}` implement the
-  bare encoding. The same layout is reused when wrapping payloads in headers so
-  hashing and signing remain deterministic.
-- **Schema + derives** – `norito_derive` generates `Encode`, `Decode`, and
-  `IntoSchema` implementations. Packed structs/sequences are enabled by default
-  and documented in `norito.md`.
-- **Multicodec registry** – Identifiers for hashes, key types, and payload
-  descriptors live in `norito::multicodec`. The authoritative table is
-  maintained in `multicodec.md`.
+- **Başlıq + faydalı yük** – Hər bir Norito mesajı xüsusiyyət danışıqları ilə başlayır
+  başlıq (bayraqlar, yoxlama məbləği) və ardınca çılpaq faydalı yük. Paketlənmiş planlar və
+  sıxılma başlıq bitləri vasitəsilə müzakirə edilir.
+- **Deterministik kodlaşdırma** – `norito::codec::{Encode, Decode}` həyata keçirir
+  çılpaq kodlaşdırma. Yükləri başlıqlara yığarkən eyni tərtibat təkrar istifadə olunur
+  hashing və imzalama deterministik olaraq qalır.
+- **Sxem + törədir** – `norito_derive` `Encode`, `Decode` və
+  `IntoSchema` tətbiqləri. Paketli strukturlar/ardıcıllıqlar defolt olaraq aktivdir
+  və `norito.md`-də sənədləşdirilmişdir.
+- **Multicodec reyestri** – Haşlar, əsas növlər və faydalı yük üçün identifikatorlar
+  deskriptorlar `norito::multicodec`-də yaşayır. Səlahiyyətli cədvəldir
+  `multicodec.md`-də saxlanılır.
 
-## Tooling
+## Alətlər
 
-| Task | Command / API | Notes |
+| Tapşırıq | Komanda / API | Qeydlər |
 | --- | --- | --- |
-| Inspect header/sections | `ivm_tool inspect <file>.to` | Shows ABI version, flags, and entrypoints. |
-| Encode/decode in Rust | `norito::codec::{Encode, Decode}` | Implemented for all core data-model types. |
-| JSON interop | `norito::json::{to_json_pretty, from_json}` | Deterministic JSON backed by Norito values. |
-| Generate docs/specs | `norito.md`, `multicodec.md` | Source-of-truth documentation in the repo root. |
+| Başlıq/bölmələri yoxlayın | `ivm_tool inspect <file>.to` | ABI versiyasını, bayraqları və giriş nöqtələrini göstərir. |
+| Rust-da kodla/şifrəni aç | `norito::codec::{Encode, Decode}` | Bütün əsas məlumat modeli növləri üçün həyata keçirilir. |
+| JSON interop | `norito::json::{to_json_pretty, from_json}` | Norito dəyərləri ilə dəstəklənən deterministik JSON. |
+| Sənədlər/spesifikasiyalar yaradın | `norito.md`, `multicodec.md` | Repo kökündəki həqiqət mənbəyi sənədləri. |
 
-## Development workflow
+## İnkişaf iş axını
 
-1. **Add derives** – Prefer `#[derive(Encode, Decode, IntoSchema)]` for new data
-   structures. Avoid hand-written serializers unless absolutely necessary.
-2. **Validate packed layouts** – Use `cargo test -p norito` (and the packed
-   feature matrix in `scripts/run_norito_feature_matrix.sh`) to ensure new
-   layouts remain stable.
-3. **Regenerate docs** – When the encoding changes, update `norito.md` and the
-   multicodec table, then refresh the portal pages (`/reference/norito-codec`
-   and this overview).
-4. **Keep tests Norito-first** – Integration tests should use the Norito JSON
-   helpers instead of `serde_json` so they exercise the same paths as production.
+1. **Törəmə əlavə et** – Yeni məlumatlar üçün `#[derive(Encode, Decode, IntoSchema)]`-ə üstünlük verin
+   strukturlar. Zəruri olmadıqda, əl ilə yazılmış serializatorlardan çəkinin.
+2. **Yüklənmiş planları təsdiq edin** – `cargo test -p norito` (və qablaşdırılan) istifadə edin
+   yenisini təmin etmək üçün `scripts/run_norito_feature_matrix.sh`-də xüsusiyyət matrisi
+   planlar sabit qalır.
+3. **Sənədləri bərpa edin** – Kodlaşdırma dəyişdikdə, `norito.md` və
+   multicodec cədvəli, sonra portal səhifələrini yeniləyin (`/reference/norito-codec`
+   və bu ümumi baxış).
+4. **Norito-birinci testləri saxlayın** – İnteqrasiya testləri Norito JSON-dan istifadə etməlidir.
+   `serde_json` əvəzinə köməkçilər istehsalla eyni yollardan istifadə edirlər.
 
-## Quick links
+## Sürətli bağlantılar
 
-- Specification: [`norito.md`](https://github.com/hyperledger-iroha/iroha/blob/master/norito.md)
-- Multicodec assignments: [`multicodec.md`](https://github.com/hyperledger-iroha/iroha/blob/master/multicodec.md)
-- Feature matrix script: `scripts/run_norito_feature_matrix.sh`
-- Packed-layout examples: `crates/norito/tests/`
+- Spesifikasiya: [`norito.md`](https://github.com/hyperledger-iroha/iroha/blob/master/norito.md)
+- Multikodek təyinatları: [`multicodec.md`](https://github.com/hyperledger-iroha/iroha/blob/master/multicodec.md)
+- Xüsusiyyət matrisi skripti: `scripts/run_norito_feature_matrix.sh`
+- Paketli tərtibat nümunələri: `crates/norito/tests/`
 
-Pair this overview with the quickstart guide (`/norito/getting-started`) for a
-hands-on walkthrough of compiling and running bytecode that uses Norito
-payloads.
+Bu icmalı sürətli başlanğıc bələdçisi (`/norito/getting-started`) ilə birləşdirin.
+Norito istifadə edən bayt kodunu tərtib etmək və işlətmək üçün praktiki təlimat
+faydalı yüklər.

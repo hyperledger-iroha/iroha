@@ -8,62 +8,64 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraNet constant-rate profiles
 sidebar_label: Constant-Rate Profiles
 description: SNNet-17B1 preset catalogue for core/home production relays plus the SNNet-17A2 null dogfood profile, with tick->bandwidth math, CLI helpers, and MTU guardrails.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
+:::ескерту Канондық дереккөз
 :::
 
-SNNet-17B introduces fixed-rate transport lanes so relays move traffic in 1,024 B cells regardless
-of payload size. Operators pick from three presets:
+SNNet-17B бекітілген жылдамдықты тасымалдау жолақтарын енгізеді, осылайша реле 1024 B ұяшықтарында трафикті жылжытады.
+пайдалы жүк мөлшері. Операторлар үш алдын ала орнатудан таңдайды:
 
-- **core** - data-centre or professionally hosted relays that can dedicate >=30 Mbps to cover
-  traffic.
-- **home** - residential or low-uplink operators that still need anonymous fetches for
-  privacy-critical circuits.
-- **null** - the SNNet-17A2 dogfood preset. It retains the same TLVs/envelope but stretches the
-  tick and ceiling for low-bandwidth staging.
+- **core** - қамту үшін >=30 Мбит/с арнай алатын деректер орталығы немесе кәсіби орналастырылған релелер
+  қозғалыс.
+- **үй** - әлі де жасырын іздеуді қажет ететін тұрғын немесе төмен байланыс операторлары
+  құпиялылық-критикалық схемалар.
+- **null** - SNNet-17A2 сынақ нұсқасының алдын ала орнатылған нұсқасы. Ол бірдей TLV/конверттерді сақтайды, бірақ ұзартады
+  белгішесі мен төбесі төмен өткізу қабілеттілігімен қойылымға арналған.
 
-## Preset summary
+## Алдын ала орнатылған қорытынды
 
-| Profile | Tick (ms) | Cell (B) | Lane cap | Dummy floor | Per-lane payload (Mb/s) | Ceiling payload (Mb/s) | Ceiling % of uplink | Recommended uplink (Mb/s) | Neighbor cap | Auto-disable trigger (%) |
-|---------|-----------|----------|----------|-------------|-------------------------|------------------------|---------------------|----------------------------|--------------|--------------------------|
-| core    | 5.0       | 1024     | 12       | 4           | 1.64                    | 19.50                  | 65                  | 30.0                       | 8            | 85                       |
-| home    | 10.0      | 1024     | 4        | 2           | 0.82                    | 4.00                   | 40                  | 10.0                       | 2            | 70                       |
-| null    | 20.0      | 1024     | 2        | 1           | 0.41                    | 0.75                   | 15                  | 5.0                        | 1            | 55                       |
+| Профиль | Белгі (мс) | (В) ұяшығы | Жолақ қақпағы | Жалған еден | Бір жолақты пайдалы жүктеме (Мб/с) | Төбенің пайдалы жүктемесі (Мб/с) | Төбенің % жоғары қарай | Ұсынылатын жоғары сілтеме (Мб/с) | Көрші қалпақ | Триггерді автоматты түрде өшіру (%) |
+|---------|-----------|----------|----------|-------------|-------------------------|-------------------|--------------------|--------------------------------|--------------------|--------------------|
+| негізгі | 5.0 | 1024 | 12 | 4 | 1,64 | 19.50 | 65 | 30,0 | 8 | 85 |
+| үй | 10.0 | 1024 | 4 | 2 | 0,82 | 4.00 | 40 | 10.0 | 2 | 70 |
+| null | 20.0 | 1024 | 2 | 1 | 0,41 | 0,75 | 15 | 5.0 | 1 | 55 |
 
-- **Lane cap** - maximum concurrent constant-rate neighbors. The relay rejects extra circuits once
-  the cap is hit and increments `soranet_handshake_capacity_reject_total`.
-- **Dummy floor** - minimum number of lanes that stay alive with dummy traffic even when actual
-  demand is lower.
-- **Ceiling payload** - uplink budget dedicated to constant-rate lanes after applying the ceiling
-  fraction. Operators should never exceed this budget even if extra bandwidth is available.
-- **Auto-disable trigger** - sustained saturation percentage (averaged per preset) that causes the
-  runtime to drop to the dummy floor. Capacity is restored after the recovery threshold
-  (75% for `core`, 60% for `home`, 45% for `null`).
+- **Жол қақпағы** - максималды бір мезгілде тұрақты жылдамдықты көршілер. Реле қосымша тізбектерді бір рет қабылдамайды
+  қақпақ соғылады және `soranet_handshake_capacity_reject_total` ұлғаяды.
+- **Мөлдір еден** - нақты кезде де жалған трафикпен тірі қалатын жолақтардың ең аз саны
+  сұраныс төмен.
+- **Төбенің пайдалы жүктемесі** - төбені қолданғаннан кейін тұрақты жылдамдықты жолақтарға арналған жоғары сілтеме бюджеті
+  бөлшек. Қосымша өткізу қабілеттілігі болса да, операторлар бұл бюджетті ешқашан асырмауы керек.
+- **Триггерді автоматты түрде өшіру** - тұрақты қанықтылық пайызы (алдын ала орнатылған орташа есеппен)
+  бос еденге түсіру үшін жұмыс уақыты. Сыйымдылық қалпына келтіру шегінен кейін қалпына келтіріледі
+  (`core` үшін 75%, `home` үшін 60%, `null` үшін 45%).
 
-**Important:** the `null` preset is for staging and capability dogfooding only; it does not meet the
-privacy guarantees required for production circuits.
+**Маңызды:** `null` алдын ала орнату тек кезеңге және сынақ мүмкіндігіне арналған; сәйкес келмейді
+өндірістік тізбектер үшін қажетті құпиялылық кепілдіктері.
 
-## Tick -> bandwidth table
+## Белгі -> өткізу қабілеттілігі кестесі
 
-Each payload cell carries 1,024 B, so the KiB/sec column equals the number of cells emitted per
-second. Use the helper to extend the table with custom ticks.
+Әрбір пайдалы жүктеме ұяшығы 1024 В тасымалдайды, сондықтан КиБ/сек бағаны бір адамға шығарылатын ұяшықтар санына тең.
+екінші. Кестені теңшелетін белгілермен кеңейту үшін көмекшіні пайдаланыңыз.
 
-| Tick (ms) | Cells/sec | Payload KiB/sec | Payload Mb/s |
-|-----------|-----------|-----------------|--------------|
-| 5.0       | 200.00    | 200.00          | 1.64         |
-| 7.5       | 133.33    | 133.33          | 1.09         |
-| 10.0      | 100.00    | 100.00          | 0.82         |
-| 15.0      | 66.67     | 66.67           | 0.55         |
-| 20.0      | 50.00     | 50.00           | 0.41         |
+| Белгі (мс) | Ұяшықтар/сек | Жүктеме КиБ/сек | Пайдалы жүктеме Мб/с |
+|----------|-----------|-----------------|--------------|
+| 5.0 | 200.00 | 200.00 | 1,64 |
+| 7.5 | 133,33 | 133,33 | 1.09 |
+| 10.0 | 100.00 | 100.00 | 0,82 |
+| 15.0 | 66,67 | 66,67 | 0,55 |
+| 20.0 | 50.00 | 50.00 | 0,41 |
 
-Formula:
+Формула:
 
 ```
 payload_mbps = (cell_bytes x 8 / 1_000_000) x (1000 / tick_ms)
 ```
 
-CLI helper:
+CLI көмекшісі:
 
 ```bash
 # Markdown table output for all presets plus default tick table
@@ -76,13 +78,13 @@ cargo xtask soranet-constant-rate-profile --profile core --format json
 cargo xtask soranet-constant-rate-profile --tick-table --tick-values 5,7.5,12,18 --format markdown
 ```
 
-`--format markdown` emits GitHub-style tables for both the preset summary and optional tick cheat
-sheet so you can paste deterministic output into the portal. Pair it with `--json-out` to archive
-the rendered data for governance evidence.
+`--format markdown` GitHub стиліндегі кестелерді алдын ала орнатылған жиынтық үшін де, қосымша құсбелгі қою үшін де шығарады
+парақ арқылы детерминирленген нәтижені порталға қоюға болады. Мұрағаттау үшін оны `--json-out` арқылы жұптаңыз
+басқару дәлелі үшін берілген деректер.
 
-## Configuration & overrides
+## Конфигурация және қайта анықтау
 
-`tools/soranet-relay` exposes the presets in both config files and runtime overrides:
+`tools/soranet-relay` конфигурация файлдарында да, орындалу уақытын қайта анықтауда да алдын ала орнатуларды көрсетеді:
 
 ```bash
 # Persisted in relay.json
@@ -92,23 +94,23 @@ the rendered data for governance evidence.
 soranet-relay --config relay.json --constant-rate-profile core
 ```
 
-The config key accepts `core`, `home`, or `null` (default `core`). CLI overrides are useful for
-staging drills or SOC requests that temporarily reduce the duty cycle without rewriting configs.
+Конфигурациялау кілті `core`, `home` немесе `null` (әдепкі `core`) қабылдайды. CLI қайта анықтаулары үшін пайдалы
+конфигурацияларды қайта жазусыз жұмыс циклін уақытша қысқартатын кезеңдік жаттығулар немесе SOC сұраулары.
 
-## MTU guardrails
+## MTU қоршаулары
 
-- Payload cells use 1,024 B plus ~96 B of Norito+Noise framing and the minimal QUIC/UDP headers,
-  keeping each datagram below the IPv6 1,280 B minimum MTU.
-- When tunnels (WireGuard/IPsec) add extra encapsulation you **must** reduce `padding.cell_size`
-  so `cell_size + framing <= 1,280 B`. The relay validator enforces
-  `padding.cell_size <= 1,136 B` (1,280 B - 48 B UDP/IPv6 overhead - 96 B framing).
-- `core` profiles should pin >=4 neighbors even when idle so dummy lanes always cover a subset of
-  PQ guards. `home` profiles may limit constant-rate circuits to wallets/aggregators but must apply
-  back-pressure when saturation exceeds 70% for three telemetry windows.
+- Пайдалы жүктеме ұяшықтары 1 024 B плюс ~ 96 B Norito+ Шу жақтауын және ең аз QUIC/UDP тақырыптарын пайдаланады,
+  әрбір датаграмманы IPv6 1,280 B ең аз MTU мәнінен төмен ұстау.
+- Туннельдер (WireGuard/IPsec) қосымша инкапсуляцияны қосқанда, `padding.cell_size` мөлшерін **азайту керек**
+  сондықтан `cell_size + framing <= 1,280 B`. Реле валидаторы күшіне енеді
+  `padding.cell_size <= 1,136 B` (1,280 B - 48 B UDP/IPv6 үстеме - 96 B жақтау).
+- `core` профильдері бос жүрсе де >=4 көршіні бекітуі керек, сондықтан жалған жолдар әрқашан келесілердің жиынын қамтиды
+  PQ күзетшілері. `home` профильдері әмияндар/агрегаторлар үшін тұрақты жылдамдықты тізбектерді шектей алады, бірақ қолданылуы керек
+  үш телеметриялық терезе үшін қанықтығы 70% асқан кезде кері қысым.
 
-## Telemetry & alerts
+## Телеметрия және ескертулер
 
-Relays export the following metrics per preset:
+Релелер алдын ала орнату үшін келесі көрсеткіштерді экспорттайды:
 
 - `soranet_constant_rate_active_neighbors`
 - `soranet_constant_rate_queue_depth`
@@ -118,12 +120,12 @@ Relays export the following metrics per preset:
 - `soranet_constant_rate_ceiling_hits_total`
 - `soranet_constant_rate_degraded`
 
-Alert when:
+Ескерту:
 
-1. Dummy ratio stays below the preset floor (`core >= 4/8`, `home >= 2/2`, `null >= 1/1`) for more than
-   two windows.
-2. `soranet_constant_rate_ceiling_hits_total` grows faster than one hit per five minutes.
-3. `soranet_constant_rate_degraded` flips to `1` outside a planned drill.
+1. Жалған қатынасы алдын ала орнатылған еденнен (`core >= 4/8`, `home >= 2/2`, `null >= 1/1`) төмен тұрады.
+   екі терезе.
+2. `soranet_constant_rate_ceiling_hits_total` бес минутта бір соққыдан жылдамырақ өседі.
+3. `soranet_constant_rate_degraded` жоспарланған бұрғылаудан тыс `1` түріне ауысады.
 
-Record the preset label and neighbor list in incident reports so auditors can prove constant-rate
-policies matched the roadmap requirements.
+Аудиторлар тұрақты жылдамдықты дәлелдей алуы үшін алдын ала орнатылған белгіні және көршілер тізімін оқиға есептеріне жазып алыңыз
+саясаты жол картасы талаптарына сәйкес келді.

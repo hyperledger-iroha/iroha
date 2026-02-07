@@ -4,55 +4,57 @@ direction: ltr
 source: docs/portal/docs/api/overview.mdx
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-import TryItConsole from '@site/src/components/TryItConsole.jsx';
+'@site/src/components/TryItConsole.jsx' မှ TryItConsole ကို တင်သွင်းပါ။
 
-# Torii API Overview
+#Torii API ခြုံငုံသုံးသပ်ချက်
 
-The Torii gateway exposes a REST + WebSocket surface for interacting with Iroha
-nodes. The canonical OpenAPI document is generated via:
+Torii ဂိတ်ဝေးသည် Iroha နှင့် အပြန်အလှန်တုံ့ပြန်ရန်အတွက် REST + WebSocket မျက်နှာပြင်ကို ဖော်ထုတ်ပေးသည်
+ဆုံမှတ်များ။ Canonical OpenAPI စာရွက်စာတမ်းကို ထုတ်ပေးသည်-
 
 ```bash
 cargo xtask openapi
 ```
 
-Running the command above writes `docs/portal/static/openapi/torii.json` and
-feeds the `docusaurus-plugin-openapi-docs` integration so this section updates
-automatically. The generator spins up an in-memory Torii router and attempts to
-query its OpenAPI endpoint; if that fails (for example, router initialization
-errors) a deterministic placeholder spec is emitted instead.
+အပေါ်က command ကို run လိုက်ရင် `docs/portal/static/openapi/torii.json` နဲ့ရေးတယ်။
+`docusaurus-plugin-openapi-docs` ပေါင်းစပ်မှုကို ဖြည့်ဆည်းပေးသောကြောင့် ဤကဏ္ဍကို အပ်ဒိတ်လုပ်ပါ။
+အလိုအလျောက်။ ဂျင်နရေတာသည် မမ်မိုရီအတွင်း Torii router ကို လည်ပတ်စေပြီး ကြိုးစားသည်။
+၎င်း၏ OpenAPI အဆုံးမှတ်ကို မေးမြန်းပါ။ မအောင်မြင်ပါက (ဥပမာ၊ router ကို အစပြုခြင်း
+အမှားအယွင်းများ) အဆုံးအဖြတ်ပေးသော နေရာယူသူ spec ကို အစား ထုတ်လွှတ်သည်။
 
-## Current status
+## လက်ရှိအခြေအနေ
 
-- **Spec source:** `cargo xtask openapi` queries the Torii router directly; the
-  fallback stub is only emitted when the router fails to expose an OpenAPI
-  document.
-- **Determinism:** JSON output is canonicalised to ensure stable diffing in CI.
-- **Authentication:** The “Try it” sandbox now forwards requests through a
-  constrained staging proxy. Operators must supply a Torii endpoint and bearer
-  token before issuing calls.
-- **Version selector:** Swagger UI, RapiDoc, and the full Torii OpenAPI page
-  expose a dropdown that reads `openapi/versions.json` so you can compare
-  historical snapshots. The `Latest (tracked)` option points to
-  `/openapi/torii.json`, while all other entries load the corresponding
-  `openapi/versions/<version>/torii.json` artifact.
-- **Snapshot workflow:** After running `npm run docs:version -- <label>`, refresh
-  the matching OpenAPI file with `npm run sync-openapi -- --version=<label> --latest`
-  so the dropdown can load both the frozen snapshot and the rolling “Latest” build.
+- **Spec အရင်းအမြစ်-** `cargo xtask openapi` သည် Torii router ကို တိုက်ရိုက်မေးမြန်းသည်။ အဆိုပါ
+  Router သည် OpenAPI ကို ဖော်ထုတ်ရန် ပျက်ကွက်သောအခါမှသာ fallback stub ကို ထုတ်လွှတ်သည်
+  စာရွက်စာတမ်း။
+- **ဆုံးဖြတ်ခြင်း-** CI တွင် တည်ငြိမ်သောကွာခြားမှုကိုသေချာစေရန် JSON အထွက်အား canonicalised ပြုလုပ်ထားသည်။
+- ** စစ်မှန်ကြောင်းအထောက်အထားပြခြင်း-** "စမ်းသုံးကြည့်ပါ" sandbox သည် တောင်းဆိုချက်များကို a မှတဆင့်ပေးပို့သည်။
+  ကန့်သတ်ထားသော staging proxy။ အော်ပရေတာများသည် Torii အဆုံးမှတ်နှင့် ကိုင်ဆောင်သူကို ပေးဆောင်ရပါမည်။
+  ခေါ်ဆိုမှုများမထုတ်ပေးမီ တိုကင်။
+- **ဗားရှင်းရွေးချယ်မှု-** Swagger UI၊ RapiDoc နှင့် Torii OpenAPI စာမျက်နှာ အပြည့်အစုံ
+  `openapi/versions.json` ကို ဖတ်ပြသော dropdown ကို သင် နှိုင်းယှဉ်ကြည့်နိုင်စေရန်
+  သမိုင်းဝင်ဓာတ်ပုံများ။ `Latest (tracked)` ရွေးချယ်မှုမှ ညွှန်ပြသည်။
+  `/openapi/torii.json` တွင် အခြားအရာအားလုံးသည် သက်ဆိုင်ရာကို တင်နေစဉ်
+  `openapi/versions/<version>/torii.json` ရှေးဟောင်းပစ္စည်း။
+- **Snapshot အလုပ်အသွားအလာ-** `npm run docs:version -- <label>` ကိုအသုံးပြုပြီးနောက်၊ ပြန်လည်စတင်ပါ။
+  `npm run sync-openapi -- --version=<label> --latest` နှင့် ကိုက်ညီသော OpenAPI ဖိုင်
+  ထို့ကြောင့် dropdown သည် frozen snapshot နှင့် rolling "latest" build နှစ်ခုလုံးကို တင်နိုင်သည်။
 
-The router-backed extractor now emits the full Torii surface. If you see the
-placeholder stub, treat it as a build-time failure and inspect the Torii
-router startup logs.
+router-backed extractor သည် ယခုအခါ Torii မျက်နှာပြင်အပြည့်ကို ထုတ်လွှတ်သည်။ မင်းမြင်ရင်
+နေရာယူထားသည့် ဆောင်းပါးတို၊ ၎င်းကို တည်ဆောက်ချိန် ချို့ယွင်းချက်အဖြစ် သဘောထားပြီး Torii ကို စစ်ဆေးပါ။
+router startup မှတ်တမ်းများ။
 
-## Try it sandbox (DOCS-3)
+## စမ်းသုံးကြည့်ပါ sandbox (DOCS-3)
 
-The developer portal embeds a small console that relays REST requests through a
-Node-based proxy. The proxy enforces CORS, rate limits, and optional bearer
-tokens so the widget can talk to staging gateways without exposing credentials.
-See `docs/devportal/try-it.md` for the full operator checklist.
+developer portal သည် REST တောင်းဆိုမှုများကို relay မှတဆင့် relay သေးငယ်သော console ကိုထည့်သွင်းထားသည်။
+Node-based proxy ။ ပရောက်စီသည် CORS၊ နှုန်းကန့်သတ်ချက်နှင့် စိတ်ကြိုက်ဆောင်သူအား တွန်းအားပေးသည်။
+အထောက်အထားများကို မဖော်ပြဘဲ ဝစ်ဂျက်သည် အဆင့်မြှင့်တင်ထားသော ဂိတ်ဝေးများနှင့် စကားပြောနိုင်စေရန် တိုကင်များ။
+အော်ပရေတာစစ်ဆေးမှုစာရင်းအပြည့်အစုံအတွက် `docs/devportal/try-it.md` ကိုကြည့်ပါ။
 
-Start the proxy alongside the Docusaurus dev server:
+Docusaurus dev ဆာဗာနှင့်အတူ ပရောက်စီကို စတင်ပါ။
 
 ```bash
 cd docs/portal
@@ -68,15 +70,15 @@ npm run tryit-proxy
 npm run start
 ```
 
-- The proxy listens on `TRYIT_PROXY_LISTEN` (default `127.0.0.1:8787`) and
-  forwards any `/proxy/...` requests to `TRYIT_PROXY_TARGET`.
-- Supply `TRYIT_PROXY_BEARER` for static bearer tokens or let callers provide
-  one per request via the “Bearer token” field.
-- Rate limits default to 60 requests per minute and can be tuned through
-  `TRYIT_PROXY_RATE_LIMIT` / `TRYIT_PROXY_RATE_WINDOW_MS`.
+- ပရောက်စီသည် `TRYIT_PROXY_LISTEN` (မူရင်း `127.0.0.1:8787`) တွင် နားထောင်သည်
+  မည်သည့် `/proxy/...` တောင်းဆိုချက်များကို `TRYIT_PROXY_TARGET` သို့ ထပ်ဆင့်ပို့သည်။
+- static bearer တိုကင်များအတွက် `TRYIT_PROXY_BEARER` ကို ထောက်ပံ့ပါ သို့မဟုတ် ခေါ်ဆိုသူများအား ပံ့ပိုးခွင့်ပြုပါ။
+  "Bearer token" အကွက်မှတစ်ဆင့် တောင်းဆိုမှုတစ်ခု။
+- နှုန်းထားသည် တစ်မိနစ်လျှင် ပုံသေတောင်းဆိုမှု 60 အထိ ကန့်သတ်ထားပြီး တစ်ဆင့်ချင်း ချိန်ညှိနိုင်သည်။
+  `TRYIT_PROXY_RATE_LIMIT` / `TRYIT_PROXY_RATE_WINDOW_MS`။
 
-> ⚠️ The proxy is intended for staging/demo access. Production deployments
-> should run behind hardened ingress and reuse the same rate limiting policy in
-> front of Torii.
+> ⚠️ ပရောက်စီသည် ဇာတ်ညွှန်း/သရုပ်ပြအသုံးပြုခွင့်အတွက် ရည်ရွယ်ပါသည်။ ထုတ်လုပ်မှု ဖြန့်ကျက်မှု
+> မာကျောသော ingress ၏နောက်ကွယ်တွင် လည်ပတ်သင့်ပြီး တူညီသောနှုန်းကန့်သတ်မှုမူဝါဒကို ပြန်လည်အသုံးပြုသင့်သည်။
+> Torii ရှေ့။
 
 <TryItConsole />

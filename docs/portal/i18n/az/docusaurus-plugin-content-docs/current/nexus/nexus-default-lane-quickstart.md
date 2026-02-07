@@ -8,34 +8,36 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: Default lane quickstart (NX-5)
 sidebar_label: Default Lane Quickstart
 description: Configure and verify the Nexus default lane fallback so Torii and SDKs can omit lane_id in public lanes.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
-This page mirrors `docs/source/quickstart/default_lane.md`. Keep both copies
-aligned until the localization sweep lands in the portal.
+:::Qeyd Kanonik Mənbə
+Bu səhifə `docs/source/quickstart/default_lane.md`-i əks etdirir. Hər iki nüsxəni saxlayın
+lokalizasiya süpürülməsi portala düşənə qədər düzülür.
 :::
 
-# Default Lane Quickstart (NX-5)
+# Defolt Zolaqlı Sürətli Başlama (NX-5)
 
-> **Roadmap context:** NX-5 — default public lane integration. The runtime now
-> exposes a `nexus.routing_policy.default_lane` fallback so Torii REST/gRPC
-> endpoints and every SDK can safely omit a `lane_id` when the traffic belongs
-> on the canonical public lane. This guide walks operators through configuring
-> the catalog, verifying the fallback in `/status`, and exercising the client
-> behaviour end to end.
+> **Yol xəritəsi konteksti:** NX-5 — defolt ictimai zolaq inteqrasiyası. İndi iş vaxtı
+> `nexus.routing_policy.default_lane` geri dönüşünü ortaya qoyur, beləliklə Torii REST/gRPC
+> son nöqtələr və hər bir SDK, trafik aid olduqda `lane_id`-i təhlükəsiz şəkildə buraxa bilər
+> kanonik ictimai zolaqda. Bu təlimat operatorları konfiqurasiyadan keçir
+> kataloq, `/status`-də geri dönüşü yoxlamaq və müştərini həyata keçirmək
+> davranış başdan sona.
 
-## Prerequisites
+## İlkin şərtlər
 
-- A Sora/Nexus build of `irohad` (run with `irohad --sora --config ...`).
-- Access to the configuration repository so you can edit `nexus.*` sections.
-- `iroha_cli` configured to talk to the target cluster.
-- `curl`/`jq` (or equivalent) to inspect the Torii `/status` payload.
+- `irohad` Sora/Nexus quruluşu (`irohad --sora --config ...` ilə işləyir).
+- `nexus.*` bölmələrini redaktə etmək üçün konfiqurasiya deposuna daxil olun.
+- `iroha_cli` hədəf klasterlə danışmaq üçün konfiqurasiya edilib.
+- `curl`/`jq` (və ya ekvivalenti) Torii `/status` faydalı yükünü yoxlamaq üçün.
 
-## 1. Describe the lane and dataspace catalog
+## 1. Zolaq və məlumat məkanı kataloqunu təsvir edin
 
-Declare the lanes and dataspaces that should exist on the network. The snippet
-below (trimmed from `defaults/nexus/config.toml`) registers three public lanes
-plus matching dataspace aliases:
+Şəbəkədə mövcud olmalı olan zolaqları və məlumat məkanlarını elan edin. Snippet
+aşağıda (`defaults/nexus/config.toml`-dən kəsilmiş) üç ictimai zolağı qeyd edir
+üstəgəl uyğun verilənlər məkanı ləqəbləri:
 
 ```toml
 [nexus]
@@ -78,17 +80,17 @@ description = "Zero-knowledge proofs and attachments"
 fault_tolerance = 1
 ```
 
-Each `index` must be unique and contiguous. Dataspace ids are 64-bit values;
-the examples above use the same numeric values as the lane indexes for clarity.
+Hər bir `index` unikal və bitişik olmalıdır. Məlumat məkanı identifikatorları 64 bitlik dəyərlərdir;
+yuxarıdakı nümunələr aydınlıq üçün zolaq indeksləri ilə eyni ədədi dəyərlərdən istifadə edir.
 
-## 2. Set routing defaults and optional overrides
+## 2. Marşrutlaşdırma defoltlarını və əlavə qeydləri təyin edin
 
-The `nexus.routing_policy` section controls the fallback lane and lets you
-override routing for specific instructions or account prefixes. If no rule
-matches, the scheduler routes the transaction to the configured `default_lane`
-and `default_dataspace`. The router logic lives in
-`crates/iroha_core/src/queue/router.rs` and applies the policy transparently to
-Torii REST/gRPC surfaces.
+`nexus.routing_policy` bölməsi ehtiyat zolağına nəzarət edir və sizə imkan verir
+xüsusi təlimatlar və ya hesab prefiksləri üçün marşrutlaşdırmanı ləğv edin. Qayda olmasa
+uyğun gəlirsə, planlaşdırıcı əməliyyatı konfiqurasiya edilmiş `default_lane`-ə yönləndirir
+və `default_dataspace`. Router məntiqi yaşayır
+`crates/iroha_core/src/queue/router.rs` və siyasəti şəffaf şəkildə tətbiq edir
+Torii REST/gRPC səthləri.
 
 ```toml
 [nexus.routing_policy]
@@ -110,31 +112,31 @@ instruction = "smartcontract::deploy"
 description = "Route contract deployments to the zk lane for proof tracking"
 ```
 
-When you later add new lanes, update the catalog first, then extend the routing
-rules. The fallback lane should continue to point at the public lane that holds
+Daha sonra yeni zolaqlar əlavə etdiyiniz zaman əvvəlcə kataloqu yeniləyin, sonra marşrutu genişləndirin
+qaydalar. Qaytarma zolağı dayanan ictimai zolağa yönəlməyə davam etməlidir
 
-## 3. Boot a node with the policy applied
+## 3. Tətbiq edilmiş siyasətlə qovşağı yükləyin
 
 ```bash
 IROHA_CONFIG=/path/to/nexus/config.toml
 irohad --sora --config "${IROHA_CONFIG}"
 ```
 
-The node logs the derived routing policy during startup. Any validation errors
-(missing indexes, duplicated aliases, invalid dataspace ids) are surfaced before
-gossip begins.
+Node başlanğıc zamanı əldə edilmiş marşrutlaşdırma siyasətini qeyd edir. Hər hansı doğrulama səhvləri
+(çatışmayan indekslər, təkrarlanan ləqəblər, etibarsız məlumat məkanı idləri) əvvəl ortaya çıxır
+qeybət başlayır.
 
-## 4. Confirm lane governance state
+## 4. Zolaqlı idarəetmə vəziyyətini təsdiqləyin
 
-Once the node is online, use the CLI helper to verify that the default lane is
-sealed (manifest loaded) and ready for traffic. The summary view prints one row
-per lane:
+Düyün onlayn olduqdan sonra standart zolağın olduğunu yoxlamaq üçün CLI köməkçisindən istifadə edin
+möhürlənmiş (manifest yüklənmiş) və hərəkətə hazırdır. Xülasə görünüşü bir sıra çap edir
+zolaq başına:
 
 ```bash
 iroha_cli app nexus lane-report --summary
 ```
 
-Example output:
+Nümunə çıxışı:
 
 ```
 Lane  Alias            Module           Status  Quorum  Validators  Detail
@@ -143,20 +145,20 @@ Lane  Alias            Module           Status  Quorum  Validators  Detail
    2  zk               parliament       sealed     03           05  manifest required
 ```
 
-If the default lane shows `sealed`, follow the lane governance runbook before
-allowing external traffic. The `--fail-on-sealed` flag is handy for CI.
+Defolt zolaq `sealed`-i göstərirsə, əvvəl zolaq idarəçiliyi kitabına əməl edin.
+xarici trafikə imkan verir. `--fail-on-sealed` bayrağı CI üçün əlverişlidir.
 
-## 5. Inspect Torii status payloads
+## 5. Torii status yüklərini yoxlayın
 
-The `/status` response exposes both the routing policy and the per-lane scheduler
-snapshot. Use `curl`/`jq` to confirm the configured defaults and to check that
-the fallback lane is producing telemetry:
+`/status` cavabı həm marşrut siyasətini, həm də hər zolaqlı planlaşdırıcını ifşa edir.
+snapshot. Konfiqurasiya edilmiş standartları təsdiqləmək və yoxlamaq üçün `curl`/`jq` istifadə edin.
+ehtiyat zolağı telemetriya istehsal edir:
 
 ```bash
 curl -s http://127.0.0.1:8080/status | jq '.nexus.routing_policy'
 ```
 
-Sample output:
+Nümunə çıxışı:
 
 ```json
 {
@@ -169,7 +171,7 @@ Sample output:
 }
 ```
 
-To inspect the live scheduler counters for lane `0`:
+`0` zolağı üçün canlı planlaşdırıcı sayğaclarını yoxlamaq üçün:
 
 ```bash
 curl -s http://127.0.0.1:8080/status \
@@ -177,37 +179,37 @@ curl -s http://127.0.0.1:8080/status \
         | {lane_id, alias, dataspace_alias, committed, manifest_ready, scheduler_utilization_pct}'
 ```
 
-This confirms that the TEU snapshot, alias metadata, and manifest flags align
-with the configuration. The same payload is what Grafana panels use for the
-lane-ingest dashboard.
+Bu, TEU snapşotunun, ləqəb metadatasının və manifest bayraqlarının uyğunlaşdığını təsdiqləyir
+konfiqurasiya ilə. Eyni faydalı yük Grafana panelləri üçün istifadə etdiyi yükdür
+zolaqlı idarəetmə paneli.
 
-## 6. Exercise client defaults
+## 6. Müştəri standartlarını həyata keçirin
 
-- **Rust/CLI.** `iroha_cli` and the Rust client crate omit the `lane_id` field
-  when you do not pass `--lane-id` / `LaneSelector`. The queue router therefore
-  falls back to `default_lane`. Use explicit `--lane-id`/`--dataspace-id` flags
-  only when targeting a non-default lane.
-- **JS/Swift/Android.** Latest SDK releases treat `laneId`/`lane_id` as optional
-  and fall back to the value advertised by `/status`. Keep the routing policy in
-  sync across staging and production so mobile apps do not need emergency
-  reconfigurations.
-- **Pipeline/SSE tests.** The transaction event filters accept
-  `tx_lane_id == <u32>` predicates (see `docs/source/pipeline.md`). Subscribe to
-  `/v1/pipeline/events/transactions` with that filter to prove that writes sent
-  without an explicit lane arrive under the fallback lane id.
+- **Rust/CLI.** `iroha_cli` və Rust müştəri qutusu `lane_id` sahəsini buraxır
+  `--lane-id` / `LaneSelector` keçmədikdə. Buna görə də növbə marşrutlaşdırıcısı
+  `default_lane`-ə qayıdır. Açıq `--lane-id`/`--dataspace-id` bayraqlarından istifadə edin
+  yalnız qeyri-defolt zolağı hədəf aldıqda.
+- **JS/Swift/Android.** Ən son SDK buraxılışları `laneId`/`lane_id` isteğe bağlıdır
+  və `/status` tərəfindən elan edilən dəyərə qayıdın. Marşrutlaşdırma siyasətini saxlayın
+  səhnələşdirmə və istehsal arasında sinxronizasiya edin ki, mobil tətbiqlər fövqəladə vəziyyətə ehtiyac duymasın
+  yenidən konfiqurasiyalar.
+- **Boru kəməri/SSE testləri.** Əməliyyat hadisəsi filtrləri qəbul edilir
+  `tx_lane_id == <u32>` predikatları (bax: `docs/source/pipeline.md`). Abunə olun
+  `/v1/pipeline/events/transactions` yazın göndərildiyini sübut etmək üçün həmin filtrlə
+  aydın zolaq olmadan geri qaytarma zolağı identifikatorunun altına çatır.
 
-## 7. Observability and governance hooks
+## 7. Müşahidə oluna bilənlik və idarəetmə qarmaqları
 
-- `/status` also publishes `nexus_lane_governance_sealed_total` and
-  `nexus_lane_governance_sealed_aliases` so Alertmanager can warn whenever a
-  lane loses its manifest. Keep those alerts enabled even for devnets.
-- The scheduler telemetry map and the lane governance dashboard
-  (`dashboards/grafana/nexus_lanes.json`) expect the alias/slug fields from the
-  catalog. If you rename an alias, relabel the corresponding Kura directories so
-  auditors keep deterministic paths (tracked under NX-1).
-- Parliament approvals for default lanes should include a rollback plan. Record
-  the manifest hash and governance evidence alongside this quickstart in your
-  operator runbook so future rotations do not guess the required state.
+- `/status` həmçinin `nexus_lane_governance_sealed_total` nəşr edir və
+  `nexus_lane_governance_sealed_aliases` beləliklə Alertmanager istənilən vaxt xəbərdarlıq edə bilər
+  zolaq öz manifestini itirir. Hətta devnetlər üçün belə xəbərdarlıqları aktiv edin.
+- Planlaşdırıcı telemetriya xəritəsi və zolaq idarəetmə paneli
+  (`dashboards/grafana/nexus_lanes.json`) -dən ləqəb/slug sahələrini gözləyirik
+  kataloq. Əgər ləqəbin adını dəyişsəniz, müvafiq Kür kataloqlarını belə adlandırın
+  auditorlar deterministik yolları saxlayır (NX-1 altında izlənilir).
+- Defolt zolaqlar üçün Parlamentin təsdiqləmələrinə geri çəkilmə planı daxil edilməlidir. Qeyd
+  açıq-aşkar hash və idarəetmə sübutu sizin bu sürətli başlanğıcla yanaşı
+  operator runbook belə gələcək fırlanmalar tələb olunan vəziyyəti təxmin etmir.
 
-Once these checks pass you can treat `nexus.routing_policy.default_lane` as the
-code paths on the network.
+Bu yoxlamalar keçdikdən sonra siz `nexus.routing_policy.default_lane` kimi davrana bilərsiniz
+şəbəkədə kod yolları.

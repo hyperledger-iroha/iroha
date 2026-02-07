@@ -4,60 +4,62 @@ direction: ltr
 source: docs/portal/docs/devportal/try-it.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Try It sandbox
+# Փորձեք ավազատուփը
 
-The developer portal ships an optional “Try it” console so you can call Torii
-endpoints without leaving the documentation. The console relays requests
-through the bundled proxy so browsers can bypass CORS limits while still
-enforcing rate limits and authentication.
+Մշակողների պորտալը ուղարկում է կամընտիր «Փորձեք այն» վահանակը, որպեսզի կարողանաք զանգահարել Torii
+վերջնակետերը՝ առանց փաստաթղթերից դուրս գալու: Վահանակը փոխանցում է հարցումները
+փաթեթավորված պրոքսիի միջոցով, որպեսզի բրաուզերները կարողանան շրջանցել CORS-ի սահմանները դեռևս
+տոկոսադրույքների սահմանաչափերի և իսկորոշման կիրառում:
 
-## Prerequisites
+## Նախադրյալներ
 
-- Node.js 18.18 or newer (matches the portal build requirements)
-- Network access to a Torii staging environment
-- A bearer token that can call the Torii routes you plan to exercise
+- Node.js 18.18 կամ ավելի նոր տարբերակ (համապատասխանում է պորտալի կառուցման պահանջներին)
+- Ցանցային մուտք դեպի Torii բեմականացման միջավայր
+- Կրող նշան, որը կարող է զանգահարել Torii երթուղիները, որոնք դուք նախատեսում եք իրականացնել
 
-All proxy configuration is done through environment variables. The table below
-lists the most important knobs:
+Բոլոր վստահված անձի կոնֆիգուրացիան կատարվում է շրջակա միջավայրի փոփոխականների միջոցով: Ստորև բերված աղյուսակը
+թվարկում է ամենակարևոր կոճակները.
 
-| Variable | Purpose | Default |
+| Փոփոխական | Նպատակը | Կանխադրված |
 | --- | --- | --- |
-| `TRYIT_PROXY_TARGET` | Base Torii URL that the proxy forwards requests to | **Required** |
-| `TRYIT_PROXY_LISTEN` | Listen address for local development (format `host:port` or `[ipv6]:port`) | `127.0.0.1:8787` |
-| `TRYIT_PROXY_ALLOWED_ORIGINS` | Comma-separated list of origins that may call the proxy | `http://localhost:3000` |
-| `TRYIT_PROXY_CLIENT_ID` | Identifier placed in `X-TryIt-Client` for every upstream request | `docs-portal` |
-| `TRYIT_PROXY_BEARER` | Default bearer token forwarded to Torii | _empty_ |
-| `TRYIT_PROXY_ALLOW_CLIENT_AUTH` | Allow end users to supply their own token via `X-TryIt-Auth` | `0` |
-| `TRYIT_PROXY_MAX_BODY` | Maximum request body size (bytes) | `1048576` |
-| `TRYIT_PROXY_TIMEOUT_MS` | Upstream timeout in milliseconds | `10000` |
-| `TRYIT_PROXY_RATE_LIMIT` | Requests allowed per rate window per client IP | `60` |
-| `TRYIT_PROXY_RATE_WINDOW_MS` | Sliding window for rate limiting (ms) | `60000` |
-| `TRYIT_PROXY_METRICS_LISTEN` | Optional listen address for the Prometheus-style metrics endpoint (`host:port` or `[ipv6]:port`) | _empty (disabled)_ |
-| `TRYIT_PROXY_METRICS_PATH` | HTTP path served by the metrics endpoint | `/metrics` |
+| `TRYIT_PROXY_TARGET` | Հիմնական Torii URL-ը, որը վստահված անձը ուղարկում է հարցումները | **Պարտադիր** |
+| `TRYIT_PROXY_LISTEN` | Լսեք տեղական զարգացման հասցե (ձևաչափ `host:port` կամ `[ipv6]:port`) | `127.0.0.1:8787` |
+| `TRYIT_PROXY_ALLOWED_ORIGINS` | Ստորակետերով բաժանված ծագման ցուցակ, որը կարող է զանգահարել վստահված անձի | `http://localhost:3000` |
+| `TRYIT_PROXY_CLIENT_ID` | `X-TryIt-Client`-ում տեղադրված նույնացուցիչը վերին հոսքի յուրաքանչյուր հարցման համար | `docs-portal` |
+| `TRYIT_PROXY_BEARER` | Կանխադրված կրիչի նշանն ուղարկվել է Torii | _դատարկ_ |
+| `TRYIT_PROXY_ALLOW_CLIENT_AUTH` | Թույլատրել վերջնական օգտագործողներին մատակարարել իրենց սեփական նշանը `X-TryIt-Auth` | `0` |
+| `TRYIT_PROXY_MAX_BODY` | Հարցման մարմնի առավելագույն չափը (բայթ) | `1048576` |
+| `TRYIT_PROXY_TIMEOUT_MS` | Վերին հոսքի ժամանակի վերջնաժամկետը միլիվայրկյաններով | `10000` |
+| `TRYIT_PROXY_RATE_LIMIT` | Հայտերը թույլատրվում են ըստ տոկոսադրույքի պատուհանի մեկ հաճախորդի IP | `60` |
+| `TRYIT_PROXY_RATE_WINDOW_MS` | Սահող պատուհան արագության սահմանափակման համար (ms) | `60000` |
+| `TRYIT_PROXY_METRICS_LISTEN` | Լսելու կամընտիր հասցե Prometheus ոճի չափման վերջնակետի համար (`host:port` կամ `[ipv6]:port`) | _դատարկ (հաշմանդամ)_ |
+| `TRYIT_PROXY_METRICS_PATH` | HTTP ուղին սպասարկվում է չափումների վերջնակետով | `/metrics` |
 
-The proxy also exposes `GET /healthz`, returns structured JSON errors, and
-redacts bearer tokens from log output.
+Վստահված սերվերը նաև բացահայտում է `GET /healthz`-ը, վերադարձնում է JSON-ի կառուցվածքային սխալները և
+խմբագրում է կրիչի նշանները տեղեկամատյանների ելքից:
 
-Enable `TRYIT_PROXY_ALLOW_CLIENT_AUTH=1` when exposing the proxy to docs users so the Swagger and
-RapiDoc panels can forward user-supplied bearer tokens. The proxy still enforces rate limits,
-redacts credentials, and records whether a request used the default token or a per-request override.
-Set `TRYIT_PROXY_CLIENT_ID` to the label you want sent as `X-TryIt-Client`
-(defaults to `docs-portal`). The proxy trims and validates caller-supplied
-`X-TryIt-Client` values, falling back to this default so staging gateways can
-audit provenance without correlating browser metadata.
+Միացնել `TRYIT_PROXY_ALLOW_CLIENT_AUTH=1`-ը փաստաթղթերի օգտատերերի համար պրոքսիի ցուցադրման ժամանակ, որպեսզի Swagger-ը և
+RapiDoc վահանակները կարող են փոխանցել օգտվողի կողմից մատակարարվող կրիչի նշանները: Վստահված անձը դեռևս կիրառում է դրույքաչափերի սահմանաչափերը,
+խմբագրում է հավատարմագրերը և արձանագրում, թե արդյոք հարցումն օգտագործել է լռելյայն նշանը, թե մեկ հարցման վերագրում:
+Սահմանեք `TRYIT_PROXY_CLIENT_ID` այն պիտակի վրա, որը ցանկանում եք ուղարկել որպես `X-TryIt-Client`
+(կանխադրված է `docs-portal`): Վստահված սերվերը կրճատում և վավերացնում է զանգահարողի կողմից տրվածը
+`X-TryIt-Client` արժեքներ, որոնք հետ են ընկնում այս լռելյայնին, որպեսզի բեմադրող դարպասները կարողանան
+աուդիտի ծագումն առանց բրաուզերի մետատվյալների փոխկապակցման:
 
-## Start the proxy locally
+## Գործարկեք վստահված անձը տեղում
 
-Install dependencies the first time you set up the portal:
+Տեղադրեք կախվածությունները, երբ առաջին անգամ ստեղծեք պորտալը.
 
 ```bash
 cd docs/portal
 npm install
 ```
 
-Run the proxy and point it at your Torii instance:
+Գործարկեք վստահված անձը և ուղղեք այն ձեր Torii օրինակին.
 
 ```bash
 export TRYIT_PROXY_TARGET="https://torii.devnet.sora.example"
@@ -67,20 +69,20 @@ export TRYIT_PROXY_BEARER="Bearer eyJhbGciOi..."
 npm run tryit-proxy
 ```
 
-The script logs the bound address and forwards requests from `/proxy/*` to the
-configured Torii origin.
+Սցենարը գրանցում է կապված հասցեն և ուղարկում հարցումները `/proxy/*`-ից դեպի
+կազմաձևված Torii ծագում:
 
-Before binding the socket the script validates that
-`static/openapi/torii.json` matches the digest recorded in
-`static/openapi/manifest.json`. If the files drift, the command exits with an
-error and instructs you to run `npm run sync-openapi -- --latest`. Export
-`TRYIT_PROXY_ALLOW_STALE_SPEC=1` only for emergency overrides; the proxy will
-log a warning and continue so you can recover during maintenance windows.
+Նախքան վարդակից կապելը, սցենարը հաստատում է դա
+`static/openapi/torii.json`-ը համապատասխանում է գրանցված ամփոփմանը
+`static/openapi/manifest.json`. Եթե ֆայլերը շարժվում են, հրամանը դուրս է գալիս an-ով
+սխալ է և հրահանգում է գործարկել `npm run sync-openapi -- --latest`: Արտահանում
+`TRYIT_PROXY_ALLOW_STALE_SPEC=1` միայն արտակարգ իրավիճակների վերացման համար; վստահված անձը կամք
+մուտքագրեք նախազգուշացում և շարունակեք, որպեսզի կարողանաք վերականգնել սպասարկման պատուհանների ժամանակ:
 
-## Wire the portal widgets
+## Միացրեք պորտալի վիդջեթները
 
-When you build or serve the developer portal, set the URL that the widgets
-should use for the proxy:
+Երբ դուք կառուցում կամ սպասարկում եք մշակողների պորտալը, սահմանեք վիջեթների URL-ը
+վստահված անձի համար պետք է օգտագործվի՝
 
 ```bash
 export TRYIT_PROXY_PUBLIC_URL="http://localhost:8787"
@@ -88,48 +90,48 @@ export TRYIT_PROXY_DEFAULT_BEARER="Bearer eyJhbGciOi..." # Optional
 npm run start
 ```
 
-The following components read these values from `docusaurus.config.js`:
+Հետևյալ բաղադրիչները կարդում են այս արժեքները `docusaurus.config.js`-ից.
 
-- **Swagger UI** — rendered at `/reference/torii-swagger`; pre-authorises the
-  bearer scheme when a token is present, tags requests with `X-TryIt-Client`,
-  injects `X-TryIt-Auth`, and rewrites calls through the proxy when
-  `TRYIT_PROXY_PUBLIC_URL` is set.
-- **RapiDoc** — rendered at `/reference/torii-rapidoc`; mirrors the token field,
-  reuses the same headers as the Swagger panel, and targets the proxy
-  automatically when the URL is configured.
-- **Try it console** — embedded on the API overview page; lets you send custom
-  requests, view headers, and inspect response bodies.
+- **Swagger UI** — մատուցված է `/reference/torii-swagger`-ում; նախապես թույլատրում է
+  կրողի սխեման, երբ առկա է նշան, պիտակավորում է հարցումները `X-TryIt-Client`-ով,
+  ներարկում է `X-TryIt-Auth` և վերագրում է զանգերը վստահված անձի միջոցով, երբ
+  Սահմանված է `TRYIT_PROXY_PUBLIC_URL`:
+- **RapiDoc** — մատուցված է `/reference/torii-rapidoc`; արտացոլում է նշանի դաշտը,
+  նորից օգտագործում է նույն վերնագրերը, ինչ Swagger վահանակը և թիրախավորում է վստահված անձին
+  ավտոմատ կերպով, երբ URL-ը կազմաձևված է:
+- **Փորձեք այն կոնսոլից** — ներկառուցված է API-ի ակնարկ էջում; թույլ է տալիս ուղարկել հատուկ
+  հարցումներ, դիտեք վերնագրերը և ստուգեք արձագանքման մարմինները:
 
-Both panels surface a **snapshot selector** that reads
-`docs/portal/static/openapi/versions.json`. Populate that index with
-`npm run sync-openapi -- --version=<label> --mirror=current --latest` so
-reviewers can jump between historical specs, see the recorded SHA-256 digest,
-and confirm whether a release snapshot carries a signed manifest before using
-the interactive widgets.
+Երկու վահանակներն էլ երևում են **պատկերի ընտրիչ**, որը կարդում է
+`docs/portal/static/openapi/versions.json`. Լրացրեք այդ ցուցանիշը
+`npm run sync-openapi -- --version=<label> --mirror=current --latest` այսպես
+վերանայողները կարող են անցնել պատմական բնութագրերի միջև, տես SHA-256-ի գրանցված ամփոփագիրը,
+և հաստատեք, թե արդյոք թողարկման նկարը նախքան օգտագործելը ունի ստորագրված մանիֆեստ
+ինտերակտիվ վիդջեթներ:
 
-Changing the token in any widget only affects the current browser session; the
-proxy never persists or logs the supplied token.
+Ցանկացած վիջեթում նշանը փոխելը ազդում է միայն բրաուզերի ընթացիկ աշխատաշրջանի վրա. որ
+վստահված անձը երբեք չի պահպանում կամ գրանցում է մատակարարված նշանը:
 
-## Short-lived OAuth tokens
+## Կարճատև OAuth նշաններ
 
-To avoid distributing long-lived Torii tokens to reviewers, wire the Try it
-console to your OAuth server. When the environment variables below are present
-the portal renders a device-code login widget, mints short-lived bearer tokens,
-and automatically injects them into the console form.
+Որպեսզի չտարածեք երկարակյաց Torii ժետոնները գրախոսողներին, միացրեք «Փորձեք այն»
+վահանակ ձեր OAuth սերվերին: Երբ առկա են ստորև նշված միջավայրի փոփոխականները
+պորտալը տրամադրում է սարքի կոդ մուտքի վիդջեթ, կարճատև կրող նշաններ,
+և ավտոմատ կերպով դրանք ներարկում է վահանակի ձևի մեջ:
 
-| Variable | Purpose | Default |
+| Փոփոխական | Նպատակը | Կանխադրված |
 | --- | --- | --- |
-| `DOCS_OAUTH_DEVICE_CODE_URL` | OAuth Device Authorization endpoint (`/oauth/device/code`) | _empty (disabled)_ |
-| `DOCS_OAUTH_TOKEN_URL` | Token endpoint that accepts `grant_type=urn:ietf:params:oauth:grant-type:device_code` | _empty_ |
-| `DOCS_OAUTH_CLIENT_ID` | OAuth client identifier registered for the docs preview | _empty_ |
-| `DOCS_OAUTH_SCOPE` | Space-delimited scopes requested during sign-in | `openid profile offline_access` |
-| `DOCS_OAUTH_AUDIENCE` | Optional API audience to bind the token to | _empty_ |
-| `DOCS_OAUTH_POLL_INTERVAL_MS` | Minimum poll interval when waiting for approval (ms) | `5000` (values < 5000 ms are rejected) |
-| `DOCS_OAUTH_DEVICE_CODE_TTL_SECONDS` | Fallback device-code expiration window (seconds) | `600` (must remain between 300 s and 900 s) |
-| `DOCS_OAUTH_TOKEN_TTL_SECONDS` | Fallback access-token lifetime (seconds) | `900` (must remain between 300 s and 900 s) |
-| `DOCS_OAUTH_ALLOW_INSECURE` | Set to `1` for local previews that intentionally skip OAuth enforcement | _unset_ |
+| `DOCS_OAUTH_DEVICE_CODE_URL` | OAuth Սարքի թույլտվության վերջնակետ (`/oauth/device/code`) | _դատարկ (հաշմանդամ)_ |
+| `DOCS_OAUTH_TOKEN_URL` | Token վերջնական կետ, որն ընդունում է `grant_type=urn:ietf:params:oauth:grant-type:device_code` | _դատարկ_ |
+| `DOCS_OAUTH_CLIENT_ID` | OAuth հաճախորդի նույնացուցիչը գրանցված է փաստաթղթերի նախադիտման համար | _դատարկ_ |
+| `DOCS_OAUTH_SCOPE` | Մուտքի ժամանակ պահանջվում են տարածքով սահմանազատված շրջանակներ | `openid profile offline_access` |
+| `DOCS_OAUTH_AUDIENCE` | Ընտրովի API լսարան՝ նշանը կապելու համար | _դատարկ_ |
+| `DOCS_OAUTH_POLL_INTERVAL_MS` | Հաստատման սպասելիս հարցման նվազագույն միջակայքը (ms) | `5000` (<5000ms արժեքները մերժվում են) |
+| `DOCS_OAUTH_DEVICE_CODE_TTL_SECONDS` | Հետադարձ սարք-կոդի ժամկետի լրանալու պատուհան (վայրկյան) | `600` (պետք է մնա 300-ից 900-ականների միջև) |
+| `DOCS_OAUTH_TOKEN_TTL_SECONDS` | Հետադարձ հասանելիության նշանի կյանքի տևողությունը (վայրկյաններ) | `900` (պետք է մնա 300-ից 900-ականների միջև) |
+| `DOCS_OAUTH_ALLOW_INSECURE` | Սահմանել `1`՝ տեղական նախադիտումների համար, որոնք միտումնավոր բաց են թողնում OAuth-ի կիրարկումը | _չսահմանված_ |
 
-Example configuration:
+Օրինակ կազմաձևում.
 
 ```bash
 export DOCS_OAUTH_DEVICE_CODE_URL="https://auth.dev.sora.example/oauth/device/code"
@@ -141,60 +143,60 @@ export DOCS_OAUTH_AUDIENCE="https://torii.devnet.sora.example"
 export DOCS_OAUTH_POLL_INTERVAL_MS="6000"
 ```
 
-When you run `npm run start` or `npm run build`, the portal embeds these values
-in `docusaurus.config.js`. During local preview the Try it card shows a
-“Sign in with device code” button. Users enter the displayed code on your OAuth
-verification page; once the device flow succeeds the widget:
+Երբ գործարկում եք `npm run start` կամ `npm run build`, պորտալը զետեղում է այս արժեքները
+`docusaurus.config.js`-ում: Տեղական նախադիտման ժամանակ Try it քարտը ցույց է տալիս a
+«Մուտք գործել սարքի կոդով» կոճակը: Օգտագործողները մուտքագրում են ցուցադրված կոդը ձեր OAuth-ում
+ստուգման էջ; երբ սարքի հոսքը հաջողվի վիջեթին.
 
-- injects the issued bearer token into the Try it console field,
-- tags requests with the existing `X-TryIt-Client` and `X-TryIt-Auth` headers,
-- displays the remaining lifetime, and
-- automatically clears the token when it expires.
+- ներարկում է թողարկված կրիչի նշանը Try it կոնսոլի դաշտում,
+- պիտակավորել հարցումները գոյություն ունեցող `X-TryIt-Client` և `X-TryIt-Auth` վերնագրերով,
+- ցուցադրում է մնացած կյանքի ժամկետը և
+- ավտոմատ կերպով մաքրում է նշանը, երբ այն սպառվում է:
 
-The manual Bearer input remains available—omit the OAuth variables whenever you
-want to force reviewers to paste a temporary token themselves, or export
-`DOCS_OAUTH_ALLOW_INSECURE=1` for isolated local previews where anonymous access
-is acceptable. Builds without OAuth configured now fail fast to satisfy the
-DOCS-1b roadmap gate.
+Ձեռքով Bearer մուտքագրումը մնում է հասանելի. ամեն անգամ բաց թողեք OAuth փոփոխականները
+ցանկանում են ստիպել վերանայողներին տեղադրել իրենց ժամանակավոր նշանը կամ արտահանել
+`DOCS_OAUTH_ALLOW_INSECURE=1` մեկուսացված տեղական նախադիտումների համար, որտեղ անանուն մուտք է գործում
+ընդունելի է։ Այժմ առանց OAuth-ի կազմաձևված շինությունները արագ չեն բավարարում
+DOCS-1b ճանապարհային քարտեզի դարպաս:
 
-📌 Review the [Security hardening & pen-test checklist](./security-hardening.md)
-before exposing the portal outside the lab; it documents the threat model,
-CSP/Trusted Types profile, and the penetration-test steps that now gate DOCS-1b.
+📌 Դիտեք [Անվտանգության կարծրացում և գրիչ-փորձարկման ստուգաթերթը] (./security-hardening.md)
+նախքան պորտալը լաբորատորիայից դուրս բացահայտելը. այն փաստագրում է սպառնալիքի մոդելը,
+CSP/Trusted Types պրոֆիլը և ներթափանցման փորձարկման քայլերը, որոնք այժմ մուտք են գործում DOCS-1b:
 
-## Norito-RPC samples
+## Norito-RPC նմուշներ
 
-Norito-RPC requests share the same proxy and OAuth plumbing as the JSON routes,
-they simply set `Content-Type: application/x-norito` and send the
-pre-encoded Norito payload described in the NRPC specification
-(`docs/source/torii/nrpc_spec.md`).
-The repository ships canonical payloads under `fixtures/norito_rpc/` so portal
-authors, SDK owners, and reviewers can replay the exact bytes that CI uses.
+Norito-RPC հարցումները կիսում են նույն պրոքսի և OAuth սանտեխնիկան, ինչ JSON երթուղիները,
+նրանք պարզապես դնում են `Content-Type: application/x-norito` և ուղարկում են
+նախապես կոդավորված Norito օգտակար բեռ, որը նկարագրված է NRPC-ի բնութագրում
+(`docs/source/torii/nrpc_spec.md`):
+Պահեստը առաքում է կանոնական բեռներ `fixtures/norito_rpc/` so պորտալի տակ
+հեղինակները, SDK-ի սեփականատերերը և գրախոսողները կարող են վերարտադրել ճշգրիտ բայթերը, որոնք օգտագործում է CI-ն:
 
-### Send a Norito payload from the Try It console
+### Ուղարկեք Norito ծանրաբեռնվածություն Try It վահանակից
 
-1. Pick a fixture such as `fixtures/norito_rpc/transfer_asset.norito`. These
-   files are raw Norito envelopes; do **not** base64-encode them.
-2. In Swagger or RapiDoc, locate the NRPC endpoint (for example
-   `POST /v1/pipeline/submit`) and switch the **Content-Type** selector to
+1. Ընտրեք այնպիսի սարք, ինչպիսին է `fixtures/norito_rpc/transfer_asset.norito`: Սրանք
+   ֆայլերը հում Norito ծրարներ են; մի **մի** base64-կոդավորեք դրանք:
+2. Swagger-ում կամ RapiDoc-ում գտնեք NRPC վերջնակետը (օրինակ
+   `POST /v1/pipeline/submit`) և միացրեք **Content-Type** ընտրիչը
    `application/x-norito`.
-3. Toggle the request body editor to **binary** (Swagger's "File" mode or
-   RapiDoc's "Binary/File" selector) and upload the `.norito` file. The widget
-   streams the bytes through the proxy without alteration.
-4. Submit the request. If Torii returns `X-Iroha-Error-Code: schema_mismatch`,
-   verify that you are calling an endpoint that accepts binary payloads and
-   confirm that the schema hash recorded in `fixtures/norito_rpc/schema_hashes.json`
-   matches the Torii build you are hitting.
+3. Միացրեք հարցումի հիմնական խմբագրիչը **բինար** (Swagger-ի «Ֆայլ» ռեժիմը կամ
+   RapiDoc-ի «Բինար/Ֆայլ» ընտրիչը) և վերբեռնեք `.norito` ֆայլը: Վիջեթը
+   բայթերը փոխանցում է պրոքսիի միջոցով՝ առանց փոփոխության:
+4. Ներկայացրե՛ք հարցումը: Եթե Torii-ը վերադարձնի `X-Iroha-Error-Code: schema_mismatch`,
+   ստուգեք, որ զանգում եք վերջնակետ, որն ընդունում է երկուական ծանրաբեռնվածություն և
+   հաստատեք, որ `fixtures/norito_rpc/schema_hashes.json`-ում գրանցված սխեմայի հեշը
+   համապատասխանում է Torii կառուցվածքին, որը դուք հարվածում եք:
 
-The console keeps the most recent file in memory so you can resubmit the same
-payload while exercising different authorisation tokens or Torii hosts. Adding
-`scripts/run_norito_rpc_fixtures.sh --note "<ticket>"` to your workflow produces
-the evidence bundle referenced in the NRPC-4 adoption plan (log + JSON summary),
-which pairs nicely with screenshotting the Try It response during reviews.
+Վահանակը պահում է ամենավերջին ֆայլը հիշողության մեջ, որպեսզի կարողանաք նույնը նորից ուղարկել
+ծանրաբեռնվածություն տարբեր թույլտվության նշաններ կամ Torii հոսթեր օգտագործելիս: Ավելացում
+`scripts/run_norito_rpc_fixtures.sh --note "<ticket>"`-ը ձեր աշխատանքային հոսքին արտադրում է
+ապացույցների փաթեթը, որը նշված է NRPC-4-ի ընդունման պլանում (տեղեկամատյան + JSON ամփոփում),
+որը հիանալի կերպով զուգորդվում է ակնարկների ժամանակ «Փորձիր այն» պատասխանի սքրինշոթինգի հետ:
 
-### CLI example (curl)
+### CLI օրինակ (գանգուր)
 
-The same fixtures can be replayed outside the portal via `curl`, which is useful
-when validating the proxy or debugging gateway responses:
+Նույն հարմարանքները կարող են վերարտադրվել պորտալից դուրս `curl`-ի միջոցով, ինչը օգտակար է
+վստահված անձի կամ վրիպազերծման դարպասի պատասխանները վավերացնելիս.
 
 ```bash
 TORII="https://torii.devnet.sora.example"
@@ -206,23 +208,21 @@ curl \
   "${TORII}/v1/pipeline/submit"
 ```
 
-Swap the fixture for any entry listed in `transaction_fixtures.manifest.json`
-or encode your own payload with `cargo xtask norito-rpc-fixtures`. When Torii
-is in canary mode you can point `curl` at the try-it proxy
-(`https://docs.sora.example/proxy/v1/pipeline/submit`) to exercise the same
-infrastructure that the portal widgets use.
+Փոխարինեք սարքը `transaction_fixtures.manifest.json`-ում նշված ցանկացած մուտքի հետ
+կամ կոդավորեք ձեր սեփական ծանրաբեռնվածությունը `cargo xtask norito-rpc-fixtures`-ով: Երբ Torii
+Կանարյան ռեժիմում է, կարող եք ուղղել `curl`-ը try-it վստահված անձի վրա
+(`https://docs.sora.example/proxy/v1/pipeline/submit`) նույնը վարելու համար
+ենթակառուցվածք, որն օգտագործում են պորտալի վիդջեթները:
 
-## Observability & operations
+## Դիտորդականություն և գործառնություններՅուրաքանչյուր հարցում գրանցվում է մեկ անգամ՝ մեթոդով, ուղով, սկզբնավորմամբ, հոսանքին հակառակ կարգավիճակով և
+Նույնականացման աղբյուր (`override`, `default` կամ `client`): Նշանները երբեք չեն լինում
+պահված. և՛ կրողի վերնագրերը, և՛ `X-TryIt-Auth` արժեքները խմբագրվել են նախկինում
+logging — այնպես որ կարող եք stdout-ը փոխանցել կենտրոնական կոլեկցիոներ՝ առանց անհանգստանալու
+գաղտնիքների արտահոսք.
 
-Every request is logged once with method, path, origin, upstream status, and the
-authentication source (`override`, `default`, or `client`). Tokens are never
-stored—both bearer headers and `X-TryIt-Auth` values are redacted before
-logging—so you can forward stdout to a central collector without worrying about
-secrets leaking.
+### Առողջության հետաքննություն և ահազանգ
 
-### Health probes & alerting
-
-Run the bundled probe during deployments or on a schedule:
+Գործարկեք փաթեթավորված զոնդը տեղակայման ժամանակ կամ ըստ ժամանակացույցի.
 
 ```bash
 # Ensure the proxy responds to /healthz and forwards a sample request.
@@ -231,19 +231,19 @@ TRYIT_PROXY_SAMPLE_PATH="/v1/status" \
 npm run probe:tryit-proxy
 ```
 
-Environment knobs:
+Շրջակա միջավայրի բռնակներ.
 
-- `TRYIT_PROXY_SAMPLE_PATH` — optional Torii route (without `/proxy`) to exercise.
-- `TRYIT_PROXY_SAMPLE_METHOD` — defaults to `GET`; set to `POST` for write routes.
-- `TRYIT_PROXY_PROBE_TOKEN` — injects a temporary bearer token for the sample call.
-- `TRYIT_PROXY_PROBE_TIMEOUT_MS` — overrides the default 5 s timeout.
-- `TRYIT_PROXY_PROBE_METRICS_FILE` — optional Prometheus textfile destination for `probe_success`/`probe_duration_seconds`.
-- `TRYIT_PROXY_PROBE_LABELS` — comma-separated `key=value` pairs appended to the metrics (defaults to `job=tryit-proxy` and `instance=<proxy URL>`).
-- `TRYIT_PROXY_PROBE_METRICS_URL` — optional metrics endpoint URL (for example, `http://localhost:9798/metrics`) that must respond successfully when `TRYIT_PROXY_METRICS_LISTEN` is enabled.
+- `TRYIT_PROXY_SAMPLE_PATH` — կամընտիր Torii երթուղի (առանց `/proxy`) մարզվելու համար:
+- `TRYIT_PROXY_SAMPLE_METHOD` — կանխադրված է `GET`; սահմանել `POST`՝ գրելու երթուղիների համար:
+- `TRYIT_PROXY_PROBE_TOKEN` — ներարկում է ժամանակավոր կրող նշան նմուշի զանգի համար:
+- `TRYIT_PROXY_PROBE_TIMEOUT_MS` — անտեսում է լռելյայն 5 վրկ ժամանակի ավարտը:
+- `TRYIT_PROXY_PROBE_METRICS_FILE` — կամընտիր Prometheus տեքստային ֆայլի նպատակակետ `probe_success`/`probe_duration_seconds`-ի համար:
+- `TRYIT_PROXY_PROBE_LABELS` — ստորակետերով բաժանված `key=value` զույգերը կցված են չափիչներին (կանխադրված են `job=tryit-proxy` և `instance=<proxy URL>`):
+- `TRYIT_PROXY_PROBE_METRICS_URL` — չափման կամընտիր վերջնակետի URL (օրինակ՝ `http://localhost:9798/metrics`), որը պետք է հաջողությամբ արձագանքի, երբ `TRYIT_PROXY_METRICS_LISTEN` միացված է:
 
-Feed the results into a textfile collector by pointing the probe at a writable
-path (for example, `/var/lib/node_exporter/textfile_collector/tryit.prom`) and
-adding any custom labels:
+Արդյունքները փոխանցեք տեքստային ֆայլերի կոլեկցիոներին՝ զոնդն ուղղելով գրվողի վրա
+ուղին (օրինակ, `/var/lib/node_exporter/textfile_collector/tryit.prom`) և
+ավելացնելով ցանկացած հատուկ պիտակ.
 
 ```bash
 TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" \
@@ -252,17 +252,17 @@ TRYIT_PROXY_PROBE_LABELS="job=tryit-proxy,cluster=prod" \
 npm run probe:tryit-proxy
 ```
 
-The script rewrites the metrics file atomically so your collector always reads a
-complete payload.
+Սցենարը վերագրում է չափման ֆայլը ատոմային եղանակով, որպեսզի ձեր կոլեկցիոները միշտ կարդա ա
+ամբողջական ծանրաբեռնվածություն.
 
-When `TRYIT_PROXY_METRICS_LISTEN` is configured, set
-`TRYIT_PROXY_PROBE_METRICS_URL` to the metrics endpoint so the probe fails fast
-if the scrape surface disappears (for example, misconfigured ingress or missing
-firewall rules). A typical production setting is
+Երբ `TRYIT_PROXY_METRICS_LISTEN` կազմաձևված է, դրեք
+`TRYIT_PROXY_PROBE_METRICS_URL` չափումների վերջնակետին, որպեսզի զոնդն արագ ձախողվի
+եթե քերծվածքի մակերեսը անհետանում է (օրինակ՝ սխալ կազմաձևված ներթափանցում կամ բացակայում է):
+firewall կանոնները): Տիպիկ արտադրական պարամետրն է
 `TRYIT_PROXY_PROBE_METRICS_URL="http://127.0.0.1:9798/metrics"`.
 
-For lightweight alerting, wire the probe into your monitoring stack. A Prometheus
-example that pages after two consecutive failures:
+Թեթև ծանուցման համար զոնդը միացրեք ձեր մոնիտորինգի կույտին: A Prometheus
+Օրինակ, որ էջերը երկու անընդմեջ ձախողումներից հետո.
 
 ```yaml
 groups:
@@ -279,14 +279,14 @@ groups:
             The try-it proxy at {{ $labels.instance }} is not responding to probe requests.
 ```
 
-### Metrics endpoint & dashboards
+### Չափման վերջնակետ և վահանակներ
 
-Set `TRYIT_PROXY_METRICS_LISTEN=127.0.0.1:9798` (or any host/port pair) before
-starting the proxy to expose a Prometheus-formatted metrics endpoint. The path
-defaults to `/metrics` but can be overridden via
-`TRYIT_PROXY_METRICS_PATH=/custom`. Each scrape returns counters for per-method
-request totals, rate-limit rejections, upstream errors/timeouts, proxy outcomes,
-and latency summaries:
+Նախկինում սահմանեք `TRYIT_PROXY_METRICS_LISTEN=127.0.0.1:9798` (կամ ցանկացած հյուրընկալող/պորտային զույգ):
+սկսել վստահված սերվերը՝ բացահայտելու Prometheus ձևաչափով չափման վերջնակետը: Ճանապարհը
+լռելյայն է `/metrics`, բայց կարող է անտեսվել միջոցով
+`TRYIT_PROXY_METRICS_PATH=/custom`. Յուրաքանչյուր քերծվածք վերադարձնում է հաշվիչներ յուրաքանչյուր մեթոդի համար
+հարցումների հանրագումարներ, տոկոսադրույքի սահմանաչափի մերժումներ, վերին հոսքի սխալներ/ժամկետներ, վստահված անձի արդյունքներ,
+և հետաձգման ամփոփագրեր.
 
 ```bash
 export TRYIT_PROXY_METRICS_LISTEN="127.0.0.1:9798"
@@ -297,16 +297,16 @@ tryit_proxy_requests_total{method="GET"} 12
 tryit_proxy_rate_limited_total 1
 ```
 
-Point your Prometheus/OTLP collectors at the metrics endpoint and reuse the
-existing `dashboards/grafana/docs_portal.json` panels so SRE can observe tail
-latencies and rejection spikes without parsing logs. The proxy automatically
-publishes `tryit_proxy_start_timestamp_ms` to help operators detect restarts.
+Ուղղեք ձեր Prometheus/OTLP կոլեկտորները չափումների վերջնակետում և նորից օգտագործեք
+գոյություն ունեցող `dashboards/grafana/docs_portal.json` վահանակներ, որպեսզի SRE-ն կարողանա դիտել պոչը
+ուշացումներ և մերժման աճեր՝ առանց տեղեկամատյանների վերլուծության: Վստահված անձը ավտոմատ կերպով
+հրատարակում է `tryit_proxy_start_timestamp_ms`՝ օգնելու օպերատորներին հայտնաբերել վերագործարկումները:
 
-### Rollback automation
+### Հետադարձ ավտոմատացում
 
-Use the management helper to update or restore the target Torii URL. The script
-stores the previous configuration in `.env.tryit-proxy.bak` so rollbacks are a
-single command.
+Օգտագործեք կառավարման օգնականը՝ նպատակային Torii URL-ը թարմացնելու կամ վերականգնելու համար: Սցենարը
+պահպանում է նախորդ կոնֆիգուրացիան `.env.tryit-proxy.bak`-ում, որպեսզի հետադարձումները լինեն
+մեկ հրաման.
 
 ```bash
 # Update TRYIT_PROXY_TARGET and back up the previous config.
@@ -316,5 +316,5 @@ npm run manage:tryit-proxy -- update --target https://torii.devnet.sora.example
 npm run manage:tryit-proxy -- rollback
 ```
 
-Override the env file path with `--env` or `TRYIT_PROXY_ENV` if your deployment
-stores configuration elsewhere.
+Անտեսեք env ֆայլի ուղին `--env` կամ `TRYIT_PROXY_ENV`, եթե ձեր տեղակայումը
+պահպանում է կոնֆիգուրացիան այլուր:

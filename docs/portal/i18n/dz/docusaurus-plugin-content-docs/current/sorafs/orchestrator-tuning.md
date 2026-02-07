@@ -8,261 +8,241 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: Orchestrator Rollout & Tuning
 sidebar_label: Orchestrator Tuning
 description: Practical defaults, tuning guidance, and audit checkpoints for taking the multi-source orchestrator to GA.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
+:::དྲན་ཐོའི་འབྱུང་ཁུངས།
 :::
 
-# Orchestrator Rollout & Tuning Guide
+# ཨོར་ཀེཊ་ཊར་ རོ་ལོ་ཨའུཊ་དང་ ཊུ་ནིང་ལམ་སྟོན།
 
-This guide builds on the [configuration reference](orchestrator-config.md) and the
-[multi-source rollout runbook](multi-source-rollout.md). It explains
-how to tune the orchestrator for each rollout phase, how to interpret the
-scoreboard artefacts, and which telemetry signals must be in place before
-expanding traffic. Apply the recommendations consistently across CLI, SDKs, and
-automation so every node follows the same deterministic fetch policy.
+ལམ་སྟོན་འདི་གིས་ [རིམ་སྒྲིག་གཞི་བསྟུན་](I18NU0000010X) དང་
+[multi-source-sourut runbook](multi-source-rollout.md). འདི་གིས་འགྲེལ་བཤད་རྐྱབ་ཨིན།
+འདོན་སྤེལ།: ༢༠༡༡/༠༤/༢༠ རིག་པ།(༡) འབྲུག་རྒྱང་བསྒྲགས་ལས་ཁུངས་ཀྱིས་ འབྲུག་རྒྱང་བསྒྲགས་ལས་ཁུངས་
+སྐུགས་ཤོག་སྒྲོམ་དང་ ཊེ་ལི་མི་ཊི་བརྡ་རྟགས་ག་ཅི་ ཧེ་མའི་ཧེ་མ་ལས་ དགོཔ་ཨིན།
+འགྲིམ་འགྲུལ་རྒྱ་སྐྱེད་འབད་ནི། གྲོས་འཆར་ཚུ་ CLI དང་ SDKs དེ་ལས་ ཚུ་ནང་ལུ་ རྟག་བུ་རང་ ལག་ལེན་འཐབ་དགོ།
+རང་བཞིན་གྱིས་ དེ་འབདཝ་ལས་ མཐུད་མཚམས་རེ་རེ་གིས་ ཐག་བཅད་པའི་ སྲིད་བྱུས་གཅིག་པའི་ རྗེས་སུ་འབྲངམ་ཨིན།
 
-## 1. Baseline Parameter Sets
+## 1. གཞི་རིམ་ཚད་གཞི་ཆ་ཚན་ཚུ།
 
-Start from a shared configuration template and adjust a small set of knobs as
-the rollout progresses. The table below captures the recommended values for the
-most common phases; values not listed fall back to the defaults in
-`OrchestratorConfig::default()` and `FetchOptions::default()`.
+རིམ་སྒྲིག་འབད་ཡོད་པའི་རིམ་སྒྲིག་ཊེམ་པེལེཊི་ཅིག་ལས་འགོ་བཙུགས་ཏེ་ ཀེབ་ཚུ་གི་ཆ་ཚན་ཆུང་ཀུ་ཅིག་ , 1 ལུ་བདེ་སྒྲིག་འབད།
+འདི་ བསྐོར་ར་འཕེལ་འགྱོཝ་ཨིན། འོག་གི་ཐིག་ཁྲམ་འདི་གིས་ དེ་གི་དོན་ལུ་ འོས་སྦྱོར་འབད་ཡོད་པའི་གནས་གོང་ཚུ་ བཟུང་བཞགཔ་ཨིན།
+མང་ཆེ་བ་ དུས་རིམ་ཚུ། ཐོ་བཀོད་མ་འབད་བའི་གནས་གོང་ཚུ་ ནང་ན་སྔོན་སྒྲིག་ཚུ་ལུ་ལོག་ལྷོདཔ་ཨིན།
+`OrchestratorConfig::default()` དང་ `FetchOptions::default()`.
 
-| Phase | `max_providers` | `fetch.per_chunk_retry_limit` | `fetch.provider_failure_threshold` | `scoreboard.latency_cap_ms` | `scoreboard.telemetry_grace_secs` | Notes |
-|-------|-----------------|-------------------------------|------------------------------------|-----------------------------|------------------------------------|-------|
-| **Lab / CI** | `3` | `2` | `2` | `2500` | `300` | Tight latency cap and grace window surface noisy telemetry quickly. Keep retries low to expose invalid manifests sooner. |
-| **Staging** | `4` | `3` | `3` | `4000` | `600` | Mirrors production defaults while leaving headroom for exploratory peers. |
-| **Canary** | `6` | `3` | `3` | `5000` | `900` | Matches defaults; set `telemetry_region` so dashboards can pivot on canary traffic. |
-| **General Availability** | `None` (use all eligible) | `4` | `4` | `5000` | `900` | Increase retry and failure thresholds to absorb transient faults while audits continue to enforce determinism. |
+| དུས་རིམ་ | `max_providers` | `fetch.per_chunk_retry_limit` | `fetch.provider_failure_threshold` | `scoreboard.latency_cap_ms` | `scoreboard.telemetry_grace_secs` | དྲན་ཐོ། |
+|-------|-----------------|-------------------------------|-------------------------- ----------|-----------------------------|------------------------------------|-------|
+| **ལབ་ / སི་ཨའི་** | `3` | `2` | I18NI0000021X | I18NI0000022X | I18NI0000023X | གཡས་ཕྱོགས་ཀྱི་ མགུ་ཏོག་དང་ བྱིན་རླབས་སྒོ་སྒྲིག་གི་ ཁ་ཐོག་ལུ་ སྐད་ཤུགས་སྦེ་ མགྱོགས་དྲག་སྦེ་ བརྡ་བརྒྱུད། མགྱོགས་པ་རང་ ནུས་མེད་ཀྱི་གསལ་སྟོན་ཚུ་ ཕྱིར་བཏོན་འབད་ནིའི་དོན་ལུ་ བསྐྱར་ལོག་ཚུ་ དམའ་ཤོས་སྦེ་བཞག། |
+| **རིམ་པ་** | `4` | I18NI0000025X | `3` | I18NI0000027X | I18NI0000028X | འཚོལ་ཞིབ་ཀྱི་མཉམ་རོགས་ འཚོལ་ཞིབ་ཀྱི་ མཉམ་རོགས་ཀྱི་དོན་ལུ་ མགུ་ཏོག་བཞག་པའི་སྐབས་ མེ་ལོང་ཐོན་སྐྱེད་སྔོན་སྒྲིག་འབདཝ་ཨིན། |
+| **ཀེ་ན་རི་** | I18NI0000029X | `3` | I18NI0000031X | I18NI0000032X | I18NI0000033X | སྔོན་སྒྲིག་མཐུན་སྒྲིག་ཚུ་; set `telemetry_region` དེ་འབདཝ་ལས་ ཌེཤ་བོརཌ་ཚུ་གིས་ ཀེ་ན་རི་འགྲུལ་སྐྱོད་ལུ་ པི་ཝཊི་འབད་ཚུགས། |
+| **སྤྱིར་བཏང་ཐོབ་ཚུགསཔ་** | `None` (ལག་ལེན་ཆ་མཉམ་རང་ལག་ལེན་འཐབ་) | `4` | `4` | `5000` | I18NI0000039X | རྩིས་ཞིབ་ཚུ་ འཕྲོ་མཐུད་དེ་རང་ བཀག་ཆ་འབད་ནི་ལུ་ བསྐྱར་བཟོའི་འབད་རྩོལ་དང་ འཐུས་ཤོར་གྱི་ཚད་གཞི་ཚུ་ ཡར་སེང་འབད་ནི། |
 
-- `scoreboard.weight_scale` remains at the default `10_000` unless a downstream
-  system requires a different integer resolution. Increasing the scale does not
-  change provider ordering; it only emits a denser credit distribution.
-- When migrating between phases, persist the JSON bundle and use
-  `--scoreboard-out` so the audit trail records the exact parameter set.
+- མར་ཕབ་ཅིག་མ་གཏོགས་ སྔོན་སྒྲིག་ `10_000` ལུ་ `scoreboard.weight_scale` ལུས་ཡོདཔ་ཨིན།
+  རིམ་ལུགས་ལུ་ ཧྲིལ་གྲངས་ཀྱི་གསལ་ཚད་སོ་སོ་ཅིག་དགོཔ་ཨིན། རྒྱ་ཚད་ཡར་སེང་ནི་མིན།
+  བྱིན་མི་ བཀའ་རྒྱ་བཏང་ནི། དེ་གིས་ བུ་ལོན་བཀྲམ་སྤེལ་མཐུག་དྲགས་སྦེ་བཏོནམ་ཨིན།
+- གནས་རིམ་ཚུ་གི་བར་ན་ གནས་སྤོ་བའི་སྐབས་ ཇེ་ཨེསི་ཨོ་ཨེན་ བང་རིམ་འདི་ རྟག་བརྟན་སྦེ་ བཞག་སྟེ་ ལག་ལེན་འཐབ།
+  `--scoreboard-out` དེ་འབདཝ་ལས་ རྩིས་ཞིབ་ལམ་འདི་གིས་ ཚད་གཞི་ཆ་ཚན་ངོ་མ་འདི་ཐོ་བཀོད་འབདཝ་ཨིན།
 
-## 2. Scoreboard Hygiene
+## 2. སྐུགས་ཚད།
 
-The scoreboard combines manifest requirements, provider adverts, and telemetry.
-Before rolling forward:
+སྐུགས་བོཌི་གིས་ གསལ་སྟོན་དགོས་མཁོ་དང་ བྱིན་མི་ ཁྱབ་བསྒྲགས་ཚུ་ དེ་ལས་ བརྒྱུད་འཕྲིན་ཚུ་ མཉམ་སྡེབ་འབདཝ་ཨིན།
+མདུན་སྐྱོད་མ་འབད་བའི་ཧེ་མ་:
 
-1. **Validate telemetry freshness.** Ensure the snapshots referenced by
-   `--telemetry-json` were captured within the configured grace window. Entries
-   older than the configured `telemetry_grace_secs` fail with
-   `TelemetryStale { last_updated }`. Treat this as a hard stop and refresh the
-   telemetry export before continuing.
-2. **Inspect eligibility reasons.** Persist artefacts via
-   `--scoreboard-out=/var/lib/sorafs/scoreboards/preflight.json`. Each entry
-   carries an `eligibility` block with the exact failure cause. Do not override
-   capability mismatches or expired adverts; fix the upstream payload.
-3. **Review weight deltas.** Compare the `normalised_weight` field against the
-   previous release. Weight shifts >10 % should correlate with deliberate advert
-   or telemetry changes and must be acknowledged in the rollout log.
-4. **Archive artefacts.** Configure `scoreboard.persist_path` so every run emits
-   the final scoreboard snapshot. Attach the artefact to the release record
-   alongside the manifest and telemetry bundle.
-5. **Record provider mix evidence.** `scoreboard.json` metadata _and_ the
-   matching `summary.json` must expose `provider_count`,
-   `gateway_provider_count`, and the derived `provider_mix` label so reviewers
-   can prove whether the run was `direct-only`, `gateway-only`, or `mixed`.
-   Gateway captures therefore report `provider_count=0` plus
-   `provider_mix="gateway-only"`, while mixed runs require non-zero counts for
-   both sources. `cargo xtask sorafs-adoption-check` enforces these fields (and
-   fails when the counts/labels disagree), so always run it alongside
-   `ci/check_sorafs_orchestrator_adoption.sh` or your bespoke capture script to
-   produce the `adoption_report.json` evidence bundle. When Torii gateways are
-   involved, keep `gateway_manifest_id`/`gateway_manifest_cid` in the scoreboard
-   metadata so the adoption gate can correlate the manifest envelope with the
-   captured provider mix.
+1. ** ཊེ་ལི་མི་ཊི་ཊི་གསརཔ་ བདེན་དཔྱད་འབད།** གཞི་བསྟུན་འབད་ཡོད་པའི་པར་ཚུ་ ངེས་གཏན་བཟོ།
+   `--telemetry-json` རིམ་སྒྲིག་འབད་ཡོད་པའི་ བྱིན་རླབས་སྒོ་སྒྲིག་ནང་འཁོད་ལུ་ བཟུང་ཡོདཔ་ཨིན། ཐོ་འགོད་ཚུ།
+   རིམ་སྒྲིག་འབད་ཡོད་པའི་ `telemetry_grace_secs` ལས་རྙིངམ་འདི་ དང་གཅིག་ཁར་ འཐུས་ཤོར་བྱུང་ཡོདཔ་ཨིན།
+   `TelemetryStale { last_updated }`. འདི་ལུ་བཀག་ཆ་འབད་ཞིནམ་ལས་ གསར་བསྐྲུན་འབད།
+   འཕྲོ་མཐུད་མ་འབད་བའི་ཧེ་མ་ telemetry ཕྱིར་གཏོང་འབད་ནི།
+2. **འོས་འབབ་ཀྱི་རྒྱུ་མཚན་ ** ཅ་རྙིང་ཚུ་ བརྒྱུད་འཕྲིན་གཏང་ནི།
+   `--scoreboard-out=/var/lib/sorafs/scoreboards/preflight.json`. འཛུལ་ཞུགས་རེ་རེ།
+   ངེས་བདེན་ འཐུས་ཤོར་གྱི་རྒྱུ་རྐྱེན་དང་གཅིག་ཁར་ `eligibility` བཀག་ཆ་ཅིག་ འབག་འོང་། མ་བཞག།
+   ལྕོགས་གྲུབ་མ་མཐུན་པ་ ཡང་ན་ དུས་ཡོལ་ཡོད་པའི་ཁྱབ་བསྒྲགས་ཚུ་; ཡར་འཕེལ་གྱི་ པེ་ལོཌ་འདི་ བཅོ་ཁ་རྐྱབ།
+3. ** བསྐྱར་ཞིབ་ལྗིད་ཚད་ཌེལ་ཊ་ཚུ་.** I18NI000000048X ས་སྒོ་འདི་ ག་བསྡུར་འབད།
+   སྔོན་འགྲོ། ལྗིད་ཚད་བསྒྱུར་བཅོས་>༡༠% འདི་ བསམ་བཞིན་དུ་ ཁྱབ་བསྒྲགས་དང་འབྲེལ་བ་འཐབ་དགོ།
+   ཡང་ན་ ཊེ་ལི་མི་ཊི་བསྒྱུར་བཅོས་ཚུ་དང་ བཤུད་བརྙན་དྲན་ཐོ་ནང་ ངོས་ལེན་འབད་དགོ།
+4. **archive artects.** གཡོག་བཀོལ་མི་རེ་རེ་བཞིན་ `scoreboard.persist_path` རིམ་སྒྲིག་འབད།
+   མཐའ་མའི་སྐུགས་ཐིག་ཁྲམ་པར་བཤུས། གསར་བཏོན་འབད་ཡོད་པའི་དྲན་ཐོ་ལུ་ ཅ་རྙིང་འདི་མཉམ་སྦྲགས་འབད།
+   གསལ་སྟོན་དང་ བརྡ་རྟགས་བརྩམས་པའི་ བང་ཚུགས།
+5. **དྲན་ཐོ་བྱིན་མི་སླ་བསྲེ་སྒྲུབ་བྱེད་ཀྱི་སྒྲུབ་བྱེད་.** `scoreboard.json` མེ་ཊ་ཌེ་ཊ་ _and_
+   མཐུན་སྒྲིག་འབད་མི་ `summary.json` གིས་ I18NI000000052X, འདི་ ཕྱིར་བཏོན་འབད་དགོ།
+   `gateway_provider_count`, དང་ འབྱུང་ཁུངས་ `provider_mix` ཁ་ཡིག་དེ་ དེ་འབདཝ་ལས་ བསྐྱར་ཞིབ་འབད་མི་ཚུ་ཨིན།
+   རན་འདི་ `direct-only`, I18NI000000056X, ཡང་ན་ I18NI000000057X ཨིན་ན་མེན་ན་ བདེན་ཁུངས་བསྐྱལ་ཚུགས།
+   དེ་འབདཝ་ལས་ གཱེཊ་ཝེ་བཟུང་མི་ཚུ་གིས་ `provider_count=0` དང་ མཉམ་བསྡོམས་སྙན་ཞུ་འབདཝ་ཨིན།
+   I18NI000000059X, སླ་བསྲེ་རྐྱབ་པའི་སྐབས་ ཀླད་ཀོར་མེན་པའི་གྱངས་ཁ་དགོཔ་ཨིན།
+   གཉིས་ཀའི་འབྱུང་ཁུངས། I18NI000000060X ས་སྒོ་འདི་དག་ལུ་སྲུང་སྐྱོབ་འབདཝ་ཨིན།
+   གྱངས་ཁ་/མིང་རྟགས་ཚུ་ ངོས་ལེན་མེད་པའི་སྐབས་ འཐུས་ཤོར་བྱུང་དོ་ཡོདཔ་ཨིན།
+   I18NI000000061X ཡང་ན་ ཁྱོད་ཀྱི་ བརྡ་རྟགས་བཟུང་བའི་ཡིག་གཟུགས་ ལུ།
+   I18NI000000062X སྒྲུབ་བྱེད་བརྩམས་ཡོད། I18NT000000007X འཛུལ་སྒོ་ནི།
+   གྲལ་གཏོགས་འབད་ནི། ཨང་རྟགས་ནང་ I18NI000000063X/`gateway_manifest_cid` ལུ་བཞག་དགོ།
+   མེ་ཊ་ཌེ་ཊ་ དེ་འབདཝ་ལས་ ཆ་འཇོག་གི་སྒོ་འདི་གིས་ གསལ་སྟོན་གྱི་ གསལ་སྟོན་འདི་ འབྲེལ་མཐུད་འབད་ཚུགས།
+   བཟུང་ཡོད་པའི་བྱིན་མི་སླ་བསྲེ་བ།
 
-For detailed field definitions see
-`crates/sorafs_car/src/scoreboard.rs` and the CLI summary structure exposed by
+ས་སྒོ་ངེས་ཚིག་ཁ་གསལ་གྱི་དོན་ལུ་བལྟ།
+I18NI000000065X དང་ སི་ཨེལ་ཨའི་ བཅུད་དོན་སྒྲིག་བཀོད་ཀྱིས་ བརྡ་སྟོན་འབད་ཡོདཔ་ཨིན།
 `sorafs_cli fetch --json-out`.
 
-## CLI & SDK Flag Reference
+## CLI & SDK དར་ཚིག དཔྱད་གཞི།
 
-`sorafs_cli fetch` (see `crates/sorafs_car/src/bin/sorafs_cli.rs`) and the
+`sorafs_cli fetch` (`crates/sorafs_car/src/bin/sorafs_cli.rs`) དང་ནི།
 `iroha_cli app sorafs fetch` wrapper (`crates/iroha_cli/src/commands/sorafs.rs`)
-share the same orchestrator configuration surface. Use the following flags when
-capturing rollout evidence or replaying the canonical fixtures:
+སྙན་ཆའི་སྒྲིག་བཀོད་ཀྱི་ཁ་ཐོག་གཅིག་པ་བགོ་བཤའ་རྐྱབས། འོག་གི་དར་ཆ་ཚུ་ ག་དུས་ལུ་ལག་ལེན་འཐབ།
+བསྐོར་བའི་སྒྲུབ་བྱེད་འཛིན་ནི་དང་ ཡང་ན་ ཁྲིམས་ལུགས་ཀྱི་ བརྟན་ཏོག་ཏོ་ཚུ་ ལོག་སྟེ་རྩེད་ནི།
 
-Shared multi-source flag reference (keep CLI help and docs in sync by editing this file only):
+སྣ་མང་-འབྱུང་ཁུངས་ཀྱི་རྒྱལ་དར་གཞི་བསྟུན་ (ཡིག་སྣོད་འདི་རྐྱངམ་ཅིག་ཞུན་དག་འབད་ཐོག་ལས་ མཉམ་འབྱུང་ནང་ སི་ཨེལ་ཨའི་གྲོགས་རམ་དང་ ཌོཀ་ཚུ་ བཞག):
 
-- `--max-peers=<count>` limits how many eligible providers survive the scoreboard filter. Leave unset to stream from every eligible provider, set to `1` only when intentionally exercising the single-source fallback. Mirrors the `maxPeers` knob in SDKs (`SorafsGatewayFetchOptions.maxPeers`, `SorafsGatewayFetchOptions.max_peers`).
-- `--retry-budget=<count>` forwards to the per-chunk retry limit enforced by `FetchOptions`. Use the rollout table in the tuning guide for recommended values; CLI runs that collect evidence must match SDK defaults to keep parity.
-- `--telemetry-region=<label>` tags `sorafs_orchestrator_*` Prometheus series (and OTLP relays) with a region/env label so dashboards can separate lab, staging, canary, and GA traffic.
-- `--telemetry-json=<path>` injects the snapshot referenced by the scoreboard. Persist the JSON next to the scoreboard so auditors can replay the run (and so `cargo xtask sorafs-adoption-check --require-telemetry` can prove which OTLP stream fed the capture).
-- `--local-proxy-*` (`--local-proxy-mode`, `--local-proxy-norito-spool`, `--local-proxy-kaigi-spool`, `--local-proxy-kaigi-policy`) enable the bridge observer hooks. When set, the orchestrator streams chunks through the local Norito/Kaigi proxy so browser clients, guard caches, and Kaigi rooms receive the same receipts emitted by Rust.
-- `--scoreboard-out=<path>` (optionally paired with `--scoreboard-now=<unix_secs>`) persists the eligibility snapshot for auditors. Always pair the persisted JSON with the telemetry and manifest artefacts referenced in the release ticket.
-- `--deny-provider name=ALIAS` / `--boost-provider name=ALIAS:delta` apply deterministic adjustments on top of the advert metadata. Use these flags only for rehearsals; production downgrades must flow through governance artefacts so every node applies the same policy bundle.
-- `--provider-metrics-out` / `--chunk-receipts-out` retain the per-provider health metrics and chunk receipts referenced by the rollout checklist; attach both artefacts when filing adoption evidence.
+- I18NI000000071X ཚད་གཞི་ཚུ་ འོས་འབབ་ཅན་གྱི་བྱིན་མི་ཚུ་གིས་ སྐུགས་བཙུགས་ཚགས་མ་ནང་ ག་དེམ་ཅིག་གནས་ཚུགསཔ་ཨིན་ན། འོས་འབབ་ཅན་གྱི་མཁོ་སྤྲོད་འབད་མི་ག་ར་ལས་ རྒྱུན་སྤེལ་འབད་ནི་ལུ་ སེམས་ཤུགས་མ་བསྐྱེད་པར་ `1` ལུ་ འབྱུང་ཁུངས་རྐྱང་པའི་ ཕོལ་བེག་འདི་ ཤེས་བཞིན་དུ་ ལག་ལེན་འཐབ་པའི་སྐབས་རྐྱངམ་ཅིག་ གཞི་སྒྲིག་འབད། ཨེསི་ཌི་ཀེ་ཨེསི་ནང་ I18NI000000073X མཛུབ་མོ་ (I18NI000000074X, I18NI00000000000075X) ཨིན།
+- I18NI0000000076X གདོང་ཕྱོགས་ལུ་ I18NI000000077X གིས་ ཤུགས་བཏོན་ཡོདཔ་ཨིན། གྲོས་འཆར་བཀོད་ཡོད་པའི་གནས་གོང་ཚུ་གི་དོན་ལུ་ ཊུ་ནིང་ལམ་སྟོན་ནང་ རུལ་ཨའུཊི་ཐིག་ཁྲམ་ལག་ལེན་འཐབ། CLI གཡོག་བཀོལ་མི་འདི་གིས་ སྒྲུབ་བྱེད་བསྡུ་ལེན་འབད་མི་འདི་གིས་ ཆ་སྙོམས་བཞག་ནིའི་དོན་ལུ་ SDK སྔོན་སྒྲིག་དང་མཐུན་དགོཔ་ཨིན།
+- I18NI0000000000078X ངོ་རྟགས་ཚུ་ I18NI000000079X I18NI0000000000X རིམ་འབྱུང་ (དང་ OTLP རི་ལེ་ཚུ་) ལུང་ཕྱོགས་/ཨེན་ཝི་ཁ་ཡིག་ཅིག་དང་གཅིག་ཁར་ ཌེཤ་བོརཌི་ཚུ་གིས་ བརྟག་དཔྱད་ཁང་དང་ དུས་རིམ་ ཀེ་རི་ དེ་ལས་ ཇི་ཨེ་འགྲུལ་སྐྱོད་ཚུ་ སོ་སོ་སྦེ་བཞག་ཚུགས།
+- I18NI000000080X གིས་ སྐུགས་ཤོག་གིས་ གཞི་བསྟུན་འབད་མི་ པར་ཆས་ཚུ་ བཙུགསཔ་ཨིན། རྩིས་ཞིབ་པ་ཚུ་གིས་ རྒྱུག་འགྲན་འདི་ ལོག་གཏང་ཚུགས། ༼དེ་ལས་ `cargo xtask sorafs-adoption-check --require-telemetry` གིས་ OTLP རྒྱུན་ལམ་ག་ཅི་བཟུང་ཡོདཔ་ཨིན་ན་ བདེན་ཁུངས་བསྐྱལ་ཚུགས།༽
+- `--local-proxy-*` (`--local-proxy-mode`, `--local-proxy-norito-spool`, `--local-proxy-kaigi-spool`, `--local-proxy-kaigi-policy`) enable the bridge observer hooks. གཞི་སྒྲིག་འབད་བའི་སྐབས་ སྙན་ཆའི་སྡེ་ཚན་འདི་ ས་གནས་ཀྱི་ Norito/Kaigi གིས་ བརྡ་འཚོལ་འབད་མི་ མཁོ་མངགས་འབད་མི་དང་ སྲུང་རྒྱབ་ཀྱི་ འདྲ་མཛོད་ དེ་ལས་ Kaigi གི་ཁང་མིག་ཚུ་གིས་ Rust གིས་ བཏོན་མི་ འབབ་ཁུངས་ཚུ་ ཐོབ་ཨིན།
+- I18NI000000087X (`--scoreboard-now=<unix_secs>` དང་ཅིག་ཁར་ ཆ་སྒྲིག་འབད་ཡོད་པའི་) རྩིས་ཞིབ་པ་ཚུ་གི་དོན་ལུ་ འོས་འབབ་ཀྱི་པར་རིས་འདི་ རྟག་བུ་རང་ཨིན། བཏོན་གཏང་ནིའི་ཤོག་བྱང་ནང་ གཞི་བསྟུན་འབད་ཡོད་པའི་ རྙིང་མའི་ ཅ་ཆས་ཚུ་ བརྡ་འཕྲིན་དང་ བརྡ་འཕྲིན་དང་གཅིག་ཁར་ རྟག་བརྟན་སྦེ་ ཆ་སྒྲིག་འབད།
+- I18NI000000089X / `--boost-provider name=ALIAS:delta` ཁྱབ་བསྒྲགས་མེ་ཊ་ཌེ་ཊ་གི་གུར་ གཏན་འབེབས་བཟོ་བཅོས་ཚུ་འཇུག་སྤྱོད་འབདཝ་ཨིན། དར་ཚིག་འདི་ཚུ་ སྦྱོང་བརྡར་གྱི་དོན་ལུ་རྐྱངམ་ཅིག་ལག་ལེན་འཐབ། ཐོན་སྐྱེད་མར་ཕབ་འདི་ གཞུང་སྐྱོང་ཅ་ཆས་ཚུ་བརྒྱུད་དེ་ འགྱོ་དགོཔ་ལས་ མཐུད་མཚམས་རེ་རེ་གིས་ སྲིད་བྱུས་ཀྱི་ བང་རིམ་གཅིག་པ་ ལག་ལེན་འཐབ་ཨིན།
+- I18NI000000091X / `--chunk-receipts-out` གིས་ བཀྲམ་སྤེལ་འབད་མི་ བརྟག་ཞིབ་ཐོ་ཡིག་གིས་ རྒྱབ་རྟེན་འབད་མི་ གསོ་བའི་མེ་ཊིག་དང་ ཆུང་ཆུང་ཚུ་ བདག་འཛིན་འཐབ་ཨིན། ཆ་འཇོག་གི་སྒྲུབ་བྱེད་ཚུ་བཙུགས་པའི་སྐབས་ལུ་ ཅ་ཆས་གཉིས་ཆ་ར་ མཉམ་སྦྲགས་འབད།
 
-Example (using the published fixture):
+དཔེ་ (དཔར་བསྐྲུན་འབད་ཡོད་པའི་གཏན་འཇགས་ལག་ལེན་འཐབ་ཐོག་ལས་):
 
-```bash
-sorafs_cli fetch \
-  --plan fixtures/sorafs_orchestrator/multi_peer_parity_v1/plan.json \
-  --gateway-provider gw-alpha=... \
-  --telemetry-source-label otlp::staging \
-  --scoreboard-out artifacts/sorafs_orchestrator/latest/scoreboard.json \
-  --json-out artifacts/sorafs_orchestrator/latest/summary.json \
-  --provider-metrics-out artifacts/sorafs_orchestrator/latest/provider_metrics.json \
-  --chunk-receipts-out artifacts/sorafs_orchestrator/latest/chunk_receipts.json
+I18NF0000008X
 
-cargo xtask sorafs-adoption-check \
-  --scoreboard artifacts/sorafs_orchestrator/latest/scoreboard.json \
-  --summary artifacts/sorafs_orchestrator/latest/summary.json
-```
+ཨེསི་ཌི་ཀེ་ཚུ་གིས་ རཱསིཊི་ནང་ I18NI0000003X བརྒྱུད་དེ་ རིམ་སྒྲིག་གཅིག་པ་ བཀོལ་སྤྱོད་འབདཝ་ཨིན།
+མཁོ་སྤྲོད་པ་ (`crates/iroha/src/client.rs`), ཇེ་ཨེསི་བཱའིན་ཌིང་ཚུ།
+(`javascript/iroha_js/src/sorafs.js`) དང་ སུའིཕཊི་ཨེསི་ཌི་ཀེ་
+(I18NI0000096X). གྲོགས་རམ་པ་དེ་ཚུ་ནང་ལུ་བཞག།
+སི་ཨེལ་ཨའི་སྔོན་སྒྲིག་དང་གཅིག་ཁར་ ལྡེ་མིག་-གོ་རིམ་ཚུ་ བཀོལ་སྤྱོད་པ་ཚུ་གིས་ རང་བཞིན་གྱིས་ སྲིད་བྱུས་ཚུ་འདྲ་བཤུས་རྐྱབ་ཚུགས།
+སྐད་སྒྱུར་གྱི་བང་རིམ་མེད་པར་།
 
-SDKs consume the same configuration via `SorafsGatewayFetchOptions` in the Rust
-client (`crates/iroha/src/client.rs`), the JS bindings
-(`javascript/iroha_js/src/sorafs.js`), and the Swift SDK
-(`IrohaSwift/Sources/IrohaSwift/SorafsOptions.swift`). Keep those helpers in
-lock-step with the CLI defaults so operators can copy policies across automation
-without bespoke translation layers.
+## 3. ཕེཆ་སྲིད་བྱུས་གནས་ཚུལ།
 
-## 3. Fetch Policy Tuning
+I18NI000000097X འདི་ཚད་འཛིན་འབདཝ་ཨིན། ནམ
+སྒྲིག་བཀོད་།
 
-`FetchOptions` controls retry behaviour, concurrency, and verification. When
-tuning:
+- **རི་ཊིརི:** I18NI0000098X ཡར་འཕར་འབད་དོ་ `4` སླར་གསོ་ཡར་སེང་འབདཝ་ཨིན།
+  དུས་ཚོད་ཡིན་ནའང་ ཁ་རས་སྤྲོད་པའི་ཉེན་ཁ་ཡོད། `4` འདི་ ཐོག་ཁེབས་སྦེ་བཞག་ནི།
+  དབུལ་ཕོངས་ཀྱི་ ལཱ་འབད་མི་ཚུ་ ཕྱི་ཁར་ཐོན་ནིའི་དོན་ལུ་ བཀྲམ་སྤེལ་འབད་མི་ བསྐོར་འཁོར་ལུ་ བརྟེན་དགོ།
+- **འཐུས་ཤོར་གྱི་ཚད་གཞི་:** `provider_failure_threshold` གིས་ a ཨིན།
+  བྱིན་མི་འདི་ ལཱ་ཡུན་ལྷག་ལུས་ཚུ་གི་དོན་ལུ་ ལྕོགས་མིན་བཟོཝ་ཨིན། གནས་གོང་འདི་དང་གཅིག་ཁར་ཕྲང་སྒྲིག་འབད།
+  retry སྲིད་བྱུས་: ལོག་སྟེ་འབད་རྩོལ་ཅན་གྱི་འཆར་དངུལ་ལས་ སྙན་ཆའི་སྡེ་ཚན་ལས་ དམའ་ཤོས་ཅིག་ཨིན།
+  བཙོན་པ་ཆ་མཉམ་ ཐང་ཆད་མ་འགྱོ་བའི་ཧེ་མ་ མཉམ་རོགས་ཅིག་ བཏོན་ནིའི་དོན་ལུ་ཨིན།
+- **མཉམ་བསྡོམས་:** `global_parallel_limit` unset (`None`) མ་གཏོགས་ མ་བཙུགས།
+  དམིགས་བསལ་མཐའ་འཁོར་འདི་གིས་ ཁྱབ་བསྒྲགས་འབད་ཡོད་པའི་ཁྱབ་ཚད་ཚུ་ ཚིམ་མི་ཚུགས། གཞི་སྒྲིག་འབད་བའི་སྐབས་ ངེས་གཏན་བཟོ།
+  གནས་གོང་འདི་ བཀྲེས་ལྟོགས་མ་འབྱུང་ནི་གི་དོན་ལུ་ བཀྲམ་སྤེལ་འབད་མི་ རྒྱུན་འབབ་འཆར་དངུལ་གྱི་བསྡོམས་རྩིས་ཨིན།
+- **བདེན་དཔྱད་ཀྱི་ སོར་ཚད:** `verify_lengths` དང་ `verify_digests` ཚུ་བཞག་དགོ།
+  ཐོན་སྐྱེད་ནང་ལྕོགས་ཅན་བཟོ་ཡོདཔ། དེ་ཚུ་གིས་ སླ་བསྲེ་རྐྱབ་མི་ གྲུ་གཟིངས་ཚུ་ སླ་བསྲེ་རྐྱབ་པའི་སྐབས་ གཏན་འབེབས་བཟོ་ནིའི་ འགན་ལེན་འབདཝ་ཨིན།
+  རྩེདམོ་ནང་ཡོདཔ་ཨིན། དེ་ཚུ་ རང་རྐྱང་སྦེ་ ཕཱ་ཛི་མཐའ་འཁོར་ནང་ ལྕོགས་མིན་བཟོཝ་ཨིན།
 
-- **Retries:** Raising `per_chunk_retry_limit` beyond `4` increases recovery
-  time but risks masking provider faults. Prefer keeping `4` as the ceiling and
-  relying on the provider rotation to surface poor performers.
-- **Failure threshold:** The `provider_failure_threshold` governs when a
-  provider is disabled for the remainder of the session. Align this value with
-  retry policy: a threshold lower than the retry budget forces the orchestrator
-  to eject a peer before all retries are exhausted.
-- **Concurrency:** Leave `global_parallel_limit` unset (`None`) unless a
-  specific environment cannot saturate the advertised ranges. When set, ensure
-  the value is ≤ the sum of provider stream budgets to avoid starvation.
-- **Verification toggles:** `verify_lengths` and `verify_digests` must remain
-  enabled in production. They guarantee determinism when mixed provider fleets
-  are in play; only disable them in isolated fuzzing environments.
+## 4. སྐྱེལ་འདྲེན་དང་མིང་མ་བཀོད་པའི་གནས་སྟངས།
 
-## 4. Transport & Anonymity Staging
+`rollout_phase`, `anonymity_policy`, དང་ `transport_policy` ཚུ་ ལུ་ལག་ལེན་འཐབ།
+སྒེར་དོན་གྱི་གནས་སྟངས་ངོ་བཏོན།- `rollout_phase="snnet-5"` ལུ་དགའ་བཞིནམ་ལས་ སྔོན་སྒྲིག་མིང་མ་བཀོད་པའི་སྲིད་བྱུས་འདི་ .
+  བརྟག་ཞིབ་ SNNet-5 གི་ལམ་ཚད་ཚུ། `anonymity_policy_override` རྐྱངམ་ཅིག་བརྒྱུད་དེ་ བརྡལ་བཀོད།
+  གཞུང་སྐྱོང་གིས་ མཚན་རྟགས་བཀོད་པའི་བཀོད་རྒྱ་ཅིག་ བཀོད།
+- I18NI000000111X གཞི་རྟེན་སྦེ་བཞག་ཡོདཔ་ད་ SNNet-4/5/5b/6a/7/8/12/13 འདི་ 🈺
+  (`roadmap.md`)ལ་གཟིགས། `transport_policy="direct-only"` ཡིག་ཆ་བཟོ་ཡོད་པའི་དོན་ལུ་རྐྱངམ་ཅིག་ལག་ལེན་འཐབ།
+  མར་ཕབ་/བསྟར་སྤྱོད་སྦྱོང་བརྡར་ཚུ་ དེ་ལས་ པི་ཀིའུ་ཁྱབ་ཚད་བསྐྱར་ཞིབ་ལུ་ བསྒུག་སྡོདཔ་ཨིན།
+  `transport_policy="soranet-strict"` ལུ་ ཁྱབ་སྤེལ་འབད་ནི།—རིམ་པ་དེ་ མགྱོགས་དྲགས་སྦེ་ འཐུས་ཤོར་འགྱོ་འོང་།
+  སྔར་ལུགས་ཀྱི་ རི་ལེ་ཚུ་རྐྱངམ་ཅིག་ ལུས་ཡོདཔ་ཨིན།
+- I18NI000000115X འབྲི་ནིའི་འགྲུལ་ལམ་རེ་རེ་ (SDK,
+  orchestrator, གཞུང་སྐྱོང་ལག་ཆས་) གིས་ PQ དགོས་མཁོ་ཚུ་ གྲུབ་ཚུགས། སྐབས་སུ
+  བསྐོར་སྐྱོད་ཚུ་གིས་ `write_mode="allow-downgrade"` བཞག་སྟེ་ གློ་བུར་གྱི་ལན་ཚུ་ བློ་གཏད་ཚུགས།
+  ཐད་ཀར་གྱི་ལམ་ཚུ་ཡོད་པའི་སྐབས་ ཊེ་ལི་མི་ཊི་གིས་ མར་ཕབ་འདི་ བརྡ་སྟོནམ་ཨིན།
+- སྲུང་སྐྱོབ་སེལ་འཐུ་དང་ གློག་ལམ་གནས་རིམ་འདི་ སོ་ར་ནེཊི་སྣོད་ཐོ་ལུ་བརྟེན་ཏེ་ཨིན། མཁོ་སྒྲུབ་
+  I18NI000000117X མཚན་རྟགས་བཀོད་ཞིནམ་ལས་ `guard_set` འདྲ་མཛོད་འདི་ དེ་འབདཝ་ལས་ བཀག་འཛིན་འབདཝ་ཨིན།
+  མོས་མཐུན་ཡོད་པའི་བཞག་སའི་སྒོ་སྒྲིག་ནང་ལུ་ ཤིང་འབྲས་ཚུ་སྡོད། འདྲ་མཛོད་ཀྱི་མཛུབ་མོ་གི་པར་རིས་ནང་བསྐྱོད་འབད་ཡོདཔ།
+  by `sorafs_cli fetch` འདི་ བསྐོར་བའི་སྒྲུབ་བྱེད་ཀྱི་ཆ་ཤས་ཅིག་བཟོཝ་ཨིན།
 
-Use the `rollout_phase`, `anonymity_policy`, and `transport_policy` fields to
-represent the privacy posture:
+## 5. མར་འབབ་དང་མཐུན་སྒྲིག་ཧུཀསི།
 
-- Prefer `rollout_phase="snnet-5"` and allow the default anonymity policy to
-  track the SNNet-5 milestones. Override via `anonymity_policy_override` only
-  when governance issues a signed directive.
-- Keep `transport_policy="soranet-first"` as the baseline while SNNet-4/5/5a/5b/6a/7/8/12/13 are 🈺
-  (see `roadmap.md`). Use `transport_policy="direct-only"` only for documented
-  downgrades/compliance drills, and wait for the PQ coverage review before
-  promoting to `transport_policy="soranet-strict"`—that tier will fail fast if
-  only classical relays remain.
-- `write_mode="pq-only"` should only be enforced when every write path (SDK,
-  orchestrator, governance tooling) can satisfy PQ requirements. During
-  rollouts keep `write_mode="allow-downgrade"` so emergency responses can rely
-  on direct routes while telemetry flags the downgrade.
-- Guard selection and circuit staging rely on the SoraNet directory. Supply the
-  signed `relay_directory` snapshot and persist the `guard_set` cache so guard
-  churn stays within the agreed retention window. The cache fingerprint logged
-  by `sorafs_cli fetch` forms part of the rollout evidence.
+སྙན་ཆའི་སྡེ་ཚན་ཆུང་བ་གཉིས་ཀྱིས་ ལག་ཐོག་བར་འཛུལ་མེད་པར་ སྲིད་བྱུས་འདི་ བསྟར་སྤྱོད་འབད་ནི་ལུ་ ཕན་ཐོགཔ་ཨིན།
 
-## 5. Downgrade & Compliance Hooks
-
-Two orchestrator subsystems help enforce policy without manual intervention:
-
-- **Downgrade remediation** (`downgrade_remediation`): monitors
-  `handshake_downgrade_total` events and, after the configured `threshold` is
-  exceeded within `window_secs`, forces the local proxy into the `target_mode`
-  (metadata-only by default). Keep the defaults (`threshold=3`, `window=300`,
-  `cooldown=900`) unless incident reviews show a different pattern. Document any
-  override in the rollout log and ensure dashboards track
+- **མར་ཉམས་བཅོས་འབད་ནི་** (`downgrade_remediation`): བལྟ་རྟོག་འབདཝ་ཨིན།
+  `handshake_downgrade_total` བྱུང་ལས་དང་ `threshold` རིམ་སྒྲིག་འབད་བའི་ཤུལ་ལས་ འདི་ ༡.
+  I18NI0000000123X ནང་ལས་བརྒལ་ཏེ་ ས་གནས་ཀྱི་ངོ་ཚབ་འདི་ `target_mode` ནང་ལུ་བཙུགས་དོ་ཡོདཔ་ཨིན།
+  (མེ་ཊ་ཌེ་ཊ་-རྐྱངམ་ཅིག་ སྔོན་སྒྲིག་གིས་)། སྔོན་སྒྲིག་ཚུ་ (`threshold=3`, `window=300`, བཞག།
+  `cooldown=900`) བྱུང་རྐྱེན་བསྐྱར་ཞིབ་ཚུ་གིས་ དཔེ་རིས་སོ་སོ་ཅིག་སྟོན་མ་ཚུགས་ཚུན་ཚོད་ཨིན། ཡིག་ཆ་གང་རུང་།
+  བསྐོར་ཐེངས་དྲན་ཐོ་ནང་བཀག་ཞིནམ་ལས་ ཌེཤ་བོརཌི་ཚུ་ ངེས་གཏན་བཟོ།
   `sorafs_proxy_downgrade_state`.
-- **Compliance policy** (`compliance`): jurisdiction and manifest carve-outs
-  flow through governance-managed opt-out lists. Never inline ad-hoc overrides
-  in the configuration bundle; instead, request a signed update to
-  `governance/compliance/soranet_opt_outs.json` and redeploy the generated JSON.
+- **བསྟར་སྤྱོད་སྲིད་བྱུས་** (`compliance`): དབང་ཚད་དང་གསལ་སྟོན་བརྐོ་བའི་ཕྱིར་འབུལ།
+  གཞུང་སྐྱོང་འཛིན་སྐྱོང་འཐབ་ཡོད་པའི་ གདམ་ཁའི་ཐོ་ཡིག་ཚུ་བརྒྱུད་དེ་ from. ནང་ཐིག་ནང་ལུ་ ཨེཌ་ཧོཀ་བཀག་མི་འབད།
+  རིམ་སྒྲིག་བཱན་ཌལ་ནང་; དེ་གི་ཚབ་ལུ་ མིང་རྟགས་བཀོད་ཡོད་པའི་དུས་མཐུན་ཅིག་ ཞུ་བ་འབད།
+  `governance/compliance/soranet_opt_outs.json` བཟོ་བཏོན་འབད་ཡོད་པའི་ཇེ་ཨེསི་ཨོ་ཨེན་དང་ བསྐྱར་བཟོ་འབད་ཡོདཔ།
 
-For both systems, persist the resulting configuration bundle and include it in
-release evidences so auditors can trace how downshifts were triggered.
+རིམ་ལུགས་གཉིས་ཆ་རའི་དོན་ལུ་ གྲུབ་འབྲས་རིམ་སྒྲིག་བཱན་ཌལ་འདི་ ཡུན་རིངམོ་སྦེ་གནས་ཡུན་འབད་ཞིནམ་ལས་ ནང་ལུ་བཙུགས།
+རྩིས་ཞིབ་པ་ཚུ་གིས་ མར་ཕབ་འབད་མི་ཚུ་ ག་དེ་སྦེ་ འབྱུང་ཡོདཔ་ཨིན་ན་ འཚོལ་ཞིབ་འབད་ཚུགས།
 
-## 6. Telemetry & Dashboards
+## 6. ཊེ་ལི་མི་ཊི་རི་དང་ ཌིཤ་བོརཌ་ཚུ།
 
-Before widening the rollout, confirm that the following signals are live in the
-target environment:
+འགོ་འབྱེད་མ་འབད་བའི་ཧེ་མ་ འོག་གི་བརྡ་རྟགས་ཚུ་ ནང་སྡོད་ཡོདཔ་ངེས་གཏན་བཟོ།
+དམིགས་གཏད་མཐའ་འཁོར་: དམིགས་ཚད་མཐའ་འཁོར།
 
 - `sorafs_orchestrator_fetch_failures_total{reason="no_healthy_providers"}` —
-  should be zero after the canary completes.
-- `sorafs_orchestrator_retries_total` and
-  `sorafs_orchestrator_retry_ratio` — should stabilise below 10 % during the
-  canary and stay below 5 % after GA.
-- `sorafs_orchestrator_policy_events_total` — validates that the expected
-  rollout stage is active (`stage` label) and records brownouts via `outcome`.
+  ཀེ་བ་མཇུག་བསྡུ་བའི་ཤུལ་ལས་ ཀླད་ཀོར་འོང་དགོ།
+- `sorafs_orchestrator_retries_total` དང་།
+  `sorafs_orchestrator_retry_ratio` — 10% ལས་དམའ་བ་བརྟན་ཏོག་ཏོ་བཟོ་དགོ།
+  ཀེ་རི་དང་ GA གི་ཤུལ་ལས་ ༥% ལས་འོག་ལུ་སྡོད་དགོ།
+- I18NI000000134X — རེ་བ་བསྐྱེད་མི་འདི་ བདེན་དཔྱད་འབདཝ་ཨིན།
+  བསྐོར་བའི་གནས་རིམ་འདི་ ཤུགས་ལྡན་ཨིན་ (`stage` recort) དེ་ལས་ `outcome` བརྒྱུད་དེ་ བཱརའོན་ཨའུཊ་ཚུ་ཐོ་བཀོད་འབདཝ་ཨིན།
 - `sorafs_orchestrator_pq_candidate_ratio` /
-  `sorafs_orchestrator_pq_deficit_ratio` — track PQ relay supply against
-  policy expectations.
-- `telemetry::sorafs.fetch.*` log targets — must be streamed to the shared log
-  aggregator with saved searches for `status=failed`.
+  `sorafs_orchestrator_pq_deficit_ratio` — རྒྱབ་འགལ་གྱི་ PQ རི་ལེ་བཀྲམ་སྤེལ་རྗེས་འདེད་འབད་ཡོདཔ།
+  སྲིད་བྱུས་རེ་བ་
+- `telemetry::sorafs.fetch.*` དྲན་ཐོ་དམིགས་གཏད་ཚུ་ — རུབ་སྤྱོད་འབད་ཡོད་པའི་དྲན་ཐོ་ལུ་ རྒྱུན་སྤེལ་འབད་དགོ།
+  བསྲུང་ཡོད་པའི་ བསྡོམས་རྩིས་དང་གཅིག་ཁར་ `status=failed` འཚོལ་ཞིབ་འབདཝ་ཨིན།
 
-Load the canonical Grafana dashboard from
-`dashboards/grafana/sorafs_fetch_observability.json` (exported in the portal
-under **SoraFS → Fetch Observability**) so the region/manifest selectors,
-provider retry heatmap, chunk latency histograms, and stall counters match
-what SRE reviews during burn-ins. Wire the Alertmanager rules in
-`dashboards/alerts/sorafs_fetch_rules.yml` and validate the Prometheus syntax
-with `scripts/telemetry/test_sorafs_fetch_alerts.sh` (the helper automatically
-runs `promtool test rules` locally or in Docker). Alert hand-offs require the
-same routing block that the script prints so operators can pin the evidence to
-the rollout ticket.
+ཚད་ལྡན་ Grafana བརྡ་བཀོད་ལས་ མངོན་གསལ་འབད།
+`dashboards/grafana/sorafs_fetch_observability.json` (དྲ་རྒྱ་ནང་ཕྱིར་འདྲེན་འབད་ཡོདཔ།
+འོག་ལུ་ **I18NT0000005X → Fatch Readability**) དེ་འབདཝ་ལས་ ལུང་ཕྱོགས་/མན་ངག་འདེམས་སྒྲུག་ཚུ་
+བཀྲམ་སྤེལ་འབད་མི་ དྲོད་ཚད་སབ་ཁྲ་དང་ ཆ་རྐྱེན་གྱི་ འཕྲོ་མཐུད་ཧིསི་ཊོ་གཱརམ་ དེ་ལས་ ཚོང་ཁང་ཚུ་ མཐུན་སྒྲིག་འབདཝ་ཨིན།
+ག་ཅི་གིས་ མེ་འབར་བའི་སྐབས་ SRE བསྐྱར་ཞིབ་འབདཝ་ཨིན། ༢༠༢༠ ལུ་ དྲན་སྐུལ་གྱི་ལམ་ལུགས་ཚུ་ ཝའིར་
+`dashboards/alerts/sorafs_fetch_rules.yml` I18NT0000001X ཚིག་སྦྱོར་འདི་བདེན་དཔྱད་འབད།
+I18NI000000143X དང་མཉམ་ (གྲོགས་རམ་པ་རང་བཞིན་གྱིས་
+I18NI000000144X ནང་འཁོད་ཡང་ན་ Docker ནང་གཡོག་བཀོལ།) ཉེན་བརྡའི་ལག་གདུབ་ཚུ་ལུ་དགོཔ་ཨིན།
+དེ་བཟུམ་མའི་ ཡིག་ཚུགས་ཀྱི་དཔར་བསྐྲུན་ཚུ་ བཀོལ་སྤྱོད་པ་ཚུ་གིས་ སྒྲུབ་བྱེད་ཚུ་ ༡ ལུ་བཙུགས་ཚུགས།
+the བསྐོར་བའི་ཤོག་བྱང་།
 
-### Telemetry burn-in workflow
+### བརྒྱུད་འཕྲིན་མེ་འབར་ནང་གི་ལས་རིམ།
 
-Roadmap item **SF-6e** requires a 30-day telemetry burn-in before flipping the
-multi-source orchestrator to its GA defaults. Use the repository scripts to
-capture a reproducible artefact bundle for every day in the window:
+ལམ་སྟོན་རྣམ་གྲངས་ **SF-6e**
+དེ་གི་ཇི་ཨེ་སྔོན་སྒྲིག་ཚུ་ལུ་ སྣ་མང་འབྱུང་ཁུངས་ཀྱི་ རོལ་དབྱངས་སྒྲིག་མི། མཛོད་ཁང་གི་ཡིག་ཆ་ཚུ་ ༡ ལུ་ལག་ལེན་འཐབ།
+སྒོ་སྒྲིག་ནང་ལུ་ ཉིནམ་གཅིག་གི་དོན་ལུ་ བསྐྱར་བཟོ་འབད་ཚུགས་པའི་ བསྐྱར་བཟོ་འབད་བཏུབ་པའི་ ཅ་རྙིང་ཚུ་ བཟུང་དགོ།
 
-1. Run `ci/check_sorafs_orchestrator_adoption.sh` with the burn-in environment
-   knobs set. Example:
+1. མེ་འབར་བའི་ཁོར་ཡུག་དང་བཅས་ `ci/check_sorafs_orchestrator_adoption.sh` བརྒྱུགས་ཡོད།
+   knobs ཚད། དཔེ:
 
-   ```bash
-   SORAFS_BURN_IN_LABEL=canary-week-1 \
-   SORAFS_BURN_IN_REGION=us-east-1 \
-   SORAFS_BURN_IN_MANIFEST=manifest-v4 \
-   SORAFS_BURN_IN_DAY=7 \
-   SORAFS_BURN_IN_WINDOW_DAYS=30 \
-   ci/check_sorafs_orchestrator_adoption.sh
-   ```
+   I18NF0000009X
 
-   The helper replays `fixtures/sorafs_orchestrator/multi_peer_parity_v1`,
-   writes `scoreboard.json`, `summary.json`, `provider_metrics.json`,
-   `chunk_receipts.json`, and `adoption_report.json` under
-   `artifacts/sorafs_orchestrator/<timestamp>/`, and enforces a minimum number
-   of eligible providers via `cargo xtask sorafs-adoption-check`.
-2. When the burn-in variables are present the script also emits
-   `burn_in_note.json`, capturing the label, day index, manifest id, telemetry
-   source, and artefact digests. Attach this JSON to the rollout log so it is
-   obvious which capture satisfied each day in the 30-day window.
-3. Import the updated Grafana board (`dashboards/grafana/sorafs_fetch_observability.json`)
-   into the staging/production workspace, tag it with the burn-in label, and
-   confirm that every panel shows samples for the manifest/region under test.
-4. Run `scripts/telemetry/test_sorafs_fetch_alerts.sh` (or `promtool test rules …`)
-   whenever `dashboards/alerts/sorafs_fetch_rules.yml` changes to document that
-   alert routing matches the metrics exported during the burn-in.
-5. Archive the resulting dashboard snapshot, alert test output, and log tail
-   from the `telemetry::sorafs.fetch.*` searches alongside the orchestrator
-   artefacts so governance can replay the evidence without pulling metrics from
-   live systems.
+   གྲོགས་རམ་པ་དེ་གིས་ `fixtures/sorafs_orchestrator/multi_peer_parity_v1`,
+   `scoreboard.json`, `summary.json`, I18NI000000149X,
+   `chunk_receipts.json`, དང་ `adoption_report.json` འོག་ལུ་ཡོད།
+   `artifacts/sorafs_orchestrator/<timestamp>/`, དང་ ཉུང་མཐའི་ཨང་གྲངས་བསྟར་སྤྱོད་འབདཝ་ཨིན།
+   འོས་འབབ་ཅན་གྱི་མཁོ་སྤྲོད་འབད་མི་ཚུ་ `cargo xtask sorafs-adoption-check` བརྒྱུད་དེ་ཨིན།
+2. མེ་འབར་བའི་འགྱུར་ལྡོག་ཚུ་ཡོད་པའི་སྐབས་ལུ་ ཡིག་ཆ་འདི་ཡང་ བཏོནམ་ཨིན།
+   `burn_in_note.json`, ཁ་ཡིག་དང་ ཉིན་གྲངས་ཀྱི་ཟུར་ཐོ་ གསལ་སྟོན་འབད་ནི་ བརྡ་འཕྲིན་ཚུ་ བཟུང་ནི།
+   source, དང་ ཅ་རྙིང་བཞུ་ནི། ཇེ་ཨེསི་ཨེན་འདི་ བསྐོར་ཐེངས་དྲན་ཐོ་ལུ་མཉམ་སྦྲགས་འབད།
+   ཉིནམ་༣༠ གི་སྒོ་སྒྲིག་ནང་ ཉིནམ་རེ་ལུ་ ག་འདི་ བསམ་པ་རྫོགས་ཏེ་ཡོདཔ་ཨིན་ན་ གསལ་ཏོག་ཏོ་ཨིན།
+3. དུས་མཐུན་བཟོ་ཡོད་པའི་ Grafana བཀོད་སྒྲིག་ (`dashboards/grafana/sorafs_fetch_observability.json`) ནང་འདྲེན་འབད།
+   གནས་རིམ་/བཟོ་སྐྲུན་ལས་ཀའི་ས་སྟོང་ནང་ མེ་འབར་བའི་ཁ་ཡིག་དང་གཅིག་ཁར་ རྟགས་བཀལ།
+   བརྟག་དཔྱད་འོག་ལུ་ཡོད་པའི་ གསལ་སྟོན་/ལུང་ཕྱོགས་ཀྱི་དཔེ་ཚད་ཚུ་ པེ་ནཱལ་རེ་རེ་གིས་ ངེས་གཏན་བཟོ།
+4. `scripts/telemetry/test_sorafs_fetch_alerts.sh` (ཡང་ན་ `promtool test rules …`)
+   ག་དུས་འབད་རུང་ I18NI000000158X ཡིག་ཆ་ལུ་བསྒྱུར་བཅོས་འབདཝ་ཨིན།
+   ཉེན་བརྡའི་འགྲུལ་ལམ་འདི་ མེ་རྐྱེན་ནང་ཕྱིར་གཏོང་འབད་མི་ མེ་ཊིག་ཚུ་དང་མཐུན་སྒྲིག་འབདཝ་ཨིན།
+༥ གྲུབ་འབྲས་ཐོན་པའི་ ཌེཤ་བོརཌ་གི་པར་བཏབ་ནི་དང་ ཉེན་བརྡའི་བརྟག་དཔྱད་ཨའུཊི་པུཊི་ དེ་ལས་ དྲན་ཐོ་ཚུ་ གཏན་མཛོད་འབད།
+   ལས་ `telemetry::sorafs.fetch.*` ལས་ སྙན་ཆའི་སྡེ་ཚན་དང་གཅིག་ཁར་ འཚོལ་ཞིབ་འབདཝ་ཨིན།
+   དེ་ལས་ གཞུང་སྐྱོང་གིས་ ཚད་གཞི་ཚུ་ མ་འཐེན་པར་ སྒྲུབ་བྱེད་ཚུ་ ལོག་རྩེད་ཚུགས།
+   ཐད་གཏོང་ལམ་ལུགས།
 
-## 7. Rollout Checklist
+## 7. ཐོ་འགོད་ཐོ་ཡིག།
 
-1. Regenerate scoreboards in CI using the candidate configuration and capture
-   artefacts under version control.
-2. Run the deterministic fixture fetch in each environment (lab, staging,
-   canary, production) and attach the `--scoreboard-out` and `--json-out`
-   artefacts to the rollout record.
-3. Review telemetry dashboards with the on-call engineer, ensuring all metrics
-   above have live samples.
-4. Record the final configuration path (usually via `iroha_config`) and the
-   git commit of the governance registry used for adverts and compliance.
-5. Update the rollout tracker and notify SDK teams of new defaults so client
-   integrations stay aligned.
+༡ འདེམས་ངོ་རིམ་སྒྲིག་ལག་ལེན་འཐབ་སྟེ་ སི་ཨའི་ ནང་ སྐུགས་ཤོག་ཚུ་ བསྐྱར་བཟོ་འབད་ནི།
+   ཐོན་རིམ་ཚད་འཛིན་འོག་ལུ་ཡོད་པའི་ ཅ་རྙིང་ཚུ།
+༢ མཐའ་འཁོར་རེ་རེ་ནང་ གཏན་འབེབས་བཟོ་ནིའི་སྒྲིག་ཆས་ (བརྟག་དཔྱད་ཁང་དང་ གནས་རིམ་) ཚུ་ གཡོག་བཀོལ་དགོ།
+   ཀེ་ན་རི་ ཐོན་སྐྱེད་) དང་ `--scoreboard-out` དང་ `--json-out` མཉམ་སྦྲགས་འབད་ནི།
+   བསྐོར་བའི་དྲན་ཐོ་ལུ་ ཅ་རྙིང་ཚུ།
+3. བསྐྱར་ཞིབ་ཀྱི་བརྡ་འཕྲིན་བཀོད་སྒྲིག ཁ་པར་གཏོང་མི་བཟོ་རིག་པ་དང་མཉམ་དུ་མེ་ཊིག་ཚང་མ།
+   གོང་འཁོད་ཀྱི་དཔེ་ཚད་ཚུ་ འཚོ་སྡོདཔ་ཨིན།
+༤ མཐའ་མའི་རིམ་སྒྲིག་འགྲུལ་ལམ་ (སྤྱིར་བཏང་ `iroha_config` བརྒྱུད་དེ་) དང་
+   གི་ཊི་གིས་ གཞུང་སྐྱོང་ཐོ་བཀོད་ཀྱི་ ཁྱབ་བསྒྲགས་དང་ བསྟར་སྤྱོད་ཀྱི་དོན་ལུ་ ལག་ལེན་འཐབ་མི་ ཐོ་བཀོད་འབདཝ་ཨིན།
+༥ བསྐོར་འཁོར་འཚོལ་ཞིབ་འདི་དུས་མཐུན་བཟོ་ཞིནམ་ལས་ སྔོན་སྒྲིག་གསརཔ་གི་ཨེསི་ཌི་ཀེ་སྡེ་ཚན་ཚུ་ལུ་བརྡ་སྤྲོད་འབད།
+   མཉམ་བསྡོམ་ཚུ་ ཕྲང་སྒྲིག་སྦེ་སྡོདཔ་ཨིན།
 
-Following this guide keeps orchestrator deployments deterministic and auditable
-while providing clear feedback loops for tuning retry budgets, provider
-capacity, and privacy posture.
+ལམ་སྟོན་འདི་ལུ་གཞི་བཞག་སྟེ་ སྙན་ཆའི་སྡེ་ཚན་བཀྲམ་སྤེལ་ཚུ་ གཏན་འབེབས་དང་རྩིས་ཞིབ་འབད་ཚུགསཔ་ཨིན།
+བསྐྱར་བཟོའི་འཆར་དངུལ་ཚུ་ བསྒྱུར་བཅོས་འབད་ནིའི་དོན་ལུ་ བསམ་འཆར་གསལ་ཏོག་ཏོ་གི་བསྐྱར་ལོག་ཚུ་བྱིན་པའི་སྐབས།
+ལྕོགས་གྲུབ་དང་ སྒེར་གསང་གནས་ཚུལ།

@@ -4,27 +4,28 @@ direction: ltr
 source: docs/portal/docs/reference/torii-rapidoc.mdx
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-import RapiDocPanel from '@site/src/components/RapiDocPanel.jsx';
+RapiDocPanel-i '@site/src/components/RapiDocPanel.jsx'dən idxal edin;
 
 # Torii API (RapiDoc)
 
-`RapiDoc` offers a compact, documentation-first rendering of the same Torii
-OpenAPI document. Use it when you need a denser overview or read-only review of
-request/response models.
+`RapiDoc` eyni Torii-in yığcam, sənədləşdirmə-ilk renderini təklif edir
+OpenAPI sənədi. Daha sıx icmal və ya yalnız oxumaq üçün nəzərdən keçirməyə ehtiyacınız olduqda istifadə edin
+sorğu/cavab modelləri.
 
-## Usage tips
+## İstifadə məsləhətləri
 
-- Enter a bearer token to enable interactive calls. The value is forwarded as an
-  `X-TryIt-Auth` header and normalised by the proxy.
-- Configure `TRYIT_PROXY_PUBLIC_URL` when serving the portal so interactive
-  requests are routed through the staging proxy. The widget warns when the proxy
-  URL is missing.
-- Use the “OpenAPI snapshot” dropdown to load historical specs published by
-  `npm run sync-openapi`; the `Latest (tracked)` option always resolves to
+- İnteraktiv zəngləri aktivləşdirmək üçün daşıyıcı nişanı daxil edin. Dəyər bir kimi ötürülür
+  `X-TryIt-Auth` başlığı və proxy tərəfindən normallaşdırılıb.
+- Portala interaktiv xidmət göstərərkən `TRYIT_PROXY_PUBLIC_URL` konfiqurasiya edin
+  sorğular staging proxy vasitəsilə yönləndirilir. Widget proksi olduqda xəbərdarlıq edir
+  URL yoxdur.
+- tərəfindən dərc edilmiş tarixi xüsusiyyətləri yükləmək üçün "OpenAPI snapshot" açılan menyusundan istifadə edin
+  `npm run sync-openapi`; `Latest (tracked)` seçimi həmişə həll edir
   `/openapi/torii.json`.
-- Combine with the “[Try it](/api/overview#try-it-sandbox-docs-3)” console when
-  working against staged gateways requiring the proxy.
+- “[Try it](/api/overview#try-it-sandbox-docs-3)” konsolu ilə birləşdirin
+  proxy tələb edən mərhələli şlüzlərə qarşı işləyir.
 
-<RapiDocPanel />

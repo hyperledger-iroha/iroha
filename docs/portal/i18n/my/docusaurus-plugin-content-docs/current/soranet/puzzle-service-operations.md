@@ -8,43 +8,45 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: Puzzle Service Operations Guide
 sidebar_label: Puzzle Service Ops
 description: Operating the `soranet-puzzle-service` daemon for Argon2/ML-DSA admission tickets.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
+::: Canonical Source ကို သတိပြုပါ။
 :::
 
-# Puzzle Service Operations Guide
+# ပဟေဠိဝန်ဆောင်မှုလုပ်ငန်းလမ်းညွှန်
 
-The `soranet-puzzle-service` daemon (`tools/soranet-puzzle-service/`) issues
-Argon2-backed admission tickets that mirror the relay’s `pow.puzzle.*` policy
-and, when configured, brokers ML-DSA admission tokens on behalf of edge relays.
-It exposes five HTTP endpoints:
+`soranet-puzzle-service` daemon (`tools/soranet-puzzle-service/`) ပြဿနာများ
+relay ၏ `pow.puzzle.*` မူဝါဒကို ထင်ဟပ်နေသည့် Argon2 ကျောထောက်နောက်ခံ ဝင်ခွင့်လက်မှတ်များ
+နှင့်၊ ပြင်ဆင်သတ်မှတ်သည့်အခါ၊ ပွဲစားများသည် edge relays များကိုယ်စား ML-DSA ဝင်ခွင့်တိုကင်များ။
+၎င်းသည် HTTP အဆုံးမှတ်ငါးခုကို ဖော်ပြသည်-
 
-- `GET /healthz` – liveness probe.
-- `GET /v1/puzzle/config` – returns the effective PoW/puzzle parameters pulled
-  from the relay JSON (`handshake.descriptor_commit_hex`, `pow.*`).
-- `POST /v1/puzzle/mint` – mints an Argon2 ticket; an optional JSON body
+- `GET /healthz` - အသက်ရှင်ခြင်းဆိုင်ရာ စစ်ဆေးခြင်း။
+- `GET /v1/puzzle/config` - ဆွဲထားသော ထိရောက်သော PoW/ပဟေဠိ ဘောင်များကို ပြန်ပေးသည်
+  relay JSON (`handshake.descriptor_commit_hex`, `pow.*`) မှ။
+- `POST /v1/puzzle/mint` – Argon2 လက်မှတ်ကို mint; ရွေးချယ်နိုင်သော JSON ကိုယ်ထည်
   `{ "ttl_secs": <u64>, "transcript_hash_hex": "<32-byte hex>", "signed": true }`
-  requests a shorter TTL (clamped to the policy window), binds the ticket to a
-  transcript hash, and returns a relay-signed ticket + signature fingerprint
-  when signing keys are configured.
-- `GET /v1/token/config` – when `pow.token.enabled = true`, returns the active
-  admission-token policy (issuer fingerprint, TTL/clock-skew bounds, relay ID,
-  and the merged revocation set).
-- `POST /v1/token/mint` – mints an ML-DSA admission token bound to the supplied
-  resume hash; the request body accepts `{ "transcript_hash_hex": "...", "ttl_secs": <u64>, "flags": <u8> }`.
+  ပိုတိုသော TTL ကို တောင်းဆိုသည် (မူဝါဒပြတင်းပေါက်တွင် ချိတ်ထားသည်)၊ လက်မှတ်ကို a နှင့် ချည်ထားသည်။
+  စာသားမှတ်တမ်း hash နှင့် ထပ်ဆင့်လက်မှတ်ထိုးထားသော လက်မှတ် + လက်မှတ် လက်ဗွေကို ပြန်ပေးသည်။
+  လက်မှတ်ထိုးသည့်အခါ သော့များကို စီစဉ်သတ်မှတ်ထားသည်။
+- `GET /v1/token/config` – `pow.token.enabled = true` တွင် တက်ကြွမှုကို ပြန်ပေးသည်
+  ဝင်ခွင့်တိုကင်မူဝါဒ (ထုတ်ပေးသူလက်ဗွေ၊ TTL/နာရီ-လှည့်ပတ်မှု၊ ထပ်လောင်း ID၊
+  နှင့် ပေါင်းစည်းခြင်း ရုပ်သိမ်းခြင်း သတ်မှတ်ခြင်း)။
+- `POST /v1/token/mint` - ပံ့ပိုးပေးထားသော ML-DSA ဝင်ခွင့် တိုကင်တစ်ခုကို ဖြည့်သွင်းသည်
+  hash ပြန်လည်စတင်; တောင်းဆိုချက်ကိုယ်ထည်သည် `{ "transcript_hash_hex": "...", "ttl_secs": <u64>, "flags": <u8> }` ကို လက်ခံသည်။
 
-Tickets produced by the service are verified in the
+ဝန်ဆောင်မှုမှ ထုတ်လုပ်သော လက်မှတ်များကို ဘဏ်တွင် စစ်ဆေးပြီးဖြစ်သည်။
 `volumetric_dos_soak_preserves_puzzle_and_latency_slo`
-integration test, which also exercises relay throttles during volumetric DoS
-scenarios.【tools/soranet-relay/tests/adaptive_and_puzzle.rs:337】
+volumetric DoS အတွင်း relay throttles ကိုလည်း လေ့ကျင့်ပေးသည့် ပေါင်းစပ်စမ်းသပ်မှု
+ဇာတ်လမ်းများ။【tools/soranet-relay/tests/adaptive_and_puzzle.rs:337】
 
-## Configuring token issuance
+## တိုကင်ထုတ်ပေးခြင်းကို ပြင်ဆင်ခြင်း။
 
-Set the relay JSON fields under `pow.token.*` (see
-`tools/soranet-relay/deploy/config/relay.entry.json` for an example) to enable
-ML-DSA tokens. At minimum provide the issuer public key and optional
-revocation list:
+Relay JSON အကွက်များကို `pow.token.*` အောက်တွင် သတ်မှတ်ပါ (ကြည့်ပါ။
+ဥပမာတစ်ခုအတွက် `tools/soranet-relay/deploy/config/relay.entry.json`) ကိုဖွင့်ပါ။
+ML-DSA တိုကင်များ အနည်းဆုံးအားဖြင့် ထုတ်ပေးသူ အများသူငှာသော့ကို ပေး၍ ရွေးချယ်နိုင်သည်
+ရုပ်သိမ်းခြင်းစာရင်း-
 
 ```json
 "pow": {
@@ -57,13 +59,13 @@ revocation list:
 }
 ```
 
-The puzzle service reuses these values and automatically reloads the Norito
-JSON revocation file at runtime. Use the `soranet-admission-token` CLI
-(`cargo run -p soranet-relay --bin soranet_admission_token`) to mint and inspect
-tokens offline, append `token_id_hex` entries to the revocation file, and audit
-existing credentials before pushing updates to production.
+ပဟေဠိဝန်ဆောင်မှုသည် ဤတန်ဖိုးများကို ပြန်လည်အသုံးပြုပြီး Norito ကို အလိုအလျောက် ပြန်လည်စတင်သည်
+runtime တွင် JSON ရုပ်သိမ်းခြင်းဖိုင်။ `soranet-admission-token` CLI ကိုသုံးပါ။
+(`cargo run -p soranet-relay --bin soranet_admission_token`) ကို mint လုပ်ပြီး စစ်ဆေးပါ။
+တိုကင်များကို အော့ဖ်လိုင်း၊ `token_id_hex` ထည့်သွင်းမှုများကို ရုတ်သိမ်းခြင်း ဖိုင်တွင် ထည့်သွင်းပြီး စစ်ဆေးခြင်း
+ထုတ်လုပ်မှုသို့ အပ်ဒိတ်များကို မတွန်းပို့မီ ရှိပြီးသားအထောက်အထားများ။
 
-Pass the issuer secret key to the puzzle service via the CLI flags:
+CLI အလံများမှတစ်ဆင့် ပဟေဠိဝန်ဆောင်မှုသို့ ထုတ်ပေးသူလျှို့ဝှက်သော့ကို ပေးပို့ပါ-
 
 ```bash
 cargo run -p soranet-puzzle-service -- \
@@ -73,82 +75,82 @@ cargo run -p soranet-puzzle-service -- \
   --token-revocation-refresh-secs 60
 ```
 
-`--token-secret-hex` is also available when the secret is managed by an out-of-band
-tooling pipeline. The revocation file watcher keeps `/v1/token/config` current;
-coordinate updates with the `soranet-admission-token revoke` command to avoid lagging
-revocation state.
+လျှို့ဝှက်ချက်ကို အဖွဲ့ပြင်ပမှ စီမံခန့်ခွဲသည့်အခါ `--token-secret-hex` ကိုလည်း ရနိုင်သည်
+ပိုက်လိုင်းကိရိယာတန်ဆာပလာ။ ပြန်လည်ရုတ်သိမ်းခြင်း ဖိုင်ကြည့်ရှုသူသည် `/v1/token/config` ကို လက်ရှိထိန်းသိမ်းထားသည်။
+နောက်ကျနေခြင်းကို ရှောင်ရှားရန် `soranet-admission-token revoke` အမိန့်ဖြင့် အပ်ဒိတ်များကို ညှိနှိုင်းပါ။
+ရုတ်သိမ်းခြင်းအခြေအနေ။
 
-Set `pow.signed_ticket_public_key_hex` in the relay JSON to advertise the ML-DSA-44 public
-key used to verify signed PoW tickets; `/v1/puzzle/config` echoes the key and its BLAKE3
-fingerprint (`signed_ticket_public_key_fingerprint_hex`) so clients can pin the verifier.
-Signed tickets are validated against the relay ID and transcript bindings and share the same
-revocation store; raw 74-byte PoW tickets remain valid when the signed-ticket verifier is
-configured. Pass the signer secret via `--signed-ticket-secret-hex` or
-`--signed-ticket-secret-path` when launching the puzzle service; startup rejects mismatched
-keypairs if the secret does not validate against `pow.signed_ticket_public_key_hex`.
-`POST /v1/puzzle/mint` accepts `"signed": true` (and optional `"transcript_hash_hex"`) to
-return a Norito-encoded signed ticket alongside the raw ticket bytes; responses include
-`signed_ticket_b64` and `signed_ticket_fingerprint_hex` to help track replay fingerprints.
-Requests with `signed = true` are rejected if the signer secret is not configured.
+ML-DSA-44 အများသူငှာ ကြော်ငြာရန်အတွက် `pow.signed_ticket_public_key_hex` ကို relay JSON တွင် သတ်မှတ်ပါ
+လက်မှတ်ထိုးထားသော PoW လက်မှတ်များကို အတည်ပြုရန် အသုံးပြုသည့်သော့၊ `/v1/puzzle/config` သည် သော့နှင့် ၎င်း၏ BLAKE3 ကို ပဲ့တင်ထပ်သည်။
+လက်ဗွေရာ (`signed_ticket_public_key_fingerprint_hex`) ထို့ကြောင့် သုံးစွဲသူများသည် အတည်ပြုစနစ်ကို ပင်ထိုးနိုင်ပါသည်။
+လက်မှတ်ရေးထိုးထားသော လက်မှတ်များကို ထပ်ဆင့် ID နှင့် စာသားမှတ်တမ်းများ ချိတ်တွဲထားသည်ကို အတည်ပြုပြီး တူညီပါသည်။
+ရုတ်သိမ်းခြင်းစတိုးဆိုင်; လက်မှတ်အကြမ်း 74-byte PoW လက်မှတ်များသည် တရားဝင်လက်မှတ်ထိုးထားသော လက်မှတ်စစ်စစ်ဖြစ်သည့်အခါတွင် အကျုံးဝင်ပါသည်။
+ပြင်ဆင်ထားသည်။ `--signed-ticket-secret-hex` သို့မဟုတ် လက်မှတ်ထိုးသူလျှို့ဝှက်ချက်ကို ကျော်ဖြတ်ပါ။
+ပဟေဠိဝန်ဆောင်မှုကိုစတင်သောအခါ `--signed-ticket-secret-path`၊ startup သည် မကိုက်ညီသည်ကို ငြင်းပယ်သည်။
+လျှို့ဝှက်ချက် `pow.signed_ticket_public_key_hex` ကို သက်သေမပြပါက သော့ချိတ်များ။
+`POST /v1/puzzle/mint` မှ `"signed": true` (နှင့် ရွေးချယ်နိုင်သော `"transcript_hash_hex"`) ကို လက်ခံသည်
+လက်မှတ်ကြမ်း bytes နှင့်အတူ Norito-ကုဒ်ဖြင့်ရေးထားသော လက်မှတ်ကို ပြန်ပေးပါ။ တုံ့ပြန်မှုများပါဝင်သည်။
+လက်ဗွေပြန်ဖွင့်ခြင်းကို ခြေရာခံရန် `signed_ticket_b64` နှင့် `signed_ticket_fingerprint_hex`။
+`signed = true` ပါရှိသည့် တောင်းဆိုချက်များကို လက်မှတ်ထိုးသူလျှို့ဝှက်ချက်ကို ပြင်ဆင်သတ်မှတ်မထားပါက ပယ်ချပါသည်။
 
-## Key rotation playbook
+## သော့လည်ပတ်ကစားစာအုပ်
 
-1. **Collect the new descriptor commit.** Governance publishes the relay
-   descriptor commit in the directory bundle. Copy the hex string into
-   `handshake.descriptor_commit_hex` inside the relay JSON configuration shared
-   with the puzzle service.
-2. **Review puzzle policy bounds.** Confirm the updated
-   `pow.puzzle.{memory_kib,time_cost,lanes}` values align with the release
-   plan. Operators should keep the Argon2 configuration deterministic across
-   relays (minimum 4 MiB memory, 1 ≤ lanes ≤ 16).
-3. **Stage the restart.** Reload the systemd unit or container once governance
-   announces the rotation cutover. The service has no hot-reload support; a
-   restart is required to pick up the new descriptor commit.
-4. **Validate.** Issue a ticket via `POST /v1/puzzle/mint` and confirm the
-   returned `difficulty` and `expires_at` match the new policy. The soak report
-   (`docs/source/soranet/reports/pow_resilience.md`) captures expected latency
-   bounds for reference. When tokens are enabled, fetch `/v1/token/config` to
-   ensure the advertised issuer fingerprint and revocation count match the
-   expected values.
+1. **ဖော်ပြချက်အသစ်ကို စုဆောင်းပါ။** အုပ်ချုပ်ရေးမှ ထပ်ဆင့်လွှင့်ခြင်းကို ထုတ်ပြန်သည်။
+   ဖော်ပြချက်သည် လမ်းညွှန်အစုအဝေးတွင် ကျူးလွန်သည်။ hex string ကို ကူးထည့်ပါ။
+   `handshake.descriptor_commit_hex` တွင် relay JSON ဖွဲ့စည်းမှုပုံစံကို မျှဝေထားသည်။
+   ပဟေဠိဝန်ဆောင်မှုနှင့်အတူ။
+2. **ပဟေဠိမူဝါဒဘောင်များကို ပြန်လည်သုံးသပ်ပါ။** အပ်ဒိတ်ကို အတည်ပြုပါ။
+   `pow.puzzle.{memory_kib,time_cost,lanes}` တန်ဖိုးများသည် ထုတ်ဝေမှုနှင့် ကိုက်ညီသည်။
+   အစီအစဉ်။ အော်ပရေတာများသည် Argon2 configuration ကို အဆုံးအဖြတ်ပေးသည့်အပိုင်းကို ထားရှိသင့်သည်။
+   relay များ (အနည်းဆုံး 4MiB မှတ်ဉာဏ်၊ 1≤lanes≤16)။
+3. **ပြန်လည်စတင်ခြင်းကို အဆင့်သတ်မှတ်ပါ။** အုပ်ချုပ်မှုပြီးသည်နှင့် systemd ယူနစ် သို့မဟုတ် ကွန်တိန်နာကို ပြန်လည်စတင်ပါ။
+   အလှည့်ကျဖြတ်တောက်မှုကို ကြေငြာသည်။ ဝန်ဆောင်မှုတွင် hot-reload ပံ့ပိုးမှု မရှိပါ။ a
+   ဖော်ပြချက်အသစ်ကို ကောက်ယူရန်အတွက် ပြန်လည်စတင်ရန် လိုအပ်သည်။
+4. **Validate.** `POST /v1/puzzle/mint` မှတစ်ဆင့် လက်မှတ်ထုတ်ပေးပြီး အတည်ပြုပါ။
+   ပြန်ပေးထားသော `difficulty` နှင့် `expires_at` သည် မူဝါဒအသစ်နှင့် ကိုက်ညီပါသည်။ တင်းစိမ်သည်။
+   (`docs/source/soranet/reports/pow_resilience.md`) သည် မျှော်လင့်ထားသော latency ကိုဖမ်းယူသည်။
+   အကိုးအကားအတွက် ဘောင်များ။ တိုကင်များကို ဖွင့်ထားသောအခါ၊ `/v1/token/config` သို့ ရယူပါ။
+   ကြော်ငြာထုတ်ပေးသူ၏ လက်ဗွေနှင့် ပြန်လည်ရုပ်သိမ်းသည့်အရေအတွက်သည် ကိုက်ညီကြောင်း သေချာပါစေ။
+   မျှော်မှန်းတန်ဖိုးများ။
 
-## Emergency disable procedure
+## အရေးပေါ် disable လုပ်ထုံးလုပ်နည်း
 
-1. Set `pow.puzzle.enabled = false` in the shared relay configuration. Keep
-   `pow.required = true` if hashcash fallback tickets must remain mandatory.
-2. Optionally enforce `pow.emergency` entries to reject stale descriptors while
-   the Argon2 gate is offline.
-3. Restart both the relay and the puzzle service to apply the change.
-4. Monitor `soranet_handshake_pow_difficulty` to ensure the difficulty drops to
-   the expected hashcash value, and verify `/v1/puzzle/config` reports
-   `puzzle = null`.
+1. မျှဝေထားသော relay ဖွဲ့စည်းမှုတွင် `pow.puzzle.enabled = false` ကို သတ်မှတ်ပါ။ စောင့်ရှောက်ပါ။
+   အကယ်၍ hashcash ပါလျှင် `pow.required = true` လက်မှတ်များသည် မဖြစ်မနေ ကျန်ရှိနေရပါမည်။
+2. သက်တမ်းရင့် ဖော်ပြချက်များကို ငြင်းပယ်ရန် `pow.emergency` အား ထည့်သွင်းမှုများကို ရွေးချယ်နိုင်သည်
+   Argon2 ဂိတ်သည် အော့ဖ်လိုင်းဖြစ်သည်။
+3. ပြောင်းလဲမှုကို အသုံးပြုရန် relay နှင့် ပဟေဠိဝန်ဆောင်မှုနှစ်ခုလုံးကို ပြန်လည်စတင်ပါ။
+4. အခက်အခဲများ ကျဆင်းသွားကြောင်း သေချာစေရန် `soranet_handshake_pow_difficulty` ကို စောင့်ကြည့်ပါ။
+   မျှော်လင့်ထားသော hashcash တန်ဖိုး၊ `/v1/puzzle/config` အစီရင်ခံစာများကို စစ်ဆေးပါ။
+   `puzzle = null`။
 
-## Monitoring and alerting
+## စောင့်ကြည့်ခြင်းနှင့် သတိပေးခြင်း။
 
-- **Latency SLO:** Track `soranet_handshake_latency_seconds` and keep the P95
-  below 300 ms. The soak test offsets provide calibration data for guard
-  throttles.【docs/source/soranet/reports/pow_resilience.md:1】
-- **Quota pressure:** Use `soranet_guard_capacity_report.py` with relay metrics
-  to tune `pow.quotas` cooldowns (`soranet_abuse_remote_cooldowns`,
-  `soranet_handshake_throttled_remote_quota_total`).【docs/source/soranet/relay_audit_pipeline.md:68】
-- **Puzzle alignment:** `soranet_handshake_pow_difficulty` should match the
-  difficulty returned by `/v1/puzzle/config`. Divergence indicates stale relay
-  config or a failed restart.
-- **Token readiness:** Alert if `/v1/token/config` drops to `enabled = false`
-  unexpectedly or if `revocation_source` reports stale timestamps. Operators
-  should rotate the Norito revocation file via the CLI whenever a token is
-  retired to keep this endpoint accurate.
-- **Service health:** Probe `/healthz` in the usual liveness cadence and alert
-  if `/v1/puzzle/mint` returns HTTP 500 responses (indicates Argon2 parameter
-  mismatch or RNG failures). Token minting errors surface through HTTP 4xx/5xx
-  responses on `/v1/token/mint`; treat repeated failures as a paging condition.
+- **Latency SLO-** Track `soranet_handshake_latency_seconds` နှင့် P95 ကို သိမ်းထားပါ။
+  300ms အောက်။ စိမ်ထားသောစမ်းသပ်အော့ဖ်ဆက်များသည် အကာအကွယ်အတွက် ချိန်ညှိဒေတာကို ပေးဆောင်သည်။
+  တွန်းအားများ။【docs/source/soranet/reports/pow_resilience.md:1】
+- **Quota pressure:** Relay တိုင်းထွာများနှင့်အတူ `soranet_guard_capacity_report.py` ကိုသုံးပါ။
+  `pow.quotas` cooldowns ချိန်ညှိရန် (`soranet_abuse_remote_cooldowns`၊
+  `soranet_handshake_throttled_remote_quota_total`)။【docs/source/soranet/relay_audit_pipeline.md:68】
+- ** ပဟေဠိ ချိန်ညှိမှု-** `soranet_handshake_pow_difficulty` သည် တူညီသင့်သည်။
+  `/v1/puzzle/config` မှပြန်လာသောအခက်အခဲ။ Divergence သည် stale relay ကိုဖော်ပြသည်။
+  config သို့မဟုတ် ပြန်လည်စတင်ခြင်း မအောင်မြင်ပါ။
+- **Token အဆင်သင့်-** `/v1/token/config` သည် `enabled = false` သို့ကျသွားပါက သတိပေးချက်
+  မမျှော်လင့်ဘဲ သို့မဟုတ် `revocation_source` သည် ပျက်နေသောအချိန်တံဆိပ်များကို အစီရင်ခံပါက။ လုပ်ငန်းရှင်များ
+  တိုကင်တစ်ခုရှိသည့်အခါတိုင်း CLI မှတစ်ဆင့် Norito ကို ပြန်လည်ရုပ်သိမ်းခြင်းဖိုင်ကို လှည့်သင့်သည်
+  ဤအဆုံးမှတ်ကို တိကျစေရန်အတွက် အနားယူခဲ့သည်။
+- ** ဝန်ဆောင်မှုကျန်းမာရေး-** Probe `/healthz` သည် ပုံမှန်နေထိုင်မှုပုံစံနှင့် သတိပေးချက်
+  အကယ်၍ `/v1/puzzle/mint` သည် HTTP 500 တုံ့ပြန်မှုများကို ပြန်ပေးမည်ဆိုပါက (Argon2 ဘောင်ကို ညွှန်ပြသည်
+  မတိုက်ဆိုင်မှု သို့မဟုတ် RNG ကျရှုံးမှုများ)။ HTTP 4xx/5xx မှတဆင့် တိုကင်တူးခြင်း အမှားများ ပေါ်လာသည်။
+  `/v1/token/mint` တွင် တုံ့ပြန်မှုများ၊ ထပ်ခါတလဲလဲ မအောင်မြင်မှုများကို စာမျက်နှာအခြေအနေတစ်ခုအဖြစ် ဆက်ဆံပါ။
 
-## Compliance and audit logging
+## လိုက်နာမှုနှင့် စာရင်းစစ်မှတ်တမ်း
 
-Relays emit structured `handshake` events that include throttle reasons and
-cooldown durations. Ensure the compliance pipeline described in
-`docs/source/soranet/relay_audit_pipeline.md` ingests these logs so puzzle
-policy changes remain auditable. When the puzzle gate is enabled, archive the
-minted ticket samples and the Norito configuration snapshot with the rollout
-ticket for future audits. Admission tokens minted ahead of maintenance windows
-should be tracked with their `token_id_hex` values and inserted into the
-revocation file once they expire or are revoked.
+Relays များသည် အခိုးအငွေ့ အကြောင်းပြချက်များ နှင့် အခိုးအငွေ့များ ပါဝင်သော တည်ဆောက်ပုံ `handshake` ဖြစ်ရပ်များကို ထုတ်လွှတ်သည်။
+cooldown ကြာချိန်။ တွင်ဖော်ပြထားသော ပိုက်လိုင်းအား လိုက်နာမှု ရှိစေရန် သေချာစေပါ။
+`docs/source/soranet/relay_audit_pipeline.md` သည် ဤမှတ်တမ်းများကို စုပ်ယူလိုက်သောကြောင့် ပဟေဠိဆန်သည်။
+မူဝါဒ အပြောင်းအလဲများသည် စာရင်းစစ်နိုင်ဆဲဖြစ်သည်။ ပဟေဠိတံခါးကိုဖွင့်သောအခါ၊ ဖိုင်ကိုသိမ်းဆည်းပါ။
+minted လက်မှတ်နမူနာများနှင့် Norito စီစဉ်သတ်မှတ်မှု လျှပ်တစ်ပြက် ထုတ်လွှင့်မှုနှင့်အတူ
+အနာဂတ်စာရင်းစစ်များအတွက်လက်မှတ်။ ပြုပြင်ထိန်းသိမ်းမှုပြတင်းပေါက်များရှေ့တွင် ဝင်ခွင့်တိုကင်များ ထည့်သွင်းထားသည်။
+၎င်းတို့၏ `token_id_hex` တန်ဖိုးများကို ခြေရာခံပြီး ထဲသို့ ထည့်သွင်းသင့်သည်။
+သက်တမ်းကုန်ဆုံးသည်နှင့် ရုပ်သိမ်းခြင်း သို့မဟုတ် ရုပ်သိမ်းခြင်း ဖိုင်။

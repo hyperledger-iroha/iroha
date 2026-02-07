@@ -7,69 +7,37 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 9c2eab4379aa346ab7d111e1c51c0230238f260647187f1a33c1819640b9bf2c
 source_last_modified: "2026-01-28T14:25:37.056140+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Genesis configuration
+# Башланмыш конфигурацияһы
 
-A `genesis.json` file defines the first transactions that run when an Iroha network starts. The file is a JSON object with these fields:
+I18NI000000036X файлы I18NT0000000019X селтәре башланғанда эшләгән тәүге транзакцияларҙы билдәләй. Файл — был яландар менән JSON объекты:
 
-- `chain` – unique chain identifier.
-- `executor` (optional) – path to the executor bytecode (`.to`). If present,
-  genesis includes an Upgrade instruction as the first transaction. If omitted,
-  no upgrade is performed and the built‑in executor is used.
-- `ivm_dir` – directory containing IVM bytecode libraries. Defaults to `"."` if omitted.
-- `consensus_mode` – consensus mode advertised in the manifest. Required; use `"Npos"` for the public Sora Nexus dataspace, or `"Permissioned"`/`"Npos"` for other Iroha3 dataspaces. Iroha2 defaults to `"Permissioned"`.
-- `transactions` – list of genesis transactions executed sequentially. Every entry may contain:
-  - `parameters` – initial network parameters.
-  - `instructions` – structured Norito instructions (e.g., `{ "Register": { "Domain": { "id": "wonderland" }}}`). Raw byte arrays are not accepted, and `SetParameter` instructions are rejected here—seed parameters via the `parameters` block and let normalization/signing inject the instructions.
-  - `ivm_triggers` – triggers with IVM bytecode executables.
-  - `topology` – initial peer topology. Each entry keeps the peer id and PoP together: `{ "peer": "<public_key>", "pop_hex": "<hex>" }`. `pop_hex` may be omitted while composing, but must be present before signing.
-- `crypto` – cryptography snapshot mirrored from `iroha_config.crypto` (`default_hash`, `allowed_signing`, `allowed_curve_ids`, `sm2_distid_default`, `sm_openssl_preview`). `allowed_curve_ids` mirrors `crypto.curves.allowed_curve_ids` so manifests can advertise which controller curves the cluster accepts. Tooling enforces SM combinations: manifests that list `sm2` must also switch the hash to `sm3-256`, while builds compiled without the `sm` feature reject `sm2` entirely. Normalization injects a `crypto_manifest_meta` custom parameter into the signed genesis; nodes refuse to start if the injected payload disagrees with the advertised snapshot.
+- `chain` – уникаль сылбырлы идентификатор.
+- I18NI000000038X (факультатив) – башҡарыусы байтекодына юл (I18NI000000039X X). Әгәр ҙә бар икән,
+  генез беренсе транзакция булараҡ Яңыртыу инструкцияһын үҙ эсенә ала. Әгәр ҙә үткәрелмәһә,
+  яңыртыу башҡарылмай һәм төҙөлгән башҡарыусы ҡулланыла.
+- I18NI000000040X – I18NT000000023X baytecode китапханалары булған каталог. Ғәҙәттәгесә I18NI000000041X, әгәр төшөрөп ҡалдырылған.
+- I18NI000000042X – консенсус режимы манифестта рекламаланған. Биргеҙәм; Ҡулланыу I18NI000000043X өсөн йәмәғәт Sora I18NT0000000020X мәғлүмәт киңлеге, йәки `"Permissioned"`/I18NI000000045X өсөн башҡа Iroha3 мәғлүмәт киңлеге. Iroha2 ғәҙәттәгесә `"Permissioned"` XX.
+- `transactions` – генез операциялары исемлеге эҙмә-эҙлекле башҡарылған. Һәр яҙма булыуы мөмкин:
+  - I18NI000000048X – башланғыс селтәр параметрҙары.
+  - I18NI000000049X – структуралы I18NT000000002X инструкциялары (мәҫәлән, `{ "Register": { "Domain": { "id": "wonderland" }}}`). Сеймал массивтары ҡабул ителмәй, һәм `SetParameter` инструкциялары бында кире ҡағыла — орлоҡ параметрҙары аша I18NI0000000052 блок һәм рөхсәт нормалләштереү/ҡулланыу инъекция күрһәтмәләр.
+  - `ivm_triggers` – I18NT000000024X baytecode башҡарылған әйберҙәр менән триггер.
+  - `topology` – тәүге тиҫтерҙәре топологияһы. Һәр яҙма тиҫтерҙәр id һәм PoP бергә тота: I18NI000000055X. `pop_hex` композиторлыҡ ваҡытында төшөрөп ҡалдырылырға мөмкин, әммә ҡул ҡуйыу алдынан булырға тейеш.
+- I18NI000000057X – криптография снимоктары I18NI0000000058X көҙгөләнгән (I18NI0000000059X X, I18NI000000060X, I18NI000000061X, `sm2_distid_default`, I18NI00000000063 X). I18NI000000064X көҙгө I18NI0000000065X шулай манифестар реклама ала, ниндәй контроллер ҡойроҡ кластер ҡабул итә. Ҡоралландырыу SM комбинацияларын үтәй: I18NI000000066X исемлегенә шулай уҡ I18NI0000000067X-ға күсергә тейеш, шул уҡ ваҡытта `sm` функцияһы I18NI0000000069X XX тулыһынса кире ҡаға. Нормализация `crypto_manifest_meta` ҡулланыусылар параметрын ҡул ҡуйылған генезға индерә; төйөндәр баш тарта, әгәр инъекцияланған файҙалы йөк рекламаланған снимок менән килешмәй.
 
-Example (`kagami genesis generate default --consensus-mode npos` output, instructions trimmed):
+Миҫал (`kagami genesis generate default --consensus-mode npos` сығыш, күрһәтмәләр ҡырҡылған):
 
-```json
-{
-  "chain": "00000000-0000-0000-0000-000000000000",
-  "ivm_dir": "defaults",
-  "transactions": [
-    {
-      "parameters": { "sumeragi": { "block_time_ms": 2000 } },
-      "instructions": [
-        { "Register": { "Domain": { "id": "wonderland" } } }
-      ],
-      "ivm_triggers": [],
-      "topology": [
-        {
-          "peer": "ed25519:...",
-          "pop_hex": "ab12cd..."
-        }
-      ]
-    }
-  ],
-  "consensus_mode": "Npos",
-  "crypto": {
-    "default_hash": "blake2b-256",
-    "allowed_signing": ["ed25519", "secp256k1"],
-    "allowed_curve_ids": [1],
-    "sm2_distid_default": "1234567812345678",
-    "sm_openssl_preview": false
-  }
-}
-```
+I18NF000000029X.
 
-### Seed the `crypto` block for SM2/SM3
+### SM2/SM3 өсөн I18NI000000072X блокын орлоҡ.
 
-Use the xtask helper to produce the key inventory and ready-to-paste configuration snippet in one step:
+Ҡулланыу xtask ярҙамсы етештереү өсөн төп инвентарь һәм әҙер-йәбештереү конфигурацияһы өҙөк бер аҙымда:
 
-```bash
-cargo xtask sm-operator-snippet \
-  --distid CN12345678901234 \
-  --json-out sm2-key.json \
-  --snippet-out client-sm2.toml
-```
+I18NF000000030X
 
-`client-sm2.toml` now contains:
+`client-sm2.toml` хәҙер:
 
 ```toml
 # Account key material
@@ -94,47 +62,27 @@ sm2_distid_default = "CN12345678901234"
 # enable_sm_openssl_preview = true  # optional: only when deploying the OpenSSL/Tongsuo path
 ```
 
-Copy the `public_key`/`private_key` values into the account/client configuration and update the `crypto` block of `genesis.json` so it matches the snippet (for example, set `default_hash` to `sm3-256`, add `"sm2"` to `allowed_signing`, and include the right `allowed_curve_ids`). Kagami will refuse manifests where the hash/curve settings and signing list are inconsistent.
+I18NI00000000074X/I18NI000000075X ҡиммәттәрен иҫәп-хисап/клиент конфигурацияһына күсерергә һәм I18NI000000076-ның I18NI000000077X блокын яңыртыу, шуға күрә ул өҙөккә тап килә (мәҫәлән, I18NI0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002 `sm3-256`, өҫтәү `"sm2"` `allowed_signing`, һәм уң `allowed_curve_ids`). I18NT000000006X хеш/крив параметрҙары һәм ҡул ҡуйыу исемлеге эҙмә-эҙлекһеҙ манифесттарҙан баш тартасаҡ.
 
-> **Tip:** Stream the snippet to stdout with `--snippet-out -` when you just want to inspect the output. Use `--json-out -` to emit the key inventory on stdout as well.
+> **Кәңәш:** Һиҙеү өсөн өҙөк stdout менән I18NI000000083X ҡасан һеҙ тик теләйем, тип тикшерергә сығыш. Ҡулланыу I18NI000000084X төп инвентарь сығарыу өсөн stdout, шулай уҡ.
 
-If you prefer to drive the lower-level CLI commands manually, the equivalent flow is:
+Әгәр һеҙ өҫтөнлөк бирәһегеҙ, драйвер түбән кимәлдәге CLI командалары ҡул менән, эквивалентлы ағым:
 
-```bash
-# 1. Produce deterministic key material (writes JSON to disk)
-cargo run -p iroha_cli --features sm -- \
-  crypto sm2 keygen \
-  --distid CN12345678901234 \
-  --output sm2-key.json
+I18NF000000032X
 
-# 2. Re-hydrate the snippet that can be pasted into client/config files
-cargo run -p iroha_cli --features sm -- \
-  crypto sm2 export \
-  --private-key-hex "$(jq -r .private_key_hex sm2-key.json)" \
-  --distid CN12345678901234 \
-  --snippet-output client-sm2.toml \
-  --emit-json --quiet
-```
+> **Тик:** I18NI000000085X өҫтә ҡулланыла, ҡул күсермәһе/йәбештереү аҙымын һаҡлау өсөн. Әгәр ул булмаһа, асыҡ `sm2-key.json`, күсермәһе I18NI0000000087X ялан, һәм уны тапшырырға I18NI000000088X туранан-тура.
 
-> **Tip:** `jq` is used above to save a manual copy/paste step. If it is not available, open `sm2-key.json`, copy the `private_key_hex` field, and pass it to `crypto sm2 export` directly.
+> **Миграция ҡулланмаһы:** SM2/SM3/SM4 булған селтәрҙе үҙгәрткәндә, эйәреп барығыҙ .
+> [`docs/source/crypto/sm_config_migration.md` X] (I18NU000000035X)
+> ҡатламлы I18NI0000000090X өҫтөндәге өҫтөнлөктәр өсөн, асыҡ регенерация һәм кире ҡайтарыу
+> планлаштырыу.
 
-> **Migration guide:** When converting an existing network to SM2/SM3/SM4, follow
-> [`docs/source/crypto/sm_config_migration.md`](source/crypto/sm_config_migration.md)
-> for the layered `iroha_config` overrides, manifest regeneration, and rollback
-> planning.
+## генерациялау һәм раҫлау
 
-## Generate and validate
-
-1. Generate a template:
-   ```bash
-   cargo run -p iroha_kagami -- genesis generate \
-     [--executor <path/to/executor.to>] \
-     --consensus-mode npos \
-     --ivm-dir <ivm/dir> \
-     --genesis-public-key <PUBLIC_KEY> > genesis.json
-   ```
-`--consensus-mode` controls which consensus parameters Kagami seeds into the `parameters` block. The public Sora Nexus dataspace requires `npos` and does not support staged cutovers; other Iroha3 dataspaces may use permissioned or NPoS. Iroha2 defaults to `permissioned` and may stage `npos` via `--next-consensus-mode`/`--mode-activation-height`. When `npos` is selected, Kagami seeds the `sumeragi_npos_parameters` payload that drives NPoS collector fan-out, election policy, and reconfiguration windows; normalization/signing turns these into `SetParameter` instructions in the signed block.
-2. Optionally edit `genesis.json`, then validate and sign it:
+1. Ҡалып генерациялау:
+   I18NF000000033X
+`--consensus-mode` контролдә тота, улар I18NT000000007X орлоҡтарын I18NI0000000092X блокына консенсус консервалары. Йәмәғәт Sora I18NT000000021X мәғлүмәттәр киңлеге I18NI000000093X талап итә һәм сәхнәләштерелгән өҙөктәрҙе хупламай; башҡа Iroha3 мәғлүмәт киңлектәрендә рөхсәт йәки NPoS ҡулланырға мөмкин. Iroha2 `permissioned` һәм I18NI0000000955X стадияһында I18NI000000096X/`--mode-activation-height` аша ойошторорға мөмкин. Ҡасан I18NI000000098X һайланған, Kagami орлоҡтары I18NI0000000009X файҙалы йөк, тип драйверҙар NPoS коллекционер фан-аут, һайлау сәйәсәте, һәм реконфигурация windows; нормалләштереү/ҡулланыу был I18NI000000100X инструкцияларына әйләндерә, ҡул ҡуйылған блокта.
+.
    ```bash
    cargo run -p iroha_kagami -- genesis sign genesis.json \
      --public-key <PUBLIC_KEY> \
@@ -142,65 +90,63 @@ cargo run -p iroha_cli --features sm -- \
      --out-file genesis.signed.nrt
    ```
 
-   To emit SM2/SM3/SM4-ready manifests, pass `--default-hash sm3-256` and include `--allowed-signing sm2` (repeat `--allowed-signing` for additional algorithms). Use `--sm2-distid-default <ID>` if you need to override the default distinguishing identifier.
+   SM2/SM3/SM4-әҙер манифестарҙы сығарыу өсөн `--default-hash sm3-256` үтергә һәм `--allowed-signing sm2` индереү (өҫтәмә алгоритмдар өсөн I18NI000000104X ҡабатлау). Ҡулланыу I18NI000000105X, әгәр һеҙгә кәрәк, тип өҫтөнлөк бирергә ғәҙәттәгесә айырыусы идентификатор.
 
-   When you start `irohad` with only `--genesis-manifest-json` (no signed genesis block), the node now seeds its runtime crypto configuration from the manifest automatically; if you also supply a genesis block, the manifest and config still must match exactly.
+   Ҡасан һеҙ башлай I18NI000000106X менән генә `--genesis-manifest-json` (бер ниндәй ҙә ҡултамға генез блок), төйөн хәҙер орлоҡтар уның эшләү ваҡыты крипто конфигурацияһы автоматик рәүештә; әгәр һеҙ шулай уҡ генезис блогы менән тәьмин итеү, манифест һәм конфиг һаман да теүәл тап килергә тейеш.
 
-- Validation notes:
-  - Kagami injects `consensus_handshake_meta`, `confidential_registry_root`, and `crypto_manifest_meta` as `SetParameter` instructions in the normalized/signed block. `irohad` will recompute the consensus fingerprint from those payloads and fail startup if the handshake metadata or crypto snapshot disagree with the encoded parameters. Keep these out of `instructions` in the manifest; they are generated automatically.
-- Inspect the normalized block:
-  - Run `kagami genesis normalize genesis.json --format text` to see the final ordered transactions (including injected metadata) without providing a keypair.
-  - Use `--format json` to dump a structured view suitable for diffing or reviews.
+- Валидация билдәләй:
+  - I18NNT00000009X X инъекция I18NI000000108X, `confidential_registry_root`, һәм I18NI0000000110X тип I18NI00000001111Х инструкциялар нормалаштырылған/билдәләнгән блок. `irohad` был файҙалы йөктәрҙән консенсус бармаҡ эҙен яңынан иҫәпләү һәм стартаптар етешһеҙлектәре булмаһа, әгәр ҡул ҡыҫышыу метамағлүмәттәре йәки крипто снимоктары кодланған параметрҙар менән риза түгел. Быларҙы I18NI000000113X-тан сығарыу манифеста; улар автоматик рәүештә генерациялана.
+- Нормалаштырылған блокты тикшерергә:
+  - Run `kagami genesis normalize genesis.json --format text` һуңғы заказ буйынса операцияларҙы (шул иҫәптән инъекция метамағлүмәттәре) клавиатура бирмәйенсә күрергә.
+  - `--format json` ҡулланыу өсөн структуралы ҡараш ташлау өсөн яраҡлы диффуляция йәки отзывтар.
 
-`kagami genesis sign` checks that the JSON is valid and produces a Norito‑encoded block ready to use via `genesis.file` in the node configuration. The resulting `genesis.signed.nrt` is already in canonical wire form: a version byte followed by a Norito header describing the payload layout. Always distribute this framed output. Prefer the `.nrt` suffix for signed payloads; if you don't need to upgrade the executor at genesis, you can omit the `executor` field and skip providing a `.to` file.
+`kagami genesis sign` тикшерә, тип JSON дөрөҫ һәм етештереү I18NT0000000000003X-кодланған блок аша ҡулланырға Docker төйөн конфигурацияһы. Һөҙөмтәлә барлыҡҡа килгән `genesis.signed.nrt` инде канонлы сым формаһында: версия байт, унан һуң Norito башлыҡтарын һүрәтләү файҙалы йөк макеты. Һәр ваҡыт был рамкалы сығыш бүлергә. Ҡул ҡуйылған файҙалы йөктәр өсөн `.nrt` суффиксы өҫтөнлөк бирергә; әгәр һеҙгә кәрәкмәй, тип яңыртыу өсөн башҡарыусы генезис, һеҙ `executor` яланын ҡалдырырға һәм үткәрергә мөмкин `.to` файл тәьмин итеү.
 
-When signing NPoS manifests (`--consensus-mode npos` or Iroha2-only staged cutovers), `kagami genesis sign` requires the `sumeragi_npos_parameters` payload; generate it with `kagami genesis generate --consensus-mode npos` or add the parameter manually.
-By default, `kagami genesis sign` uses the manifest's `consensus_mode`; pass `--consensus-mode` to override it.
+NPoS-ҡа ҡул ҡуйғанда (I18NI0000122X йәки Iroha2-тик сәхнәләштерелгән өҙөклөктәр), `kagami genesis sign` X `sumeragi_npos_parameters` файҙалы йөк талап итә; генерациялау уны `kagami genesis generate --consensus-mode npos` менән йәки параметрҙы ҡул менән өҫтәү.
+Ғәҙәттәгесә, `kagami genesis sign` XE18NI000000127X X; үткәреү өсөн `--consensus-mode` уны өҫтөндә йөрөү өсөн.
 
-## What Genesis Can Do
+## Башланмыш нимә эшләй ала
 
-Genesis supports the following operations. Kagami assembles them into transactions in a well‑defined order so peers deterministically execute the same sequence.
+Башланмыш түбәндәге операцияларҙы хуплай. I18NT000000010X уларҙы транзакцияларға скважина билдәләнгән тәртиптә йыйып, шуға күрә тиҫтерҙәре бер үк эҙмә-эҙлеклелекте детерминистик башҡара.
 
-- Parameters: Set initial values for Sumeragi (block/commit times, drift), Block (max txs), Transaction (max instructions, bytecode size), Executor and Smart Contract limits (fuel, memory, depth), and custom parameters. Kagami seeds `Sumeragi::NextMode` and the `sumeragi_npos_parameters` payload (NPoS election, reconfig) via the `parameters` block so startup can apply consensus knobs from on-chain state; the signed block carries the generated `SetParameter` instructions.
-- Native Instructions: Register/Unregister Domain, Account, Asset Definition; Mint/Burn/Transfer assets; Transfer domain and asset definition ownership; Modify metadata; Grant permissions and roles.
-- IVM Triggers: Register triggers that execute IVM bytecode (see `ivm_triggers`). Triggers’ executables resolve relative to `ivm_dir`.
-- Topology: Provide the initial set of peers via the `topology` array inside any transaction (commonly the first or last one). Each entry is `{ "peer": "<public_key>", "pop_hex": "<hex>" }`; `pop_hex` may be omitted while composing but must be present before signing.
-- Executor Upgrade (optional): If `executor` is present, genesis inserts a single Upgrade instruction as the first transaction; otherwise, genesis starts directly with parameters/instructions.
+- Параметрҙар: I18NT000000000Х (блок/коммит ваҡыты, дрейф), Блок (макс txs), Транзакция (макс инструкциялары, байткод ҙурлығы), башҡарыусы һәм аҡыллы килешеп сиктәре (яғыулыҡ, хәтер, тәрәнлек) һәм ҡулланыусылар параметрҙары өсөн башланғыс ҡиммәттәр ҡуйырға. I18NT0000011X орлоҡтары I18NI000000129X һәм `sumeragi_npos_parameters` файҙалы йөк (NPoS һайлау, реконфигурация) аша `parameters` блок шулай стартап сылбырлы дәүләттән консенсус ручкалар ҡуллана ала; ҡул ҡуйылған блок генерацияланған `SetParameter` инструкцияларын йөрөтә.
+- Тыуған инструкциялар: Теркәү/Антерегистр домен, иҫәп, Активтар билдәләмәһе; Минт/Яндырыу/Трансфер активтары; Домен һәм активтарҙы билдәләү милекселеген күсерергә; Метамәғлүмәттәрҙе үҙгәртеү; Грант рөхсәттәре һәм ролдәре.
+- IVM Триггерс: теркәлергә триггерҙары, улар I18NT000000026X байтекодты башҡарҙы (ҡара: `ivm_triggers`). Триггерс’ башҡармалар хәл итеү өсөн сағыштырмаса I18NI000000134X.
+- Топология: I18NI000000135X массивы аша теләһә ниндәй транзакция (ғәҙәттә, беренсе йәки һуңғы) аша тиҫтерҙәренең тәүге йыйылмаһын тәьмин итеү. Һәр яҙма `{ "peer": "<public_key>", "pop_hex": "<hex>" }`; `pop_hex` композиторлыҡ ваҡытында төшөрөп ҡалдырылырға мөмкин, әммә ҡул ҡуйыу алдынан булырға тейеш.
+- Башҡарыусы Яңыртыу (теләһәгеҙ): Әгәр `executor` бар икән, генездың беренсе транзакция булараҡ бер Яңыртыу инструкцияһын индерә; башҡаса, генез туранан-тура параметрҙар/инструкцияларҙан башлана.
 
-### Transaction Ordering
+### Транзакция заказы
 
-Conceptually, genesis transactions are processed in this order:
+Концептуаль яҡтан генез операциялары был тәртиптә эшкәртелә:
 
-1) (Optional) Executor Upgrade
-2) For each transaction in `transactions`:
-   - Parameter updates
-   - Native instructions
-   - IVM trigger registrations
-   - Topology entries
+1) (Факультатив) Башҡарыусы яңыртыу
+2) I18NI000000139X-тағы һәр операция өсөн:
+   - Параметр яңыртыуҙары
+   - Тыуған күрһәтмәләр
+   - I18NT0000000027X триггер теркәүҙәре
+   - Топология яҙмалары
 
-Kagami and the node code ensure this ordering so that, for example, parameters apply before subsequent instructions in the same transaction.
+I18NT000000012X һәм төйөн коды был заказды тәьмин итә, шулай итеп, параметрҙар, мәҫәлән, шул уҡ транзакцияла артабанғы күрһәтмәләр алдынан ҡулланыла.
 
-## Recommended Workflow
+## Тәҡдим ителгән эш ағымы
 
-- Start from a template with Kagami:
-  - Built‑in ISI only: `kagami genesis generate --ivm-dir <dir> --genesis-public-key <PK> --consensus-mode npos > genesis.json` (Sora Nexus public dataspace; use `--consensus-mode permissioned` for Iroha2 or private Iroha3).
-  - With custom executor upgrade (optional): add `--executor <path/to/executor.to>`
-  - Iroha2-only: to stage a future cutover to NPoS, pass `--next-consensus-mode npos --mode-activation-height <HEIGHT>` (keep `--consensus-mode permissioned` for the current mode).
-- `<PK>` is any multihash recognised by `iroha_crypto::Algorithm`, including the TC26 GOST variants when Kagami is built with `--features gost` (for example `gost3410-2012-256-paramset-a:...`).
-- Validate while editing: `kagami genesis validate genesis.json`
-- Sign for deployment: `kagami genesis sign genesis.json --public-key <PK> --private-key <SK> --out-file genesis.signed.nrt`
-- Configure peers: set `genesis.file` to the signed Norito file (e.g., `genesis.signed.nrt`) and `genesis.public_key` to the same `<PK>` used for signing.
+- I18NT000000013X менән шаблондан башлап:
+  - ISI ғына төҙөлгән: `kagami genesis generate --ivm-dir <dir> --genesis-public-key <PK> --consensus-mode npos > genesis.json` (Сора I18NT0000000022X йәмәғәт мәғлүмәт киңлеге; Iroha2 йәки шәхси Ироха3 өсөн I18NI000000141X ҡулланыу).
+  - Ҡулланыусыларҙы яңыртыу менән яңыртыу (теләк буйынса): `--executor <path/to/executor.to>` өҫтәргә
+  - Iroha2-тик: NPoS-ҡа киләсәктәге өҙөклөк ойошторорға, `--next-consensus-mode npos --mode-activation-height <HEIGHT>` аша үтергә (ағымдағы режим өсөн I18NI000000144X тотоғоҙ).
+- I18NI000000145X - теләһә ниндәй күпхаш танылған I18NI000000146X, шул иҫәптән TC26 GOST варианттары, ҡасан I18NT000000000014X `--features gost` менән төҙөлгән (мәҫәлән, I18NI000000000000148X).
+- монтажлау ваҡытында раҫлау: I18NI000000149XX
+- Ҡулланыу өсөн билдә: I18NI000000150X
+- Йәштәштәрен конфигурациялау: I18NI000000151X ҡуйылған Norito файлына (мәҫәлән, I18NI000000152X) һәм `genesis.public_key`-ға ҡул ҡуйыу өсөн ҡулланылған I18NI000000154X-ҡа тиклем.Иҫкәрмәләр:
+- I18NT000000015X’s “подлуҫ” ҡалыптары өлгө домен һәм иҫәп яҙмалары теркәй, бер нисә актив, һәм гранттар минималь рөхсәт ҡулланып, тик төҙөлгән ISIs – юҡ `.to` кәрәк.
+- Әгәр ҙә һеҙ башҡарма яңыртыуҙы үҙ эсенә ала икән, ул беренсе транзакция булырға тейеш. I18NT000000016X генерациялау/ҡулланыу ваҡытында был үтәй.
+- Ҡулланыу I18NI0000000156X тотоу өсөн дөрөҫ булмаған `Name` ҡиммәттәре (мәҫәлән, аҡ майҙан) һәм дөрөҫ формалаштырылған күрһәтмәләр ҡул ҡуйыу алдынан.
 
-Notes:
-- Kagami’s “default” template registers a sample domain and accounts, mints a few assets, and grants minimal permissions using only built‑in ISIs – no `.to` required.
-- If you do include an executor upgrade, it must be the first transaction. Kagami enforces this when generating/signing.
-- Use `kagami genesis validate` to catch invalid `Name` values (e.g., whitespace) and malformed instructions before signing.
+## I18NT0000000017X/Свойство менән йүгереүҙе
 
-## Running with Docker/Swarm
+I18NT0000000018X бирелгән композит һәм страк инструменталь инструменталь ручка ике осраҡта ла:
 
-The provided Docker Compose and Swarm tooling handle both cases:
+- Башҡармаһыҙ: композиция команда юғалған/буш `executor` яланын таҫмалар һәм файлға ҡул ҡуя.
+- Башҡарыусы менән: ул контейнер эсендәге абсолют юлға сағыштырмаса башҡарыусы юлды хәл итә һәм файлға ҡул ҡуя.
 
-- Without executor: the compose command strips a missing/empty `executor` field and signs the file.
-- With executor: it resolves the relative executor path to an absolute path inside the container and signs the file.
-
-This keeps development simple on machines without prebuilt IVM samples while still allowing executor upgrades when needed.
+Был үҫеш ябай машиналарҙа һаҡлай алдынан төҙөлгән I18NT0000000000028X өлгөләре, шул уҡ ваҡытта башҡарма яңыртыу мөмкинлеге бирә, ҡасан кәрәк.

@@ -4,112 +4,102 @@ direction: ltr
 source: docs/portal/docs/sorafs/node-plan.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: node-plan
-title: SoraFS node implementation plan
-sidebar_label: node implementation plan
-description: SF-3 storage roadmap کو milestones، tasks اور test coverage کے ساتھ actionable engineering work میں تبدیل کرتا ہے۔
+identifiant : plan de nœud
+titre : Plan de mise en œuvre du nœud SoraFS
+sidebar_label : plan de mise en œuvre du nœud
+description : Feuille de route du stockage SF-3, jalons, tâches et couverture des tests, travaux d'ingénierie exploitables.
 ---
 
 :::note مستند ماخذ
 :::
 
-SF-3 پہلا runnable `sorafs-node` crate فراہم کرتا ہے جو Iroha/Torii process کو SoraFS storage provider میں بدلتا ہے۔ اس پلان کو [node storage guide](node-storage.md)، [provider admission policy](provider-admission-policy.md) اور [storage capacity marketplace roadmap](storage-capacity-marketplace.md) کے ساتھ استعمال کریں جب deliverables sequence کریں۔
+SF-3 est un système de caisse exécutable `sorafs-node` et un processus Iroha/Torii et un fournisseur de stockage SoraFS. Voir [Guide de stockage des nœuds] (node-storage.md) et [Politique d'admission du fournisseur] (provider-admission-policy.md) et [Feuille de route du marché de la capacité de stockage] (storage-capacity-marketplace.md) جب séquence des livrables کریں۔
 
-## Target scope (Milestone M1)
+## Portée cible (jalon M1)1. **Intégration du magasin de morceaux.** `sorafs_car::ChunkStore` est un backend persistant et un wrapper et un répertoire de données configuré avec des octets de morceaux, des manifestes et des arbres PoR.
+2. **Points de terminaison de la passerelle.** Processus Torii pour la soumission de broches, la récupération de morceaux, l'échantillonnage PoR et la télémétrie de stockage et les points de terminaison HTTP Norito exposent les points de terminaison HTTP.
+3. ** Plomberie de configuration. ** Structure de configuration `SoraFsStorage` (indicateur activé, capacité, répertoires, limites de concurrence) شامل کریں اور `iroha_config`, `iroha_core`, `iroha_torii` کے ذریعے fil کریں۔
+4. **Quota/planification.** Les limites de disque/parallélisme définies par l'opérateur appliquent les requêtes de transfert, la contre-pression et la file d'attente.
+5. **Télémétrie.** Réussite des broches, latence de récupération de fragments, utilisation de la capacité et résultats d'échantillonnage PoR et les métriques/journaux émettent des messages.
 
-1. **Chunk store integration.** `sorafs_car::ChunkStore` کو ایسے persistent backend سے wrap کریں جو configured data directory میں chunk bytes، manifests اور PoR trees محفوظ کرے۔
-2. **Gateway endpoints.** Torii process کے اندر pin submission، chunk fetch، PoR sampling اور storage telemetry کے لیے Norito HTTP endpoints expose کریں۔
-3. **Configuration plumbing.** `SoraFsStorage` config struct (enabled flag، capacity، directories، concurrency limits) شامل کریں اور `iroha_config`, `iroha_core`, `iroha_torii` کے ذریعے wire کریں۔
-4. **Quota/scheduling.** Operator-defined disk/parallelism limits enforce کریں اور requests کو back-pressure کے ساتھ queue کریں۔
-5. **Telemetry.** pin success، chunk fetch latency، capacity utilization اور PoR sampling results کے لیے metrics/logs emit کریں۔
+## Répartition du travail
 
-## Work breakdown
-
-### A. Crate & module structure
-
-| Task | Owner(s) | Notes |
+### A. Structure de la caisse et du module| Tâche | Propriétaire(s) | Remarques |
 |------|----------|-------|
-| `crates/sorafs_node` بنائیں جس میں `config`, `store`, `gateway`, `scheduler`, `telemetry` modules ہوں۔ | Storage Team | Torii integration کے لیے reusable types re-export کریں۔ |
-| `StorageConfig` implement کریں جو `SoraFsStorage` سے mapped ہو (user → actual → defaults)۔ | Storage Team / Config WG | Norito/`iroha_config` layers کو deterministic رکھیں۔ |
-| Torii کے pins/fetches کے لیے `NodeHandle` facade فراہم کریں۔ | Storage Team | storage internals اور async plumbing encapsulate کریں۔ |
+| `crates/sorafs_node` Modules `config`, `store`, `gateway`, `scheduler`, `telemetry` modules noir | Équipe de stockage | Torii intégration pour réexportation de types réutilisables |
+| `StorageConfig` implémente le système et `SoraFsStorage` mappé (utilisateur → réel → valeurs par défaut) | Équipe Stockage / Config WG | Couches Norito/`iroha_config` et couches déterministes |
+| Torii broches/récupérations de façade `NodeHandle` façade de façade | Équipe de stockage | les composants internes de stockage et la plomberie asynchrone encapsulent les éléments internes |
 
-### B. Persistent chunk store
+### B. Magasin de morceaux persistants
 
-| Task | Owner(s) | Notes |
+| Tâche | Propriétaire(s) | Remarques |
 |------|----------|-------|
-| `sorafs_car::ChunkStore` کو on-disk manifest index (`sled`/`sqlite`) کے ساتھ disk backend میں wrap کریں۔ | Storage Team | Deterministic layout: `<data_dir>/<manifest_cid>/chunk_{idx}.bin`. |
-| `ChunkStore::sample_leaves` کے ذریعے PoR metadata (64 KiB/4 KiB trees) maintain کریں۔ | Storage Team | Restart کے بعد replay support؛ corruption پر fail fast۔ |
-| Startup پر integrity replay implement کریں (manifests rehash، incomplete pins prune)۔ | Storage Team | replay مکمل ہونے تک Torii start block کریں۔ |
+| `sorafs_car::ChunkStore` et index de manifeste sur disque (`sled`/`sqlite`) pour le backend du disque et le wrapper | Équipe de stockage | Disposition déterministe : `<data_dir>/<manifest_cid>/chunk_{idx}.bin`. |
+| `ChunkStore::sample_leaves` Les métadonnées PoR (arborescences de 64 Ko/4 Ko) maintiennent les métadonnées PoR | Équipe de stockage | Redémarrez pour prendre en charge la relecture la corruption échoue rapidement |
+| Démarrage et mise en œuvre de relecture d'intégrité (manifeste rehash, élagage incomplet des broches) | Équipe de stockage | replay مکمل ہونے تک Torii start block کریں۔ |
 
-### C. Gateway endpoints
-
-| Endpoint | Behaviour | Tasks |
+### C. Points de terminaison de la passerelle| Point de terminaison | Comportement | Tâches |
 |----------|-----------|-------|
-| `POST /sorafs/pin` | `PinProposalV1` قبول کریں، manifests validate کریں، ingestion queue کریں، manifest CID واپس دیں۔ | chunk profile validate کریں، quotas enforce کریں، chunk store کے ذریعے data stream کریں۔ |
-| `GET /sorafs/chunks/{cid}` + range query | `Content-Chunker` headers کے ساتھ chunk bytes serve کریں؛ range capability spec respect کریں۔ | scheduler + stream budgets استعمال کریں (SF-2d range capability کے ساتھ tie کریں)۔ |
-| `POST /sorafs/por/sample` | manifest کے لیے PoR sampling چلائیں اور proof bundle واپس کریں۔ | chunk store sampling reuse کریں، Norito JSON payloads کے ساتھ respond کریں۔ |
-| `GET /sorafs/telemetry` | Summaries: capacity، PoR success، fetch error counts۔ | dashboards/operators کے لیے data فراہم کریں۔ |
+| `POST /sorafs/pin` | `PinProposalV1` Les manifestes valident la file d'attente d'ingestion et le CID du manifeste et le client | profil de bloc valider les quotas appliquer le magasin de blocs et le flux de données |
+| `GET /sorafs/chunks/{cid}` + requête de plage | Les en-têtes `Content-Chunker` et les octets de fragments servent ici. gamme capacité spécification respect کریں۔ | planificateur + budgets de flux en cours (capacité de gamme SF-2d en cas d'égalité) |
+| `POST /sorafs/por/sample` | manifeste et échantillonnage PoR et paquet de preuves et paquet de preuves | réutilisation de l'échantillonnage du magasin de fragments Les charges utiles JSON Norito répondent correctement |
+| `GET /sorafs/telemetry` | Résumés : capacité, réussite du PoR, nombre d'erreurs de récupération | tableaux de bord/opérateurs et données |
 
-Runtime plumbing `sorafs_node::por` کے ذریعے PoR interactions کو thread کرتی ہے: tracker ہر `PorChallengeV1`, `PorProofV1`, `AuditVerdictV1` کو record کرتا ہے تاکہ `CapacityMeter` metrics governance verdicts کو Torii-specific logic کے بغیر reflect کریں۔【crates/sorafs_node/src/scheduler.rs#L147】
+Runtime Plumbing `sorafs_node::por` pour les interactions PoR et les threads : tracker pour `PorChallengeV1`, `PorProofV1`, `AuditVerdictV1` et enregistrement Les verdicts de gouvernance des métriques `CapacityMeter` et la logique spécifique à Torii reflètent les éléments suivants : crates/sorafs_node/src/scheduler.rs#L147
 
-Implementation notes:
+Notes de mise en œuvre :
 
-- Torii کے Axum stack کو `norito::json` payloads کے ساتھ استعمال کریں۔
-- responses کے لیے Norito schemas شامل کریں (`PinResultV1`, `FetchErrorV1`, telemetry structs)۔
+- Torii pour la pile Axum et les charges utiles `norito::json` pour les charges utiles
+- réponses aux schémas Norito et aux schémas (`PinResultV1`, `FetchErrorV1`, structures de télémétrie)- ✅ `/v1/sorafs/por/ingestion/{manifest_digest_hex}` pour la profondeur du backlog, l'époque/date limite la plus ancienne et le fournisseur, les horodatages de réussite/échec récents et `sorafs_node::NodeHandle::por_ingestion_status`, alimenté par `/v1/sorafs/por/ingestion/{manifest_digest_hex}`. Les tableaux de bord Torii et les jauges `torii_sorafs_por_ingest_backlog`/`torii_sorafs_por_ingest_failures_total` enregistrent ہے۔【crates/sorafs_node/src/lib.rs:510】【crates/iroha_torii/src/sorafs/api.rs:1883】【crates/iroha_torii/src/routing.rs:7244】【crates/iroha_telemetry/src/metrics.rs:5390】
 
-- ✅ `/v1/sorafs/por/ingestion/{manifest_digest_hex}` اب backlog depth کے ساتھ oldest epoch/deadline اور ہر provider کے recent success/failure timestamps دکھاتا ہے، جو `sorafs_node::NodeHandle::por_ingestion_status` سے powered ہے، اور Torii dashboards کے لیے `torii_sorafs_por_ingest_backlog`/`torii_sorafs_por_ingest_failures_total` gauges record کرتا ہے۔【crates/sorafs_node/src/lib.rs:510】【crates/iroha_torii/src/sorafs/api.rs:1883】【crates/iroha_torii/src/routing.rs:7244】【crates/iroha_telemetry/src/metrics.rs:5390】
+### D. Planification et application des quotas
 
-### D. Scheduler & quota enforcement
+| Tâche | Détails |
+|------|--------------|
+| Quota de disque | Piste des octets du disque `max_capacity_bytes` les broches rejetées sont rejetées مستقبل کی politiques کے لیے crochets d'expulsion فراہم کریں۔ |
+| Récupérer la simultanéité | Sémaphore global (`max_parallel_fetches`) pour les budgets par fournisseur et les plafonds de plage SF-2d pour chaque fournisseur |
+| File d'attente des broches | Travaux d'ingestion exceptionnels محدود کریں؛ profondeur de file d'attente et les points de terminaison d'état Norito exposent les points de terminaison |
+| Cadence PoR | `por_sample_interval_secs` pour un travailleur en arrière-plan |
 
-| Task | Details |
-|------|---------|
-| Disk quota | Disk bytes track کریں؛ `max_capacity_bytes` پر نئے pins reject کریں۔ مستقبل کی policies کے لیے eviction hooks فراہم کریں۔ |
-| Fetch concurrency | Global semaphore (`max_parallel_fetches`) کے ساتھ per-provider budgets جو SF-2d range caps سے آتے ہیں۔ |
-| Pin queue | Outstanding ingestion jobs محدود کریں؛ queue depth کے لیے Norito status endpoints expose کریں۔ |
-| PoR cadence | `por_sample_interval_secs` سے چلنے والا background worker۔ |
+### E. Télémétrie et journalisation
 
-### E. Telemetry & logging
-
-Metrics (Prometheus):
+Métriques (Prometheus) :
 
 - `sorafs_pin_success_total`, `sorafs_pin_failure_total`
-- `sorafs_chunk_fetch_duration_seconds` (histogram with `result` labels)
-- `torii_sorafs_storage_bytes_used`, `torii_sorafs_storage_bytes_capacity`
-- `torii_sorafs_storage_pin_queue_depth`, `torii_sorafs_storage_fetch_inflight`
-- `torii_sorafs_storage_fetch_bytes_per_sec`
-- `torii_sorafs_storage_por_inflight`
-- `torii_sorafs_storage_por_samples_success_total`, `torii_sorafs_storage_por_samples_failed_total`
+- `sorafs_chunk_fetch_duration_seconds` (histogramme avec étiquettes `result`)
+-`torii_sorafs_storage_bytes_used`, `torii_sorafs_storage_bytes_capacity`
+-`torii_sorafs_storage_pin_queue_depth`, `torii_sorafs_storage_fetch_inflight`
+-`torii_sorafs_storage_fetch_bytes_per_sec`
+-`torii_sorafs_storage_por_inflight`
+-`torii_sorafs_storage_por_samples_success_total`, `torii_sorafs_storage_por_samples_failed_total`
 
-Logs / events:
+Journaux/événements :
 
-- governance ingestion کے لیے structured Norito telemetry (`StorageTelemetryV1`).
-- utilization > 90% یا PoR failure streak threshold سے اوپر ہو تو alerts۔
+- ingestion de gouvernance par télémétrie structurée Norito (`StorageTelemetryV1`).
+- utilisation > 90 % et seuil de séquence de défaillances PoR et alertes### F. Stratégie de test
 
-### F. Testing strategy
+1. **Tests unitaires.** persistance du magasin de morceaux, calculs de quotas, invariants du planificateur (voir `crates/sorafs_node/src/scheduler.rs`).
+2. **Tests d'intégration** (`crates/sorafs_node/tests`). Épingler → récupérer l'aller-retour, redémarrer la récupération, rejet de quota, vérification de la preuve d'échantillonnage PoR.
+3. **Tests d'intégration Torii.** Torii pour le stockage activé pour les points de terminaison HTTP et pour l'exercice `assert_cmd`.
+4. **Feuille de route du chaos.** L'objectif est de percer l'épuisement du disque et de simuler la suppression lente du fournisseur d'E/S.
 
-1. **Unit tests.** chunk store persistence، quota calculations، scheduler invariants (see `crates/sorafs_node/src/scheduler.rs`).
-2. **Integration tests** (`crates/sorafs_node/tests`). Pin → fetch round trip، restart recovery، quota rejection، PoR sampling proof verification۔
-3. **Torii integration tests.** Torii کو storage enabled کے ساتھ چلائیں، HTTP endpoints کو `assert_cmd` کے ذریعے exercise کریں۔
-4. **Chaos roadmap.** مستقبل کے drills disk exhaustion، slow IO اور provider removal simulate کریں گے۔
+## Dépendances
 
-## Dependencies
+- Politique d'admission SF-2b — les nœuds et les annonces publient les enveloppes d'admission et vérifient les conditions d'admission.
+- Marché de capacité SF-2c — télémétrie et déclarations de capacité et cravates
+- Extensions d'annonces SF-2d — capacité de portée + budgets de flux pour consommer plus
 
-- SF-2b admission policy — nodes کو adverts publish کرنے سے پہلے admission envelopes verify کرنے ہوں گے۔
-- SF-2c capacity marketplace — telemetry کو capacity declarations کے ساتھ tie کریں۔
-- SF-2d advert extensions — range capability + stream budgets دستیاب ہونے پر consume کریں۔
+## Critères de sortie d'étape
 
-## Milestone exit criteria
+- Appareils locaux `cargo run -p sorafs_node --example pin_fetch` pour les appareils locaux
+- Torii `--features sorafs-storage` pour construire et tester l'intégration
+- Documentation ([guide de stockage des nœuds] (node-storage.md)) paramètres par défaut + exemples CLI mis à jour maintenant opérateur runbook دستیاب ہو۔
+- Tableaux de bord de mise en scène de télémétrie saturation de la capacité et pannes PoR et alertes configurer
 
-- `cargo run -p sorafs_node --example pin_fetch` local fixtures کے خلاف کام کرے۔
-- Torii `--features sorafs-storage` کے ساتھ build ہو اور integration tests پاس کرے۔
-- Documentation ([node storage guide](node-storage.md)) config defaults + CLI examples کے ساتھ updated ہو؛ operator runbook دستیاب ہو۔
-- Telemetry staging dashboards میں نظر آئے؛ capacity saturation اور PoR failures کے لیے alerts configure ہوں۔
-
-## Documentation & ops deliverables
-
-- [node storage reference](node-storage.md) کو config defaults، CLI usage اور troubleshooting steps کے ساتھ update کریں۔
-- [node operations runbook](node-operations.md) کو implementation کے ساتھ align رکھیں جیسے SF-3 evolve ہو۔
-- `/sorafs/*` endpoints کی API references developer portal میں publish کریں اور Torii handlers آنے کے بعد OpenAPI manifest سے wire کریں۔
+## Livrables de documentation et d'opérations- [référence de stockage du nœud] (node-storage.md) pour les valeurs par défaut de configuration, l'utilisation de la CLI et les étapes de dépannage pour la mise à jour
+- [runbook des opérations de nœud] (node-operations.md) pour la mise en œuvre et l'alignement des tâches pour que SF-3 évolue et
+- Points de terminaison `/sorafs/*` et références API du portail des développeurs pour publier des gestionnaires Torii et un manifeste OpenAPI avec fil.

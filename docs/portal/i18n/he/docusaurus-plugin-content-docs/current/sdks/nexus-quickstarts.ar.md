@@ -4,6 +4,8 @@ direction: rtl
 source: docs/portal/docs/sdks/nexus-quickstarts.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 الدليل الكامل موجود في `docs/source/nexus_sdk_quickstarts.md`. يسلط هذا الملخص في البوابة الضوء على المتطلبات المشتركة والاوامر لكل SDK حتى يتمكن المطورون من التحقق من اعداداتهم بسرعة.
@@ -17,9 +19,9 @@ export NEXUS_CHAIN_ID="iroha3"
 export NEXUS_TRUSTED_PUBKEY="<peer-public-key>"
 ```
 
-قم بتنزيل حزمة تهيئة Nexus، وثبت تبعيات كل SDK، وتاكد من تطابق شهادات TLS مع ملف الاصدار (انظر `docs/source/sora_nexus_operator_onboarding.md`).
+דף הבית של Nexus, ו-SDK, ו-SDK, ו-SDK الاصدار (انظر `docs/source/sora_nexus_operator_onboarding.md`).
 
-## Rust
+## חלודה
 
 ```bash
 cargo run --bin nexus_quickstart \
@@ -28,7 +30,7 @@ cargo run --bin nexus_quickstart \
   --chain "${NEXUS_CHAIN_ID}"
 ```
 
-المراجع: `docs/source/sdk/rust.md`
+מקור: `docs/source/sdk/rust.md`
 
 ## JavaScript / TypeScript
 
@@ -38,7 +40,7 @@ npm run demo:nexus
 
 يقوم السكربت بتهيئة `ToriiClient` باستخدام متغيرات البيئة اعلاه ويطبع اخر كتلة.
 
-## Swift
+## סוויפט
 
 ```bash
 make swift-nexus-demo
@@ -46,7 +48,7 @@ make swift-nexus-demo
 
 يستخدم `Torii.Client` من `IrohaSwift` لجلب `FindNetworkStatus`.
 
-## Android
+## אנדרואיד
 
 ```bash
 ./gradlew :iroha-android:nexusQuickstartTest \

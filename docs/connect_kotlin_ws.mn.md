@@ -7,11 +7,12 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 1b54527ff5f4376f4d8aa1562964479b44a3ebd022a0f70ca8f864d67b526af5
 source_last_modified: "2026-01-05T18:22:23.393526+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-## Kotlin WS Join with Tokens (OkHttp)
+## Котлин WS Токен ашиглан нэгдэх (OkHttp)
 
-Dependencies (Gradle):
+Хамаарал (Gradle):
 ```kotlin
 dependencies {
   implementation("com.squareup.okhttp3:okhttp:4.12.0")
@@ -39,7 +40,7 @@ fun joinWs(node: String, sid: String, role: String, token: String, listener: Web
 // })
 ```
 
-### Sealing/Opening Payloads (ChaCha20‑Poly1305 + AAD)
+### Ачаа битүүмжлэх/нээх (ChaCha20‑Poly1305 + AAD)
 
 ```kotlin
 import javax.crypto.Cipher

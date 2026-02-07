@@ -7,50 +7,51 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 9f775ae297c910da91c6ce97e97ee36fb87f60218fcfb97639ace6eba39f2252
 source_last_modified: "2025-12-29T18:16:35.118933+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Welcome to the SORA Nexus Developer Portal
+# SORA Nexus Хөгжүүлэгчийн порталд тавтай морилно уу
 
-The SORA Nexus developer portal bundles interactive documentation, SDK
-tutorials, and API references for Nexus operators and Hyperledger Iroha
-contributors. It complements the main docs site by surfacing hands-on guides
-and generated specs directly from this repository. The landing page now carries
-themed Norito/SoraFS entry points, signed OpenAPI snapshots, and a dedicated
-Norito Streaming reference so contributors can find the streaming control-plane
-contract without digging through the root spec.
+SORA Nexus хөгжүүлэгч портал нь интерактив баримт бичиг, SDK-г багцалдаг.
+зааварчилгаа, Nexus оператор болон Hyperledger Iroha-д зориулсан API лавлагаа
+хувь нэмэр оруулагчид. Энэ нь гарын авлагыг гаргаснаар үндсэн баримт бичгийн сайтыг нөхдөг
+мөн энэ агуулахаас техникийн үзүүлэлтүүдийг шууд үүсгэсэн. Одоо буух хуудас авч байна
+сэдэвчилсэн Norito/SoraFS нэвтрэх цэгүүд, гарын үсэг зурсан OpenAPI агшин зуурын зураг, тусгай зориулалтын
+Norito Дамжуулалтын лавлагаа, ингэснээр хувь нэмэр оруулагчид дамжуулалтын хяналтын хавтгайг олох боломжтой
+root spec-ийг ухахгүйгээр гэрээ хийх.
 
-## What you can do here
+## Та энд юу хийж чадах вэ
 
-- **Learn Norito** – start with the overview and quickstart to understand the
-  serialization model and bytecode tooling.
-- **Bootstrap SDKs** – follow quickstarts for JavaScript and Rust today; Python,
-  Swift, and Android guides will join them as recipes are migrated.
-- **Browse API references** – the Torii OpenAPI page renders the latest REST
-  specification, and configuration tables link back to the canonical Markdown
-  sources.
-- **Prepare deployments** – operational runbooks (telemetry, settlement, Nexus
-  overlays) are being ported from `docs/source/` and will land in this site as
-  the migration progresses.
+- **Norito-г сур** – тоймоос эхэлж, ойлгохын тулд хурдан эхлүүлээрэй.
+  цуваа загвар болон байт код хэрэгсэл.
+- **Bootstrap SDKs** – өнөөдөр JavaScript болон Rust-ийн хурдан эхлэлийг дагана уу; Python,
+  Жорыг шилжүүлэх үед Swift болон Android хөтөчүүд тэдэнтэй нэгдэх болно.
+- **API лавлагааг үзэх** – Torii OpenAPI хуудас нь хамгийн сүүлийн үеийн REST-ийг гаргадаг.
+  тодорхойлолт, тохиргооны хүснэгтүүд нь каноник Markdown руу буцаж холбогддог
+  эх сурвалжууд.
+- **Байршуулах ажлыг бэлтгэх** – үйлдлийн дэвтэр (телеметр, тооцоо, Nexus)
+  давхаргууд) `docs/source/`-ээс зөөгдөн байгаа бөгөөд энэ сайтад дараах байдлаар буух болно.
+  шилжилт хөдөлгөөн урагшилж байна.
 
-## Current status
+## Одоогийн байдал
 
-- ✅ Themed Docusaurus v3 landing with refreshed typography, gradient-driven
-  hero/cards, and resource tiles that include the Norito Streaming summary.
-- ✅ Torii OpenAPI plugin wired to `npm run sync-openapi`, with signed snapshot
-  checks and CSP guards enforced by `buildSecurityHeaders`.
-- ✅ Preview and probe coverage run in CI (`docs-portal-preview.yml` +
-  `scripts/portal-probe.mjs`), now gating the streaming doc, SoraFS quickstarts,
-  and the reference checklists before artifacts are published.
-- ✅ Norito, SoraFS, and SDK quickstarts plus reference sections are live in the
-  sidebar; new imports from `docs/source/` (streaming, orchestration, runbooks)
-  land here as they are authored.
+- ✅ Сэдэвчилсэн Docusaurus v3 буулт, шинэчилсэн хэвлэмэл, градиент тулгуурласан
+  баатар/картууд болон Norito Дамжуулалтын хураангуйг агуулсан нөөц хавтан.
+- ✅ Torii OpenAPI залгаас нь `npm run sync-openapi` руу холбогдсон, гарын үсэг зурсан агшин зуурын зурагтай
+  `buildSecurityHeaders`-ээр хэрэгжүүлсэн шалгалтууд болон CSP хамгаалалтууд.
+- ✅ CI (`docs-portal-preview.yml` +) дээр хамрах хүрээг урьдчилан харж, шалгах
+  `scripts/portal-probe.mjs`), одоо стриминг баримт бичиг, SoraFS хурдан эхлүүлэх,
+  болон олдворыг нийтлэхээс өмнө лавлагаа шалгах хуудас.
+- ✅ Norito, SoraFS, SDK-н хурдан эхлүүлэх болон лавлагааны хэсгүүдийг шууд үзэх боломжтой.
+  хажуугийн самбар; `docs/source/`-ийн шинэ импортууд (streaming, orchestration, runbooks)
+  зохиогчийнхоо дагуу энд газардах.
 
-## Getting involved
+## Оролцож байна
 
-- See `docs/portal/README.md` for local development commands (`npm install`,
+- Орон нутгийн хөгжлийн командуудыг `docs/portal/README.md`-с үзнэ үү (`npm install`,
   `npm run start`, `npm run build`).
-- Content migration tasks are tracked alongside the `DOCS-*` roadmap items.
-  Contributions are welcome—port sections from `docs/source/` and add the page
-  to the sidebar.
-- If you add a generated artifact (specs, config tables), document the build
-  command so future contributors can refresh it easily.
+- Агуулга шилжүүлэх ажлыг `DOCS-*` замын газрын зургийн зүйлсийн хажуугаар хянадаг.
+  Хувь нэмэр оруулахыг урьж байна—`docs/source/` портын хэсгүүд болон хуудсыг нэмнэ үү
+  хажуу тал руу.
+- Хэрэв та үүсгэсэн олдвор (техникийн үзүүлэлтүүд, тохиргооны хүснэгтүүд) нэмбэл бүтээцийг баримтжуулна
+  тушаал өгснөөр ирээдүйн хувь нэмэр оруулагчид үүнийг хялбархан сэргээх боломжтой.

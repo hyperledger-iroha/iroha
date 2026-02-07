@@ -7,26 +7,27 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 035600f179f4dd225778fae57c927b2a6c9a0f1c45ca949e3536b99283c2dde3
 source_last_modified: "2026-01-28T17:11:30.697433+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Rust SDK Quickstart
+# Rust SDK жылдам іске қосу
 
-The Rust client API lives in the `iroha` crate, which exposes a `client::Client`
-type for talking to Torii. Use it when you need to submit transactions,
-subscribe to events, or query state from a Rust application.
+Rust клиентінің API интерфейсі `iroha` жәшігінде тұрады, ол `client::Client` ашады.
+Torii телефонымен сөйлесу үшін теріңіз. Оны транзакцияларды жіберу қажет болғанда пайдаланыңыз,
+оқиғаларға жазылу немесе Rust қолданбасынан күй сұрау.
 
-## 1. Add the crate
+## 1. Қорапты қосыңыз
 
 ```toml title="Cargo.toml"
 [dependencies]
 iroha = { path = "../../crates/iroha", features = ["client"] }
 ```
 
-The workspace example unlocks the client module via the `client` feature. If you
-consume the published crate, replace the `path` attribute with the current
-version string.
+Жұмыс кеңістігінің мысалы клиент модулін `client` мүмкіндігі арқылы ашады. Егер сіз
+жарияланған жәшікті тұтыну, `path` төлсипатын ағымдағымен ауыстырыңыз
+нұсқа жолы.
 
-## 2. Configure the client
+## 2. Клиентті конфигурациялаңыз
 
 ```rust title="src/main.rs"
 use iroha::client::{Client, ClientConfiguration};
@@ -45,10 +46,10 @@ fn main() -> eyre::Result<()> {
 }
 ```
 
-`ClientConfiguration` mirrors the CLI configuration file: it includes Torii and
-telemetry URLs, authentication material, timeouts, and batching preferences.
+`ClientConfiguration` CLI конфигурация файлын көрсетеді: оған Torii және
+телеметрия URL мекенжайлары, аутентификация материалы, күту уақыттары және пакеттік теңшелімдер.
 
-## 3. Submit a transaction
+## 3. Транзакция жіберіңіз
 
 ```rust
 use iroha::client::{Client, ClientConfiguration};
@@ -88,11 +89,11 @@ fn submit_example() -> eyre::Result<()> {
 }
 ```
 
-Under the hood the client uses Norito to encode the transaction payload before
-posting it to Torii. If submission succeeds, the returned hash can be used to
-track status via `client.poll_transaction_status(hash)`.
+Сорғыштың астында клиент транзакцияның пайдалы жүктемесін кодтау үшін Norito пайдаланады.
+оны Torii мекенжайына жариялау. Жіберу сәтті болса, қайтарылған хэшті қолдануға болады
+`client.poll_transaction_status(hash)` арқылы күйді қадағалау.
 
-## 4. Submit DA blobs
+## 4. DA блоктарын жіберіңіз
 
 ```rust
 use iroha::client::{Client, ClientConfiguration};
@@ -115,11 +116,11 @@ fn submit_da_blob() -> eyre::Result<()> {
 }
 ```
 
-When you need to inspect or persist the Norito payload without sending it to
-Torii, call `client.build_da_ingest_request(...)` to obtain the signed request
-and render it as JSON/bytes, mirroring `iroha app da submit --no-submit`.
+Norito пайдалы жүктемесін жібермей тексеру немесе сақтау қажет болғанда
+Torii, қол қойылған сұрауды алу үшін `client.build_da_ingest_request(...)` нөміріне қоңырау шалыңыз
+және оны `iroha app da submit --no-submit` шағылысатын JSON/байт ретінде көрсетіңіз.
 
-## 5. Query data
+## 5. Деректерді сұрау
 
 ```rust
 use iroha::client::{Client, ClientConfiguration};
@@ -135,11 +136,11 @@ fn list_domains() -> eyre::Result<()> {
 }
 ```
 
-Queries follow the request/response pattern: construct a query type from
-`iroha_data_model::query`, send it via `client.request`, and iterate over the
-results. Responses use Norito-backed JSON, so the wire format is deterministic.
+Сұраулар сұрау/жауап үлгісіне сәйкес келеді: сұрау түрін құрастырыңыз
+`iroha_data_model::query`, оны `client.request` арқылы жіберіңіз және қайталаңыз
+нәтижелер. Жауаптар Norito қолдайтын JSON пайдаланады, сондықтан сым пішімі детерминирленген.
 
-## 6. Explorer QR snapshots
+## 6. Explorer QR суреттері
 
 ```rust
 use iroha::client::{
@@ -160,15 +161,15 @@ fn download_qr() -> eyre::Result<()> {
 }
 ```
 
-`ExplorerAccountQrSnapshot` mirrors the `/v1/explorer/accounts/{id}/qr` JSON
-surface: it includes the canonical account id, the literal rendered with the
-requested format, network prefix/error-correction metadata, QR dimensions, and
-the inline SVG payload that wallets/explorers can embed directly. Omit
-`ExplorerAccountQrOptions` to default to the preferred IH58 output or set
-`address_format: Some(AddressFormat::Compressed)` to retrieve the second-best
-`sora…` variant used by ADDR-6b.
+`ExplorerAccountQrSnapshot` `/v1/explorer/accounts/{id}/qr` JSON көрсетеді
+беті: ол канондық тіркелгі идентификаторын, әріппен көрсетілген литералды қамтиды
+сұралған пішім, желі префиксі/қателерді түзету метадеректері, QR өлшемдері және
+әмияндар/зерттеушілер тікелей ендіре алатын кірістірілген SVG пайдалы жүктемесі. Өткізіп тастаңыз
+`ExplorerAccountQrOptions` таңдаулы IH58 шығысына әдепкіге немесе орнатуға
+Екінші ең жақсысын алу үшін `address_format: Some(AddressFormat::Compressed)`
+ADDR-6b пайдаланатын `sora…` нұсқасы.
 
-## 7. Subscribe to events
+## 7. Оқиғаларға жазылыңыз
 
 ```rust
 use iroha::client::{Client, ClientConfiguration};
@@ -188,29 +189,29 @@ async fn listen_for_blocks() -> eyre::Result<()> {
 }
 ```
 
-The client exposes async streams for Torii’s SSE endpoints, including pipeline
-events, data events, and telemetry feeds.
+Клиент Torii SSE соңғы нүктелері үшін асинхронды ағындарды, соның ішінде құбыр желісін көрсетеді
+оқиғалар, деректер оқиғалары және телеметрия арналары.
 
-## More examples
+## Қосымша мысалдар
 
-- End-to-end flows live under `tests/` in `crates/iroha`. Search for integration
-  tests such as `transaction_submission.rs` for richer scenarios.
-- The CLI (`iroha_cli`) uses the same client module; browse
-  `crates/iroha_cli/src/` to see how authentication, batching, and retries are
-  handled in production tooling.
-- Keep Norito in mind: the client never falls back to `serde_json`. When you
-  extend the SDK, rely on `norito::json` helpers for JSON endpoints and
-  `norito::codec` for binary payloads.
+- `crates/iroha` ішіндегі `tests/` астында ұшып-соңғы ағындар өмір сүреді. Интеграцияны іздеу
+  бай сценарийлер үшін `transaction_submission.rs` сияқты сынақтар.
+- CLI (`iroha_cli`) бірдей клиент модулін пайдаланады; шолу
+  Аутентификация, топтастыру және қайталау әрекеттерінің қалай орындалатынын көру үшін `crates/iroha_cli/src/`
+  өндірістік құрал-саймандарда өңделеді.
+- Norito есте сақтаңыз: клиент ешқашан `serde_json` нұсқасына қайта оралмайды. Сіз кезде
+  SDK кеңейтіңіз, JSON соңғы нүктелері үшін `norito::json` көмекшілеріне сеніңіз және
+  `norito::codec` екілік пайдалы жүктемелер үшін.
 
-## Related Norito examples
+## Қатысты Norito мысалдары
 
-- [Hajimari entrypoint skeleton](../norito/examples/hajimari-entrypoint) — compile, run, and deploy
-  the minimal Kotodama scaffold that mirrors the setup phase in this quickstart.
-- [Register domain and mint assets](../norito/examples/register-and-mint) — aligns with the
-  `Register` + `Mint` flow shown above so you can replay the same operations from a contract.
-- [Transfer asset between accounts](../norito/examples/transfer-asset) — demonstrates the
-  `transfer_asset` syscall with the same account IDs the SDK quickstarts use.
+- [Hajimari кіру нүктесінің қаңқасы](../norito/examples/hajimari-entrypoint) — құрастыру, іске қосу және орналастыру
+  осы жылдам іске қосудағы орнату фазасын көрсететін минималды Kotodama тірегі.
+- [Домен мен ақша активтерін тіркеу](../norito/examples/register-and-mint) — келесімен тураланады
+  `Register` + `Mint` ағыны жоғарыда көрсетілген, осылайша келісім-шарттағы бірдей әрекеттерді қайталай аласыз.
+- [Активтерді шоттар арасында тасымалдау](../norito/examples/transfer-asset) — көрсетеді
+  SDK жылдам бастаулары пайдаланатын бірдей тіркелгі идентификаторлары бар `transfer_asset` жүйесін шақыру.
 
-With these building blocks you can integrate Torii into Rust services or CLIs.
-Refer to the generated documentation and data-model crates for the full set of
-instructions, queries, and events.
+Осы құрылыс блоктарымен Torii жүйесін Rust қызметтеріне немесе CLI қызметтеріне біріктіруге болады.
+Толық жиынтығы үшін жасалған құжаттаманы және деректер үлгісі жәшіктерін қараңыз
+нұсқаулар, сұраулар және оқиғалар.

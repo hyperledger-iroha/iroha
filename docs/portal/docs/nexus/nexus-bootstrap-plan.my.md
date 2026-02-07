@@ -10,95 +10,96 @@ translation_last_reviewed: 2026-02-07
 id: nexus-bootstrap-plan
 title: Sora Nexus bootstrap & observability
 description: Operational plan for bringing the core Nexus validator cluster online before layering SoraFS and SoraNet services.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
-This page mirrors `docs/source/soranexus_bootstrap_plan.md`. Keep both copies aligned until localized versions land in the portal.
+::: Canonical Source ကို သတိပြုပါ။
+ဤစာမျက်နှာသည် `docs/source/soranexus_bootstrap_plan.md` ဖြစ်သည်။ မိတ္တူနှစ်ခုစလုံးကို ပေါ်တယ်တွင် ဒေသစံသတ်မှတ်ထားသောဗားရှင်းများ မရောက်မချင်း ချိန်ညှိထားပါ။
 :::
 
 # Sora Nexus Bootstrap & Observability Plan
 
-## Objectives
-- Stand up the base Sora Nexus validator/observer network with governance keys, Torii APIs, and consensus monitoring.
-- Validate core services (Torii, consensus, persistence) before enabling SoraFS/SoraNet piggyback deployments.
-- Establish CI/CD workflows and observability dashboards/alerts to ensure network health.
+## ရည်ရွယ်ချက်များ
+- အုပ်ချုပ်မှုသော့များ၊ Torii APIs နှင့် အများသဘောတူစောင့်ကြည့်မှုတို့ပါရှိသော အခြေခံ Sora Nexus စိစစ်သူ/လေ့လာသူကွန်ရက်ကို ရပ်တည်ပါ။
+- SoraFS/SoraNet piggyback ဖြန့်ကျက်မှုများကို မဖွင့်မီ ပင်မဝန်ဆောင်မှုများ (Torii၊ အများသဘောတူမှု၊ တည်မြဲမှု) ကို အတည်ပြုပါ။
+- ကွန်ရက်ကျန်းမာရေးကိုသေချာစေရန် CI/CD အလုပ်အသွားအလာများနှင့် စောင့်ကြည့်နိုင်မှု ဒက်ရှ်ဘုတ်များ/သတိပေးချက်များကို တည်ထောင်ပါ။
 
-## Prerequisites
-- Governance key material (council multisig, committee keys) available in HSM or Vault.
-- Baseline infrastructure (Kubernetes clusters or bare-metal nodes) in primary/secondary regions.
-- Updated bootstrap configuration (`configs/nexus/bootstrap/*.toml`) reflecting latest consensus parameters.
+## လိုအပ်ချက်များ
+- HSM သို့မဟုတ် Vault တွင် ရရှိနိုင်သော အုပ်ချုပ်ရေးဆိုင်ရာ အဓိကအချက်များ (ကောင်စီ multisig၊ ကော်မတီသော့များ)။
+- ပင်မ/အလယ်တန်းဒေသများရှိ အခြေခံအဆောက်အဦများ ( Kubernetes အစုအဝေးများ သို့မဟုတ် သတ္တုမပါသော ဆုံမှတ်များ)။
+- အပ်ဒိတ်လုပ်ထားသော bootstrap configuration (`configs/nexus/bootstrap/*.toml`) သည် နောက်ဆုံးပေါ် အများဆန္ဒသတ်မှတ်ချက်များကို ထင်ဟပ်စေသည်။
 
-## Network Environments
-- Operate two Nexus environments with distinct network prefixes:
-- **Sora Nexus (mainnet)** – production network prefix `nexus`, hosting canonical governance and SoraFS/SoraNet piggyback services (chain ID `0x02F1` / UUID `00000000-0000-0000-0000-000000000753`).
-- **Sora Testus (testnet)** – staging network prefix `testus`, mirroring mainnet configuration for integration testing and pre-release validation (chain UUID `809574f5-fee7-5e69-bfcf-52451e42d50f`).
-- Maintain separate genesis files, governance keys, and infrastructure footprints for each environment. Testus acts as the proving ground for all SoraFS/SoraNet rollouts before promotion to Nexus.
-- CI/CD pipelines should deploy to Testus first, execute automated smoke tests, and require manual promotion to Nexus once checks pass.
-- Reference configuration bundles live under `configs/soranexus/nexus/` (mainnet) and `configs/soranexus/testus/` (testnet), each containing sample `config.toml`, `genesis.json`, and Torii admission directories.
+## ကွန်ရက်ပတ်ဝန်းကျင်
+- ကွဲပြားသောကွန်ရက်ရှေ့ဆက်များဖြင့် Nexus ပတ်ဝန်းကျင်နှစ်ခုကို လုပ်ဆောင်ပါ-
+- **Sora Nexus (ပင်မ)** - ထုတ်လုပ်မှုကွန်ရက်ရှေ့ဆက် `nexus`၊ စည်းမျဉ်းစည်းကမ်းဆိုင်ရာ အုပ်ချုပ်မှုနှင့် SoraFS/SoraNet piggyback ဝန်ဆောင်မှုများ (ကွင်းဆက် ID `0x02F1` / U090 I180)။
+- **Sora Testus (testnet)** - ကွန်ရက်ရှေ့ဆက် `testus`၊ ပေါင်းစပ်စမ်းသပ်ခြင်းနှင့် မထုတ်လွှတ်မီ တရားဝင်အတည်ပြုခြင်းအတွက် ပေါင်းစပ်ထည့်သွင်းခြင်းအတွက် ပင်မကွန်ရက်ဖွဲ့စည်းပုံကို ထင်ဟပ်စေခြင်း (ကွင်းဆက် UUID `809574f5-fee7-5e69-bfcf-52451e42d50f`)။
+- ပတ်ဝန်းကျင်တစ်ခုစီအတွက် သီးခြားဥပါဒ်ဖိုင်များ၊ အုပ်ချုပ်မှုသော့များနှင့် အခြေခံအဆောက်အဦခြေရာများကို ထိန်းသိမ်းပါ။ Testus သည် I18NT000000010X သို့ ပရိုမိုးရှင်းမပြုလုပ်မီ SoraFS/SoraNet ဖြန့်ချိမှုအားလုံးအတွက် သက်သေအထောက်အထားအဖြစ် ဆောင်ရွက်ပါသည်။
+- CI/CD ပိုက်လိုင်းများသည် Testus သို့ ဦးစွာအသုံးပြုသင့်ပြီး အလိုအလျောက် မီးခိုးစမ်းသပ်မှုများကို လုပ်ဆောင်ပြီး စစ်ဆေးမှုပြီးဆုံးသည်နှင့် Nexus သို့ လူကိုယ်တိုင် အရောင်းမြှင့်တင်ရန် လိုအပ်ပါသည်။
+- အကိုးအကားဖွဲ့စည်းမှုအစုအဝေးများသည် `configs/soranexus/nexus/` (mainnet) နှင့် `configs/soranexus/testus/` (testnet) အောက်တွင် နေထိုင်ကြသည်၊ တစ်ခုစီတွင် နမူနာ `config.toml`၊ `genesis.json`၊ နှင့် Torii ဝင်ခွင့်လမ်းညွှန်များပါရှိသည်။
 
-## Step 1 – Configuration Review
-1. Audit existing documentation:
-   - `docs/source/nexus/architecture.md` (consensus, Torii layout).
-   - `docs/source/nexus/deployment_checklist.md` (infra requirements).
-   - `docs/source/nexus/governance_keys.md` (key custody procedures).
-2. Validate genesis files (`configs/nexus/genesis/*.json`) align with current validator roster and staking weights.
-3. Confirm network parameters:
-   - Consensus committee size & quorum.
-   - Block interval / finality thresholds.
-   - Torii service ports and TLS certificates.
+## အဆင့် 1 – ဖွဲ့စည်းမှုပြန်လည်သုံးသပ်ခြင်း။
+1. ရှိပြီးသားစာရွက်စာတမ်းများကို စစ်ဆေးပါ-
+   - `docs/source/nexus/architecture.md` (သဘောတူညီမှု၊ Torii အပြင်အဆင်)။
+   - `docs/source/nexus/deployment_checklist.md` (အင်ဖရာလိုအပ်ချက်များ)။
+   - `docs/source/nexus/governance_keys.md` (သော့ထိန်းသိမ်းမှုလုပ်ငန်းစဉ်များ)။
+2. မျိုးဥပါဒ်ဖိုင်များ (`configs/nexus/genesis/*.json`) ကို မှန်ကန်ကြောင်းသက်သေပြပြီး လက်ရှိစာရင်းဇယားနှင့် လောင်းကြေးအလေးများတို့နှင့် ချိန်ညှိပါ။
+3. ကွန်ရက် ကန့်သတ်ချက်များကို အတည်ပြုပါ-
+   - အများဆန္ဒ ကော်မတီ အရွယ်အစားနှင့် အထမြောက်သည်။
+   - ကြားကာလ / နောက်ဆုံးအဆင့်သတ်မှတ်ချက်များကိုပိတ်ဆို့ပါ။
+   - Torii ဝန်ဆောင်မှုဆိပ်ကမ်းများနှင့် TLS လက်မှတ်များ။
 
-## Step 2 – Bootstrap Cluster Deployment
-1. Provision validator nodes:
-   - Deploy `irohad` instances (validators) with persistent volumes.
-   - Ensure network firewall rules allow consensus & Torii traffic between nodes.
-2. Start Torii services (REST/WebSocket) on each validator with TLS.
-3. Deploy observer nodes (read-only) for extra resilience.
-4. Run bootstrap scripts (`scripts/nexus_bootstrap.sh`) to distribute genesis, start consensus, and register nodes.
-5. Execute smoke tests:
-   - Submit test transactions via Torii (`iroha_cli tx submit`).
-   - Verify block production/finality through telemetry.
-   - Check ledger replication across validators/observers.
+## အဆင့် 2 – Bootstrap Cluster Deployment
+1. Provision validator nodes-
+   - ဆက်တိုက် volumes များဖြင့် `irohad` (တရားဝင်စစ်ဆေးသူများ) ကို အသုံးပြုပါ။
+   - ကွန်ရက် firewall စည်းမျဉ်းများသည် nodes များကြားတွင် အများဆန္ဒနှင့် Torii အသွားအလာများကို ခွင့်ပြုကြောင်း သေချာပါစေ။
+2. TLS ဖြင့် validator တစ်ခုစီတွင် Torii ဝန်ဆောင်မှုများ (REST/WebSocket) ကို စတင်ပါ။
+3. ပိုခံနိုင်ရည်ရှိရန်အတွက် စောင့်ကြည့်လေ့လာသူ ဆုံမှတ်များ (ဖတ်ရန်သာ) ကို အသုံးပြုပါ။
+4. bootstrap scripts (`scripts/nexus_bootstrap.sh`) ကို run ပြီး genesis ကိုဖြန့်ဝေရန်၊ consensus စတင်ရန်နှင့် node များကို စာရင်းသွင်းပါ။
+5. မီးခိုးစမ်းသပ်မှုများကို လုပ်ဆောင်ပါ-
+   - Torii (`iroha_cli tx submit`) မှတစ်ဆင့် စမ်းသပ်ငွေလွှဲမှုများကို တင်သွင်းပါ။
+   - telemetry မှတဆင့်ပိတ်ဆို့ထုတ်လုပ်မှု / အပြီးသတ်စစ်ဆေးပါ။
+   - တရားဝင်သူများ/လေ့လာသူများကြားတွင် လယ်ဂျာပုံတူပွားမှုကို စစ်ဆေးပါ။
 
-## Step 3 – Governance & Key Management
-1. Load council multisig configuration; confirm governance proposals can be submitted and ratified.
-2. Securely store consensus/committee keys; configure automatic backups with access logging.
-3. Set up emergency key rotation procedures (`docs/source/nexus/key_rotation.md`) and verify runbook.
+## အဆင့် 3 – အုပ်ချုပ်မှုနှင့် အဓိကစီမံခန့်ခွဲမှု
+1. ကောင်စီ multisig ဖွဲ့စည်းမှုပုံစံကို Load; အုပ်ချုပ်မှုအဆိုပြုချက်များကို တင်သွင်းအတည်ပြုပြီး အတည်ပြုနိုင်သည်။
+2. အများသဘောတူ/ကော်မတီသော့များကို လုံခြုံစွာသိမ်းဆည်းပါ။ ဝင်ရောက်အသုံးပြုမှုမှတ်တမ်းနှင့်အတူ အလိုအလျောက် အရန်ကူးယူမှုများကို စီစဉ်သတ်မှတ်ပါ။
+3. အရေးပေါ်သော့လှည့်ခြင်းလုပ်ငန်းစဉ်များ (`docs/source/nexus/key_rotation.md`) ကိုသတ်မှတ်ပြီး runbook ကိုအတည်ပြုပါ။
 
-## Step 4 – CI/CD Integration
-1. Configure pipelines:
-   - Build & publish validator/Torii images (GitHub Actions or GitLab CI).
-   - Automated configuration validation (lint genesis, verify signatures).
-   - Deployment pipelines (Helm/Kustomize) for staging & production clusters.
-2. Implement smoke tests in CI (spin up ephemeral cluster, run canonical transaction suite).
-3. Add rollback scripts for failed deployments and document runbooks.
+## အဆင့် 4 – CI/CD ပေါင်းစည်းခြင်း။
+1. ပိုက်လိုင်းများ စီစဉ်သတ်မှတ်ခြင်း-
+   - အတည်ပြုသူ/Torii ပုံများ (GitHub လုပ်ဆောင်ချက်များ သို့မဟုတ် GitLab CI) ကို တည်ဆောက်ပြီး ထုတ်ဝေပါ။
+   - အလိုအလျောက်ဖွဲ့စည်းပုံအတည်ပြုခြင်း (lint ဥပါဒ်၊ လက်မှတ်များကိုစစ်ဆေးခြင်း)။
+   - အဆင့်မြှင့်တင်ခြင်းနှင့် ထုတ်လုပ်မှုအစုအဝေးများအတွက် ဖြန့်ကျက်ပိုက်လိုင်းများ (Helm/Kustomize)။
+2. မီးခိုးစမ်းသပ်မှုများကို CI တွင် အကောင်အထည်ဖော်ပါ (မြင်သာထင်သာအစုအဝေးကို လှည့်ပတ်ပါ၊ ကျမ်းဂန်ငွေပေးချေမှုအစုအဝေးကို ဖွင့်ပါ)။
+3. မအောင်မြင်သော ဖြန့်ကျက်မှုများနှင့် မှတ်တမ်းစာအုပ်များအတွက် rollback script များထည့်ပါ။
 
-## Step 5 – Observability & Alerts
-1. Deploy monitoring stack (Prometheus + Grafana + Alertmanager) per region.
-2. Collect core metrics:
-  - `nexus_consensus_height`, `nexus_finality_lag`, `torii_request_duration_seconds`, `validator_peer_count`.
-   - Logs via Loki/ELK for Torii & consensus services.
-3. Dashboards:
-   - Consensus health (block height, finality, peer status).
-   - Torii API latency/error rates.
-   - Governance transactions & proposal statuses.
-4. Alerts:
-   - Block production stall (>2 block intervals).
-   - Peer count drop below quorum.
-   - Torii error rate spikes.
-   - Governance proposal queue backlog.
+## အဆင့် 5 – စောင့်ကြည့်နိုင်မှုနှင့် သတိပေးချက်များ
+1. ဒေသတစ်ခုစီအတွက် စောင့်ကြည့်ရေးအစုစု (Prometheus + Grafana + Alertmanager) ကို အသုံးပြုပါ။
+2. အဓိက တိုင်းတာမှုများ စုဆောင်းပါ-
+  - `nexus_consensus_height`, `nexus_finality_lag`, `torii_request_duration_seconds`, `validator_peer_count`။
+   - Torii နှင့် အများသဘောတူဝန်ဆောင်မှုများအတွက် Loki/ELK မှတဆင့် မှတ်တမ်းများ။
+3. ဒက်ရှ်ဘုတ်များ-
+   - အများသဘောတူကျန်းမာရေး (အနိမ့်အမြင့်၊ နောက်ဆုံးအဆင့်၊ သက်တူရွယ်တူအဆင့်အတန်း)။
+   - Torii API ကြာချိန်/အမှားနှုန်းများ။
+   - အုပ်ချုပ်မှုလွှဲပြောင်းမှုများနှင့် အဆိုပြုချက်အခြေအနေများ။
+4. သတိပေးချက်များ-
+   - ထုတ်လုပ်မှုကိုပိတ်ပါ (> 2 ဘလောက်ကြားကာလများ)။
+   - အထွတ်အထိပ်အောက်ရှိ မျိုးတူအရေအတွက် ကျဆင်းခြင်း။
+   - Torii အမှားအယွင်းနှုန်း မြင့်တက်ခြင်း။
+   - အုပ်ချုပ်မှု အဆိုပြုချက် တန်းစီဇယား။
 
-## Step 6 – Validation & Handoff
-1. Run end-to-end validation:
-   - Submit governance proposal (e.g., parameter change).
-   - Process it through council approval to ensure governance pipeline works.
-   - Run ledger state diff to ensure consistency.
-2. Document runbook for on-call (incident response, failover, scaling).
-3. Communicate readiness to SoraFS/SoraNet teams; confirm piggyback deployments can point to Nexus nodes.
+## အဆင့် 6 - အတည်ပြုခြင်းနှင့် လက်လွှဲပေးခြင်း
+1. အဆုံးမှ အဆုံး တရားဝင်အတည်ပြုချက်ကို လုပ်ဆောင်ပါ-
+   - အုပ်ချုပ်မှုအဆိုပြုချက်ကို တင်သွင်းပါ (ဥပမာ၊ ကန့်သတ်ချက်ပြောင်းလဲမှု)။
+   - စီမံအုပ်ချုပ်မှု ပိုက်လိုင်းများ ကောင်းမွန်စေရန်အတွက် ကောင်စီ၏ ခွင့်ပြုချက်ဖြင့် ဆောင်ရွက်ရမည်။
+   - လိုက်လျောညီထွေရှိစေရန် လယ်ဂျာပြည်နယ်ကွာခြားချက်ကို လုပ်ဆောင်ပါ။
+2. ဖုန်းခေါ်ဆိုမှုအတွက် မှတ်တမ်းစာအုပ် (မတော်တဆတုံ့ပြန်မှု၊ ပျက်ကွက်မှု၊ အတိုင်းအတာ)။
+3. SoraFS/SoraNet အဖွဲ့များသို့ အဆင်သင့်ဆက်သွယ်ပါ။ piggyback ဖြန့်ကျက်မှုများကို Nexus node များသို့ညွှန်ပြနိုင်သည်ကိုအတည်ပြုပါ။
 
-## Implementation Checklist
-- [ ] Genesis/configuration audit completed.
-- [ ] Validator & observer nodes deployed with healthy consensus.
-- [ ] Governance keys loaded, proposal tested.
-- [ ] CI/CD pipelines running (build + deploy + smoke tests).
-- [ ] Observability dashboards live with alerting.
-- [ ] Handoff documentation delivered to downstream teams.
+## အကောင်အထည်ဖော်မှုစာရင်း
+- [ ] ကမ္ဘာဦး/ဖွဲ့စည်းပုံဆိုင်ရာ စာရင်းစစ်ပြီးပါပြီ။
+- [ ] မှန်ကန်သောသဘောတူချက်ဖြင့် အသုံးပြုထားသော validator နှင့် လေ့လာသူ node များ။
+- [ ] အုပ်ချုပ်ရေးသော့များ တင်ပြီး အဆိုပြုချက်ကို စမ်းသပ်ပြီးပါပြီ။
+- [ ] CI/CD ပိုက်လိုင်းများ လည်ပတ်နေသည် (တည်ဆောက် + ဖြန့်ကျက် + မီးခိုးစမ်းသပ်မှုများ)။
+- [ ] ကြည့်ရှုနိုင်မှု ဒက်ရှ်ဘုတ်များသည် သတိပေးချက်ဖြင့် အသက်ရှင်သည်။
+- [ ] Handoff စာရွက်စာတမ်းများကို ရေအောက်အသင်းများသို့ ပေးပို့သည်။

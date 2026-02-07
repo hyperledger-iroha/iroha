@@ -4,12 +4,14 @@ direction: rtl
 source: docs/portal/docs/sorafs/developer-sdk-rust.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
 id: developer-sdk-rust
-title: Rust SDK snippets
-sidebar_label: Rust snippets
+כותרת: קטעי SDK של Rust
+sidebar_label: קטעי חלודה
 description: Proof streams اور manifests consume کرنے کے لیے minimal Rust examples۔
 ---
 
@@ -19,7 +21,7 @@ description: Proof streams اور manifests consume کرنے کے لیے minimal
 اس repository کے Rust crates CLI کو power کرتے ہیں اور custom orchestrators یا services میں embed کیے جا سکتے ہیں۔
 نیچے والے snippets ان helpers کو highlight کرتے ہیں جن کی طلب سب سے زیادہ ہوتی ہے۔
 
-## Proof stream helper
+## עוזר זרם הוכחה
 
 HTTP response سے metrics aggregate کرنے کے لیے existing proof stream parser reuse کریں:
 
@@ -63,11 +65,11 @@ Full version (tests سمیت) `docs/examples/sorafs_rust_proof_stream.rs` میں
 `ProofStreamSummary::to_json()` وہی metrics JSON render کرتا ہے جو CLI دیتا ہے، جس سے
 observability backends یا CI assertions feed کرنا آسان ہوتا ہے۔
 
-## Multi-source fetch scoring
+## ניקוד אחזור של ריבוי מקורות
 
 `sorafs_car::multi_fetch` module وہ async fetch scheduler expose کرتا ہے جو CLI استعمال کرتا ہے۔
 `sorafs_car::multi_fetch::ScorePolicy` implement کریں اور `FetchOptions::score_policy` کے ذریعے pass کریں
-تاکہ provider ordering tune ہو سکے۔ Unit test `multi_fetch::tests::score_policy_can_filter_providers`
+تاکہ provider ordering tune ہو سکے۔ בדיקת יחידה `multi_fetch::tests::score_policy_can_filter_providers`
 custom preferences enforce کرنے کا طریقہ دکھاتا ہے۔
 
 Other knobs CLI flags کو mirror کرتے ہیں:
@@ -82,22 +84,22 @@ Other knobs CLI flags کو mirror کرتے ہیں:
   صرف downgrade stage کرنے یا compliance directive follow کرنے پر استعمال کریں، اور `SoranetStrict` کو
   PQ-only pilots کے لیے explicit approval کے ساتھ reserve کریں۔
 - `SorafsGatewayFetchOptions::write_mode_hint =
-  Some(WriteModeHint::UploadPqOnly)` set کریں تاکہ PQ-only uploads force ہوں؛ helper transport/anonymity
+  Some(WriteModeHint::UploadPqOnly)` set کریں تاکہ PQ-only uploads force ہوں؛ הובלה עוזר/ אנונימיות
   policies کو خودکار طور پر promote کرے گا جب تک واضح override نہ ہو۔
-- `SorafsGatewayFetchOptions::policy_override` استعمال کریں تاکہ ایک request کے لیے temporary transport
+- `SorafsGatewayFetchOptions::policy_override` בקשת הובלה זמנית
   یا anonymity tier pin ہو جائے؛ کسی بھی field کے دینے سے brownout demotion skip ہوتا ہے اور اگر
   requested tier satisfy نہ ہو سکے تو failure آتا ہے۔
-- Python (`sorafs_multi_fetch_local` / `sorafs_gateway_fetch`) اور JavaScript (`sorafsMultiFetchLocal`)
+- Python (`sorafs_multi_fetch_local` / `sorafs_gateway_fetch`) או JavaScript (`sorafsMultiFetchLocal`)
   bindings اسی scheduler کو reuse کرتے ہیں، اس لیے ان helpers میں `return_scoreboard=true` set کریں تاکہ
   computed weights chunk receipts کے ساتھ مل سکیں۔
 - `SorafsGatewayScoreboardOptions::telemetry_source_label` OTLP stream کو record کرتا ہے جس نے adoption bundle
   بنایا تھا۔ اگر omit ہو تو client خودکار طور پر `region:<telemetry_region>` (یا `chain:<chain_id>`) derive کرتا ہے
   تاکہ metadata میں ہمیشہ descriptive label رہے۔
 
-## Fetch via `iroha::Client`
+## אחזור דרך `iroha::Client`
 
 Rust SDK میں gateway fetch helper شامل ہے؛ manifest کے ساتھ provider descriptors (stream tokens سمیت) فراہم کریں
-اور client کو multi-source fetch drive کرنے دیں:
+כונן אחזור של לקוח מרובות מקורות קובץ:
 
 ```rust
 use eyre::Result;
@@ -144,18 +146,16 @@ pub async fn fetch_payload(
         .await?;
     Ok(outcome.assemble_payload())
 }
-```
-
-جب uploads کو classical relays سے انکار کرنا ہو تو `transport_policy` کو `Some(TransportPolicy::SoranetStrict)`
+```جب uploads کو classical relays سے انکار کرنا ہو تو `transport_policy` کو `Some(TransportPolicy::SoranetStrict)`
 پر set کریں، یا جب SoraNet کو مکمل bypass کرنا ہو تو `Some(TransportPolicy::DirectOnly)` پر۔
-`scoreboard.persist_path` کو release artifact directory پر point کریں، ضرورت ہو تو `scoreboard.now_unix_secs` fix کریں،
+`scoreboard.persist_path`, ספריית חפצים לשחרור, נקודת קוד, קוד ו-`scoreboard.now_unix_secs` תיקון.
 اور `scoreboard.metadata` میں capture context (fixture labels، Torii target، وغیرہ) شامل کریں تاکہ
 `cargo xtask sorafs-adoption-check` SDKs کے درمیان deterministic JSON consume کرے اور SF-6c والا provenance blob
-include رہے۔ `Client::sorafs_fetch_via_gateway` اب اس metadata کو manifest identifier، optional manifest CID expectation،
+include رہے۔ `Client::sorafs_fetch_via_gateway` או מטא נתונים או מזהה מניפסט, ציפייה אופציונלית למניפסט CID,
 اور `gateway_manifest_provided` flag کے ساتھ augment کرتا ہے via supplied `GatewayFetchConfig`، تاکہ signed manifest envelope
 شامل کرنے والی captures SF-6c evidence requirement پورا کریں بغیر ان fields کو دستی طور پر duplicate کیے۔
 
-## Manifest helpers
+## עוזרי מניפסט
 
 `ManifestBuilder` اب بھی Norito payloads programmatically assemble کرنے کا canonical طریقہ ہے:
 

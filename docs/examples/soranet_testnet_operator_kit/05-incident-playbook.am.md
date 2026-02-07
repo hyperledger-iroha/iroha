@@ -7,36 +7,37 @@ generator: scripts/sync_docs_i18n.py
 source_hash: d2fbce156952c669e73d74c13284fca317013d706ee401359028c3638341d34b
 source_last_modified: "2025-12-29T18:16:35.091815+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Brownout / Downgrade Response Playbook
+# ብራውን መውጣት/የወረደ ምላሽ Playbook
 
-1. **Detect**
-   - Alert `soranet_privacy_circuit_events_total{kind="downgrade"}` fires or
-     brownout webhook triggers from governance.
-   - Confirm via `kubectl logs soranet-relay` or systemd journal within 5 mins.
+1. ** ፈልግ ***
+   - ማንቂያ I18NI0000000X እሳቶች ወይም
+     ቡኒ የዌብ መንጠቆ ከአስተዳደር ያስነሳል።
+   - በ 5 ደቂቃዎች ውስጥ በI18NI0000001X ወይም በስርዓት የተዘጋጀ ጆርናል ያረጋግጡ።
 
-2. **Stabilise**
-   - Freeze guard rotation (`relay guard-rotation disable --ttl 30m`).
-   - Enable direct-only override for affected clients
-     (`sorafs fetch --transport-policy direct-only --write-mode read-only`).
-   - Capture current compliance config hash (`sha256sum compliance.toml`).
+2. ** ተረጋጋ ***
+   - የጥበቃ ማሽከርከርን (`relay guard-rotation disable --ttl 30m`)።
+   - ለተጎዱ ደንበኞች በቀጥታ ብቻ መሻርን አንቃ
+     (`sorafs fetch --transport-policy direct-only --write-mode read-only`)።
+   - የአሁኑን ተገዢነት ማዋቀር ሃሽ (`sha256sum compliance.toml`) ያንሱ።
 
-3. **Diagnose**
-   - Collect latest directory snapshot and relay metrics bundle:
+3. ** ምርመራ ***
+   - የቅርብ ጊዜ የማውጫ ቅጽበታዊ ገጽ እይታን ይሰብስቡ እና የመለኪያ ልኬቶችን ጥቅል ያድርጉ።
      `soranet-relay support-bundle --output /tmp/bundle.tgz`.
-   - Note PoW queue depth, throttle counters, and GAR category spikes.
-   - Identify whether PQ deficit, compliance override, or relay failure caused the event.
+   - የPoW ወረፋ ጥልቀት ፣ ስሮትል ቆጣሪዎች እና የ GAR ምድብ ስፒሎች ያስተውሉ።
+   - የPQ ጉድለት፣ ተገዢነት መሻር ወይም የዝውውር አለመሳካት ክስተቱን ያመጣው እንደሆነ ይለዩ።
 
-4. **Escalate**
-   - Notify the governance bridge (`#soranet-incident`) with summary and bundle hash.
-   - Open incident ticket linking to the alert, including timestamps and mitigation steps.
+4. **አሳድግ**
+   - የአስተዳደር ድልድዩን (`#soranet-incident`) በማጠቃለያ እና በጥቅል ሃሽ ያሳውቁ።
+   - የጊዜ ማህተሞችን እና የመቀነስ እርምጃዎችን ጨምሮ ከማንቂያው ጋር የሚያገናኝ የክስተቶች ትኬት ይክፈቱ።
 
-5. **Recover**
-   - Once root cause addressed, re-enable rotation
-     (`relay guard-rotation enable`) and revert direct-only overrides.
-   - Monitor KPIs for 30 minutes; ensure no new brownouts appear.
+5. ** ማገገም ***
+   - የስር መንስኤው ከተስተካከለ በኋላ ማሽከርከርን እንደገና አንቃ
+     (`relay guard-rotation enable`) እና ቀጥታ-ብቻ መሻሮችን አድህር።
+   - ለ 30 ደቂቃዎች KPIs ይቆጣጠሩ; አዲስ ቡኒዎች እንዳይታዩ ያረጋግጡ።
 
-6. **Postmortem**
-   - Submit incident report within 48 hours using governance template.
-   - Update runbooks if new failure mode discovered.
+6. **ከሞት በኋላ**
+   - የአስተዳደር አብነት በመጠቀም በ 48 ሰዓታት ውስጥ የአደጋ ሪፖርት ያቅርቡ።
+   - አዲስ ውድቀት ሁነታ ከተገኘ runbooks ያዘምኑ።

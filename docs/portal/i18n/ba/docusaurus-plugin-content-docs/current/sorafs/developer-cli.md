@@ -8,20 +8,22 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraFS CLI Cookbook
 sidebar_label: CLI Cookbook
 description: Task-focused walkthrough of the consolidated `sorafs_cli` surface.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
-:::
+:::иҫкәртергә канонлы сығанаҡ
+::: 1990 й.
 
-The consolidated `sorafs_cli` surface (provided by the `sorafs_car` crate with
-the `cli` feature enabled) exposes every step required to prepare SoraFS
-artifacts. Use this cookbook to jump directly to common workflows; pair it with
-the manifest pipeline and orchestrator runbooks for operational context.
+Консолидацияланған I18NI000000013X өҫтө (`sorafs_car` йәшник менән тәьмин ителә.
+I18NI000000015X функцияһы өҫтөндә эшләй) I18NT0000000003X әҙерләү өсөн кәрәкле һәр аҙымды фашлай.
+артефакттары. Был аш-һыу китабын ҡулланып, туранан-тура дөйөм эш ағымына һикерергә; уны пар менән .
+оператив контекст өсөн асыҡ торба һәм оркестр йүнһеҙлеге.
 
-## Package payloads
+## Пакет файҙалы йөкләмәләр
 
-Use `car pack` to produce deterministic CAR archives and chunk plans. The
-command automatically selects the SF-1 chunker unless a handle is provided.
+Ҡулланыу `car pack` етештереү өсөн детерминистик CAR архивтары һәм өлөшө пландары. 1990 й.
+командаһы автоматик рәүештә SF-1 чанкерын һайлай, әгәр ҙә тотҡа бирелмәһә.
 
 ```bash
 sorafs_cli car pack \
@@ -31,13 +33,13 @@ sorafs_cli car pack \
   --summary-out artifacts/video.car.json
 ```
 
-- Default chunker handle: `sorafs.sf1@1.0.0`.
-- Directory inputs are walked in lexicographic order so checksums stay stable
-  across platforms.
-- The JSON summary includes payload digests, per-chunk metadata, and the root
-  CID recognised by the registry and orchestrator.
+- Ғәҙәттәгесә, чанкер ручкаһы: I18NI000000017X.
+- Каталог индереүҙәр лексикографик тәртиптә йөрөйҙәр, шуға күрә чектар тотороҡло ҡала
+  платформалар буйынса.
+- JSON йомғаҡлауы файҙалы йөктәрҙе үҙ эсенә ала, пер-версия метамағлүмәттәре, һәм тамыр .
+  CID реестр һәм оркестр менән танылған.
 
-## Construct manifests
+## Конструкция манифесттары
 
 ```bash
 sorafs_cli manifest build \
@@ -49,15 +51,15 @@ sorafs_cli manifest build \
   --manifest-json-out artifacts/video.manifest.json
 ```
 
-- `--pin-*` options map directly to `PinPolicy` fields in
+- I18NI0000000018X варианттары картаһы туранан-тура I18NI000000019X яландарында 2012 йылда.
   `sorafs_manifest::ManifestBuilder`.
-- Provide `--chunk-plan` when you want the CLI to recompute the SHA3 chunk
-  digest before submission; otherwise it reuses the digest embedded in the
-  summary.
-- The JSON output mirrors the Norito payload for straightforward diffs during
-  reviews.
+- I18NI000000021X тәьмин итеү, ҡасан һеҙ теләйһегеҙ, CLI SHA3 өлөшөн ҡабаттан иҫәпләү өсөн
+  тапшырыу алдынан үҙләштереү; юғиһә ул ҡабаттан файҙалана үҙләштереү һеңдерелгән .
+  һығымта.
+- JSON сығарыу I18NT0000000001X файҙалы йөкләмәһен көҙгөләй, туранан-тура диффтар ваҡытында 2012 йыл.
+  рецензиялар.
 
-## Sign manifests without long-lived keys
+## Ҡулланма оҙон ғүмерле асҡыстарһыҙ күренә
 
 ```bash
 sorafs_cli manifest sign \
@@ -65,15 +67,15 @@ sorafs_cli manifest sign \
   --bundle-out artifacts/video.manifest.bundle.json \
   --signature-out artifacts/video.manifest.sig \
   --identity-token-env SIGSTORE_ID_TOKEN
-```
+``` X
 
-- Accepts inline tokens, environment variables, or file-based sources.
-- Adds provenance metadata (`token_source`, `token_hash_hex`, chunk digest)
-  without persisting the raw JWT unless `--include-token=true`.
-- Works well in CI: combine with GitHub Actions OIDC by setting
+- 1-се жетондарҙы, тирә-яҡ мөхит үҙгәртеүселәрен йәки файлға нигеҙләнгән сығанаҡтарҙы ҡабул итеү.
+- Провенанс метамағлүмәттәрен өҫтәй (`token_source`, `token_hash_hex`, өлөшләтә һеңдерергә)
+  сеймал JWT һаҡһыҙ, әгәр `--include-token=true`.
+- CI-ла яҡшы эшләй: GitHub Actions I18NT00000000006X менән берләштерә
   `--identity-token-provider=github-actions`.
 
-## Submit manifests to Torii
+## I18NT000000004X-ҡа тапшырыла
 
 ```bash
 sorafs_cli manifest submit \
@@ -88,13 +90,13 @@ sorafs_cli manifest submit \
   --summary-out artifacts/video.submit.json
 ```
 
-- Performs Norito decoding for alias proofs and verifies they match the
-  manifest digest before POSTing to Torii.
-- Recomputes the chunk SHA3 digest from the plan to prevent mismatch attacks.
-- Response summaries capture HTTP status, headers, and registry payloads for
-  later auditing.
+- I18NT000000002X псевдонимы өсөн декодлауҙы башҡара һәм улар тап килә.
+  I18NT000000005X тиклем POSTing алдынан асыҡ һеңдерергә.
+- SHA3 өлөшө үҙләштереү планы тап килмәү һөжүмдәренә юл ҡуймау.
+- Яуап резюмелары HTTP статусын, башлыҡтарын һәм реестр файҙалы йөктәрен тота.
+  һуңыраҡ аудит.
 
-## Verify CAR contents and proofs
+## CAR йөкмәткеһен һәм дәлилдәрен раҫлау
 
 ```bash
 sorafs_cli proof verify \
@@ -103,11 +105,11 @@ sorafs_cli proof verify \
   --summary-out artifacts/video.verify.json
 ```
 
-- Rebuilds the PoR tree and compares payload digests with the manifest summary.
-- Captures counts and identifiers required when submitting replication proofs
-  to governance.
+- PoR ағасын яңынан төҙөй һәм файҙалы йөктәрҙе үҙләштереүҙе асыҡ резюме менән сағыштыра.
+- Ҡаҙанлыҡтарҙы иҫәпләй һәм идентификаторҙар репликацияға дәлилдәр тапшырғанда талап ителә
+  идара итеүгә тиклем.
 
-## Stream proof telemetry
+## Стромлы дәлилдәр телеметрия
 
 ```bash
 sorafs_cli proof stream \
@@ -120,24 +122,24 @@ sorafs_cli proof stream \
   --governance-evidence-dir artifacts/video.proof_stream_evidence
 ```
 
-- Emits NDJSON items for each streamed proof (disable replay with
+- Һәр ағымлы дәлилдәр өсөн NDJSON әйберҙәрен сығара (өҙөүсе реплей менән өҙөлә
   `--emit-events=false`).
-- Aggregates success/failure counts, latency histograms, and sampled failures in
-  the summary JSON so dashboards can plot outcomes without scraping logs.
-- Exits non-zero when the gateway reports failures or local PoR verification
-  (via `--por-root-hex`) rejects proofs. Adjust the thresholds with
-  `--max-failures` and `--max-verification-failures` for rehearsal runs.
-- Supports PoR today; PDP and PoTR reuse the same envelope once SF-13/SF-14
-  land.
-- `--governance-evidence-dir` writes the rendered summary, metadata (timestamp,
-  CLI version, gateway URL, manifest digest), and a copy of the manifest into
-  the supplied directory so governance packets can archive the proof-stream
-  evidence without replaying the run.
+- Уңыштар/уңышһыҙлыҡтар һаны агрегаттары, латентлыҡ гистограммалары, һәм 1990 йылда уңышһыҙлыҡтар өлгөләре.
+  Йыйынтыҡ JSON шулай приборҙар таҡталары һөҙөмтәләрен график төҙөй ала, бүрәнәләр ҡырҡып.
+- нульдән тыш сыға, ҡасан шлюз тураһында хәбәр итә етешһеҙлектәр йәки урындағы PoR тикшерергә
+  (`--por-root-hex` аша) дәлилдәрҙе кире ҡаға. Сиктәрҙе көйләү менән .
+  18NI000000028X һәм репетиция йүгерә өсөн `--max-verification-failures`.
+- Бөгөн PoR-ға ярҙам итә; PDP һәм PoTR ҡабаттан ҡулланыу бер үк конверт бер тапҡыр SF-13/SF-14
+  ил.
+- I18NI000000030X рендерланған резюме, метамағлүмәттәр яҙа (ваҡыт тамғаһы,
+  CLI версияһы, шлюз URL, асыҡ һеңдерергә), һәм күсермәһе манифест .
+  тәьмин ителгән каталог шулай идара итеү пакеттары архивлау мөмкин дәлил-ағым
+  йүгереүҙе ҡабатламайынса дәлилдәр.
 
-## Additional references
+## Өҫтәмә һылтанмалар
 
-- `docs/source/sorafs_cli.md` — exhaustive flag documentation.
-- `docs/source/sorafs_proof_streaming.md` — proof telemetry schema and Grafana
-  dashboard template.
-- `docs/source/sorafs/manifest_pipeline.md` — deep dive on chunking, manifest
-  composition, and CAR handling.
+- `docs/source/sorafs_cli.md` — тулы флаг документацияһы.
+- I18NI000000032X — иҫбатлау телеметрия схемаһы һәм I18NT000000000X
+  приборҙар таҡтаһы шаблон.
+- I18NI000000033X — тәрән һыу инеү өҫтөндә чанкинг, манифест
+  композиция, һәм CAR менән эш итеү.

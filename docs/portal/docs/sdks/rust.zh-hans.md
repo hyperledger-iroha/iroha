@@ -7,26 +7,27 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 035600f179f4dd225778fae57c927b2a6c9a0f1c45ca949e3536b99283c2dde3
 source_last_modified: "2026-01-28T17:11:30.697433+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Rust SDK Quickstart
+# Rust SDK 快速入门
 
-The Rust client API lives in the `iroha` crate, which exposes a `client::Client`
-type for talking to Torii. Use it when you need to submit transactions,
-subscribe to events, or query state from a Rust application.
+Rust 客户端 API 位于 `iroha` 箱中，它公开了 `client::Client`
+用于与 Torii 对话的类型。当您需要提交交易时使用它，
+订阅事件，或从 Rust 应用程序查询状态。
 
-## 1. Add the crate
+## 1. 添加箱子
 
 ```toml title="Cargo.toml"
 [dependencies]
 iroha = { path = "../../crates/iroha", features = ["client"] }
 ```
 
-The workspace example unlocks the client module via the `client` feature. If you
-consume the published crate, replace the `path` attribute with the current
-version string.
+工作区示例通过 `client` 功能解锁客户端模块。如果你
+使用已发布的板条箱，将 `path` 属性替换为当前的
+版本字符串。
 
-## 2. Configure the client
+## 2.配置客户端
 
 ```rust title="src/main.rs"
 use iroha::client::{Client, ClientConfiguration};
@@ -45,10 +46,10 @@ fn main() -> eyre::Result<()> {
 }
 ```
 
-`ClientConfiguration` mirrors the CLI configuration file: it includes Torii and
-telemetry URLs, authentication material, timeouts, and batching preferences.
+`ClientConfiguration` 镜像 CLI 配置文件：它包括 Torii 和
+遥测 URL、身份验证材料、超时和批处理首选项。
 
-## 3. Submit a transaction
+## 3.提交交易
 
 ```rust
 use iroha::client::{Client, ClientConfiguration};
@@ -88,11 +89,11 @@ fn submit_example() -> eyre::Result<()> {
 }
 ```
 
-Under the hood the client uses Norito to encode the transaction payload before
-posting it to Torii. If submission succeeds, the returned hash can be used to
-track status via `client.poll_transaction_status(hash)`.
+在后台，客户端使用 Norito 之前对交易有效负载进行编码
+将其发布到 Torii。如果提交成功，返回的hash可以用来
+通过 `client.poll_transaction_status(hash)` 跟踪状态。
 
-## 4. Submit DA blobs
+## 4. 提交 DA blob
 
 ```rust
 use iroha::client::{Client, ClientConfiguration};
@@ -115,11 +116,11 @@ fn submit_da_blob() -> eyre::Result<()> {
 }
 ```
 
-When you need to inspect or persist the Norito payload without sending it to
-Torii, call `client.build_da_ingest_request(...)` to obtain the signed request
-and render it as JSON/bytes, mirroring `iroha app da submit --no-submit`.
+当您需要检查或保留 Norito 有效负载而不将其发送到
+Torii，调用`client.build_da_ingest_request(...)`获取签名请求
+并将其渲染为 JSON/字节，镜像 `iroha app da submit --no-submit`。
 
-## 5. Query data
+## 5.查询数据
 
 ```rust
 use iroha::client::{Client, ClientConfiguration};
@@ -135,11 +136,11 @@ fn list_domains() -> eyre::Result<()> {
 }
 ```
 
-Queries follow the request/response pattern: construct a query type from
-`iroha_data_model::query`, send it via `client.request`, and iterate over the
-results. Responses use Norito-backed JSON, so the wire format is deterministic.
+查询遵循请求/响应模式：构造查询类型
+`iroha_data_model::query`，通过 `client.request` 发送，并迭代
+结果。响应使用 Norito 支持的 JSON，因此传输格式是确定的。
 
-## 6. Explorer QR snapshots
+## 6. 资源管理器二维码快照
 
 ```rust
 use iroha::client::{
@@ -160,15 +161,15 @@ fn download_qr() -> eyre::Result<()> {
 }
 ```
 
-`ExplorerAccountQrSnapshot` mirrors the `/v1/explorer/accounts/{id}/qr` JSON
-surface: it includes the canonical account id, the literal rendered with the
-requested format, network prefix/error-correction metadata, QR dimensions, and
-the inline SVG payload that wallets/explorers can embed directly. Omit
-`ExplorerAccountQrOptions` to default to the preferred IH58 output or set
-`address_format: Some(AddressFormat::Compressed)` to retrieve the second-best
-`sora…` variant used by ADDR-6b.
+`ExplorerAccountQrSnapshot` 镜像 `/v1/explorer/accounts/{id}/qr` JSON
+表面：它包括规范的帐户ID，用
+请求的格式、网络前缀/纠错元数据、QR 尺寸以及
+钱包/浏览器可以直接嵌入的内联 SVG 有效负载。省略
+`ExplorerAccountQrOptions` 默认为首选 IH58 输出或设置
+`address_format: Some(AddressFormat::Compressed)` 检索第二好
+ADDR-6b 使用的 `sora…` 变体。
 
-## 7. Subscribe to events
+## 7. 订阅事件
 
 ```rust
 use iroha::client::{Client, ClientConfiguration};
@@ -188,29 +189,29 @@ async fn listen_for_blocks() -> eyre::Result<()> {
 }
 ```
 
-The client exposes async streams for Torii’s SSE endpoints, including pipeline
-events, data events, and telemetry feeds.
+客户端公开 Torii 的 SSE 端点的异步流，包括管道
+事件、数据事件和遥测源。
 
-## More examples
+## 更多示例
 
-- End-to-end flows live under `tests/` in `crates/iroha`. Search for integration
-  tests such as `transaction_submission.rs` for richer scenarios.
-- The CLI (`iroha_cli`) uses the same client module; browse
-  `crates/iroha_cli/src/` to see how authentication, batching, and retries are
-  handled in production tooling.
-- Keep Norito in mind: the client never falls back to `serde_json`. When you
-  extend the SDK, rely on `norito::json` helpers for JSON endpoints and
-  `norito::codec` for binary payloads.
+- 端到端流在 `crates/iroha` 中的 `tests/` 下运行。搜索集成
+  测试如`transaction_submission.rs`，场景更丰富。
+- CLI (`iroha_cli`) 使用相同的客户端模块；浏览
+  `crates/iroha_cli/src/` 查看身份验证、批处理和重试的情况
+  在生产工具中处理。
+- 记住 Norito：客户端永远不会回退到 `serde_json`。当你
+  扩展 SDK，依赖 `norito::json` JSON 端点帮助程序
+  `norito::codec` 用于二进制有效负载。
 
-## Related Norito examples
+## 相关 Norito 示例
 
-- [Hajimari entrypoint skeleton](../norito/examples/hajimari-entrypoint) — compile, run, and deploy
-  the minimal Kotodama scaffold that mirrors the setup phase in this quickstart.
-- [Register domain and mint assets](../norito/examples/register-and-mint) — aligns with the
-  `Register` + `Mint` flow shown above so you can replay the same operations from a contract.
-- [Transfer asset between accounts](../norito/examples/transfer-asset) — demonstrates the
-  `transfer_asset` syscall with the same account IDs the SDK quickstarts use.
+- [Hajimari 入口点框架](../norito/examples/hajimari-entrypoint) — 编译、运行和部署
+  最小的 Kotodama 脚手架，反映了本快速入门中的设置阶段。
+- [注册域名和铸造资产](../norito/examples/register-and-mint) — 与
+  上面显示了 `Register` + `Mint` 流程，以便您可以从合约重播相同的操作。
+- [账户之间转移资产](../norito/examples/transfer-asset) — 演示
+  `transfer_asset` 系统调用与 SDK 快速入门使用的帐户 ID 相同。
 
-With these building blocks you can integrate Torii into Rust services or CLIs.
-Refer to the generated documentation and data-model crates for the full set of
-instructions, queries, and events.
+使用这些构建块，您可以将 Torii 集成到 Rust 服务或 CLI 中。
+请参阅生成的文档和数据模型包以获取全套内容
+指令、查询和事件。

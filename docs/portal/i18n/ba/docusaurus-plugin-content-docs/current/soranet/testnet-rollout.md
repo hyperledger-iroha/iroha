@@ -8,82 +8,84 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraNet testnet rollout (SNNet-10)
 sidebar_label: Testnet Rollout (SNNet-10)
 description: Phased activation plan, onboarding kit, and telemetry gates for SoraNet testnet promotions.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
-:::
+:::иҫкәртергә канонлы сығанаҡ
+::: 1990 й.
 
-SNNet-10 coordinates the staged activation of the SoraNet anonymity overlay across the network. Use this plan to translate the roadmap bullet into concrete deliverables, runbooks, and telemetry gates so every operator understands the expectations before SoraNet becomes the default transport.
+SNNet-10 селтәр буйынса SoraNet анонимлығының стадияһында әүҙемләштереүен координациялай. Был планды ҡулланып, юл картаһы пуляһын бетон тапшырыу, ranbooks һәм телеметрия ҡапҡаларына тәржемә итеү өсөн, шулай итеп, һәр оператор СорНит ғәҙәттәге транспортҡа әйләнгәнсе өмөттәрҙе аңлай.
 
-## Launch phases
+##
 
-| Phase | Timeline (target) | Scope | Required artefacts |
-|-------|-------------------|-------|--------------------|
-| **T0 — Closed Testnet** | Q4 2026 | 20–50 relays across ≥3 ASNs operated by core contributors. | Testnet onboarding kit, guard pinning smoke suite, baseline latency + PoW metrics, brownout drill log. |
-| **T1 — Public Beta** | Q1 2027 | ≥100 relays, guard rotation enabled, exit bonding enforced, SDK betas default to SoraNet with `anon-guard-pq`. | Updated onboarding kit, operator verification checklist, directory publishing SOP, telemetry dashboard pack, incident rehearsal reports. |
-| **T2 — Mainnet Default** | Q2 2027 (gated on SNNet-6/7/9 completion) | Production network defaults to SoraNet; obfs/MASQUE transports and PQ ratchet enforcement enabled. | Governance approval minutes, direct-only rollback procedure, downgrade alarms, signed success metrics report. |
+| Фаза | Ваҡыт һыҙығы (маҡсат) | Скоп | Кәрәкле артефакттар |
+|------|----------------------------------------------- |
+| **Т0 — Ябыҡ Стестнет** | 2026 йылдың 1-се кварталында | 20–50 реле ≥3 ASNs буйынса ядро ​​өлөш индереүселәр эшләй. | Һыҙыҡлы onboarding комплекты, һаҡсы приключать төтөн люкс, база латентлығы + PoW метрикаһы, браунут бура журналы. |
+| **Т1 — Йәмәғәт Бета** | 1-се квартал 2027 | ≥100 эстафета, һаҡсы әйләнеше, сығыу бәйләнеше үтәлгән, SDK бетас стандарт SoraNet менән `anon-guard-pq`. | Яңыртылған onboarding комплекты, оператор тикшерелеүе тикшерелгән исемлеге, каталог баҫтырыу SOP, телеметрия таҡтаһы пакеты, инцидент репетиция отчеттары. |
+| **Т2 — Майнет ғәҙәттәгесә** | 2027 йылдың Q2 (SNNet-6/7/9 тамамлау буйынса ҡапҡа) | СораНетҡа етештереү селтәре ғәҙәттәгесә; obfs/MASQUE транспорт һәм PQ трещотка үтәү мөмкинлеге. | Идара итеү раҫлау минуты, туранан-тура ғына кире ҡайтарыу процедураһы, сигнализацияны түбәнәйтеү, ҡул ҡуйылған уңыш метрикаһы отчет. |
 
-There is **no skip path**—each phase must ship the telemetry and governance artefacts from the preceding stage before promotion.
+Бар ** юҡ юл юҡ **—һәр фазаһы телеметрия һәм идара итеү артефакттарын ташырға тейеш, был этаптан алдағы этапта пропагандаға тиклем.
 
-## Testnet onboarding kit
+## Һынау онбординг комплекты
 
-Every relay operator receives a deterministic package with the following files:
+Һәр реле операторы түбәндәге файлдар менән детерминистик пакет ала:
 
-| Artefact | Description |
-|----------|-------------|
-| `01-readme.md` | Overview, contact points, and timeline. |
-| `02-checklist.md` | Pre-flight checklist (hardware, network reachability, guard policy verification). |
-| `03-config-example.toml` | Minimal SoraNet relay + orchestrator configuration aligned with SNNet-9 compliance blocks, including a `guard_directory` block that pins the latest guard snapshot hash. |
-| `04-telemetry.md` | Instructions for wiring the SoraNet privacy metrics dashboards and alert thresholds. |
-| `05-incident-playbook.md` | Brownout/downgrade response procedure with escalation matrix. |
-| `06-verification-report.md` | Template operators complete and return once smoke tests pass. |
+| Артефакт | Тасуирлама |
+|---------|--------------|
+| `01-readme.md` | Обзор, контакт нөктәләре, һәм ваҡыт һыҙығы. |
+| `02-checklist.md` | Осоу алдынан тикшерелгән исемлек (аппарат, селтәр етеү мөмкинлеге, һаҡсы сәйәсәтен тикшергән). |
+| `03-config-example.toml` | Минималь SoraNet реле + оркестр конфигурацияһы менән тура килтерелгән SNNet-9 үтәү блоктары, шул иҫәптән `guard_directory` блок, тип, һуңғы һаҡсы снимок хеш итеп ҡуя. |
+| `04-telemetry.md` | Инструкция өсөн проводка SoraNet хосуси метрика приборҙар таҡталары һәм иҫкәртмә сиктәре. |
+| I18NI0000007X | Браунут/төшөү яуап процедураһы менән эскалация матрицаһы. |
+| `06-verification-report.md` | Ҡалып операторҙары тамамлана һәм төтөн анализдары үткәндән һуң ҡайта. |
 
-A rendered copy lives in `docs/examples/soranet_testnet_operator_kit/`. Each promotion refreshes the kit; version numbers track the phase (for example, `testnet-kit-vT0.1`).
+Реклавный күсермәһе йәшәй I18NI000000009X. Һәр акция комплектты яңыртыу; версия номерҙары фазаны күҙәтә (мәҫәлән, `testnet-kit-vT0.1`).
 
-For public-beta (T1) operators, the concise onboarding brief in `docs/source/soranet/snnet10_beta_onboarding.md` summarises prerequisites, telemetry deliverables, and the submission workflow while pointing back to the deterministic kit and validator helpers.
+Йәмәғәт-бета (T1) операторҙары өсөн, ҡыҫҡаса onboarding бриф I18NI0000001X дөйөмләштерә алдан шарттар, телеметрия тапшырыу, һәм тапшырыу эш ағымы, шул уҡ ваҡытта детерминистик комплект һәм валидатор ярҙамсыларына кире йүнәлтелгән.
 
-`cargo xtask soranet-testnet-feed` generates the JSON feed that aggregates the promotion window, relay roster, metrics report, drill evidence, and attachment hashes referenced by the stage-gate template. Sign drill logs plus attachments with `cargo xtask soranet-testnet-drill-bundle` first so the feed can record `drill_log.signed = true`.
+`cargo xtask soranet-testnet-feed` генерациялай JSON канал, улар промоушен тәҙрәһе, реле исемлеге, метрика отчет, быраулау дәлилдәре, һәм беркетелеү хештары һылтанма сәхнә-ҡапҡа шаблон. Ҡултамға бура журналдары плюс ҡушымталар менән I18NI000000013X беренсе, шулай итеп, канал `drill_log.signed = true` теркәй ала.
 
-## Success metrics
+## Уңыш метрикаһы
 
-Promotion between phases is gated on the following telemetry, collected for a minimum of two weeks:
+Фазалар араһында пропагандалау түбәндәге телеметрияға ҡапҡаға эләгә, минимум ике аҙна йыйыла:
 
-- `soranet_privacy_circuit_events_total`: 95 % of circuits complete without brownout or downgrade events; remaining 5 % capped by PQ supply.
-- `sorafs_orchestrator_policy_events_total{outcome="brownout"}`: &lt;1 % of fetch sessions per day trigger brownout outside scheduled drills.
-- `soranet_privacy_gar_reports_total`: variance within ±10 % of expected GAR category mix; spikes must be explained by approved policy updates.
-- PoW ticket success rate: ≥99 % within the 3 s target window; reported via `soranet_privacy_throttles_total{scope="congestion"}`.
-- Latency (95th percentile) per region: &lt;200 ms once circuits are fully built, captured via `soranet_privacy_rtt_millis{percentile="p95"}`.
+- `soranet_privacy_circuit_events_total`: 95% схемалар тулы булмаған браунут йәки түбәнәйеү ваҡиғалары булмаған; ҡалған 5% PQ менән тәьмин итеү менән ҡапланған.
+- I18NI000000016X: <1% көнөнә сессиялар сессияларҙы ҡабыҙыу тышында планлы буралар.
+- `soranet_privacy_gar_reports_total`: көтөлгән GAR категорияһы ҡатнашмаһының ±10% сиктәрендә дисперсия; шпиктарҙы раҫланған сәйәсәтте яңыртыу менән аңлатырға кәрәк.
+- PoW билет уңыш ставкаһы: ≥99% 3s маҡсатлы тәҙрә сиктәрендә; `soranet_privacy_throttles_total{scope="congestion"}` аша хәбәр иткән.
+- Латентлыҡ (95-се процентил) бер төбәк: <200мс бер тапҡыр схемалар тулыһынса төҙөлгән, I18NI000000019X аша төшөрөлгән.
 
-Dashboard and alert templates live in `dashboard_templates/` and `alert_templates/`; mirror them into your telemetry repository and add them to CI lint checks. Use `cargo xtask soranet-testnet-metrics` to generate the governance-facing report before requesting promotion.
+Приборҙар таҡтаһы һәм иҫкәртмә ҡалыптары йәшәй I18NI0000000020X һәм `alert_templates/`; көҙгө уларҙы һеҙҙең телеметрия һаҡлағысы һәм уларҙы өҫтәргә CI линт тикшерелгән. Ҡулланыу `cargo xtask soranet-testnet-metrics` генерациялау өсөн идара итеү-йөҙ отчет алдынан промоушен.
 
-Stage-gate submissions must follow `docs/source/soranet/snnet10_stage_gate_template.md`, which links to the ready-to-copy Markdown form stored under `docs/examples/soranet_testnet_stage_gate/stage_gate_report_template.md`.
+Сәхнә-ҡапҡа тапшырыуҙары `docs/source/soranet/snnet10_stage_gate_template.md`-ҡа эйәрергә тейеш, улар `docs/examples/soranet_testnet_stage_gate/stage_gate_report_template.md` буйынса һаҡланған әҙер Markdown формаһына һылтанмалар.
 
-## Verification checklist
+## Тикшереү исемлеге
 
-Operators must sign off on the following before entering each phase:
+Операторҙар һәр фазаға ингәнсе түбәндәгеләрҙе ҡул ҡуйырға тейеш:
 
-- ✅ Relay advert signed with current admission envelope.
-- ✅ Guard rotation smoke test (`tools/soranet-relay --check-rotation`) passes.
-- ✅ `guard_directory` points at the latest `GuardDirectorySnapshotV2` artefact and `expected_directory_hash_hex` matches the committee digest (relay startup logs the validated hash).
-- ✅ PQ ratchet metrics (`sorafs_orchestrator_pq_ratio`) stay above target thresholds for the requested stage.
-- ✅ GAR compliance config matches the latest tag (see SNNet-9 catalogue).
-- ✅ Downgrade alarm simulation (disable collectors, expect alert within 5 min).
-- ✅ PoW/DoS drill executed with documented mitigation steps.
+- ✅ Релей рекламаһы менән ҡул ҡуйылған ағымдағы ҡабул итеү конверты.
+- ✅ Гвардия ротация төтөн анализы (I18NI000000025X) үтә.
+- ✅ `guard_directory` мәрәйҙәре һуңғы I18NI0000000027X артефакт һәм `expected_directory_hash_hex` комитет үҙләштереүе матч (эстафета стартаптар логик хеш логин).
+- ✅ PQ трещотка метрикаһы (I18NI000000029X) һоралған этап өсөн маҡсатлы сиктәрҙән юғарыраҡ ҡала.
+- ✅ GAR үтәү конфигурациялау һуңғы тегҡа тап килә (ҡара: SNNet-9 каталогы).
+- ✅ Даунград сигнализация моделләштереү (өҙөүсе коллекционерҙар, 5мин эсендә иҫкәртмә көтә).
+- ✅ PoW/DoS бурау документлаштырылған йомшартыу аҙымдары менән башҡарылған.
 
-A pre-filled template is included in the onboarding kit. Operators submit the completed report to the governance helpdesk before receiving production credentials.
+Алдан тултырылған шаблон onboarding комплектына индерелгән. Операторҙар тамамланған отчетты идара итеүгә ярҙам итә, етештереү ышаныс ҡағыҙҙары алыу алдынан.
 
-## Governance & reporting
+## Идара итеү & отчет
 
-- **Change control:** promotions require Governance Council approval recorded in the council minutes and attached to the status page.
-- **Status digest:** publish weekly updates summarising relay count, PQ ratio, brownout incidents, and outstanding action items (stored in `docs/source/status/soranet_testnet_digest.md` once the cadence starts).
-- **Rollbacks:** maintain a signed rollback plan that returns the network to the previous phase within 30 minutes, including DNS/guard cache invalidation and client communication templates.
+- **Предмет үҙгәрештәре:** акциялары совет протоколында теркәлгән һәм статус битенә беркетелгән идара итеү советы раҫлауын талап итә.
+- **Статус disist:** аҙна һайын яңыртыуҙарҙы баҫтырып сығарыу реле һаны, PQ нисбәте, браунут инциденттары һәм иҫ киткес ғәмәлдәр пункттары (I18NI0000000030X-та һаҡланған бер тапҡыр каденция башлана).
+- **Роллбектар:** 30минут эсендәге алдағы фазаға селтәрҙе кире ҡайтара, шул иҫәптән DNS/һаҡсы кэшты инвалидация һәм клиент бәйләнеш ҡалыптарын ҡайтара.
 
-## Supporting assets
+## Ярҙамсы активтар
 
-- `cargo xtask soranet-testnet-kit [--out <dir>]` materialises the onboarding kit from `xtask/templates/soranet_testnet/` into the target directory (defaults to `docs/examples/soranet_testnet_operator_kit/`).
-- `cargo xtask soranet-testnet-metrics --input <metrics.json> [--out <path|->]` evaluates the SNNet-10 success metrics and emits a structured pass/fail report suitable for governance reviews. A sample snapshot lives in `docs/examples/soranet_testnet_metrics_sample.json`.
-- Grafana and Alertmanager templates live under `dashboard_templates/soranet_testnet_overview.json` and `alert_templates/soranet_testnet_rules.yml`; copy them into your telemetry repository or wire them into CI lint checks.
-- The downgrade communication template for SDK/portal messaging resides in `docs/source/soranet/templates/downgrade_communication_template.md`.
-- Weekly status digests should use `docs/source/status/soranet_testnet_weekly_digest.md` as the canonical form.
+- I18NI000000031X I18NI0000000032X-тан маҡсатлы каталогҡа (I18NI000000033X тиклем ғәҙәттәгесә) onboarding комплектын матдилаштыра).
+- `cargo xtask soranet-testnet-metrics --input <metrics.json> [--out <path|->]` SNNet-10 уңыш метрикаһын баһалай һәм идара итеүҙе тикшерергә яраҡлы структуралы пропуск/уңышһыҙлыҡҡа осраған отчет сығара. Өлгө снимок йәшәй I18NI000000035X.
+- I18NT00000000Х һәм иҫкәртмәнсе шаблондар I18NI000000036X һәм `alert_templates/soranet_testnet_rules.yml` буйынса йәшәй; уларҙы күсерергә һеҙҙең телеметрия репозиторийы йәки уларҙы CI линт тикшерергә сым.
+- SDK/порталы хәбәрҙәр өсөн коммуникация шаблоны I18NI000000038X-та йәшәй.
+- Аҙналыҡ статус derists I18NI000000039XX канон формаһы булараҡ ҡулланырға тейеш.
 
-Pull requests should update this page alongside any artefact or telemetry changes so the rollout plan stays canonical.
+Был битте тартып алыу запростар теләһә ниндәй артефакт йәки телеметрия үҙгәрештәре менән бергә яңыртырға тейеш, шуға күрә роллут планы канонлы ҡала.

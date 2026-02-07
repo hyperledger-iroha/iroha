@@ -7,39 +7,40 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 164bd373091ae3280f9f90fcfd915a90088b0c79b8f3759ffd2548edb64d0a90
 source_last_modified: "2026-01-28T17:11:30.632934+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# IH58 Rollout Note for SDK & Codec Owners
+SDK & Codec эзэмшигчдэд зориулсан # IH58 танилцуулах тэмдэглэл
 
-Teams: Rust SDK, TypeScript/JavaScript SDK, Python SDK, Kotlin SDK, Codec tooling
+Багууд: Rust SDK, TypeScript/JavaScript SDK, Python SDK, Kotlin SDK, Codec хэрэгсэл
 
-Context: `docs/account_structure.md` now reflects the shipping IH58 account ID
-implementation. Please align SDK behaviour and tests with the canonical spec.
+Контекст: `docs/account_structure.md` одоо хүргэлтийн IH58 дансны ID-г тусгасан
+хэрэгжилт. SDK-ийн үйлдэл болон тестийг каноник үзүүлэлттэй тохируулна уу.
 
-Key references:
-- Address codec + header layout — `docs/account_structure.md` §2
-- Curve registry — `docs/source/references/address_curve_registry.md`
-- Norm v1 domain handling — `docs/source/references/address_norm_v1.md`
-- Fixture vectors — `fixtures/account/address_vectors.json`
+Гол лавлагаа:
+- Хаягийн кодлогч + толгой хэсгийн байршил — `docs/account_structure.md` §2
+- Муруй бүртгэл — `docs/source/references/address_curve_registry.md`
+- Норм v1 домэйн зохицуулалт — `docs/source/references/address_norm_v1.md`
+- Бэхэлгээний векторууд — `fixtures/account/address_vectors.json`
 
-Action items:
-1. **Canonical output:** `AccountId::to_string()`/Display MUST emit IH58 only
-   (no `@domain` suffix). Canonical hex is for debugging (`0x...`).
-2. **Accepted inputs:** parsers MUST accept IH58 (preferred), `sora` compressed,
-   and canonical hex (`0x...` only; bare hex is rejected). Inputs MAY carry an
-   `@<domain>` suffix for routing hints; `<label>@<domain>` aliases require a
-   resolver. Raw `public_key@domain` (multihash hex) remains supported.
-3. **Resolvers:** domainless IH58/sora parsing requires a domain-selector
-   resolver unless the selector is implicit default (use the configured default
-   domain label). UAID (`uaid:...`) and opaque (`opaque:...`) literals require
-   resolvers.
-4. **IH58 checksum:** use Blake2b-512 over `IH58PRE || prefix || payload`, take
-   the first 2 bytes. Compressed alphabet base is **105**.
-5. **Curve gating:** SDKs default to Ed25519-only. Provide explicit opt-in for
-   ML‑DSA/GOST/SM (Swift build flags; JS/Android `configureCurveSupport`). Do
-   not assume secp256k1 is enabled by default outside Rust.
-6. **No CAIP-10:** there is no shipped CAIP‑10 mapping yet; do not expose or
-   depend on CAIP‑10 conversions.
+Үйлдлийн зүйлс:
+1. **Каноник гаралт:** `AccountId::to_string()`/Дэлгэц нь зөвхөн IH58-г ялгаруулах ёстой.
+   (`@domain` дагавар байхгүй). Каноник зургаан тал нь дибаг хийхэд зориулагдсан (`0x...`).
+2. **Хүлээн зөвшөөрөгдсөн оролт:** задлан шинжлэгч нь IH58 (давуу), `sora` шахагдсан,
+   ба каноник hex (зөвхөн `0x...`; нүцгэн зургаан өнцөгт татгалзсан). Оролтууд нь ан агуулж болно
+   Чиглүүлэлтийн зөвлөмжийн `@<domain>` дагавар; `<label>@<domain>` нэрс нь a шаарддаг
+   шийдэгч. Түүхий `public_key@domain` (multihash hex) дэмжигдсэн хэвээр байна.
+3. ** Шийдвэрлэгч:** домэйнгүй IH58/sora задлан шинжлэхэд домэйн сонгогч шаардлагатай
+   Хэрэв сонгогч нь далд өгөгдмөл биш бол шийдэгч (тохируулсан өгөгдмөл
+   домэйн шошго). UAID (`uaid:...`) болон тунгалаг (`opaque:...`) литералууд шаардлагатай
+   шийдэгчид.
+4. **IH58 шалгах нийлбэр:** `IH58PRE || prefix || payload` дээр Blake2b-512-г ашиглана уу
+   эхний 2 байт. Шахсан цагаан толгойн суурь нь **105**.
+5. **Муруй гарц:** SDK-г зөвхөн Ed25519-д тохируулна. Сонголтыг тодорхой зааж өгнө үү
+   ML‑DSA/GOST/SM (Swift бүтээх тугууд; JS/Android `configureCurveSupport`). Хий
+   Secp256k1-г Rust-аас гадуур анхдагчаар идэвхжүүлсэн гэж бүү бод.
+6. **CAIP-10 байхгүй:** илгээсэн CAIP-10 зураглал хараахан байхгүй байна; бүү ил эсвэл
+   CAIP‑10 хөрвүүлэлтээс хамаарна.
 
-Please confirm once the codecs/tests are updated; open questions can be tracked
-in the account-addressing RFC thread.
+Кодек/тест шинэчлэгдсэний дараа баталгаажуулна уу; нээлттэй асуултуудыг хянах боломжтой
+данс хаяглах RFC хэлхээнд.

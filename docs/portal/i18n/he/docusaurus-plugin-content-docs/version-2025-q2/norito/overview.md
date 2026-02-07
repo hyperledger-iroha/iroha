@@ -6,62 +6,63 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: c28a429f0ade5a5e93c063dc7eda4b95fd0c379a7598b72f19367ca13734e443
 source_last_modified: "2026-01-03T18:07:57+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Norito Overview
+# Norito סקירה כללית
 
-Norito is the binary serialization layer used across Iroha: it defines how data
-structures are encoded on the wire, persisted on disk, and exchanged between
-contracts and hosts. Every crate in the workspace relies on Norito instead of
-`serde` so peers on different hardware produce identical bytes.
+Norito היא שכבת ההסדרה הבינארית המשמשת על פני Iroha: היא מגדירה כיצד נתונים
+מבנים מקודדים על החוט, מוחזקים בדיסק ומוחלפים ביניהם
+חוזים ומארחים. כל ארגז בסביבת העבודה מסתמך על Norito במקום
+`serde` כך שעמיתים בחומרה שונה מייצרים בתים זהים.
 
-This overview summarises the core pieces and links to the canonical references.
+סקירה כללית זו מסכמת את חלקי הליבה וקישורים להפניות הקנוניות.
 
-## Architecture at a glance
+## אדריכלות במבט חטוף
 
-- **Header + payload** – Each Norito message begins with a feature-negotiation
-  header (flags, checksum) followed by the bare payload. Packed layouts and
-  compression are negotiated via header bits.
-- **Deterministic encoding** – `norito::codec::{Encode, Decode}` implement the
-  bare encoding. The same layout is reused when wrapping payloads in headers so
-  hashing and signing remain deterministic.
-- **Schema + derives** – `norito_derive` generates `Encode`, `Decode`, and
-  `IntoSchema` implementations. Packed structs/sequences are enabled by default
-  and documented in `norito.md`.
-- **Multicodec registry** – Identifiers for hashes, key types, and payload
-  descriptors live in `norito::multicodec`. The authoritative table is
-  maintained in `multicodec.md`.
+- **כותרת + מטען** - כל הודעת Norito מתחילה במשא ומתן על תכונה
+  header (דגלים, checksum) ואחריו המטען החשוף. פריסות עמוסות ו
+  הדחיסה מתבצעת באמצעות סיביות כותרת.
+- **קידוד דטרמיניסטי** - `norito::codec::{Encode, Decode}` ליישם את
+  קידוד חשוף. באותה פריסה נעשה שימוש חוזר בעת עטיפת מטענים בכותרות כך
+  הגיבוב והחתימה נשארים דטרמיניסטיים.
+- **סכימה + נובעת** - `norito_derive` יוצר `Encode`, `Decode`, ו
+  יישומי `IntoSchema`. מבנים/רצפים ארוזים מופעלים כברירת מחדל
+  ומתועד ב-`norito.md`.
+- **רישום Multicodec** - מזהים עבור hashes, סוגי מפתחות ומטען
+  המתארים חיים ב-`norito::multicodec`. הטבלה הסמכותית היא
+  מתוחזק ב-`multicodec.md`.
 
-## Tooling
+## כלי עבודה
 
-| Task | Command / API | Notes |
+| משימה | פקודה / API | הערות |
 | --- | --- | --- |
-| Inspect header/sections | `ivm_tool inspect <file>.to` | Shows ABI version, flags, and entrypoints. |
-| Encode/decode in Rust | `norito::codec::{Encode, Decode}` | Implemented for all core data-model types. |
-| JSON interop | `norito::json::{to_json_pretty, from_json}` | Deterministic JSON backed by Norito values. |
-| Generate docs/specs | `norito.md`, `multicodec.md` | Source-of-truth documentation in the repo root. |
+| בדוק כותרת/סעיפים | `ivm_tool inspect <file>.to` | מציג גרסת ABI, דגלים ונקודות כניסה. |
+| קידוד/פענוח ב-Rust | `norito::codec::{Encode, Decode}` | מיושם עבור כל סוגי מודל הנתונים המרכזיים. |
+| JSON interop | `norito::json::{to_json_pretty, from_json}` | JSON דטרמיניסטי מגובה על ידי ערכי Norito. |
+| צור מסמכים/מפרטים | `norito.md`, `multicodec.md` | תיעוד מקור האמת בשורש הריפו. |
 
-## Development workflow
+## זרימת עבודה לפיתוח
 
-1. **Add derives** – Prefer `#[derive(Encode, Decode, IntoSchema)]` for new data
-   structures. Avoid hand-written serializers unless absolutely necessary.
-2. **Validate packed layouts** – Use `cargo test -p norito` (and the packed
-   feature matrix in `scripts/run_norito_feature_matrix.sh`) to ensure new
-   layouts remain stable.
-3. **Regenerate docs** – When the encoding changes, update `norito.md` and the
-   multicodec table, then refresh the portal pages (`/reference/norito-codec`
-   and this overview).
-4. **Keep tests Norito-first** – Integration tests should use the Norito JSON
-   helpers instead of `serde_json` so they exercise the same paths as production.
+1. **הוסף נגזרות** - העדיפו `#[derive(Encode, Decode, IntoSchema)]` לנתונים חדשים
+   מבנים. הימנע מתכשירי סדרות בכתב יד אלא אם כן הכרחי.
+2. **אמת פריסות ארוזות** - השתמש ב-`cargo test -p norito` (ובארוזים
+   מטריצת תכונה ב-`scripts/run_norito_feature_matrix.sh`) כדי להבטיח חדש
+   פריסות נשארות יציבות.
+3. **צור מחדש מסמכים** - כאשר הקידוד משתנה, עדכן את `norito.md` ואת
+   טבלת multicodec, ולאחר מכן רענן את דפי הפורטל (`/reference/norito-codec`
+   והסקירה הכללית הזו).
+4. **שמור את הבדיקות Norito-first** - בדיקות האינטגרציה צריכות להשתמש ב-Norito JSON
+   עוזרים במקום `serde_json` כך שהם מפעילים את אותם נתיבים כמו ייצור.
 
-## Quick links
+## קישורים מהירים
 
-- Specification: [`norito.md`](https://github.com/hyperledger-iroha/iroha/blob/master/norito.md)
-- Multicodec assignments: [`multicodec.md`](https://github.com/hyperledger-iroha/iroha/blob/master/multicodec.md)
-- Feature matrix script: `scripts/run_norito_feature_matrix.sh`
-- Packed-layout examples: `crates/norito/tests/`
+- מפרט: [`norito.md`](https://github.com/hyperledger-iroha/iroha/blob/master/norito.md)
+- הקצאות מולטי-קודקים: [`multicodec.md`](https://github.com/hyperledger-iroha/iroha/blob/master/multicodec.md)
+- סקריפט מטריצת תכונה: `scripts/run_norito_feature_matrix.sh`
+- דוגמאות לפריסה ארוזה: `crates/norito/tests/`
 
-Pair this overview with the quickstart guide (`/norito/getting-started`) for a
-hands-on walkthrough of compiling and running bytecode that uses Norito
-payloads.
+שידוך סקירה כללית זו עם מדריך ההתחלה המהירה (`/norito/getting-started`) עבור א
+הדרכה מעשית של קומפילציה והרצת bytecode המשתמשת ב-Norito
+מטענים.

@@ -4,105 +4,99 @@ direction: ltr
 source: docs/portal/docs/sorafs/direct-mode-pack.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: direct-mode-pack
-title: Pacote de contingencia de modo direto do SoraFS (SNNet-5a)
-sidebar_label: Pacote de modo direto
-description: Configuracao obrigatoria, checagens de compliance e passos de rollout ao operar SoraFS em modo direto Torii/QUIC durante a transicao SNNet-5a.
+идентификатор: пакет прямого режима
+заголовок: Пакет непредвиденных обстоятельств прямого режима для SoraFS (SNNet-5a)
+Sidebar_label: Пакет прямого режима
+описание: Обязательная настройка, проверка соответствия и пропуски развертывания для работы SoraFS в прямом режиме Torii/QUIC во время перехода через SNNet-5a.
 ---
 
-:::note Fonte canonica
-Esta pagina espelha `docs/source/sorafs/direct_mode_pack.md`. Mantenha ambas as copias sincronizadas.
+:::примечание Fonte canonica
+Эта страница написана `docs/source/sorafs/direct_mode_pack.md`. Мантенья представился как копиас синхронизадас.
 :::
 
-Os circuitos SoraNet seguem como transporte padrao do SoraFS, mas o item de roadmap **SNNet-5a** exige um fallback regulado para que operadores mantenham acesso de leitura deterministico enquanto o rollout de anonimato se completa. Este pacote captura os knobs de CLI/SDK, perfis de configuracao, testes de compliance e o checklist de deploy necessario para rodar o SoraFS em modo direto Torii/QUIC sem tocar os transportes de privacidade.
+Схемы SoraNet будут пересылаться по SoraFS, но пункт дорожной карты **SNNet-5a** может стать резервным регулированием для того, чтобы операторы могли получить доступ к детерминистическому режиму или развертыванию анонимного режима в полном объеме. Этот пакет захватывает кнопки CLI/SDK, параметры настройки, тесты соответствия и контрольный список развертывания, необходимый для проверки или SoraFS в режиме непосредственно Torii/QUIC, чтобы обеспечить конфиденциальность.
 
-O fallback se aplica a staging e ambientes de producao regulada ate que SNNet-5 a SNNet-9 passem pelos gates de prontidao. Mantenha os artefatos abaixo junto com o material de deploy do SoraFS para que operadores alternem entre modos anonimo e direto sob demanda.
+В качестве резервного варианта можно использовать промежуточную и регулируемую среду производства, которая проходит через SNNet-5 и SNNet-9, закрывая ворота ожидания. Подберите артефатос в качестве материала для развертывания SoraFS для альтернативных операций между анонимными режимами и по требованию.
 
-## 1. Flags de CLI e SDK
+## 1. Флаги CLI и SDK
 
-- `sorafs_cli fetch --transport-policy=direct-only ...` desativa o agendamento de relays e impoe transportes Torii/QUIC. A ajuda do CLI agora lista `direct-only` como valor aceito.
-- SDKs devem definir `OrchestratorConfig::with_transport_policy(TransportPolicy::DirectOnly)` sempre que expuserem um toggle de "modo direto". As bindings geradas em `iroha::ClientOptions` e `iroha_android` encaminham o mesmo enum.
-- Harnesses de gateway (`sorafs_fetch`, bindings Python) podem interpretar o toggle direct-only via helpers Norito JSON compartilhados para que a automacao receba o mesmo comportamento.
+- `sorafs_cli fetch --transport-policy=direct-only ...` требуется для настройки реле и использования транспорта Torii/QUIC. А можно сделать CLI в списке `direct-only` как доблесть.
+- В SDK разработано определение `OrchestratorConfig::with_transport_policy(TransportPolicy::DirectOnly)`, которое всегда используется для переключения «прямого режима». В качестве привязок используются `iroha::ClientOptions` и `iroha_android` encaminham или mesmo enum.
+- Использование шлюза (`sorafs_fetch`, привязки Python) для интерпретатора или переключения напрямую через помощники Norito JSON, которые компилируются для автоматического получения или более удобного выполнения.
 
-Documente o flag em runbooks voltados a parceiros e passe os toggles via `iroha_config` em vez de variaveis de ambiente.
+Документируйте или помечайте Runbook, подключая их к посылкам и проходя их переключения через `iroha_config` среди всех вариантов окружения.
 
-## 2. Perfis de politica do gateway
+## 2. Политические возможности шлюза
 
-Use Norito JSON para persistir configuracao deterministica do orquestrador. O perfil de exemplo em `docs/examples/sorafs_direct_mode_policy.json` codifica:
+Используйте Norito JSON для сохранения детерминированной конфигурации ордера. В примере примера с кодировкой `docs/examples/sorafs_direct_mode_policy.json`:
 
-- `transport_policy: "direct_only"` - rejeita provedores que so anunciam transportes de relay SoraNet.
-- `max_providers: 2` - limita peers diretos aos endpoints Torii/QUIC mais confiaveis. Ajuste conforme as concessoes de compliance regionais.
-- `telemetry_region: "regulated-eu"` - rotula as metricas emitidas para que dashboards e auditorias distingam execucoes de fallback.
-- Orcamentos de retry conservadores (`retry_budget: 2`, `provider_failure_threshold: 3`) para evitar mascarar gateways mal configurados.
+- `transport_policy: "direct_only"` - подтверждается, что объявляется о передаче ретранслятора SoraNet.
+- `max_providers: 2` — ограничение количества одноранговых узлов, напрямую связанных с конечными точками Torii/QUIC, которые можно настроить. Отрегулируйте соответствие региональным уступкам.
+- `telemetry_region: "regulated-eu"` - список показателей, излучаемых для выполнения резервных панелей и аудиторий.
+- Правила повторной попытки консерваторов (`retry_budget: 2`, `provider_failure_threshold: 3`), чтобы избежать неправильной конфигурации шлюзов.
 
-Carregue o JSON via `sorafs_cli fetch --config` (automacao) ou bindings do SDK (`config_from_json`) antes de expor a politica a operadores. Persista a saida do scoreboard (`persist_path`) para trilhas de auditoria.
+Выполняйте обработку или JSON через `sorafs_cli fetch --config` (автоматически) или привязки к SDK (`config_from_json`) перед экспортом политики в операции. Сохраните табло (`persist_path`) для трех зрительных залов.Ручки принудительного исполнения шлюза установлены на `docs/examples/sorafs_gateway_direct_mode.toml`. В шаблоне, указанном в `iroha app sorafs gateway direct-mode enable`, невозможно проверить конверт/допуск, подключить значения по умолчанию для ограничения скорости и добавить в таблицу `direct_mode` вместе с производными именами хостов в плане и дайджестами манифеста. Замените значения заполнителей на свой план развертывания до версии или после завершения настройки.
 
-Os knobs de enforcement do lado do gateway estao em `docs/examples/sorafs_gateway_direct_mode.toml`. O template espelha a saida de `iroha app sorafs gateway direct-mode enable`, desabilitando checagens de envelope/admission, conectando defaults de rate-limit e preenchendo a tabela `direct_mode` com hostnames derivados do plano e digests de manifest. Substitua os valores de placeholder pelo seu plano de rollout antes de versionar o trecho na gestao de configuracao.
+## 3. Набор тестов на соответствие
 
-## 3. Suite de testes de compliance
+Prontidao do modo direto agora, включая cobertura tanto no orquestrador quanto nos crates de CLI:
 
-A prontidao do modo direto agora inclui cobertura tanto no orquestrador quanto nos crates de CLI:
+- `direct_only_policy_rejects_soranet_only_providers` гарантирует, что `TransportPolicy::DirectOnly` будет быстрым, когда каждая реклама будет кандидатом для поддержки реле SoraNet. [crates/sorafs_orchestrator/src/lib.rs:7238]
+- `direct_only_policy_prefers_direct_transports_when_available` гарантирует, что передача Torii/QUIC будет использована, когда будет отключено, и что ретрансляторы SoraNet будут исключены из сеанса. [crates/sorafs_orchestrator/src/lib.rs:7285]
+- `direct_mode_policy_example_is_valid` фазовый анализ `docs/examples/sorafs_direct_mode_policy.json`, чтобы гарантировать, что документ будет всегда доступен для помощников. [crates/sorafs_orchestrator/src/lib.rs:7509] [docs/examples/sorafs_direct_mode_policy.json:1]
+- `fetch_command_respects_direct_transports` упражнение `sorafs_cli fetch --transport-policy=direct-only` против шлюза Torii симулядо, fornecendo um тест дыма для регулирования окружающей среды, которую фиксация транспортирует напрямую. [crates/sorafs_car/tests/sorafs_cli.rs:2733]
+- `scripts/sorafs_direct_mode_smoke.sh` включает в себя команду в виде политического JSON и постоянное табло для автоматического развертывания.
 
-- `direct_only_policy_rejects_soranet_only_providers` garante que `TransportPolicy::DirectOnly` falhe rapido quando cada advert candidato so suporta relays SoraNet. [crates/sorafs_orchestrator/src/lib.rs:7238]
-- `direct_only_policy_prefers_direct_transports_when_available` garante que transportes Torii/QUIC sejam usados quando disponiveis e que relays SoraNet sejam excluidos da sessao. [crates/sorafs_orchestrator/src/lib.rs:7285]
-- `direct_mode_policy_example_is_valid` faz parse de `docs/examples/sorafs_direct_mode_policy.json` para garantir que a documentacao permanece alinhada aos helpers. [crates/sorafs_orchestrator/src/lib.rs:7509] [docs/examples/sorafs_direct_mode_policy.json:1]
-- `fetch_command_respects_direct_transports` exercita `sorafs_cli fetch --transport-policy=direct-only` contra um gateway Torii simulado, fornecendo um smoke test para ambientes regulados que fixam transportes diretos. [crates/sorafs_car/tests/sorafs_cli.rs:2733]
-- `scripts/sorafs_direct_mode_smoke.sh` envolve o mesmo comando com o JSON de politica e a persistencia do scoreboard para automacao de rollout.
-
-Rode a suite focada antes de publicar atualizacoes:
+Ездил в люксе перед публичной публикацией:
 
 ```bash
 cargo test -p sorafs_orchestrator direct_only_policy
 cargo test -p sorafs_car --features cli fetch_command_respects_direct_transports
 ```
 
-Se a compilacao do workspace falhar por mudancas upstream, registre o erro bloqueador em `status.md` e rode novamente quando a dependencia atualizar.
+Если вы скомпилировали рабочее пространство для всех вышестоящих по течению, зарегистрируйтесь или заблокируйте ошибку в `status.md` и совершите новое действие, когда будет установлена зависимость.
 
-## 4. Runs automatizados de smoke
+## 4. Автоматический запуск дыма
 
-A cobertura do CLI sozinha nao revela regressoes especificas do ambiente (por exemplo, drift de politica do gateway ou divergencias de manifest). Um helper de smoke dedicado vive em `scripts/sorafs_direct_mode_smoke.sh` e envolve `sorafs_cli fetch` com a politica do orquestrador em modo direto, persistencia do scoreboard e captura de resumo.
+Кобертура CLI показывает особенности регресса окружающей среды (например, политический сдвиг в воротах или явные расхождения). Помощник по курению, живущий в `scripts/sorafs_direct_mode_smoke.sh` и вовлекающий `sorafs_cli fetch` в политику, делающую организатора в прямом режиме, упорство в табло и захват резюме.
 
-Exemplo de uso:
+Пример использования:
 
 ```bash
 ./scripts/sorafs_direct_mode_smoke.sh \
   --config docs/examples/sorafs_direct_mode_smoke.conf \
   --provider name=gw-regulated,provider-id=001122...,base-url=https://gw.example/direct/,stream-token=BASE64
-```
+```- Сценарий восстановления флагов CLI и архивов конфигурации ключ=значение (veja `docs/examples/sorafs_direct_mode_smoke.conf`). Preencha или дайджест проявляют себя как рекламные объявления с ценностями производства перед просмотром.
+- `--policy` под именем `docs/examples/sorafs_direct_mode_policy.json`, а также JSON-файл ордера-производителя для `sorafs_orchestrator::bindings::config_to_json`, который может помочь. Если CLI работает с политикой через `--orchestrator-config=PATH`, вы можете запускать воспроизведение с настройкой флагов вручную.
+- Когда `sorafs_cli` не существует `PATH`, или помогите ему собрать часть ящика `sorafs_orchestrator` (выпуск для каждого файла) для того, чтобы курить или выполнять сантехнические работы в прямом режиме.
+- Саидас:
+  - Полезная нагрузка монтадо (`--output`, падрао `artifacts/sorafs_direct_mode/payload.bin`).
+  - Возобновление выборки (`--summary`, адрес полезной нагрузки) соответствует региону телеметрии и связям с поставщиками, используемыми в качестве доказательств развертывания.
+  - Снимок табло сохраняется без объявления политического JSON (например, `fetch_state/direct_mode_scoreboard.json`). Архивируйте резюме и билеты на муданку.
+- Автоматические входы в систему: при извлечении или вызове помощника `cargo xtask sorafs-adoption-check`, используя постоянные источники информации на табло и сводку. Требуется кворум для падрао и число проверяющих на линии команды; sobrescreva com `--min-providers=<n>`, когда я знаю больше любви. Связи, связанные с допуском к резюме (`--adoption-report=<path>`, которые можно определить для локальной настройки), и вспомогательный проход `--require-direct-only` для ввода (в качестве резервного варианта) и `--require-telemetry` всегда, что вам нужно, чтобы указать флаг корреспондента. Используйте `XTASK_SORAFS_ADOPTION_FLAGS` для повторения дополнительных аргументов при выполнении xtask (например, `--allow-single-source` во время перехода на более раннюю версию, чтобы получить разрешение и откат). Итак, выберите ворота com `--skip-adoption-check` или локальный диагностический датчик; o дорожная карта требует, чтобы каждый раз регулировалось в прямом режиме, включая пакет отношений по рекламе.
 
-- O script respeita flags de CLI e arquivos de configuracao key=value (veja `docs/examples/sorafs_direct_mode_smoke.conf`). Preencha o digest do manifest e as entradas de advert de provedor com valores de producao antes de rodar.
-- `--policy` tem como padrao `docs/examples/sorafs_direct_mode_policy.json`, mas qualquer JSON de orquestrador produzido por `sorafs_orchestrator::bindings::config_to_json` pode ser fornecido. O CLI aceita a politica via `--orchestrator-config=PATH`, habilitando runs reproduziveis sem ajustar flags manualmente.
-- Quando `sorafs_cli` nao esta no `PATH`, o helper compila a partir do crate `sorafs_orchestrator` (perfil release) para que os smokes exercitem o plumbing de modo direto enviado.
-- Saidas:
-  - Payload montado (`--output`, padrao `artifacts/sorafs_direct_mode/payload.bin`).
-  - Resumo de fetch (`--summary`, padrao ao lado do payload) contendo a regiao de telemetria e relatorios de provedores usados como evidencia de rollout.
-  - Snapshot de scoreboard persistido no caminho declarado no JSON de politica (por exemplo, `fetch_state/direct_mode_scoreboard.json`). Arquive junto ao resumo em tickets de mudanca.
-- Automacao do gate de adocao: apos o fetch, o helper invoca `cargo xtask sorafs-adoption-check` usando os caminhos persistidos de scoreboard e summary. O quorum requerido por padrao e o numero de provedores fornecidos na linha de comando; sobrescreva com `--min-providers=<n>` quando precisar de uma amostra maior. Relatorios de adocao sao gravados ao lado do resumo (`--adoption-report=<path>` pode definir um local customizado) e o helper passa `--require-direct-only` por padrao (alinhado ao fallback) e `--require-telemetry` sempre que voce fornecer o flag correspondente. Use `XTASK_SORAFS_ADOPTION_FLAGS` para repassar argumentos extras do xtask (por exemplo `--allow-single-source` durante um downgrade aprovado para que o gate tolere e imponha o fallback). So pule o gate com `--skip-adoption-check` ao rodar diagnosticos locais; o roadmap exige que cada run regulado em modo direto inclua o bundle de relatorio de adocao.
+## 5. Контрольный список внедрения1. **Заморозить конфигурацию:** активировать или загрузить JSON из режима непосредственно в репозиторий `iroha_config` и зарегистрироваться или хешировать без заданного билета.
+2. **Аудитория шлюза:** подтвердите, что конечные точки Torii используют TLS, TLV-адреса емкости и регистрацию аудитории перед вирусом для прямого режима. Публикация или политический доступ к воротам для операторов.
+3. **Подтверждение соответствия требованиям:** составление или составление учебного пособия с пересмотром соответствия/нормативных требований и получение подтверждений для работы на форуме для анонимного наложения.
+4. **Пробный прогон:** выполните пакет проверки соответствия, затем выберите промежуточные контр-проверки Torii confaveis. Архивируйте результаты табло и резюме в CLI.
+5. **Переключение в производство:** объявите о задании, измените `transport_policy` на `direct_only` (если вы выбрали вариант `soranet-first`) и отслеживайте панели управления прямым режимом (задержка `sorafs_fetch`, contadores de falha deprovores). Документ о плане отката для возврата к SoraNet-первый раз, когда SNNet-4/5/5a/5b/6a/7/8/12/13 заканчивается на `roadmap.md:532`.
+6. **Пересмотр по запросу:** дополнительные снимки табло, резюме и результаты мониторинга, а также билеты по запросу. Атуализируйте `status.md` с соответствующими данными и некоторыми аномалиями.
 
-## 5. Checklist de rollout
+Составьте контрольный список вместе с Runbook `sorafs_node_ops`, чтобы операторы могли работать в режиме реального времени. Когда SNNet-5 подключится к общему доступу, отключите или отмените его после подтверждения полной телеметрии производства.
 
-1. **Freeze de configuracao:** armazene o perfil JSON de modo direto no repositorio `iroha_config` e registre o hash no ticket de mudanca.
-2. **Auditoria de gateway:** confirme que endpoints Torii aplicam TLS, TLVs de capacidade e logging de auditoria antes de virar para modo direto. Publique o perfil de politica do gateway para os operadores.
-3. **Sign-off de compliance:** compartilhe o playbook atualizado com revisores de compliance/regulatorios e capture aprovacoes para operar fora do overlay de anonimato.
-4. **Dry run:** execute a suite de compliance mais um fetch de staging contra provedores Torii confiaveis. Arquive outputs de scoreboard e resumos do CLI.
-5. **Cutover em producao:** anuncie a janela de mudanca, altere `transport_policy` para `direct_only` (se voce tinha optado por `soranet-first`) e monitore os dashboards de modo direto (latencia de `sorafs_fetch`, contadores de falha de provedores). Documente o plano de rollback para voltar ao SoraNet-first quando SNNet-4/5/5a/5b/6a/7/8/12/13 graduarem em `roadmap.md:532`.
-6. **Revisao pos-mudanca:** anexe snapshots do scoreboard, resumos de fetch e resultados de monitoramento ao ticket de mudanca. Atualize `status.md` com a data efetiva e qualquer anomalia.
+## 6. Реквизиты для улик и ворота для удержания
 
-Mantenha o checklist junto ao runbook `sorafs_node_ops` para que operadores possam ensaiar o fluxo antes de uma virada ao vivo. Quando SNNet-5 chegar a GA, retire o fallback apos confirmar paridade na telemetria de producao.
+Захват в прямом режиме и точное удовлетворение или ворота в SF-6c. Пакет табло, резюме, конверт манифеста и связка рекламных материалов каждый раз, когда вы запускаете `cargo xtask sorafs-adoption-check`, чтобы подтвердить положение резервного варианта. Когда вы выходите из дома или получаете доступ к воротам, необходимо зарегистрировать метаданные или отправить нам билеты.- **Переносные метаданные:** `scoreboard.json` должен объявить `transport_policy="direct_only"` (и получить `transport_policy_override=true`, когда вы проголосуете за переход на более раннюю версию). Поддерживайте политические анонимные кампании в тех случаях, когда они имеют значения по умолчанию, чтобы внести изменения, которые вам нужны, чтобы сделать план анонимных действий в фазе.
+- **Контадоры проверяющих:** Сессии, доступные только для шлюза, могут сохраняться `provider_count=0` и использовать преэнчер `gateway_provider_count=<n>` с числом использованных проверяющих Torii. При редактировании JSON вручную: CLI/SDK может быть получен в качестве контагенов и шлюзов для обработки данных, которые нужно пропустить и отделить.
+- **Доказательство манифеста:** Когда шлюзы Torii участвуют, используйте `--gateway-manifest-envelope <path>` (или эквивалент SDK) для того, чтобы `gateway_manifest_provided` больше `gateway_manifest_id`/`gateway_manifest_cid` были зарегистрированы в них. `scoreboard.json`. Гарантия, что `summary.json` будет заменена на `manifest_id`/`manifest_cid`; a checkagem de adocao falha se qualquer arquivo omitir or par.
+- **Ожидания телеметрии:** Когда телеметрия сопровождала захват, поехала к воротам с `--require-telemetry`, чтобы доказать, что метрики для излучаемых данных. Ensaios с воздушным зазором может опустить флаг, но CI и билеты на муданку должны быть документированы ausencia.
 
-## 6. Requisitos de evidencia e gate de adocao
-
-Capturas em modo direto ainda precisam satisfazer o gate de adocao SF-6c. Bundle o scoreboard, o resumo, o envelope de manifest e o relatorio de adocao em cada run para que `cargo xtask sorafs-adoption-check` valide a postura de fallback. Campos ausentes fazem o gate falhar, entao registre o metadata esperado nos tickets de mudanca.
-
-- **Metadados de transporte:** `scoreboard.json` deve declarar `transport_policy="direct_only"` (e virar `transport_policy_override=true` quando voce forcar o downgrade). Mantenha os campos de politica de anonimato pareados mesmo quando herdarem defaults para que revisores vejam se houve desvio do plano de anonimato em fases.
-- **Contadores de provedores:** Sessoes gateway-only devem persistir `provider_count=0` e preencher `gateway_provider_count=<n>` com o numero de provedores Torii usados. Evite editar o JSON manualmente: o CLI/SDK ja deriva as contagens e o gate de adocao rejeita capturas que omitem a separacao.
-- **Evidencia de manifest:** Quando gateways Torii participarem, passe o `--gateway-manifest-envelope <path>` assinado (ou equivalente no SDK) para que `gateway_manifest_provided` mais `gateway_manifest_id`/`gateway_manifest_cid` sejam registrados em `scoreboard.json`. Garanta que `summary.json` carregue o mesmo `manifest_id`/`manifest_cid`; a checagem de adocao falha se qualquer arquivo omitir o par.
-- **Expectativas de telemetria:** Quando a telemetria acompanhar a captura, rode o gate com `--require-telemetry` para que o relatorio prove que metricas foram emitidas. Ensaios air-gapped podem omitir o flag, mas CI e tickets de mudanca devem documentar a ausencia.
-
-Exemplo:
+Пример:
 
 ```bash
 cargo xtask sorafs-adoption-check \
@@ -114,4 +108,4 @@ cargo xtask sorafs-adoption-check \
   --require-telemetry
 ```
 
-Anexe `adoption_report.json` junto ao scoreboard, ao summary, ao envelope de manifest e ao bundle de logs de smoke. Esses artefatos espelham o que o job de adocao em CI (`ci/check_sorafs_orchestrator_adoption.sh`) aplica e mantem downgrades de modo direto auditaveis.
+Приложение `adoption_report.json` вместе с табло, сводкой, конвертом манифеста и пачкой журналов дыма. Есть артефакты, которые говорят о том, что задание выполняется в CI (`ci/check_sorafs_orchestrator_adoption.sh`) и может быть понижено до более ранней версии режима прямой проверки.

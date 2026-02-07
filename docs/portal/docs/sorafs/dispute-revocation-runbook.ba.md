@@ -11,33 +11,34 @@ id: dispute-revocation-runbook
 title: SoraFS Dispute & Revocation Runbook
 sidebar_label: Dispute & Revocation Runbook
 description: Governance workflow for filing SoraFS capacity disputes, coordinating revocations, and evacuating data deterministically.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
-:::
+:::иҫкәртергә канонлы сығанаҡ
+::: 1990 й.
 
-## Purpose
+## Ниәт
 
-This runbook guides governance operators through filing SoraFS capacity disputes, coordinating revocations, and ensuring data evacuation completes deterministically.
+Был runbook I18NT0000000000X ҡәҙерле бәхәстәр аша идара итеү операторҙарын етәкләй, ревокацияларҙы координациялау һәм мәғлүмәттәрҙе эвакуациялауҙы тәьмин итеү детерминистик рәүештә тамамлай.
 
-## 1. Assess the Incident
+## 1. Инцидентты баһалау
 
-- **Trigger conditions:** detection of SLA breach (uptime/PoR failure), replication shortfall, or billing disagreement.
-- **Confirm telemetry:** capture `/v1/sorafs/capacity/state` and `/v1/sorafs/capacity/telemetry` snapshots for the provider.
-- **Notify stakeholders:** Storage Team (provider operations), Governance Council (decision body), Observability (dashboard updates).
+- **Триггер шарттары:** SLA боҙоуҙы асыҡлау (өҫкә ваҡыт/PoR етешһеҙлеге), репликация етешмәүе, йәки биллинг ризаһыҙлыҡ.
+- **Телеметрияны раҫлау:** провайдер өсөн `/v1/sorafs/capacity/state` һәм I18NI0000000010X снимоктарын төшөрөү.
+- **Ҡатнашыусыларға хәбәр итеү:** Һаҡлау командаһы (провайдер операциялары), Идара итеү советы (ҡарар органы), Күҙәтеүсәнлек (приборҙар таҡтаһы яңыртыуҙары).
 
-## 2. Prepare Evidence Bundle
+## 2. Дәлилдәр өйөмөн әҙерләү
 
-1. Collect raw artefacts (telemetry JSON, CLI logs, auditor notes).
-2. Normalize into a deterministic archive (for example, a tarball); record:
-   - BLAKE3-256 digest (`evidence_digest`)
-   - Media type (`application/zip`, `application/jsonl`, and so on)
-   - Hosting URI (object storage, SoraFS pin, or Torii-accessible endpoint)
-3. Store the bundle in the governance evidence collection bucket with write-once access.
+1. Сеймал артефакттарын йыйыу (телеметрия JSON, CLI журналдары, аудитор билдәләй).
+2. Детерминистик архивты нормалаштырыу (мәҫәлән, татарбол); яҙымта:
+   - BLAKE3-256 һеңдереүҙең (`evidence_digest`)
+   - тип медиа (`application/zip`, `application/jsonl`, һ.б.)
+   - Хостинг URI (объект һаҡлау, I18NT0000000001X булавка, йәки I18NT000000003X-ҡулланыусы ос нөктәһе)
+3. Һаҡлау өйөм идара итеү дәлилдәре йыйыу биҙрә менән яҙыу-бер тапҡыр инеү.
 
-## 3. File the Dispute
+## 3.
 
-1. Create a spec JSON for `sorafs_manifest_stub capacity dispute`:
+1. I18NI000000014X өсөн JSON спецификацияһын булдырыу:
 
    ```json
    {
@@ -57,7 +58,7 @@ This runbook guides governance operators through filing SoraFS capacity disputes
    }
    ```
 
-2. Run the CLI:
+2. CLI-ны эшләгеҙ:
 
    ```bash
    sorafs_manifest_stub capacity dispute \
@@ -70,38 +71,38 @@ This runbook guides governance operators through filing SoraFS capacity disputes
      --private-key=ed25519:<key>
    ```
 
-3. Review `dispute_summary.json` (confirm kind, evidence digest, timestamps).
-4. Submit the request JSON to Torii `/v1/sorafs/capacity/dispute` via the governance transaction queue. Capture the `dispute_id_hex` response value; it anchors follow-up revocation actions and audit reports.
+3. `dispute_summary.json` тикшерергә (раҫлау төрө, дәлилдәр үҙләштереү, ваҡыт маркалары).
+. `dispute_id_hex` яуап ҡиммәтен төшөрөү; ул якорь эҙмә-эҙлекле ғәмәлдән сығарыу ғәмәлдәре һәм аудит отчеттары.
 
-## 4. Evacuation & Revocation
+## 4. Эвакуация & Ҡабул итеү
 
-1. **Grace window:** notify the provider of impending revocation; allow evacuation of pinned data when policy permits.
-2. **Generate `ProviderAdmissionRevocationV1`:**
-   - Use `sorafs_manifest_stub provider-admission revoke` with the approved reason.
-   - Verify signatures and the revocation digest.
-3. **Publish revocation:**
-   - Submit the revocation request to Torii.
-   - Ensure provider adverts are blocked (expect `torii_sorafs_admission_total{result="rejected",reason="admission_missing"}` to climb).
-4. **Update dashboards:** flag the provider as revoked, reference the dispute ID, and link the evidence bundle.
+1. **Рәхмәт тәҙрәһе:** яҡынлашып килгән ҡайтарыу менән тәьмин итеүсегә хәбәр итә; рөхсәт итеү өсөн эвакуация пинированный мәғлүмәттәрҙе ҡасан сәйәсәт рөхсәт итә.
+2. **Беренсе I18NI000000018X:**
+   - Ҡулланыу I18NI000000019X раҫланған сәбәп менән.
+   - Ҡултамғаларҙы һәм ҡабул итеүҙе тикшерергә.
+3. **Башҡа сығарыу:**
+   - I18NT000000005X-ҡа ҡайтарыу запросын тапшырырға.
+   - Тәьмин итеү провайдеры реклама блокировкаланған (көтөү I18NI0000000020X күтәрелергә).
+4. **Яңыртыу приборҙар таҡталары:** флаг провайдер, нисек тартып алынған, бәхәс бәхәс идентификаторы, һәм дәлилдәр өйөмөн бәйләй.
 
-## 5. Post-Mortem & Follow-Up
+## 5. Пост-Мортема & Һуңынан-Ук
 
-- Record the timeline, root cause, and remediation actions in the governance incident tracker.
-- Determine restitution (stake slashing, fee clawbacks, customer refunds).
-- Document learnings; update SLA thresholds or monitoring alerts if required.
+- Ваҡыт һыҙығын, тамыр сәбәбен һәм идара итеү инцидент трекерында төҙәтеү ғәмәлдәрен яҙығыҙ.
+- Реституцияны билдәләү (перчатка ҡырҡыу, түләү clowbacks, клиенттар ҡайтарыу).
+- Документ өйрәнеүҙәре; яңыртыу SLA сиктәре йәки мониторинг иҫкәртмәләр, әгәр кәрәк.
 
-## 6. Reference Materials
+## 6. Һылтанма материалдары
 
 - `sorafs_manifest_stub capacity dispute --help`
-- `docs/source/sorafs/storage_capacity_marketplace.md` (dispute section)
-- `docs/source/sorafs/provider_admission_policy.md` (revocation workflow)
-- Observability dashboard: `SoraFS / Capacity Providers`
+- `docs/source/sorafs/storage_capacity_marketplace.md` (бәхәс бүлеге)
+- `docs/source/sorafs/provider_admission_policy.md` (ҡайтарыу эш ағымы)
+- Күҙәтеүсәнлек панелендә: `SoraFS / Capacity Providers`
 
-## Checklist
+## Тикшереү исемлеге
 
-- [ ] Evidence bundle captured and hashed.
-- [ ] Dispute payload validated locally.
-- [ ] Torii dispute transaction accepted.
-- [ ] Revocation executed (if approved).
-- [ ] Dashboards/runbooks updated.
-- [ ] Post-mortem filed with governance council.
+- [ ] Дәлилдәр өйөмө тотолған һәм хешировать.
+- [ ] Бәхәс файҙалы йөк локаль раҫланған.
+- [ ] Torii бәхәс операцияһы ҡабул ителә.
+- [ ] Ҡабул итеү башҡарыла (әгәр раҫланһа).
+- [ ] Приборҙар таҡталары/йүгереү китаптары яңыртылған.
+- [ ] Идара итеү советына бирелгәндән һуң.

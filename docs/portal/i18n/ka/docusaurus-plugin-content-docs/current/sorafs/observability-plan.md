@@ -8,203 +8,203 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraFS Observability & SLO Plan
 sidebar_label: Observability & SLOs
 description: Telemetry schema, dashboards, and error-budget policy for SoraFS gateways, nodes, and the multi-source orchestrator.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
+:::შენიშვნა კანონიკური წყარო
 :::
 
-## Objectives
-- Define metrics and structured events for gateways, nodes, and the multi-source orchestrator.
-- Provide Grafana dashboards, alert thresholds, and validation hooks.
-- Establish SLO targets alongside error-budget and chaos-drill policies.
+## მიზნები
+- განსაზღვრეთ მეტრიკა და სტრუქტურირებული მოვლენები კარიბჭეებისთვის, კვანძებისთვის და მრავალ წყაროს ორკესტრისთვის.
+- მიაწოდეთ Grafana დაფები, გაფრთხილების ზღურბლები და ვალიდაციის კაკვები.
+- ჩამოაყალიბეთ SLO მიზნები შეცდომების საბიუჯეტო და ქაოსური სავარჯიშო პოლიტიკის გვერდით.
 
-## Metric Catalogue
+## მეტრული კატალოგი
 
-### Gateway surfaces
+### კარიბჭის ზედაპირები
 
-| Metric | Type | Labels | Notes |
+| მეტრული | ტიპი | ეტიკეტები | შენიშვნები |
 |--------|------|--------|-------|
-| `sorafs_gateway_active` | Gauge (UpDownCounter) | `endpoint`, `method`, `variant`, `chunker`, `profile` | Emitted via `SorafsGatewayOtel`; tracks in-flight HTTP operations per endpoint/method combination. |
-| `sorafs_gateway_responses_total` | Counter | `endpoint`, `method`, `variant`, `chunker`, `profile`, `result`, `status`, `error_code` | Every completed gateway request increments once; `result` ∈ {`success`,`error`,`dropped`}. |
-| `sorafs_gateway_ttfb_ms_bucket` | Histogram | `endpoint`, `method`, `variant`, `chunker`, `profile`, `result`, `status`, `error_code` | Time-to-first-byte latency for gateway responses; exported as Prometheus `_bucket/_sum/_count`. |
-| `sorafs_gateway_proof_verifications_total` | Counter | `profile_version`, `result`, `error_code` | Proof verification outcomes captured at request time (`result` ∈ {`success`,`failure`}). |
-| `sorafs_gateway_proof_duration_ms_bucket` | Histogram | `profile_version`, `result`, `error_code` | Verification latency distribution for PoR receipts. |
-| `telemetry::sorafs.gateway.request` | Structured event | `endpoint`, `method`, `variant`, `result`, `status`, `error_code`, `duration_ms` | Structured log emitted on every request completion for Loki/Tempo correlation. |
+| `sorafs_gateway_active` | ლიანდაგი (UpDownCounter) | `endpoint`, `method`, `variant`, `chunker`, `profile` | ემიტირებული `SorafsGatewayOtel` მეშვეობით; თვალყურს ადევნებს ფრენის დროს HTTP ოპერაციებს საბოლოო წერტილის/მეთოდის კომბინაციის მიხედვით. |
+| `sorafs_gateway_responses_total` | მრიცხველი | `endpoint`, `method`, `variant`, `chunker`, `profile`, `result`, I18NI0000000040X, I18NI0000000040X | ყველა დასრულებული კარიბჭის მოთხოვნა იზრდება ერთხელ; `result` ∈ {`success`,`error`,`dropped`}. |
+| `sorafs_gateway_ttfb_ms_bucket` | ჰისტოგრამა | `endpoint`, `method`, `variant`, `chunker`, `profile`, `result`, I18NI0000000050X, I18NI0000000050X | დროიდან პირველ ბაიტამდე შეყოვნება კარიბჭის პასუხებისთვის; ექსპორტირებული როგორც Prometheus `_bucket/_sum/_count`. |
+| `sorafs_gateway_proof_verifications_total` | მრიცხველი | `profile_version`, `result`, `error_code` | დადასტურების დადასტურების შედეგები აღბეჭდილია მოთხოვნის დროს (`result` ∈ {`success`,`failure`}). |
+| `sorafs_gateway_proof_duration_ms_bucket` | ჰისტოგრამა | `profile_version`, `result`, `error_code` | ვერიფიკაციის შეყოვნების განაწილება PoR ქვითრებისთვის. |
+| `telemetry::sorafs.gateway.request` | სტრუქტურირებული ღონისძიება | `endpoint`, `method`, `variant`, `result`, `status`, `error_code`, `duration_ms` | სტრუქტურირებული ჟურნალი გამოქვეყნებულია Loki/Tempo კორელაციის ყოველი მოთხოვნის დასრულებისას. |
 
-`telemetry::sorafs.gateway.request` events mirror the OTEL counters with structured payloads, surfacing `endpoint`, `method`, `variant`, `status`, `error_code`, and `duration_ms` for Loki/Tempo correlation while dashboards consume the OTLP series for SLO tracking.
+`telemetry::sorafs.gateway.request` მოვლენები ასახავს OTEL-ის მრიცხველებს სტრუქტურირებული დატვირთვით, ზედაპირული `endpoint`, `method`, `variant`, I18NI000000080X, I1801800000, I18NI0000000079X, I18NI000000080X, I1801800000, I18NI00000000 ლოკი/ტემპის კორელაცია მაშინ, როცა დაფები მოიხმარენ OTLP სერიებს SLO თვალთვალისათვის.
 
-### Proof-health telemetry
+### ჯანმრთელობის დამადასტურებელი ტელემეტრია
 
-| Metric | Type | Labels | Notes |
+| მეტრული | ტიპი | ეტიკეტები | შენიშვნები |
 |--------|------|--------|-------|
-| `torii_sorafs_proof_health_alerts_total` | Counter | `provider_id`, `trigger`, `penalty` | Increments every time `RecordCapacityTelemetry` emits a `SorafsProofHealthAlert`. `trigger` distinguishes PDP/PoTR/Both failures, while `penalty` captures whether collateral was actually slashed or suppressed by cooldown. |
-| `torii_sorafs_proof_health_pdp_failures`, `torii_sorafs_proof_health_potr_breaches` | Gauge | `provider_id` | Latest PDP/PoTR counts reported inside the offending telemetry window so teams can quantify how far providers overshot policy. |
-| `torii_sorafs_proof_health_penalty_nano` | Gauge | `provider_id` | Nano-XOR amount slashed on the last alert (zero when cooldown suppressed enforcement). |
-| `torii_sorafs_proof_health_cooldown` | Gauge | `provider_id` | Boolean gauge (`1` = alert suppressed by cooldown) to surface when follow-up alerts are temporarily muted. |
-| `torii_sorafs_proof_health_window_end_epoch` | Gauge | `provider_id` | Epoch recorded for the telemetry window tied to the alert so operators can correlate against Norito artefacts. |
+| `torii_sorafs_proof_health_alerts_total` | მრიცხველი | `provider_id`, `trigger`, `penalty` | იზრდება ყოველ ჯერზე, როცა `RecordCapacityTelemetry` გამოსცემს `SorafsProofHealthAlert`-ს. `trigger` განასხვავებს PDP/PoTR/ორივე წარუმატებლობას, ხოლო `penalty` ასახავს, ​​იყო თუ არა გირაოს რეალურად შემცირება ან ჩახშობა გაგრილებით. |
+| `torii_sorafs_proof_health_pdp_failures`, `torii_sorafs_proof_health_potr_breaches` | ლიანდაგი | `provider_id` | უახლესი PDP/PoTR თვლები მოხსენებულია შეურაცხმყოფელი ტელემეტრიის ფანჯარაში, რათა გუნდებმა შეძლონ რაოდენობრივად განსაზღვრონ პროვაიდერების პოლიტიკა. |
+| `torii_sorafs_proof_health_penalty_nano` | ლიანდაგი | `provider_id` | Nano-XOR რაოდენობა შემცირდა ბოლო გაფრთხილებისას (ნულოვანია, როდესაც გაგრილებამ თრგუნა აღსრულება). |
+| `torii_sorafs_proof_health_cooldown` | ლიანდაგი | `provider_id` | ლოგიკური ლიანდაგი (`1` = გაფრთხილება ჩახშობილია გაგრილებით) ზედაპირზე, როდესაც შემდგომი გაფრთხილებები დროებით დადუმებულია. |
+| `torii_sorafs_proof_health_window_end_epoch` | ლიანდაგი | `provider_id` | ეპოქა ჩაწერილია ტელემეტრიის ფანჯრისთვის, რომელიც დაკავშირებულია გაფრთხილებასთან, რათა ოპერატორებმა შეძლონ კორელაცია Norito არტეფაქტებთან. |
 
-These feeds now power the Taikai viewer dashboard’s proof-health row
-(`dashboards/grafana/taikai_viewer.json`), giving CDN operators live visibility
-into alert volumes, PDP/PoTR trigger mix, penalties, and cooldown state per
-provider.
+ეს არხები ახლა აძლიერებს Taikai-ის მაყურებლის დაფის ჯანმრთელობის მტკიცებულების რიგს
+(`dashboards/grafana/taikai_viewer.json`), რაც CDN ოპერატორებს აძლევს პირდაპირ ხილვადობას
+გაფრთხილების მოცულობაში, PDP/PoTR ტრიგერების მიქსში, ჯარიმებსა და გაგრილების მდგომარეობაზე
+პროვაიდერი.
 
-The same metrics now back two Taikai viewer alert rules:
-`SorafsProofHealthPenalty` fires whenever
-`torii_sorafs_proof_health_alerts_total{penalty="penalty_applied"}` increases in
-the last 15 minutes, while `SorafsProofHealthCooldown` raises a warning if a
-provider remains in cooldown for five minutes. Both alerts live in
-`dashboards/alerts/taikai_viewer_rules.yml` so SREs receive immediate context
-whenever PoR/PoTR enforcement escalates.
+იგივე მეტრიკა ახლა მხარს უჭერს Taikai მაყურებლის გაფრთხილების ორ წესს:
+`SorafsProofHealthPenalty` ისვრის ნებისმიერ დროს
+`torii_sorafs_proof_health_alerts_total{penalty="penalty_applied"}` იზრდება
+ბოლო 15 წუთი, ხოლო `SorafsProofHealthCooldown` აჩენს გაფრთხილებას, თუ
+პროვაიდერი რჩება გაგრილებაში ხუთი წუთის განმავლობაში. ორივე გაფრთხილება პირდაპირ ეთერშია
+`dashboards/alerts/taikai_viewer_rules.yml` ასე რომ, SRE-ები მიიღებენ უშუალო კონტექსტს
+როდესაც PoR/PoTR აღსრულება იზრდება.
 
-### Orchestrator surfaces
+### ორკესტრის ზედაპირები
 
-| Metric / Event | Type | Labels | Producer | Notes |
-|----------------|------|--------|----------|-------|
-| `sorafs_orchestrator_active_fetches` | Gauge | `manifest_id`, `region` | `FetchMetricsCtx` | Sessions currently in-flight. |
-| `sorafs_orchestrator_fetch_duration_ms` | Histogram | `manifest_id`, `region` | `FetchMetricsCtx` | Duration histogram in milliseconds; 1 ms→30 s buckets. |
-| `sorafs_orchestrator_fetch_failures_total` | Counter | `manifest_id`, `region`, `reason` | `FetchMetricsCtx` | Reasons: `no_providers`, `no_healthy_providers`, `no_compatible_providers`, `exhausted_retries`, `observer_failed`, `internal_invariant`. |
-| `sorafs_orchestrator_retries_total` | Counter | `manifest_id`, `provider_id`, `reason` | `FetchMetricsCtx` | Distinguishes retry causes (`retry`, `digest_mismatch`, `length_mismatch`, `provider_error`). |
-| `sorafs_orchestrator_provider_failures_total` | Counter | `manifest_id`, `provider_id`, `reason` | `FetchMetricsCtx` | Captures session-level disablement / failure tallies. |
-| `sorafs_orchestrator_chunk_latency_ms` | Histogram | `manifest_id`, `provider_id` | `FetchMetricsCtx` | Per-chunk fetch latency distribution (ms) for throughput/SLO analysis. |
-| `sorafs_orchestrator_bytes_total` | Counter | `manifest_id`, `provider_id` | `FetchMetricsCtx` | Bytes delivered per manifest/provider; derive throughput via `rate()` in PromQL. |
-| `sorafs_orchestrator_stalls_total` | Counter | `manifest_id`, `provider_id` | `FetchMetricsCtx` | Counts chunks exceeding `ScoreboardConfig::latency_cap_ms`. |
-| `telemetry::sorafs.fetch.lifecycle` | Structured event | `manifest`, `region`, `job_id`, `event`, `status`, `chunk_count`, `total_bytes`, `provider_candidates`, `retry_budget`, `global_parallel_limit` | `FetchTelemetryCtx` | Mirrors job lifecycle (start/complete) with Norito JSON payload. |
-| `telemetry::sorafs.fetch.retry` | Structured event | `manifest`, `region`, `job_id`, `provider`, `reason`, `attempts` | `FetchTelemetryCtx` | Emitted per provider retry streak; `attempts` counts incremental retries (≥ 1). |
-| `telemetry::sorafs.fetch.provider_failure` | Structured event | `manifest`, `region`, `job_id`, `provider`, `reason`, `failures` | `FetchTelemetryCtx` | Surfaced when a provider crosses the failure threshold. |
-| `telemetry::sorafs.fetch.error` | Structured event | `manifest`, `region`, `job_id`, `reason`, `provider?`, `provider_reason?`, `duration_ms` | `FetchTelemetryCtx` | Terminal failure record, friendly to Loki/Splunk ingestion. |
-| `telemetry::sorafs.fetch.stall` | Structured event | `manifest`, `region`, `job_id`, `provider`, `latency_ms`, `bytes` | `FetchTelemetryCtx` | Raised when chunk latency breaches the configured cap (mirrors stall counters). |
+| მეტრიკა / მოვლენა | ტიპი | ეტიკეტები | პროდიუსერი | შენიშვნები |
+|----------------|------|-------|----------|------|
+| `sorafs_orchestrator_active_fetches` | ლიანდაგი | `manifest_id`, `region` | `FetchMetricsCtx` | სესიები ამჟამად ფრენის დროს. |
+| `sorafs_orchestrator_fetch_duration_ms` | ჰისტოგრამა | `manifest_id`, `region` | `FetchMetricsCtx` | ხანგრძლივობის ჰისტოგრამა მილიწამებში; 1ms→30s თაიგულები. |
+| `sorafs_orchestrator_fetch_failures_total` | მრიცხველი | `manifest_id`, `region`, `reason` | `FetchMetricsCtx` | მიზეზები: `no_providers`, `no_healthy_providers`, `no_compatible_providers`, `exhausted_retries`, `observer_failed`, `internal_invariant`. |
+| `sorafs_orchestrator_retries_total` | მრიცხველი | `manifest_id`, `provider_id`, `reason` | `FetchMetricsCtx` | განასხვავებს განმეორებით მიზეზებს (`retry`, `digest_mismatch`, `length_mismatch`, `provider_error`). |
+| `sorafs_orchestrator_provider_failures_total` | მრიცხველი | `manifest_id`, `provider_id`, `reason` | `FetchMetricsCtx` | იჭერს სესიის დონის გამორთვის / წარუმატებლობის ანგარიშებს. |
+| `sorafs_orchestrator_chunk_latency_ms` | ჰისტოგრამა | `manifest_id`, `provider_id` | `FetchMetricsCtx` | თითო ნაწილზე მოტანის შეყოვნების განაწილება (მმ) გამტარუნარიანობა/SLO ანალიზისთვის. |
+| `sorafs_orchestrator_bytes_total` | მრიცხველი | `manifest_id`, `provider_id` | `FetchMetricsCtx` | ბაიტები მიწოდებული თითო მანიფესტზე/პროვაიდერზე; მიიღება გამტარუნარიანობა `rate()`-ის მეშვეობით PromQL-ში. |
+| `sorafs_orchestrator_stalls_total` | მრიცხველი | `manifest_id`, `provider_id` | `FetchMetricsCtx` | ითვლის ნაწილებს `ScoreboardConfig::latency_cap_ms`-ზე მეტი. |
+| `telemetry::sorafs.fetch.lifecycle` | სტრუქტურირებული ღონისძიება | `manifest`, `region`, `job_id`, `event`, `status`, `chunk_count`, I18NI000001860X, I18NI000001860X `retry_budget`, `global_parallel_limit` | `FetchTelemetryCtx` | ასახავს სამუშაოს სიცოცხლის ციკლს (დაწყება/დასრულება) Norito JSON დატვირთვით. |
+| `telemetry::sorafs.fetch.retry` | სტრუქტურირებული ღონისძიება | `manifest`, `region`, `job_id`, `provider`, `reason`, `attempts` | `FetchTelemetryCtx` | ემიტირებული თითო პროვაიდერის ხელახალი ცდის სტრიქონზე; `attempts` ითვლის დამატებით განმეორებით ცდებს (≥1). |
+| `telemetry::sorafs.fetch.provider_failure` | სტრუქტურირებული ღონისძიება | `manifest`, `region`, `job_id`, `provider`, `reason`, `failures` | `FetchTelemetryCtx` | ჩნდება მაშინ, როდესაც პროვაიდერი გადალახავს წარუმატებლობის ზღვარს. |
+| `telemetry::sorafs.fetch.error` | სტრუქტურირებული ღონისძიება | `manifest`, `region`, `job_id`, `reason`, `provider?`, `provider_reason?`, `duration_ms` | `FetchTelemetryCtx` | ტერმინალის უკმარისობის ჩანაწერი, მეგობრული Loki/Splunk-ის გადაყლაპვისთვის. |
+| `telemetry::sorafs.fetch.stall` | სტრუქტურირებული ღონისძიება | `manifest`, `region`, `job_id`, `provider`, `latency_ms`, `bytes` | `FetchTelemetryCtx` | მატულობს, როდესაც ბლოკის შეყოვნება არღვევს კონფიგურირებულ თავსახურს (სარკეები დგას სალაროების მრიცხველებს). |
 
-### Node / replication surfaces
+### კვანძის / რეპლიკაციის ზედაპირები
 
-| Metric | Type | Labels | Notes |
+| მეტრული | ტიპი | ეტიკეტები | შენიშვნები |
 |--------|------|--------|-------|
-| `sorafs_node_capacity_utilisation_pct` | Histogram | `provider_id` | OTEL histogram of storage utilisation percentage (exported as `_bucket/_sum/_count`). |
-| `sorafs_node_por_success_total` | Counter | `provider_id` | Monotonic counter for successful PoR samples, derived from scheduler snapshots. |
-| `sorafs_node_por_failure_total` | Counter | `provider_id` | Monotonic counter for failed PoR samples. |
-| `torii_sorafs_storage_bytes_*`, `torii_sorafs_storage_por_*` | Gauge | `provider` | Existing Prometheus gauges for bytes used, queue depth, PoR inflight counts. |
-| `torii_sorafs_capacity_*`, `torii_sorafs_uptime_bps`, `torii_sorafs_por_bps` | Gauge | `provider` | Provider capacity/uptime success data surfaced in the capacity dashboard. |
-| `torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total` | Gauge | `provider`, `manifest` | Backlog depth plus the cumulative failure counters exported whenever `/v1/sorafs/por/ingestion/{manifest}` is polled, feeding the “PoR Stalls” panel/alert. |
+| `sorafs_node_capacity_utilisation_pct` | ჰისტოგრამა | `provider_id` | საცავის გამოყენების პროცენტის OTEL ჰისტოგრამა (ექსპორტირებული როგორც `_bucket/_sum/_count`). |
+| `sorafs_node_por_success_total` | მრიცხველი | `provider_id` | მონოტონური მრიცხველი წარმატებული PoR ნიმუშებისთვის, მიღებული გრაფიკის კადრებიდან. |
+| `sorafs_node_por_failure_total` | მრიცხველი | `provider_id` | მონოტონური მრიცხველი წარუმატებელი PoR ნიმუშებისთვის. |
+| `torii_sorafs_storage_bytes_*`, `torii_sorafs_storage_por_*` | ლიანდაგი | `provider` | არსებული Prometheus ლიანდაგები გამოყენებული ბაიტებისთვის, რიგის სიღრმე, PoR ფრენის რაოდენობა. |
+| `torii_sorafs_capacity_*`, `torii_sorafs_uptime_bps`, `torii_sorafs_por_bps` | ლიანდაგი | `provider` | პროვაიდერის სიმძლავრის/ტემპის წარმატების მონაცემები გამოჩნდა სიმძლავრის საინფორმაციო დაფაზე. |
+| `torii_sorafs_por_ingest_backlog`, `torii_sorafs_por_ingest_failures_total` | ლიანდაგი | `provider`, `manifest` | ბექლოგის სიღრმე პლუს კუმულაციური წარუმატებლობის მრიცხველები ექსპორტირებულია `/v1/sorafs/por/ingestion/{manifest}`-ის გამოკითხვისას, რაც კვებავს „PoR Stalls“ პანელს/გაფრთხილებას. |
 
-### Repair & SLA
+### შეკეთება და SLA
 
-| Metric | Type | Labels | Notes |
+| მეტრული | ტიპი | ეტიკეტები | შენიშვნები |
 |--------|------|--------|-------|
-| `sorafs_repair_tasks_total` | Counter | `status` | OTEL counter for repair task transitions. |
-| `sorafs_repair_latency_minutes` | Histogram | `outcome` | OTEL histogram for repair lifecycle latency. |
-| `sorafs_repair_queue_depth` | Histogram | `provider` | OTEL histogram of queued tasks per provider (snapshot-style). |
-| `sorafs_repair_backlog_oldest_age_seconds` | Histogram | — | OTEL histogram of the oldest queued task age (seconds). |
-| `sorafs_repair_lease_expired_total` | Counter | `outcome` | OTEL counter for lease expiries (`requeued`/`escalated`). |
-| `sorafs_repair_slash_proposals_total` | Counter | `outcome` | OTEL counter for slash proposal transitions. |
-| `torii_sorafs_repair_tasks_total` | Counter | `status` | Prometheus counter for task transitions. |
-| `torii_sorafs_repair_latency_minutes_bucket` | Histogram | `outcome` | Prometheus histogram for repair lifecycle latency. |
-| `torii_sorafs_repair_queue_depth` | Gauge | `provider` | Prometheus gauge for queued tasks per provider. |
-| `torii_sorafs_repair_backlog_oldest_age_seconds` | Gauge | — | Prometheus gauge for the oldest queued task age (seconds). |
-| `torii_sorafs_repair_lease_expired_total` | Counter | `outcome` | Prometheus counter for lease expiries. |
-| `torii_sorafs_slash_proposals_total` | Counter | `outcome` | Prometheus counter for slash proposal transitions. |
+| `sorafs_repair_tasks_total` | მრიცხველი | `status` | OTEL მრიცხველი სარემონტო დავალების გადასვლებისთვის. |
+| `sorafs_repair_latency_minutes` | ჰისტოგრამა | `outcome` | OTEL ჰისტოგრამა შეკეთების სასიცოცხლო ციკლის შეყოვნებისთვის. |
+| `sorafs_repair_queue_depth` | ჰისტოგრამა | `provider` | OTEL რიგი ამოცანების ჰისტოგრამა თითო პროვაიდერზე (სნეპშოტის სტილი). |
+| `sorafs_repair_backlog_oldest_age_seconds` | ჰისტოგრამა | — | OTEL-ის ჰისტოგრამა ყველაზე ძველი დავალების რიგებში (წამები). |
+| `sorafs_repair_lease_expired_total` | მრიცხველი | `outcome` | OTEL-ის მთვლელი იჯარის ვადის გასვლისთვის (`requeued`/`escalated`). |
+| `sorafs_repair_slash_proposals_total` | მრიცხველი | `outcome` | OTEL მთვლელი წინადადების გადასასვლელად. |
+| `torii_sorafs_repair_tasks_total` | მრიცხველი | `status` | Prometheus მრიცხველი ამოცანების გადასვლებისთვის. |
+| `torii_sorafs_repair_latency_minutes_bucket` | ჰისტოგრამა | `outcome` | Prometheus ჰისტოგრამა სასიცოცხლო ციკლის შეფერხებისთვის. |
+| `torii_sorafs_repair_queue_depth` | ლიანდაგი | `provider` | Prometheus ლიანდაგი რიგზე მდგომი ამოცანების თითო პროვაიდერზე. |
+| `torii_sorafs_repair_backlog_oldest_age_seconds` | ლიანდაგი | — | Prometheus ლიანდაგი ყველაზე ძველი რიგის დავალების ასაკისთვის (წამი). |
+| `torii_sorafs_repair_lease_expired_total` | მრიცხველი | `outcome` | Prometheus მრიცხველი იჯარის ვადის გასვლისთვის. |
+| `torii_sorafs_slash_proposals_total` | მრიცხველი | `outcome` | Prometheus მრიცხველი ხაზის წინადადების გადასვლებისთვის. |
 
-Governance audit JSON metadata mirrors the repair telemetry labels (`status`, `ticket_id`, `manifest`, `provider` on repair events; `outcome` on slash proposals) so metrics and audit artefacts can be correlated deterministically.
+მართვის აუდიტი JSON მეტამონაცემები ასახავს სარემონტო ტელემეტრიის ეტიკეტებს (`status`, `ticket_id`, `manifest`, `provider` სარემონტო მოვლენებზე; I18NI000000246X-ზე; დეტერმინისტულად.
 
-### Retention & GC
-
-| Metric | Type | Labels | Notes |
+### შეკავება და GC| მეტრული | ტიპი | ეტიკეტები | შენიშვნები |
 |--------|------|--------|-------|
-| `sorafs_gc_runs_total` | Counter | `result` | OTEL counter for GC sweeps, emitted by the embedded node. |
-| `sorafs_gc_evictions_total` | Counter | `reason` | OTEL counter for evicted manifests grouped by reason. |
-| `sorafs_gc_bytes_freed_total` | Counter | `reason` | OTEL counter for bytes freed grouped by reason. |
-| `sorafs_gc_blocked_total` | Counter | `reason` | OTEL counter for evictions blocked by active repairs or policy. |
-| `torii_sorafs_gc_runs_total` | Counter | `result` | Prometheus counter for GC sweeps (success/error). |
-| `torii_sorafs_gc_evictions_total` | Counter | `reason` | Prometheus counter for evicted manifests grouped by reason. |
-| `torii_sorafs_gc_bytes_freed_total` | Counter | `reason` | Prometheus counter for bytes freed grouped by reason. |
-| `torii_sorafs_gc_blocked_total` | Counter | `reason` | Prometheus counter for blocked evictions grouped by reason. |
-| `torii_sorafs_gc_expired_manifests` | Gauge | — | Current count of expired manifests observed by GC sweeps. |
-| `torii_sorafs_gc_oldest_expired_age_seconds` | Gauge | — | Age in seconds of the oldest expired manifest (after retention grace). |
+| `sorafs_gc_runs_total` | მრიცხველი | `result` | OTEL-ის მრიცხველი GC სვიპებისთვის, რომელიც გამოსხივებულია ჩაშენებული კვანძის მიერ. |
+| `sorafs_gc_evictions_total` | მრიცხველი | `reason` | OTEL-ის მრიცხველი გამოსახლებული მანიფესტებისთვის დაჯგუფებულია მიზეზის მიხედვით. |
+| `sorafs_gc_bytes_freed_total` | მრიცხველი | `reason` | OTEL მრიცხველი გამოთავისუფლებული ბაიტებისთვის დაჯგუფებული მიზეზის მიხედვით. |
+| `sorafs_gc_blocked_total` | მრიცხველი | `reason` | OTEL-ის მრიცხველი გამოსახლებისთვის დაბლოკილია აქტიური რემონტით ან პოლიტიკით. |
+| `torii_sorafs_gc_runs_total` | მრიცხველი | `result` | Prometheus მრიცხველი GC სვიპებისთვის (წარმატება/შეცდომა). |
+| `torii_sorafs_gc_evictions_total` | მრიცხველი | `reason` | Prometheus მთვლელი გამოსახლებული მანიფესტებისთვის დაჯგუფებული მიზეზით. |
+| `torii_sorafs_gc_bytes_freed_total` | მრიცხველი | `reason` | Prometheus მრიცხველი გამოთავისუფლებული ბაიტებისთვის დაჯგუფებული მიზეზის მიხედვით. |
+| `torii_sorafs_gc_blocked_total` | მრიცხველი | `reason` | Prometheus მრიცხველი დაბლოკილი გამოსახლებისთვის დაჯგუფებულია მიზეზის მიხედვით. |
+| `torii_sorafs_gc_expired_manifests` | ლიანდაგი | — | ვადაგასული მანიფესტების ამჟამინდელი რაოდენობა დაფიქსირდა GC სვიპებით. |
+| `torii_sorafs_gc_oldest_expired_age_seconds` | ლიანდაგი | — | ასაკი ყველაზე ძველი ვადაგასული მანიფესტის წამებში (შეკავების შემდეგ). |
 
-### Reconciliation
+### შერიგება
 
-| Metric | Type | Labels | Notes |
+| მეტრული | ტიპი | ეტიკეტები | შენიშვნები |
 |--------|------|--------|-------|
-| `sorafs.reconciliation.runs_total` | Counter | `result` | OTEL counter for reconciliation snapshots. |
-| `sorafs.reconciliation.divergence_total` | Counter | — | OTEL counter of divergence counts per run. |
-| `torii_sorafs_reconciliation_runs_total` | Counter | `result` | Prometheus counter for reconciliation runs. |
-| `torii_sorafs_reconciliation_divergence_count` | Gauge | — | Latest divergence count observed in a reconciliation report. |
+| `sorafs.reconciliation.runs_total` | მრიცხველი | `result` | OTEL მრიცხველი შერიგების კადრებისთვის. |
+| `sorafs.reconciliation.divergence_total` | მრიცხველი | — | OTEL-ის დივერგენციის მრიცხველი თითო გაშვებაზე. |
+| `torii_sorafs_reconciliation_runs_total` | მრიცხველი | `result` | Prometheus მრიცხველი შერიგებისთვის. |
+| `torii_sorafs_reconciliation_divergence_count` | ლიანდაგი | — | უახლესი განსხვავება დაფიქსირდა შერიგების ანგარიშში. |
 
-### Proof of Timely Retrieval (PoTR) & chunk SLA
+### დროული მოძიების დამადასტურებელი (PoTR) და ცალი SLA
 
-| Metric | Type | Labels | Producer | Notes |
-|--------|------|--------|----------|-------|
-| `sorafs_potr_deadline_ms` | Histogram | `tier`, `provider` | PoTR coordinator | Deadline slack in milliseconds (positive = met). |
-| `sorafs_potr_failures_total` | Counter | `tier`, `provider`, `reason` | PoTR coordinator | Reasons: `expired`, `missing_proof`, `corrupt_proof`. |
-| `sorafs_chunk_sla_violation_total` | Counter | `provider`, `manifest_id`, `reason` | SLA monitor | Fired when chunk delivery misses SLO (latency, success rate). |
-| `sorafs_chunk_sla_violation_active` | Gauge | `provider`, `manifest_id` | SLA monitor | Boolean gauge (0/1) toggled during active breach window. |
+| მეტრული | ტიპი | ეტიკეტები | პროდიუსერი | შენიშვნები |
+|--------|------|-------|----------|-------|
+| `sorafs_potr_deadline_ms` | ჰისტოგრამა | `tier`, `provider` | PoTR კოორდინატორი | ბოლო ვადის შემცირება მილიწამებში (დადებითი = დაკმაყოფილებულია). |
+| `sorafs_potr_failures_total` | მრიცხველი | `tier`, `provider`, `reason` | PoTR კოორდინატორი | მიზეზები: `expired`, `missing_proof`, `corrupt_proof`. |
+| `sorafs_chunk_sla_violation_total` | მრიცხველი | `provider`, `manifest_id`, `reason` | SLA მონიტორი | გააქტიურებულია, როდესაც ნაწილის მიწოდებას აკლია SLO (დაყოვნება, წარმატების მაჩვენებელი). |
+| `sorafs_chunk_sla_violation_active` | ლიანდაგი | `provider`, `manifest_id` | SLA მონიტორი | ლოგიკური ლიანდაგი (0/1) ჩართულია აქტიური დარღვევის ფანჯრის დროს. |
 
-## SLO Targets
+## SLO მიზნები
 
-- Gateway trustless availability: **99.9 %** (HTTP 2xx/304 responses).
-- Trustless TTFB P95: hot tier ≤ 120 ms, warm tier ≤ 300 ms.
-- Proof success rate: ≥ 99.5 % per day.
-- Orchestrator success (chunk completion): ≥ 99 %.
+- კარიბჭის საიმედო ხელმისაწვდომობა: **99.9%** (HTTP 2xx/304 პასუხი).
+- დაუჯერებელი TTFB P95: ცხელი იარუსი ≤120 ms, თბილი იარუსი ≤300 ms.
+- დადასტურების წარმატების მაჩვენებელი: ≥99.5% დღეში.
+- ორკესტრის წარმატება (ნაწილის დასრულება): ≥99%.
 
-## Dashboards & Alerting
+## დაფები და გაფრთხილება
 
-1. **Gateway Observability** (`dashboards/grafana/sorafs_gateway_observability.json`) — tracks trustless availability, TTFB P95, refusal breakdown, and PoR/PoTR failures via the OTEL metrics.
-2. **Orchestrator Health** (`dashboards/grafana/sorafs_fetch_observability.json`) — covers multi-source load, retries, provider failures, and stall bursts.
-3. **SoraNet Privacy Metrics** (`dashboards/grafana/soranet_privacy_metrics.json`) — charts anonymised relay buckets, suppression windows, and collector health via `soranet_privacy_last_poll_unixtime`, `soranet_privacy_collector_enabled`, and `soranet_privacy_poll_errors_total{provider}`.
-4. **Capacity Health** (`dashboards/grafana/sorafs_capacity_health.json`) — tracks provider headroom plus repair SLA escalations, repair queue depth by provider, and GC sweeps/evictions/bytes freed/blocked reasons/expired-manifest age and reconciliation divergence snapshots.
+1. **კარიბჭის დაკვირვება** (`dashboards/grafana/sorafs_gateway_observability.json`) — თვალყურს ადევნებს საიმედო ხელმისაწვდომობას, TTFB P95, უარის ავარიას და PoR/PoTR წარუმატებლობას OTEL მეტრიკის საშუალებით.
+2. **Orchestrator Health** (`dashboards/grafana/sorafs_fetch_observability.json`) — მოიცავს მრავალ წყაროს დატვირთვას, განმეორებით მცდელობებს, პროვაიდერის წარუმატებლობას და აურზაურს.
+3. **SoraNet Privacy Metrics** (`dashboards/grafana/soranet_privacy_metrics.json`) — ანონიმური სარელეო თაიგულების, ჩახშობის ფანჯრებისა და კოლექტორის სიჯანსაღის დიაგრამები `soranet_privacy_last_poll_unixtime`, `soranet_privacy_collector_enabled` და I18NI0000029 მეშვეობით.
+4. **Capacity Health** (`dashboards/grafana/sorafs_capacity_health.json`) - თვალს ადევნებს პროვაიდერის სათავეს, პლუს სარემონტო SLA ესკალაციები, სარემონტო რიგის სიღრმე პროვაიდერის მიერ და GC სვიპები/გამოსახლებები/ბაიტები გათავისუფლებული/დაბლოკილი მიზეზები/ვადაგადაცილებული მანიფესტირებული ასაკობრივი და შერიგების დარღვევის განსხვავება.
 
-Alert bundles:
+გაფრთხილების პაკეტები:
 
-- `dashboards/alerts/sorafs_gateway_rules.yml` — gateway availability, TTFB, proof failure spikes.
-- `dashboards/alerts/sorafs_fetch_rules.yml` — orchestrator failures/retries/stalls; validated via `scripts/telemetry/test_sorafs_fetch_alerts.sh`, `dashboards/alerts/tests/sorafs_fetch_rules.test.yml`, `dashboards/alerts/tests/soranet_privacy_rules.test.yml`, and `dashboards/alerts/tests/soranet_policy_rules.test.yml`.
-- `dashboards/alerts/sorafs_capacity_rules.yml` — capacity pressure plus repair SLA/backlog/lease-expiry alerts and GC stall/blocked/error alerts for retention sweeps.
-- `dashboards/alerts/soranet_privacy_rules.yml` — privacy downgrade spikes, suppression alarms, collector-idle detection, and disabled-collector alerts (`soranet_privacy_last_poll_unixtime`, `soranet_privacy_collector_enabled`).
-- `dashboards/alerts/soranet_policy_rules.yml` — anonymity brownout alarms wired to `sorafs_orchestrator_brownouts_total`.
-- `dashboards/alerts/taikai_viewer_rules.yml` — Taikai viewer drift/ingest/CEK lag alarms plus the new SoraFS proof-health penalty/cooldown alerts powered by `torii_sorafs_proof_health_*`.
+- `dashboards/alerts/sorafs_gateway_rules.yml` — კარიბჭის ხელმისაწვდომობა, TTFB, წარუმატებლობის დამადასტურებელი მწვერვალები.
+- `dashboards/alerts/sorafs_fetch_rules.yml` — ორკესტრის წარუმატებლობები/განმეორებითი ცდები/ჩერდება; დადასტურებულია `scripts/telemetry/test_sorafs_fetch_alerts.sh`, `dashboards/alerts/tests/sorafs_fetch_rules.test.yml`, `dashboards/alerts/tests/soranet_privacy_rules.test.yml` და `dashboards/alerts/tests/soranet_policy_rules.test.yml` მეშვეობით.
+- `dashboards/alerts/sorafs_capacity_rules.yml` — სიმძლავრის წნევა პლუს შეკეთება SLA/ჩამორჩენილი/იჯარის ვადის გასვლის გაფრთხილებები და GC შეჩერების/დაბლოკვის/შეცდომის გაფრთხილებები შეკავების გაწმენდისთვის.
+- `dashboards/alerts/soranet_privacy_rules.yml` — კონფიდენციალურობის შემცირების მწვერვალები, ჩახშობის სიგნალიზაცია, კოლექციონერის უმოქმედობის გამოვლენა და გამორთული კოლექციონერის გაფრთხილებები (`soranet_privacy_last_poll_unixtime`, `soranet_privacy_collector_enabled`).
+- `dashboards/alerts/soranet_policy_rules.yml` — ანონიმურობის სიგნალიზაცია ჩართულია `sorafs_orchestrator_brownouts_total`-ზე.
+- `dashboards/alerts/taikai_viewer_rules.yml` — Taikai მაყურებლის დრიფტის/შეღწევის/CEK შეფერხების სიგნალიზაცია პლუს ახალი SoraFS ჯანმრთელობის სასჯელის/გაგრილების დამადასტურებელი გაფრთხილებები, რომლებიც უზრუნველყოფილია `torii_sorafs_proof_health_*`-ით.
 
-## Tracing Strategy
+## მიკვლევის სტრატეგია
 
-- Adopt OpenTelemetry end-to-end:
-  - Gateways emit OTLP spans (HTTP) annotated with request IDs, manifest digests, and token hashes.
-  - The orchestrator uses `tracing` + `opentelemetry` to export spans for fetch attempts.
-  - Embedded SoraFS nodes export spans for PoR challenges and storage operations. All components share a common trace ID propagated via `x-sorafs-trace`.
-- `SorafsFetchOtel` bridges orchestrator metrics into OTLP histograms while `telemetry::sorafs.fetch.*` events provide lightweight JSON payloads for log-centric backends.
-- Collectors: run OTEL collectors alongside Prometheus/Loki/Tempo (Tempo preferred). Jaeger API exporters remain optional.
-- High-cardinality operations should be sampled (10 % for success paths, 100 % for failures).
+- მიიღეთ OpenTelemetry ბოლომდე:
+  - კარიბჭეები ასხივებენ OTLP სპანებს (HTTP), რომლებიც ანოტირდება მოთხოვნის ID-ებით, მანიფესტების დაიჯესტებით და ტოკენის ჰეშებით.
+  - ორკესტრატორი იყენებს `tracing` + `opentelemetry` სპექტაკლების ექსპორტისთვის, რათა მიიღონ მცდელობა.
+  - ჩაშენებული SoraFS კვანძების ექსპორტი პორ გამოწვევებისთვის და შენახვის ოპერაციებისთვის. ყველა კომპონენტი იზიარებს `x-sorafs-trace`-ის მეშვეობით გავრცელებულ საერთო კვალი ID-ს.
+- `SorafsFetchOtel` აკავშირებს ორკესტრატორის მეტრიკას OTLP ჰისტოგრამებში, ხოლო `telemetry::sorafs.fetch.*` ღონისძიებები უზრუნველყოფს მსუბუქ JSON დატვირთვას ლოგინზე ორიენტირებული ბექენდებისთვის.
+- კოლექციონერები: მართეთ OTEL კოლექციონერები Prometheus/Loki/Tempo-სთან ერთად (სასურველია ტემპი). Jaeger API ექსპორტიორები არჩევითია.
+- მაღალი კარდინალურობის ოპერაციების შერჩევა უნდა მოხდეს (10% წარმატების ბილიკებისთვის, 100% წარუმატებლობისთვის).
 
-## TLS Telemetry Coordination (SF-5b)
+## TLS ტელემეტრიის კოორდინაცია (SF-5b)
 
-- Metric alignment:
-  - TLS automation ships `sorafs_gateway_tls_cert_expiry_seconds`, `sorafs_gateway_tls_renewal_total{result}`, and `sorafs_gateway_tls_ech_enabled`.
-  - Include these gauges in the Gateway Overview dashboard under the TLS/Certificates panel.
-- Alert linkage:
-  - When TLS expiry alerts fire (≤ 14 days remaining) correlate with the trustless availability SLO.
-  - ECH disablement emits a secondary alert referencing both TLS and availability panels.
-- Pipeline: the TLS automation job exports to the same Prometheus stack as gateway metrics; coordination with SF-5b ensures deduplicated instrumentation.
+- მეტრიკული გასწორება:
+  - TLS ავტომატიზაცია იგზავნება `sorafs_gateway_tls_cert_expiry_seconds`, `sorafs_gateway_tls_renewal_total{result}` და `sorafs_gateway_tls_ech_enabled`.
+  - ჩართეთ ეს მრიცხველები Gateway Overview-ის დაფაში TLS/სერთიფიკატების პანელის ქვეშ.
+- გაფრთხილების კავშირი:
+  - როდესაც TLS ვადის გასვლის სიგნალები გასროლის (≤14 დღე დარჩენილია) კორელაციაშია დაუსაბუთებელი ხელმისაწვდომობის SLO.
+  - ECH გამორთვა ასხივებს მეორად გაფრთხილებას, რომელიც ეხება როგორც TLS, ასევე ხელმისაწვდომობის პანელებს.
+- მილსადენი: TLS ავტომატიზაციის სამუშაო ექსპორტი ხდება იმავე Prometheus დასტაზე, როგორც კარიბჭის მეტრიკა; SF-5b-თან კოორდინაცია უზრუნველყოფს ინსტრუმენტაციის დუბლირებას.
 
-## Metric Naming & Label Conventions
+## მეტრიკული დასახელებისა და ეტიკეტების კონვენციები
 
-- Metric names follow the existing `torii_sorafs_*` or `sorafs_*` prefixes used by Torii and the gateway.
-- Label sets are standardised:
-  - `result` → HTTP outcome (`success`, `refused`, `failed`).
-  - `reason` → refusal/error code (`unsupported_chunker`, `timeout`, etc.).
-  - `status` → repair task state (`queued`, `in_progress`, `completed`, `failed`, `escalated`).
-  - `outcome` → repair lease or latency outcome (`requeued`, `escalated`, `completed`, `failed`).
-  - `provider` → hex-encoded provider identifier.
-  - `manifest` → canonical manifest digest (trimmed when high-cardinality).
-  - `tier` → declarative tier labels (`hot`, `warm`, `archive`).
-- Telemetry emission points:
-  - Gateway metrics live under `torii_sorafs_*` and reuse conventions from `crates/iroha_core/src/telemetry.rs`.
-  - The orchestrator emits `sorafs_orchestrator_*` metrics and `telemetry::sorafs.fetch.*` events (lifecycle, retry, provider failure, error, stall) tagged with manifest digest, job ID, region, and provider identifiers.
-  - Nodes surface `torii_sorafs_storage_*`, `torii_sorafs_capacity_*`, and `torii_sorafs_por_*`.
-- Coordinate with Observability to register the metric catalogue in the shared Prometheus naming doc, including label cardinality expectations (provider/manifests upper bounds).
+- მეტრული სახელები მიჰყვება არსებულ `torii_sorafs_*` ან `sorafs_*` პრეფიქსებს, რომლებიც გამოიყენება Torii და კარიბჭის მიერ.
+- ეტიკეტების ნაკრები სტანდარტიზებულია:
+  - `result` → HTTP შედეგი (`success`, `refused`, `failed`).
+  - `reason` → უარის/შეცდომის კოდი (`unsupported_chunker`, `timeout` და ა.შ.).
+  - `status` → სარემონტო დავალების მდგომარეობა (`queued`, `in_progress`, `completed`, `failed`, `escalated`).
+  - `outcome` → სარემონტო იჯარა ან ლატენტური შედეგი (`requeued`, `escalated`, `completed`, `failed`).
+  - `provider` → ექვსკუთხედი კოდირებული პროვაიდერის იდენტიფიკატორი.
+  - `manifest` → კანონიკური მანიფესტი დაიჯესტი (მოჭრილი მაღალი კარდინალურობისას).
+  - `tier` → დეკლარაციული დონის ეტიკეტები (`hot`, `warm`, `archive`).
+- ტელემეტრიის ემისიის წერტილები:
+  - კარიბჭის მეტრიკა მოქმედებს `torii_sorafs_*`-ის ქვეშ და ხელახლა გამოიყენება `crates/iroha_core/src/telemetry.rs`-ის კონვენციები.
+  - ორკესტრატორი გამოსცემს `sorafs_orchestrator_*` მეტრიკას და `telemetry::sorafs.fetch.*` მოვლენებს (სასიცოცხლო ციკლი, ხელახალი ცდა, პროვაიდერის წარუმატებლობა, შეცდომა, შეფერხება), მონიშნული მანიფესტის შეჯამებით, სამუშაოს ID, რეგიონისა და პროვაიდერის იდენტიფიკატორებით.
+  - კვანძების ზედაპირი `torii_sorafs_storage_*`, `torii_sorafs_capacity_*` და `torii_sorafs_por_*`.
+- კოორდინაცია Observability-თან, რათა დაარეგისტრიროთ მეტრიკული კატალოგი Prometheus დასახელების საერთო დოკუმენტში, ლეიბლის კარდინალურობის მოლოდინების ჩათვლით (პროვაიდერი/გამოხატავს ზედა საზღვრებს).
 
-## Data Pipeline
+## მონაცემთა მილსადენი
 
-- Collectors deploy alongside each component, exporting OTLP to Prometheus (metrics) and Loki/Tempo (logs/traces).
-- Optional eBPF (Tetragon) enriches low-level tracing for gateways/nodes.
-- Use `iroha_telemetry::metrics::{install_sorafs_gateway_otlp_exporter, install_sorafs_node_otlp_exporter}` for Torii and embedded nodes; the orchestrator continues to call `install_sorafs_fetch_otlp_exporter`.
+- კოლექციონერები განლაგებულია თითოეულ კომპონენტთან ერთად, ექსპორტზე OTLP-ზე Prometheus (მეტრიკა) და Loki/Tempo (ლოგიები/კვალი).
+- სურვილისამებრ eBPF (ტეტრაგონი) ამდიდრებს დაბალი დონის მიკვლევას კარიბჭეებისთვის/კვანძებისთვის.
+- გამოიყენეთ `iroha_telemetry::metrics::{install_sorafs_gateway_otlp_exporter, install_sorafs_node_otlp_exporter}` Torii და ჩაშენებული კვანძებისთვის; ორკესტრი აგრძელებს `install_sorafs_fetch_otlp_exporter` დარეკვას.
 
-## Validation Hooks
+## ვალიდაციის კაკვები
 
-- Run `scripts/telemetry/test_sorafs_fetch_alerts.sh` during CI to ensure Prometheus alert rules remain in lockstep with stall metrics and privacy suppression checks.
-- Keep Grafana dashboards under version control (`dashboards/grafana/`) and update screenshots/links when panels change.
-- Chaos drills log outcomes via `scripts/telemetry/log_sorafs_drill.sh`; validation leverages `scripts/telemetry/validate_drill_log.sh` (see the [Operations Playbook](operations-playbook.md)).
+- გაუშვით `scripts/telemetry/test_sorafs_fetch_alerts.sh` CI-ის დროს, რათა დარწმუნდეთ, რომ Prometheus გაფრთხილების წესები დარჩება ჩაკეტილი მეტრიკისა და კონფიდენციალურობის აღკვეთის შემოწმებით.
+- შეინახეთ Grafana დაფები ვერსიის კონტროლის ქვეშ (`dashboards/grafana/`) და განაახლეთ ეკრანის ანაბეჭდები/ბმულები, როდესაც პანელები იცვლება.
+- ქაოსის წვრთნების შესვლა შედეგები `scripts/telemetry/log_sorafs_drill.sh`-ის საშუალებით; ვალიდაცია იყენებს `scripts/telemetry/validate_drill_log.sh` (იხილეთ [ოპერაციების წიგნი](operations-playbook.md)).

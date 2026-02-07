@@ -4,35 +4,37 @@ direction: rtl
 source: docs/portal/docs/nexus/settlement-faq.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: nexus-settlement-faq
-title: FAQ Settlement
-description: Reponses pour les operateurs couvrant le routage settlement, la conversion XOR, la telemetrie et les preuves d'audit.
+ID: گٹھ جوڑ-سیٹلمنٹ-ایف اے کیو
+عنوان: تصفیے کے عمومی سوالنامہ
+تفصیل: روٹنگ تصفیہ ، XOR تبادلوں ، ٹیلی میٹری اور آڈٹ شواہد کو ڈھکنے والے آپریٹرز کے جوابات۔
 ---
 
-Cette page reprend la FAQ interne de settlement (`docs/source/nexus_settlement_faq.md`) pour que les lecteurs du portail puissent consulter les memes indications sans fouiller le mono-repo. Elle explique comment le Settlement Router traite les paiements, quelles metriques surveiller et comment les SDK doivent integrer les payloads Norito.
+اس صفحے میں داخلی تصفیے کے عمومی سوالنامہ (`docs/source/nexus_settlement_faq.md`) شامل ہیں تاکہ پورٹل کے قارئین مونو ریپو کو تلاش کیے بغیر اسی ہدایات سے مشورہ کرسکیں۔ اس میں بتایا گیا ہے کہ کس طرح تصفیہ روٹر ادائیگیوں پر کارروائی کرتا ہے ، کس پیمائش کی نگرانی کی جائے اور ایس ڈی کے ایس کو پے لوڈ کو Norito کو کس طرح ضم کرنا چاہئے۔
 
-## Points cles
+## کلیدی نکات
 
-1. **Mappage des lanes** - chaque dataspace declare un `settlement_handle` (`xor_global`, `xor_lane_weighted`, `xor_hosted_custody` ou `xor_dual_fund`). Consultez le dernier catalogue des lanes dans `docs/source/project_tracker/nexus_config_deltas/`.
-2. **Conversion deterministe** - le router convertit toutes les settlements en XOR via les sources de liquidite approuvees par la gouvernance. Les lanes privees prefinancent des buffers XOR; les haircuts ne s'appliquent que lorsque les buffers derivent hors de la politique.
-3. **Telemetrie** - surveillez `nexus_settlement_latency_seconds`, les compteurs de conversion et les jauges de haircut. Les dashboards se trouvent dans `dashboards/grafana/nexus_settlement.json` et les alertes dans `dashboards/alerts/nexus_audit_rules.yml`.
-4. **Preuves** - archivez les configs, logs du router, exports de telemetrie et rapports de reconciliation pour les audits.
-5. **Responsabilites SDK** - chaque SDK doit exposer des helpers de settlement, des IDs de lane et des encodeurs de payloads Norito pour rester aligne avec le router.
+1. ** لین میپنگ ** - ہر ڈیٹا اسپیس نے `settlement_handle` (`xor_global` ، `xor_lane_weighted` ، `xor_hosted_custody` یا `xor_dual_fund`) کا اعلان کیا ہے۔ `docs/source/project_tracker/nexus_config_deltas/` میں تازہ ترین لین کیٹلاگ چیک کریں۔
+2. پرائیویٹ لینز پریفنڈ زور بفرز ؛ بال کٹوانے صرف اس وقت لاگو ہوتے ہیں جب پالیسی سے باہر بفرز بہتے ہیں۔
+3. ڈیش بورڈز `dashboards/grafana/nexus_settlement.json` میں ہیں اور `dashboards/alerts/nexus_audit_rules.yml` میں الرٹس۔
+4. ** ثبوت ** - آرکائیو کی تشکیل ، روٹر لاگز ، ٹیلی میٹری برآمدات اور آڈٹ کے لئے مفاہمت کی رپورٹیں۔
+5. ** ایس ڈی کے ذمہ داریاں ** - ہر ایس ڈی کے کو روٹر کے ساتھ منسلک رہنے کے لئے آبادکاری کے مددگار ، لین آئی ڈی اور پے لوڈ انکوڈرز Norito کو بے نقاب کرنا ہوگا۔
 
-## Flux d'exemple
+## مثال کے بہاؤ
 
-| Type de lane | Preuves a collecter | Ce que cela prouve |
-|-----------|--------------------|----------------|
-| Privee `xor_hosted_custody` | Log du router + `nexus_settlement_latency_seconds{lane}` + `settlement_router_haircut_total{lane}` | Les buffers CBDC debitent un XOR deterministe et les haircuts restent dans la politique. |
-| Publique `xor_global` | Log du router + reference DEX/TWAP + metriques de latence/conversion | Le chemin de liquidite partage a fixe le prix du transfert sur le TWAP publie avec zero haircut. |
-| Hybride `xor_dual_fund` | Log du router montrant la repartition public vs shielded + compteurs de telemetrie | Le mix shielded/public a respecte les ratios de gouvernance et enregistre le haircut applique a chaque jambe. |
+| لین کی قسم | جمع کرنے کا ثبوت | یہ کیا ثابت ہوتا ہے |
+| ---------- | ------------------- | ------------------ |
+| نجی `xor_hosted_custody` | راؤٹر لاگ + `nexus_settlement_latency_seconds{lane}` + `settlement_router_haircut_total{lane}` | سی بی ڈی سی بفرز ایک ڈٹرمینسٹک زور آؤٹ پٹ کرتے ہیں اور بال کٹوانے پالیسی میں رہتے ہیں۔ |
+| عوامی `xor_global` | راؤٹر لاگ + ڈیکس/ٹیوپ ریفرنس + لیٹینسی/تبادلوں کی پیمائش | مشترکہ لیکویڈیٹی پاتھ نے صفر بال کٹوانے کے ساتھ شائع ہونے والے ٹوپے پر منتقلی کی قیمت طے کرلی ہے۔ |
+| ہائبرڈ `xor_dual_fund` | راؤٹر لاگ کو عوامی بمقابلہ شیلڈڈ ڈسٹری بیوشن + ٹیلی میٹری کاؤنٹرز دکھا رہا ہے | شیلڈڈ/پبلک مکس نے گورننس کے تناسب کا احترام کیا اور ہر ٹانگ پر لگائے ہوئے بال کٹوانے کو ریکارڈ کیا۔ |
 
-## Besoin de plus de details ?
+## مزید تفصیلات کی ضرورت ہے؟
 
-- FAQ complete: `docs/source/nexus_settlement_faq.md`
-- Spec du settlement router: `docs/source/settlement_router.md`
-- Playbook de politique CBDC: `docs/source/cbdc_lane_playbook.md`
-- Runbook operations: [Operations Nexus](./nexus-operations)
+- مکمل عمومی سوالنامہ: `docs/source/nexus_settlement_faq.md`
+- تصفیہ روٹر سپیک: `docs/source/settlement_router.md`
+- سی بی ڈی سی پالیسی پلے بوک: `docs/source/cbdc_lane_playbook.md`
+- رن بک آپریشنز: [آپریشن Nexus] (./nexus-operations)

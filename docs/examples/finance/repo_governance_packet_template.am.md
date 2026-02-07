@@ -7,6 +7,7 @@ generator: scripts/sync_docs_i18n.py
 source_hash: cd018a94197722adfbb9d54bf02f1c486147078174ba4c81f32e9d93b8c3f6d5
 source_last_modified: "2026-01-22T16:26:46.473419+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
@@ -15,39 +16,39 @@ translation_last_reviewed: 2026-02-07
 
 # Repo Governance Packet Template (Roadmap F1)
 
-Use this template when preparing the artefact bundle required by roadmap item
-F1 (repo lifecycle documentation & tooling). The goal is to hand reviewers a
-single Markdown file that lists every input, hash, and evidence bundle so the
-governance council can replay the bytes referenced in the proposal.
+በፍኖተ ካርታ ንጥል የሚፈለገውን የቅርስ ቅርቅብ ሲያዘጋጁ ይህን አብነት ይጠቀሙ
+F1 (የሪፖ የህይወት ዑደት ሰነዶች እና መሳሪያዎች)። ግቡ ገምጋሚዎችን መስጠት ነው ሀ
+እያንዳንዱን ግብዓት፣ ሃሽ እና የማስረጃ ጥቅል የሚዘረዝር ነጠላ ማርክዳውድ ፋይል
+የአስተዳደር ምክር ቤት በአስተያየቱ ውስጥ የተጠቀሱትን ባይት እንደገና ማጫወት ይችላል።
 
-> Copy the template into your own evidence directory (for example
-> `artifacts/finance/repo/2026-03-15/packet.md`), replace the placeholders, and
-> commit/upload it next to the hashed artefacts referenced below.
+> አብነቱን ወደ እራስዎ የማስረጃ ማውጫ ይቅዱ (ለምሳሌ
+> `artifacts/finance/repo/2026-03-15/packet.md`)፣ ቦታ ያዥዎቹን ይተኩ፣ እና
+> ከዚህ በታች ከተጠቀሱት ሃሽድ ቅርሶች ቀጥሎ ግባ/ስቀል።
 
-## 1. Metadata
+## 1. ሜታዳታ
 
-| Field | Value |
-|-------|-------|
-| Agreement/change identifier | `<repo-yyMMdd-XX>` |
-| Prepared by / date | `<desk lead> – 2026-03-15T10:00Z` |
-| Reviewed by | `<dual-control reviewer(s)>` |
-| Change type | `Initiation / Haircut update / Substitution matrix change / Margin policy` |
-| Custodian(s) | `<custodian id(s)>` |
-| Linked proposal / referendum | `<governance ticket id or GAR link>` |
-| Evidence directory | ``artifacts/finance/repo/<slug>/`` |
+| መስክ | ዋጋ |
+|-------|------|
+| ስምምነት/የለውጥ መለያ | `<repo-yyMMdd-XX>` |
+| የተዘጋጀው በ / ቀን | `<desk lead> – 2026-03-15T10:00Z` |
+| የተገመገመ በ | `<dual-control reviewer(s)>` |
+| አይነት ለውጥ | `Initiation / Haircut update / Substitution matrix change / Margin policy` |
+| ጠባቂ(ዎች) | `<custodian id(s)>` |
+| የተያያዘ ፕሮፖዛል / ሪፈረንደም | `<governance ticket id or GAR link>` |
+| የማስረጃ ማውጫ | ``artifacts/finance/repo/<slug>/`` |
 
-## 2. Instruction Payloads
+## 2. የመመሪያ ክፍያ
 
-Record the staged Norito instructions that desks signed off on via
-`iroha app repo ... --output`. Each entry should include the hash of the emitted
-file and a short description of the action that will be submitted once the vote
-passes.
+ዴስኮች በ በኩል የጀመሩትን በደረጃ I18NT0000001X መመሪያዎችን ይመዝግቡ
+`iroha app repo ... --output`. እያንዳንዱ ግቤት የተለቀቀውን ሃሽ ማካተት አለበት።
+ፋይል እና ድምጽ አንድ ጊዜ የሚቀርበው ድርጊት አጭር መግለጫ
+ያልፋል።
 
-| Action | File | SHA-256 | Notes |
-|--------|------|---------|-------|
-| Initiate | `instructions/initiate.json` | `<sha256>` | Contains the cash/collateral legs approved by desk + counterparty. |
-| Margin call | `instructions/margin_call.json` | `<sha256>` | Captures cadence + participant id that triggered the call. |
-| Unwind | `instructions/unwind.json` | `<sha256>` | Proof of the reverse-leg once conditions are met. |
+| ድርጊት | ፋይል | SHA-256 | ማስታወሻ |
+|--------|-------|-----|------|
+| አስጀምር | `instructions/initiate.json` | `<sha256>` | በጠረጴዛ + ተጓዳኝ የጸደቁትን ጥሬ ገንዘብ/መያዣ እግሮችን ይዟል። |
+| የኅዳግ ጥሪ | `instructions/margin_call.json` | `<sha256>` | ጥሪውን የቀሰቀሰውን cadence + የአሳታፊ መታወቂያን ይይዛል። |
+| ፈታ | `instructions/unwind.json` | `<sha256>` | ሁኔታዎች ከተሟሉ በኋላ የኋላ-እግር ማረጋገጫ። |
 
 ```bash
 # Example hash helper (repeat per instruction file)
@@ -55,28 +56,28 @@ sha256sum artifacts/finance/repo/<slug>/instructions/initiate.json \
   | tee artifacts/finance/repo/<slug>/hashes/initiate.sha256
 ```
 
-## 2.1 Custodian Acknowledgements (tri-party only)
+## 2.1 ሞግዚት ምስጋናዎች (ባለሶስት ፓርቲ ብቻ)
 
-Complete this section whenever a repo uses `--custodian`. The governance packet
-must include a signed acknowledgement from each custodian plus the hash of the
-file referenced in §2.8 of `docs/source/finance/repo_ops.md`.
+repo `--custodian` ሲጠቀም ይህንን ክፍል ያጠናቅቁ። የአስተዳደር ፓኬት
+ከእያንዳንዱ ሞግዚት የተፈረመ እውቅና እና ሃሽ ማካተት አለበት።
+በ`docs/source/finance/repo_ops.md` §2.8 የተጠቀሰው ፋይል።
 
-| Custodian | File | SHA-256 | Notes |
-|-----------|------|---------|-------|
-| `<ih58...>` | `custodian_ack_<custodian>.md` | `<sha256>` | Signed SLA covering custody window, routing account, and drill contact. |
+| ጠባቂ | ፋይል | SHA-256 | ማስታወሻ |
+|--------|-------|-----|-------|
+| `<ih58...>` | `custodian_ack_<custodian>.md` | `<sha256>` | የተፈረመ SLA የጥበቃ መስኮት፣ የማዞሪያ መለያ እና የመሰርሰሪያ ግንኙነት። |
 
-> Store the acknowledgement next to the other evidence (`artifacts/finance/repo/<slug>/`)
-> so `scripts/repo_evidence_manifest.py` records the file in the same tree as
-> the staged instructions and config snippets. See
-> `docs/examples/finance/repo_custodian_ack_template.md` for a ready-to-fill
-> template that matches the governance evidence contract.
+> እውቅናውን ከሌላው ማስረጃ (`artifacts/finance/repo/<slug>/`) አጠገብ ያከማቹ
+> ስለዚህ `scripts/repo_evidence_manifest.py` ፋይሉን በተመሳሳይ ዛፍ ውስጥ ይመዘግባል
+> የታቀዱት መመሪያዎች እና ቅንጥቦችን ያዋቅሩ። ተመልከት
+> `docs/examples/finance/repo_custodian_ack_template.md` ለመሙላት ዝግጁ
+> ከአስተዳደር ማስረጃ ውል ጋር የሚዛመድ አብነት።
 
-## 3. Configuration Snippet
+## 3. የማዋቀር ቅንጣቢ
 
-Paste the `[settlement.repo]` TOML block that will land on the cluster (including
-`collateral_substitution_matrix`). Store the hash next to the snippet so
-auditors can confirm the runtime policy that was active when the repo booking
-was approved.
+በክላስተር ላይ የሚያርፍ የ`[settlement.repo]` TOML ብሎክ ይለጥፉ (ጨምሮም)
+`collateral_substitution_matrix`). ከቅንጣው ቀጥሎ ያለውን ሃሽ ያከማቹ
+ኦዲተሮች ሪፖ ቦታ ሲያዙ ንቁ የነበረውን የሩጫ ጊዜ ፖሊሲን ማረጋገጥ ይችላሉ።
+ተቀባይነት አግኝቷል።
 
 ```toml
 [settlement.repo]
@@ -89,12 +90,12 @@ default_margin_percent = "0.025"
 
 `SHA-256 (config snippet): <sha256>`
 
-### 3.1 Post-Approval Configuration Snapshots
+### 3.1 የድህረ ማጽደቅ ውቅረት ቅጽበተ-ፎቶዎች
 
-After the referendum or governance vote completes and the `[settlement.repo]`
-change is rolled out, capture `/v1/configuration` snapshots from every peer so
-auditors can prove the approved policy is live across the cluster (see
-`docs/source/finance/repo_ops.md` §2.9 for the evidence workflow).
+የሪፈረንደም ወይም የአስተዳደር ድምጽ ከተጠናቀቀ እና `[settlement.repo]`
+ለውጥ ተዘርግቷል፣የ `/v1/configuration` ቅጽበተ-ፎቶዎችን ከእያንዳንዱ እኩያ ያንሱ
+ኦዲተሮች የጸደቀው ፖሊሲ በክላስተር ውስጥ የቀጥታ መሆኑን ማረጋገጥ ይችላሉ (ተመልከት
+`docs/source/finance/repo_ops.md` §2.9 ለማስረጃው የስራ ሂደት)።
 
 ```bash
 mkdir -p artifacts/finance/repo/<slug>/config/peers
@@ -103,38 +104,38 @@ curl -fsSL https://peer01.example/v1/configuration \
   > artifacts/finance/repo/<slug>/config/peers/peer01.json
 ```
 
-| Peer / source | File | SHA-256 | Block height | Notes |
-|---------------|------|---------|--------------|-------|
-| `peer01` | `config/peers/peer01.json` | `<sha256>` | `<block-height>` | Snapshot captured immediately after the config rollout. |
-| `peer02` | `config/peers/peer02.json` | `<sha256>` | `<block-height>` | Confirms `[settlement.repo]` matches the staged TOML. |
+| እኩያ / ምንጭ | ፋይል | SHA-256 | አግድ ቁመት | ማስታወሻ |
+|--------|------|-----|-------------|---|
+| `peer01` | `config/peers/peer01.json` | `<sha256>` | `<block-height>` | የቅጽበታዊ ገጽ እይታ ውቅር ከተለቀቀ በኋላ ወዲያውኑ ተይዟል። |
+| `peer02` | `config/peers/peer02.json` | `<sha256>` | `<block-height>` | `[settlement.repo]` ከታቀደው TOML ጋር እንደሚመሳሰል ያረጋግጣል። |
 
-Record the digests alongside the peer ids in `hashes.txt` (or the equivalent
-summary) so reviewers can trace which nodes ingested the change. The snapshots
-live under `config/peers/` next to the TOML snippet and will be picked up
-automatically by `scripts/repo_evidence_manifest.py`.
+በ `hashes.txt` (ወይንም ተመጣጣኝውን) ከእኩያ መታወቂያዎች ጋር መቀላቀልን ይመዝግቡ
+ማጠቃለያ) ስለዚህ ገምጋሚዎች ለውጡን ወደ ውስጥ የገቡት የትኞቹ አንጓዎች መፈለግ ይችላሉ። ቅጽበተ-ፎቶዎቹ
+ከTOML ቅንጣቢ ቀጥሎ በ`config/peers/` ስር ይኖራሉ እና ይወሰዳል።
+በራስ-ሰር በ `scripts/repo_evidence_manifest.py`።
 
-## 4. Deterministic Test Artefacts
+## 4. ቆራጥ የፍተሻ ቅርሶች
 
-Attach the latest outputs from:
+የቅርብ ጊዜ ውጤቶችን ከ፡ ያያይዙ፡
 
 - `cargo test -p iroha_core -- repo_deterministic_lifecycle_proof_matches_fixture`
 - `cargo test --package integration_tests --test repo`
 
-Record file paths + hashes for the log bundles or JUnit XML produced by your CI
-system.
+የፋይል ዱካዎችን + hashes ይቅረጹ ለሎግ ቅርቅቦች ወይም JUnit XML በእርስዎ CI የተሰራ
+ስርዓት.
 
-| Artefact | File | SHA-256 | Notes |
-|----------|------|---------|-------|
-| Lifecycle proof log | `tests/repo_lifecycle.log` | `<sha256>` | Captured with `--nocapture` output. |
-| Integration test log | `tests/repo_integration.log` | `<sha256>` | Includes substitution + margin cadence coverage. |
+| Artefact | ፋይል | SHA-256 | ማስታወሻ |
+|---------|-----|-------|
+| የህይወት ዑደት ማረጋገጫ መዝገብ | `tests/repo_lifecycle.log` | `<sha256>` | በI18NI0000055X ውፅዓት ተይዟል። |
+| የውህደት ሙከራ መዝገብ | `tests/repo_integration.log` | `<sha256>` | መተኪያ + የኅዳግ ግልጽነት ሽፋንን ያካትታል። |
 
-## 5. Lifecycle Proof Snapshot
+## 5. የህይወት ዑደት ማረጋገጫ ቅጽበታዊ እይታ
 
-Every packet must include the deterministic lifecycle snapshot exported from
-`repo_deterministic_lifecycle_proof_matches_fixture`. Run the harness with the
-export knobs enabled so reviewers can diff the JSON frame and digest against
-the fixture tracked in `crates/iroha_core/tests/fixtures/` (see
-`docs/source/finance/repo_ops.md` §2.7).
+እያንዳንዱ ፓኬት ወደ ውጭ የተላከውን ወሳኝ የህይወት ዑደት ቅጽበታዊ ገጽ እይታ ማካተት አለበት።
+`repo_deterministic_lifecycle_proof_matches_fixture`. ማሰሪያውን በ
+ገምጋሚዎች የJSON ክፈፉን እንዲለያዩ እና እንዲቃወሙ ወደ ውጭ መላክ ቁልፎች ነቅተዋል።
+በ `crates/iroha_core/tests/fixtures/` ውስጥ ተከታትሏል (ተመልከት
+`docs/source/finance/repo_ops.md` §2.7)።
 
 ```bash
 REPO_PROOF_SNAPSHOT_OUT=artifacts/finance/repo/<slug>/repo_proof_snapshot.json \
@@ -143,24 +144,24 @@ cargo test -p iroha_core \
   -- --exact smartcontracts::isi::repo::tests::repo_deterministic_lifecycle_proof_matches_fixture
 ```
 
-Or use the pinned helper to regenerate the fixtures and copy them into your
-evidence bundle in one step:
+ወይም የተሰካውን ረዳት ተጠቀም መጫዎቻዎቹን ለማደስ እና ወደ እርስዎ ለመቅዳት
+የማስረጃ ጥቅል በአንድ እርምጃ
 
 ```bash
 scripts/regen_repo_proof_fixture.sh --toolchain <toolchain> \
   --bundle-dir artifacts/finance/repo/<slug>
 ```
 
-| Artefact | File | SHA-256 | Notes |
-|----------|------|---------|-------|
-| Snapshot JSON | `repo_proof_snapshot.json` | `<sha256>` | Canonical lifecycle frame emitted by the proof harness. |
-| Digest file | `repo_proof_digest.txt` | `<sha256>` | Uppercase hex digest mirrored from `crates/iroha_core/tests/fixtures/repo_lifecycle_proof.digest`; attach even when unchanged. |
+| Artefact | ፋይል | SHA-256 | ማስታወሻ |
+|---------|-----|-------|
+| ቅጽበታዊ ገጽ እይታ JSON | `repo_proof_snapshot.json` | `<sha256>` | በማረጋገጫ መታጠቂያው የተለቀቀው ቀኖናዊ የህይወት ዑደት ፍሬም። |
+| ዳይጀስት ፋይል | `repo_proof_digest.txt` | `<sha256>` | አቢይ ሆክስ ዳይጀስት ከ `crates/iroha_core/tests/fixtures/repo_lifecycle_proof.digest` ተንጸባርቋል; ሳይለወጥ እንኳ አያይዝ. |
 
-## 6. Evidence Manifest
+## 6. የማስረጃ መግለጫ
 
-Generate the manifest for the entire evidence directory so auditors can verify
-hashes without unpacking the archive. The helper mirrors the workflow described
-in `docs/source/finance/repo_ops.md` §3.2.
+ኦዲተሮች ማረጋገጥ እንዲችሉ ለጠቅላላው የማስረጃ መዝገብ ማኒፌክተሩን ያመንጩ
+ማህደሩን ሳይከፍቱ hashes. ረዳቱ የተገለጸውን የስራ ሂደት ያንጸባርቃል
+በ `docs/source/finance/repo_ops.md` §3.2.
 
 ```bash
 python3 scripts/repo_evidence_manifest.py \
@@ -169,40 +170,40 @@ python3 scripts/repo_evidence_manifest.py \
   --output artifacts/finance/repo/<slug>/manifest.json
 ```
 
-| Artefact | File | SHA-256 | Notes |
-|----------|------|---------|-------|
-| Evidence manifest | `manifest.json` | `<sha256>` | Include the checksum in the governance ticket / referendum notes. |
+| Artefact | ፋይል | SHA-256 | ማስታወሻ |
+|---------|-----|-------|
+| ማስረጃ አንጸባራቂ | `manifest.json` | `<sha256>` | በአስተዳደር ትኬት/የህዝበ ውሳኔ ማስታወሻዎች ውስጥ ቼክሱን ያካትቱ። |
 
-## 7. Telemetry & Event Snapshot
+## 7. ቴሌሜትሪ እና የክስተት ቅጽበታዊ ገጽ እይታ
 
-Export the relevant `AccountEvent::Repo(*)` entries and any dashboards or CSV
-exports referenced in `docs/source/finance/repo_ops.md`. Record the files +
-hashes here so reviewers can jump straight to the evidence.
+ተዛማጅነት ያላቸውን የ`AccountEvent::Repo(*)` ግቤቶችን እና ማንኛውንም ዳሽቦርድ ወይም CSV ወደ ውጪ ላክ
+ወደ ውጪ መላክ በI18NI0000070X ተጠቅሷል። ፋይሎቹን ይቅረጹ +
+እዚህ hashes ስለዚህ ገምጋሚዎች በቀጥታ ወደ ማስረጃው መዝለል ይችላሉ።
 
-| Export | File | SHA-256 | Notes |
-|--------|------|---------|-------|
-| Repo events JSON | `evidence/repo_events.ndjson` | `<sha256>` | Raw Torii event stream filtered to the desk accounts. |
-| Telemetry CSV | `evidence/repo_margin_dashboard.csv` | `<sha256>` | Exported from Grafana using the Repo Margin panel. |
+| ወደ ውጭ መላክ | ፋይል | SHA-256 | ማስታወሻ |
+|--------|-------|-----|------|
+| Repo ክስተቶች JSON | `evidence/repo_events.ndjson` | `<sha256>` | ጥሬ Torii ክስተት ዥረት ወደ ዴስክ መለያዎች ተጣርቶ። |
+| ቴሌሜትሪ CSV | `evidence/repo_margin_dashboard.csv` | `<sha256>` | Repo Margin ፓነልን በመጠቀም ከI18NT0000000X ወደ ውጭ ተልኳል። |
 
-## 8. Approvals & Signatures
+## 8. ማጽደቂያዎች እና ፊርማዎች
 
-- **Dual-control signers:** `<names + timestamps>`
-- **GAR / minutes digest:** `<sha256>` of the signed GAR PDF or minutes upload.
-- **Storage location:** `governance://finance/repo/<slug>/packet/`
+- ** ባለሁለት መቆጣጠሪያ ፈራሚዎች: ** `<names + timestamps>`
+- ** GAR / ደቂቃ መፍጨት: ** `<sha256>` የተፈረመ GAR ፒዲኤፍ ወይም ደቂቃዎች ሰቀላ.
+- ** የማከማቻ ቦታ: ** `governance://finance/repo/<slug>/packet/`
 
-## 9. Checklist
+## 9. የማረጋገጫ ዝርዝር
 
-Mark each item once complete.
+እያንዳንዱን ንጥል አንዴ እንደተጠናቀቀ ምልክት ያድርጉበት።
 
-- [ ] Instruction payloads staged, hashed, and attached.
-- [ ] Configuration snippet hash recorded.
-- [ ] Deterministic test logs captured + hashed.
-- [ ] Lifecycle snapshot + digest exported.
-- [ ] Evidence manifest generated and hash recorded.
-- [ ] Event/telemetry exports captured + hashed.
-- [ ] Dual-control acknowledgements archived.
-- [ ] GAR/minutes uploaded; digest recorded above.
+- [ ] የመመሪያ ሸክሞች በደረጃ፣ በሃሽድ እና በማያያዝ።
+- [ ] የውቅረት ቅንጣቢ ሃሽ ተመዝግቧል።
+- [ ] ቆራጥ የሙከራ ምዝግብ ማስታወሻዎች ተይዘዋል + hashed።
+- [ ] የህይወት ዑደት ቅጽበታዊ + የምግብ መፍጨት ወደ ውጭ ተልኳል።
+- [ ] የመነጨው ማስረጃ እና ሃሽ ተመዝግቧል።
+- [ ] ክስተት/ቴሌሜትሪ ወደ ውጭ መላክ ተያዘ + hashed።
+- [ ] ባለሁለት ቁጥጥር ምስጋናዎች በማህደር ተቀምጠዋል።
+- [] GAR/ደቂቃዎች ተሰቅለዋል; ከላይ ተመዝግቧል መፈጨት.
 
-Maintaining this template alongside every packet keeps the governance DAG
-deterministic and provides auditors with a portable manifest for repo lifecycle
-decisions.
+ይህን አብነት ከእያንዳንዱ ፓኬት ጋር ማቆየት የDAG አስተዳደርን ይጠብቃል።
+የሚወስን እና ለሪፖ የህይወት ዑደት ተንቀሳቃሽ አንጸባራቂ ኦዲተሮችን ይሰጣል
+ውሳኔዎች.

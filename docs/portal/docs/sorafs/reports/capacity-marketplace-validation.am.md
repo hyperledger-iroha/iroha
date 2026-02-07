@@ -10,48 +10,49 @@ translation_last_reviewed: 2026-02-07
 title: SoraFS Capacity Marketplace Validation
 tags: [SF-2c, acceptance, checklist]
 summary: Acceptance checklist covering provider onboarding, dispute workflows, and treasury reconciliation gating the SoraFS capacity marketplace general availability.
+translator: machine-google-reviewed
 ---
 
-# SoraFS Capacity Marketplace Validation Checklist
+# SoraFS የአቅም የገበያ ቦታ ማረጋገጫ ዝርዝር
 
-**Review window:** 2026-03-18 → 2026-03-24  
-**Programme owners:** Storage Team (`@storage-wg`), Governance Council (`@council`), Treasury Guild (`@treasury`)  
-**Scope:** Provider onboarding pipelines, dispute adjudication flows, and treasury reconciliation processes required for SF-2c GA.
+**የግምገማ መስኮት፡** 2026-03-18 → 2026-03-24  
+**የፕሮግራም ባለቤቶች፡** የማከማቻ ቡድን (`@storage-wg`)፣ የአስተዳደር ምክር ቤት (`@council`)፣ የግምጃ ቤት ማህበር (`@treasury`)  
+** ወሰን፡** ለSF-2c GA የሚፈለጉ የአቅራቢዎች የቧንቧ መስመሮች፣ የክርክር ዳኝነት ፍሰቶች እና የግምጃ ቤት ማስታረቅ ሂደቶች።
 
-The checklist below must be reviewed before enabling the marketplace for external operators. Each row links to deterministic evidence (tests, fixtures, or documentation) that auditors can replay.
+የገበያ ቦታውን ለውጭ ኦፕሬተሮች ከማስቻሉ በፊት ከዚህ በታች ያለው የማረጋገጫ ዝርዝር መከለስ አለበት። እያንዳንዱ ረድፍ ኦዲተሮች እንደገና ሊጫወቱት ከሚችሉት ወሳኝ ማስረጃዎች (ሙከራዎች፣ ዕቃዎች ወይም ሰነዶች) ጋር ያገናኛል።
 
-## Acceptance Checklist
+## የመቀበል ማረጋገጫ ዝርዝር
 
-### Provider Onboarding
+### አቅራቢ በመሳፈር ላይ
 
-| Check | Validation | Evidence |
-|-------|------------|----------|
-| Registry accepts canonical capacity declarations | Integration test exercises `/v1/sorafs/capacity/declare` via the app API, verifying signature handling, metadata capture, and hand-off to the node registry. | `crates/iroha_torii/src/routing.rs:7654` |
-| Smart contract rejects mismatched payloads | Unit test ensures provider IDs and committed GiB fields match the signed declaration before persisting. | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3445` |
-| CLI emits canonical onboarding artefacts | CLI harness writes deterministic Norito/JSON/Base64 outputs and validates round-trips so operators can stage declarations offline. | `crates/sorafs_car/tests/capacity_cli.rs:17` |
-| Operator guide captures admission workflow and governance guardrails | Documentation enumerates declaration schema, policy defaults, and review steps for the council. | `../storage-capacity-marketplace.md` |
+| አረጋግጥ | ማረጋገጫ | ማስረጃ |
+|-------|------------|------|
+| መዝገብ ቤት ቀኖናዊ የአቅም መግለጫዎችን ይቀበላል | የውህደት ሙከራ መልመጃዎች `/v1/sorafs/capacity/declare` በመተግበሪያው ኤፒአይ በኩል፣ የፊርማ አያያዝን፣ ሜታዳታ ቀረጻን እና ወደ መስቀለኛ መንገድ መዝገብ ማጥፋት። | `crates/iroha_torii/src/routing.rs:7654` |
+| ብልጥ ኮንትራት ያልተዛመደ ክፍያ ውድቅ ያደርጋል | የዩኒት ፈተና የአቅራቢ መታወቂያዎችን እና የጊቢ መስኮችን ከመቀጠልዎ በፊት ከተፈረመው መግለጫ ጋር እንደሚዛመዱ ያረጋግጣል። | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3445` |
+| CLI ቀኖናዊ የመሳፈሪያ ቅርሶችን ያመነጫል | CLI harness የሚወስነውን I18NT0000002X/JSON/Base64 ውጤቶችን ይጽፋል እና የዙር ጉዞዎችን ያረጋግጣል ስለዚህ ኦፕሬተሮች ከመስመር ውጭ መግለጫዎችን እንዲያሳዩ። | `crates/sorafs_car/tests/capacity_cli.rs:17` |
+| ኦፕሬተር መመሪያ የመግቢያ የስራ ሂደት እና የአስተዳደር ጥበቃ መንገዶችን ይይዛል | ሰነዱ የማወጃ እቅድን፣ የመመሪያ ነባሮችን እና ለምክር ቤቱ ግምገማ ደረጃዎችን ይዘረዝራል። | `../storage-capacity-marketplace.md` |
 
-### Dispute Resolution
+### የክርክር አፈታት
 
-| Check | Validation | Evidence |
-|-------|------------|----------|
-| Dispute records persist with canonical payload digest | Unit test registers a dispute, decodes the stored payload, and asserts pending status to guarantee ledger determinism. | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:1835` |
-| CLI dispute generator matches canonical schema | CLI test covers Base64/Norito outputs and JSON summaries for `CapacityDisputeV1`, ensuring evidence bundles hash deterministically. | `crates/sorafs_car/tests/capacity_cli.rs:455` |
-| Replay test proves dispute/penalty determinism | Proof-failure telemetry replayed twice produces identical ledger, credit, and dispute snapshots so slashes are deterministic across peers. | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3430` |
-| Runbook documents escalation and revocation flow | Operations guide captures council workflow, evidence requirements, and rollback procedures. | `../dispute-revocation-runbook.md` |
+| አረጋግጥ | ማረጋገጫ | ማስረጃ |
+|-------|------------|------|
+| የክርክር መዛግብት በቀኖናዊ የደመወዝ ጭነት መፍቻ | የዩኒት ፈተና አለመግባባቶችን ይመዘግባል፣ የተከማቸ ክፍያን ይፈታዋል እና የሂሳብ መዝገብ አወሳሰንን ለማረጋገጥ በመጠባበቅ ላይ ያለ ሁኔታን ያረጋግጣል። | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:1835` |
+| CLI ሙግት ጄኔሬተር ቀኖናዊ ንድፍ ጋር ይዛመዳል | የCLI ፈተና የBase64/Norito ውፅዓቶችን እና የJSON ማጠቃለያዎችን ለ`CapacityDisputeV1` ይሸፍናል፣የማስረጃ ቅርቅቦችን በቁርጠኝነት ያረጋግጣል። | `crates/sorafs_car/tests/capacity_cli.rs:455` |
+| የድጋሚ አጫውት ፈተና ሙግት/የቅጣት ውሳኔን ያረጋግጣል | የማረጋገጫ አለመሳካት ቴሌሜትሪ ሁለት ጊዜ በድጋሚ የተጫወተው ተመሳሳይ ደብተር፣ ክሬዲት እና ሙግት ቅጽበታዊ ገጽ እይታዎችን ያዘጋጃል ስለዚህ መቆራረጦች በእኩዮች መካከል የሚወሰኑ ናቸው። | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3430` |
+| Runbook ሰነዶች መጨመር እና የመሻር ፍሰት | የክዋኔ መመሪያ የምክር ቤት የስራ ሂደትን፣ የማስረጃ መስፈርቶችን እና የመመለሻ ሂደቶችን ይይዛል። | `../dispute-revocation-runbook.md` |
 
-### Treasury Reconciliation
+### የግምጃ ቤት ማስታረቅ
 
-| Check | Validation | Evidence |
-|-------|------------|----------|
-| Ledger accrual matches 30-day soak projection | Soak test spans five providers across 30 settlement windows, diffing ledger entries against the expected payout reference. | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3000` |
-| Ledger export reconciliation recorded nightly | `capacity_reconcile.py` compares fee ledger expectations with executed XOR transfer exports, emits Prometheus metrics, and gates treasury approval via Alertmanager. | `scripts/telemetry/capacity_reconcile.py:1`,`docs/source/sorafs/runbooks/capacity_reconciliation.md:1`,`dashboards/alerts/sorafs_capacity_rules.yml:100` |
-| Billing dashboards surface penalties and accrual telemetry | Grafana import plots GiB·hour accrual, strike counters, and bonded collateral for on-call visibility. | `dashboards/grafana/sorafs_capacity_penalties.json:1` |
-| Published report archives soak methodology and replay commands | Report details soak scope, execution commands, and observability hooks for auditors. | `./sf2c-capacity-soak.md` |
+| አረጋግጥ | ማረጋገጫ | ማስረጃ |
+|-------|------------|------|
+| Ledger accrual የ30-ቀን soak projection ጋር ይዛመዳል | የሶክ ሙከራ አምስት አቅራቢዎችን በ30 የመቋቋሚያ መስኮቶች ላይ ይሸፍናል፣ ይህም የሂሳብ መዝገብ ግቤቶችን ከሚጠበቀው የክፍያ ማጣቀሻ ጋር ይለያል። | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3000` |
+| ደብተር ኤክስፖርት እርቅ በምሽት ተመዝግቧል | `capacity_reconcile.py` የክፍያ ደብተር የሚጠበቁትን ከተፈጸሙት የXOR ማስተላለፍ ኤክስፖርት ጋር ያወዳድራል፣ I18NT0000000X ሜትሪክስ ያወጣል እና የግምጃ ቤት ማረጋገጫ በአለርትማናጀር በኩል። | `scripts/telemetry/capacity_reconcile.py:1`,I18NI0000023X,`dashboards/alerts/sorafs_capacity_rules.yml:100` |
+| የሂሳብ አከፋፈል ዳሽቦርዶች የወለል ቅጣቶች እና የተጠራቀመ ቴሌሜትሪ | Grafana የማስመጣት ሴራዎች የጂቢሆር ክምችት፣ የስራ ማቆም አድማዎች እና ለጥሪ ታይነት የታሰሩ ዋስትናዎች። | `dashboards/grafana/sorafs_capacity_penalties.json:1` |
+| የታተመ የሪፖርት መዛግብት የማጥለቅ ዘዴ እና የድጋሚ ትዕዛዞችን | ለኦዲተሮች የዝርዝር ወሰን፣ የአፈጻጸም ትዕዛዞች እና ታዛቢነት መንጠቆዎችን ሪፖርት ያድርጉ። | `./sf2c-capacity-soak.md` |
 
-## Execution Notes
+## የአፈፃፀም ማስታወሻዎች
 
-Re-run the validation suite before sign-off:
+ከመውጣቱ በፊት የማረጋገጫ ስብስብን እንደገና ያሂዱ፡
 
 ```bash
 cargo test -p iroha_torii --features app_api -- capacity_declaration_handler_accepts_request
@@ -63,20 +64,20 @@ cargo test -p sorafs_car --features cli --test capacity_cli
 python3 scripts/telemetry/capacity_reconcile.py --snapshot <state.json> --ledger <ledger.ndjson> --warn-only
 ```
 
-Operators should regenerate onboarding/dispute request payloads with `sorafs_manifest_stub capacity {declaration,dispute}` and archive the resulting JSON/Norito bytes alongside the governance ticket.
+ኦፕሬተሮች የመሳፈሪያ/የሙግት ጥያቄን በI18NI0000027X እንደገና ማመንጨት እና የተገኘውን JSON/Norito ባይት ከአስተዳደር ትኬት ጋር በማህደር ማስቀመጥ አለባቸው።
 
-## Sign-off Artefacts
+## ዘግተህ አጥፋ ቅርሶች
 
-| Artefact | Path | blake2b-256 |
-|----------|------|-------------|
-| Provider onboarding approval packet | `docs/examples/sorafs_capacity_marketplace_validation/2026-03-24_onboarding_signoff.md` | `8f41a745d8d94710fe81c07839651520429d4abea5729bc00f8f45bbb11daa4c` |
-| Dispute resolution approval packet | `docs/examples/sorafs_capacity_marketplace_validation/2026-03-24_dispute_signoff.md` | `c3ac3999ef52857170fedb83cddbff7733ef5699f8b38aea2e65ae507a6229f7` |
-| Treasury reconciliation approval packet | `docs/examples/sorafs_capacity_marketplace_validation/2026-03-24_treasury_signoff.md` | `0511aeed1f5607c329428cd49c94d1af51292c85134c10c3330c172b0140e8c6` |
+| Artefact | መንገድ | blake2b-256 |
+|-------------|--------|
+| አቅራቢ የመሳፈሪያ ማረጋገጫ ፓኬት | `docs/examples/sorafs_capacity_marketplace_validation/2026-03-24_onboarding_signoff.md` | `8f41a745d8d94710fe81c07839651520429d4abea5729bc00f8f45bbb11daa4c` |
+| የክርክር አፈታት ማጽደቂያ ፓኬት | `docs/examples/sorafs_capacity_marketplace_validation/2026-03-24_dispute_signoff.md` | `c3ac3999ef52857170fedb83cddbff7733ef5699f8b38aea2e65ae507a6229f7` |
+| የግምጃ ቤት ማስታረቅ ማጽደቂያ ፓኬት | `docs/examples/sorafs_capacity_marketplace_validation/2026-03-24_treasury_signoff.md` | `0511aeed1f5607c329428cd49c94d1af51292c85134c10c3330c172b0140e8c6` |
 
-Store the signed copies of these artefacts with the release bundle and link them in the governance change record.
+የተፈረሙትን የእነዚህን ቅርሶች ቅጂዎች ከተለቀቀው ጥቅል ጋር ያከማቹ እና በአስተዳደር ለውጥ መዝገብ ውስጥ ያገናኙዋቸው።
 
-## Approvals
+## ማጽደቆች
 
-- Storage Team Lead — @storage-tl (2026-03-24)  
-- Governance Council Secretary — @council-sec (2026-03-24)  
-- Treasury Operations Lead — @treasury-ops (2026-03-24)
+- የማከማቻ ቡድን መሪ - @storage-tl (2026-03-24)  
+- የአስተዳደር ምክር ቤት ፀሐፊ - @ካውንስል-ሰከንድ (2026-03-24)  
+- የግምጃ ቤት ስራዎች አመራር - @treasury-ops (2026-03-24)

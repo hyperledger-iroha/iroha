@@ -9,17 +9,18 @@ source_last_modified: "2026-01-22T16:26:46.508367+00:00"
 translation_last_reviewed: 2026-02-07
 title: Norito Try-It Console
 description: Use the developer-portal proxy, Swagger, and RapiDoc widgets to send real Torii / Norito-RPC requests directly from the documentation site.
+translator: machine-google-reviewed
 ---
 
-The portal bundles three interactive surfaces that relay traffic to Torii:
+該門戶捆綁了三個交互式界面，將流量中繼到 Torii：
 
-- **Swagger UI** at `/reference/torii-swagger` renders the signed OpenAPI spec and automatically rewrites requests through the proxy when `TRYIT_PROXY_PUBLIC_URL` is set.
-- **RapiDoc** at `/reference/torii-rapidoc` exposes the same schema with file uploads and content-type selectors that work well for `application/x-norito`.
-- **Try it sandbox** on the Norito overview page provides a lightweight form for ad-hoc REST requests and OAuth-device logins.
+- `/reference/torii-swagger` 處的 **Swagger UI** 呈現簽名的 OpenAPI 規範，並在設置 `TRYIT_PROXY_PUBLIC_URL` 時自動通過代理重寫請求。
+- `/reference/torii-rapidoc` 的 **RapiDoc** 公開了與文件上傳和內容類型選擇器相同的架構，適用於 `application/x-norito`。
+- Norito 概述頁面上的 **Try it sandbox** 為臨時 REST 請求和 OAuth 設備登錄提供了輕量級表單。
 
-All three widgets send requests to the local **Try-It proxy** (`docs/portal/scripts/tryit-proxy.mjs`). The proxy verifies that `static/openapi/torii.json` matches the signed digest in `static/openapi/manifest.json`, enforces a rate limiter, redacts `X-TryIt-Auth` headers in logs, and tags every upstream call with `X-TryIt-Client` so Torii operators can audit traffic sources.
+所有三個小部件都將請求發送到本地 **Try-It 代理** (`docs/portal/scripts/tryit-proxy.mjs`)。代理驗證 `static/openapi/torii.json` 是否與 `static/openapi/manifest.json` 中的簽名摘要匹配，實施速率限制器，編輯日誌中的 `X-TryIt-Auth` 標頭，並使用 `X-TryIt-Client` 標記每個上游調用，以便 Torii 操作員可以審核流量源。
 
-## Launch the proxy
+## 啟動代理
 
 ```bash
 cd docs/portal
@@ -34,65 +35,65 @@ export DOCS_TRYIT_ALLOW_DEFAULT_BEARER=1
 npm run tryit-proxy
 ```
 
-- `TRYIT_PROXY_TARGET` is the Torii base URL you want to exercise.
-- `TRYIT_PROXY_ALLOWED_ORIGINS` must include every portal origin (local dev server, production hostname, preview URL) that should embed the console.
-- `TRYIT_PROXY_PUBLIC_URL` is consumed by `docusaurus.config.js` and injected into the widgets via `customFields.tryIt`.
-- `TRYIT_PROXY_BEARER` only loads when `DOCS_TRYIT_ALLOW_DEFAULT_BEARER=1`; otherwise users must supply their own token via the console or OAuth device flow.
-- `TRYIT_PROXY_CLIENT_ID` sets the `X-TryIt-Client` tag carried on every request.
-  Supplying `X-TryIt-Client` from the browser is allowed but values are trimmed
-  and rejected if they contain control characters.
+- `TRYIT_PROXY_TARGET` 是您要使用的 Torii 基本 URL。
+- `TRYIT_PROXY_ALLOWED_ORIGINS` 必須包含應嵌入控制台的每個門戶源（本地開發服務器、生產主機名、預覽 URL）。
+- `TRYIT_PROXY_PUBLIC_URL` 由 `docusaurus.config.js` 消耗並通過 `customFields.tryIt` 注入到小部件中。
+- `TRYIT_PROXY_BEARER`僅在`DOCS_TRYIT_ALLOW_DEFAULT_BEARER=1`時加載；否則，用戶必須通過控制台或 OAuth 設備流提供自己的令牌。
+- `TRYIT_PROXY_CLIENT_ID` 設置每個請求攜帶的 `X-TryIt-Client` 標籤。
+  允許從瀏覽器提供 `X-TryIt-Client`，但值會被修剪
+  如果它們包含控製字符則被拒絕。
 
-On startup the proxy runs `verifySpecDigest` and exits with a remediation hint if the manifest is stale. Run `npm run sync-openapi -- --latest` to download the newest Torii specification or pass `TRYIT_PROXY_ALLOW_STALE_SPEC=1` for emergency overrides.
+啟動時，代理運行 `verifySpecDigest`，如果清單已過時，則退出並顯示修復提示。運行 `npm run sync-openapi -- --latest` 下載最新的 Torii 規範或通過 `TRYIT_PROXY_ALLOW_STALE_SPEC=1` 進行緊急覆蓋。
 
-To update or roll back the proxy target without editing environment files by hand, use the helper:
+要更新或回滾代理目標而不手動編輯環境文件，請使用幫助程序：
 
 ```bash
 npm run manage:tryit-proxy -- update --target https://new.torii.example
 npm run manage:tryit-proxy -- rollback
 ```
 
-## Wire the widgets
+## 連接小部件
 
-Serve the portal after the proxy is listening:
+代理監聽後為門戶提供服務：
 
 ```bash
 cd docs/portal
 TRYIT_PROXY_PUBLIC_URL="http://localhost:8787" npm run start
 ```
 
-`docusaurus.config.js` exposes the following knobs:
+`docusaurus.config.js` 公開了以下旋鈕：
 
-| Variable | Purpose |
-| --- | --- |
-| `TRYIT_PROXY_PUBLIC_URL` | URL injected into Swagger, RapiDoc, and the Try it sandbox. Leave unset to hide the widgets during unauthorised previews. |
-| `TRYIT_PROXY_DEFAULT_BEARER` | Optional default token stored in memory. Requires `DOCS_TRYIT_ALLOW_DEFAULT_BEARER=1` and the HTTPS-only CSP guard (DOCS-1b) unless you pass `DOCS_SECURITY_ALLOW_INSECURE=1` locally. |
-| `DOCS_OAUTH_*` | Enable the OAuth device flow (`OAuthDeviceLogin` component) so reviewers can mint short-lived tokens without leaving the portal. |
+|變量|目的|
+| ---| ---|
+| `TRYIT_PROXY_PUBLIC_URL` | URL 注入到 Swagger、RapiDoc 和 Try it 沙箱中。保持未設置狀態可在未經授權的預覽期間隱藏小部件。 |
+| `TRYIT_PROXY_DEFAULT_BEARER` |可選的默認令牌存儲在內存中。需要 `DOCS_TRYIT_ALLOW_DEFAULT_BEARER=1` 和僅 HTTPS CSP 防護 (DOCS-1b)，除非您在本地傳遞 `DOCS_SECURITY_ALLOW_INSECURE=1`。 |
+| `DOCS_OAUTH_*` |啟用 OAuth 設備流（`OAuthDeviceLogin` 組件），以便審閱者可以在不離開門戶的情況下創建短期令牌。 |
 
-When the OAuth variables are present the sandbox renders a **Sign in with device code** button that walks through the configured Auth server (see `config/security-helpers.js` for the exact shape). Tokens issued through the device flow are only cached in the browser session.
+當 OAuth 變量存在時，沙箱會呈現一個 **使用設備代碼登錄** 按鈕，該按鈕遍歷配置的身份驗證服務器（有關確切形狀，請參閱 `config/security-helpers.js`）。通過設備流發出的令牌僅緩存在瀏覽器會話中。
 
-## Sending Norito-RPC payloads
+## 發送 Norito-RPC 有效負載
 
-1. Build a `.norito` payload with the CLI or snippets described in the [Norito quickstart](./quickstart.md). The proxy forwards `application/x-norito` bodies unchanged, so you can reuse the same artefact you would post with `curl`.
-2. Open `/reference/torii-rapidoc` (preferred for binary payloads) or `/reference/torii-swagger`.
-3. Select the desired Torii snapshot from the drop-down. Snapshots are signed; the panel shows the manifest digest recorded in `static/openapi/manifest.json`.
-4. Choose the `application/x-norito` content type in the “Try it” drawer, click **Choose File**, and select your payload. The proxy rewrites the request to `/proxy/v1/pipeline/submit` and tags it with `X-TryIt-Client=docs-portal-rapidoc`.
-5. To download Norito responses, set `Accept: application/x-norito`. Swagger/RapiDoc expose the header selector in the same drawer and stream the binary back through the proxy.
+1. 使用 [Norito 快速入門](./quickstart.md) 中描述的 CLI 或代碼片段構建 `.norito` 有效負載。代理轉發 `application/x-norito` 主體不變，因此您可以重複使用與 `curl` 一起發布的相同工件。
+2. 打開 `/reference/torii-rapidoc`（二進制有效負載首選）或 `/reference/torii-swagger`。
+3. 從下拉列表中選擇所需的 Torii 快照。快照已簽名；該面板顯示 `static/openapi/manifest.json` 中記錄的清單摘要。
+4. 在“Try it”抽屜中選擇 `application/x-norito` 內容類型，單擊 **選擇文件**，然後選擇您的負載。代理將請求重寫為 `/proxy/v1/pipeline/submit` 並用 `X-TryIt-Client=docs-portal-rapidoc` 對其進行標記。
+5. 要下載 Norito 響應，請設置 `Accept: application/x-norito`。 Swagger/RapiDoc 在同一個抽屜中公開標頭選擇器，並通過代理將二進製文件流回。
 
-For JSON-only routes the embedded Try it sandbox is often faster: enter the path (for example, `/v1/accounts/ih58.../assets`), select the HTTP method, paste a JSON body when needed, and hit **Send request** to inspect headers, duration, and payloads inline.
+對於純 JSON 路由，嵌入式 Try it 沙箱通常更快：輸入路徑（例如 `/v1/accounts/ih58.../assets`），選擇 HTTP 方法，在需要時粘貼 JSON 正文，然後點擊 **發送請求** 以內聯檢查標頭、持續時間和有效負載。
 
-## Troubleshooting
+## 故障排除
 
-| Symptom | Likely cause | Remediation |
-| --- | --- | --- |
-| Browser console shows CORS errors or the sandbox warns that the proxy URL is missing. | Proxy is not running or the origin is not whitelisted. | Start the proxy, make sure `TRYIT_PROXY_ALLOWED_ORIGINS` covers your portal host, and relaunch `npm run start`. |
-| `npm run tryit-proxy` exits with “digest mismatch”. | The Torii OpenAPI bundle changed upstream. | Run `npm run sync-openapi -- --latest` (or `--version=<tag>`) and retry. |
-| Widgets return `401` or `403`. | Token missing, expired, or insufficient scopes. | Use the OAuth device flow or paste a valid bearer token into the sandbox. For static tokens you must export `DOCS_TRYIT_ALLOW_DEFAULT_BEARER=1`. |
-| `429 Too Many Requests` from the proxy. | Per-IP rate limit exceeded. | Raise `TRYIT_PROXY_RATE_LIMIT`/`TRYIT_PROXY_RATE_WINDOW_MS` for trusted environments or throttle test scripts. All rate-limit rejections increment `tryit_proxy_rate_limited_total`. |
+|症狀|可能的原因 |修復|
+| ---| ---| ---|
+|瀏覽器控制台顯示 CORS 錯誤或沙箱警告代理 URL 丟失。 |代理未運行或源未列入白名單。 |啟動代理，確保 `TRYIT_PROXY_ALLOWED_ORIGINS` 覆蓋您的門戶主機，然後重新啟動 `npm run start`。 |
+| `npm run tryit-proxy` 退出並顯示“摘要不匹配”。 | Torii OpenAPI 捆綁包已更改為上游。 |運行 `npm run sync-openapi -- --latest`（或 `--version=<tag>`）並重試。 |
+|小組件返回 `401` 或 `403`。 |令牌丟失、過期或範圍不足。 |使用 OAuth 設備流或將有效的承載令牌粘貼到沙箱中。對於靜態令牌，您必須導出 `DOCS_TRYIT_ALLOW_DEFAULT_BEARER=1`。 |
+|來自代理的 `429 Too Many Requests`。 |超出每個 IP 的速率限制。 |為可信環境或限制測試腳本提高 `TRYIT_PROXY_RATE_LIMIT`/`TRYIT_PROXY_RATE_WINDOW_MS`。所有速率限制拒絕都會增加 `tryit_proxy_rate_limited_total`。 |
 
-## Observability
+## 可觀察性
 
-- `npm run probe:tryit-proxy` (wrapper around `scripts/tryit-proxy-probe.mjs`) calls `/healthz`, optionally exercises a sample route, and emits Prometheus textfiles for `probe_success` / `probe_duration_seconds`. Configure `TRYIT_PROXY_PROBE_METRICS_FILE` to integrate with node_exporter.
-- Set `TRYIT_PROXY_METRICS_LISTEN=127.0.0.1:9798` to expose counters (`tryit_proxy_requests_total`, `tryit_proxy_rate_limited_total`, `tryit_proxy_upstream_failures_total`) and latency histograms. The `dashboards/grafana/docs_portal.json` board reads these metrics to enforce DOCS-SORA SLOs.
-- Runtime logs live on stdout. Every entry includes the request id, upstream status, authentication source (`default`, `override`, or `client`), and duration; secrets are redacted before emission.
+- `npm run probe:tryit-proxy`（`scripts/tryit-proxy-probe.mjs` 的包裝）調用 `/healthz`，可選擇執行示例路由，並為 `probe_success` / `probe_duration_seconds` 發出 Prometheus 文本文件。配置 `TRYIT_PROXY_PROBE_METRICS_FILE` 以與 node_exporter 集成。
+- 設置 `TRYIT_PROXY_METRICS_LISTEN=127.0.0.1:9798` 以公開計數器（`tryit_proxy_requests_total`、`tryit_proxy_rate_limited_total`、`tryit_proxy_upstream_failures_total`）和延遲直方圖。 `dashboards/grafana/docs_portal.json` 板讀取這些指標以實施 DOCS-SORA SLO。
+- 運行時日誌位於標準輸出上。每個條目包括請求 ID、上游狀態、身份驗證源（`default`、`override` 或 `client`）和持續時間；秘密在發布前被編輯。
 
-If you need to validate that `application/x-norito` payloads reach Torii unchanged, run the Jest suite (`npm test -- tryit-proxy`) or inspect the fixtures under `docs/portal/scripts/__tests__/tryit-proxy.test.mjs`. The regression tests cover compressed Norito binaries, signed OpenAPI manifests, and proxy downgrade paths so NRPC rollouts keep a permanent evidence trail.
+如果您需要驗證 `application/x-norito` 有效負載是否達到 Torii 不變，請運行 Jest 套件 (`npm test -- tryit-proxy`) 或檢查 `docs/portal/scripts/__tests__/tryit-proxy.test.mjs` 下的裝置。回歸測試涵蓋壓縮的 Norito 二進製文件、簽名的 OpenAPI 清單和代理降級路徑，以便 NRPC 推出保留永久的證據跟踪。

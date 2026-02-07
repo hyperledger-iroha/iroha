@@ -4,42 +4,44 @@ direction: rtl
 source: docs/portal/docs/norito/ledger-walkthrough.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: Пошаговый разбор реестра
-description: Воспроизведите детерминированный поток register -> mint -> transfer с CLI `iroha` и проверьте итоговое состояние реестра.
-slug: /norito/ledger-walkthrough
+عنوان: رجسٹری کا مرحلہ وار تجزیہ
+تفصیل: ڈٹرمینسٹک رجسٹر کو دوبارہ چلائیں -> ٹکسال -> CLI `iroha` سے منتقلی کا بہاؤ اور اس کے نتیجے میں رجسٹری ریاست کو چیک کریں۔
+سلگ: /نوریٹو /لیجر واک تھرو
 ---
 
-Этот walkthrough дополняет [Norito quickstart](./quickstart.md), показывая, как менять и проверять состояние реестра с помощью CLI `iroha`. Вы зарегистрируете новую дефиницию актива, заминтите единицы на дефолтный операторский аккаунт, переведете часть баланса на другой аккаунт и проверите итоговые транзакции и владения. Каждый шаг отражает потоки, покрытые в quickstart SDK Rust/Python/JavaScript, чтобы вы могли подтвердить паритет между CLI и поведением SDK.
+یہ واک تھرو [Norito quickstart] (./quickstart.md) کو Norito CLI کا استعمال کرتے ہوئے رجسٹری کی حیثیت کو کس طرح تبدیل کرنے اور چیک کرنے کا طریقہ دکھا کر ہے۔ آپ ایک نئی اثاثہ تعریف ، ڈیفالٹ آپریٹر اکاؤنٹ میں جمع یونٹوں کو جمع کریں گے ، توازن کا کچھ حصہ دوسرے اکاؤنٹ میں منتقل کریں گے اور اس کے نتیجے میں لین دین اور ہولڈنگ کی تصدیق کریں گے۔ ہر قدم زنگ/ازگر/جاوا اسکرپٹ ایس ڈی کے کوئیک اسٹارٹ میں ڈھکے ہوئے بہاؤ کو آئینہ دار کرتا ہے تاکہ آپ سی ایل آئی اور ایس ڈی کے سلوک کے مابین برابری کی تصدیق کرسکیں۔
 
-## Требования
+## تقاضے
 
-- Следуйте [quickstart](./quickstart.md), чтобы запустить одноузловую сеть через
-  `docker compose -f defaults/docker-compose.single.yml up --build`.
-- Убедитесь, что `iroha` (CLI) собран или скачан, и что вы можете достучаться до
-  peer через `defaults/client.toml`.
-- Опциональные помощники: `jq` (форматирование JSON ответов) и POSIX shell для
-  сниппетов с переменными окружения ниже.
+- ایک سنگل نوڈ نیٹ ورک کے ذریعے شروع کرنے کے لئے [کوئیک اسٹارٹ] (./quickstart.md) پر عمل کریں
+  `docker compose -f defaults/docker-compose.single.yml up --build`۔
+- اس بات کو یقینی بنائیں کہ `iroha` (CLI) بنایا گیا ہے یا ڈاؤن لوڈ کیا گیا ہے اور آپ پہنچ سکتے ہیں
+  `defaults/client.toml` کے ذریعے ہم مرتبہ۔
+- اختیاری مددگار: `jq` (JSON جوابات کی شکل دینا) اور POSIX شیل
+  ذیل میں ماحولیاتی متغیر کے ساتھ ٹکڑوں۔
 
-По всей инструкции заменяйте `$ADMIN_ACCOUNT` и `$RECEIVER_ACCOUNT` на нужные вам
-ID аккаунтов. В дефолтном bundle уже есть два аккаунта, полученных из demo-ключей:
+ہدایات کے دوران ، `$ADMIN_ACCOUNT` اور `$RECEIVER_ACCOUNT` کو اپنی ضرورت کے ساتھ تبدیل کریں
+اکاؤنٹ IDs. پہلے سے طے شدہ بنڈل میں پہلے ہی ڈیمو کیز سے دو اکاؤنٹس حاصل کیے گئے ہیں:
 
 ```sh
 export ADMIN_ACCOUNT="ih58..."
 export RECEIVER_ACCOUNT="ih58..."
 ```
 
-Подтвердите значения, выведя первые аккаунты:
+پہلے اکاؤنٹس کی نمائش کرکے اقدار کی تصدیق کریں:
 
 ```sh
 iroha --config defaults/client.toml account list all --limit 5 --table
 ```
 
-## 1. Осмотрите состояние genesis
+## 1. پیدائش کی حالت کا معائنہ کریں
 
-Начните с изучения реестра, на который нацелен CLI:
+رجسٹری کی جانچ کرکے شروع کریں جس کا سی ایل آئی اہداف ہے:
 
 ```sh
 # Domains, зарегистрированные в genesis
@@ -54,25 +56,25 @@ iroha --config defaults/client.toml account list filter \
 iroha --config defaults/client.toml asset definition list all --table
 ```
 
-Эти команды опираются на Norito-ответы, поэтому фильтрация и пагинация
-детерминированы и совпадают с тем, что получают SDK.
+یہ کمانڈ Norito جوابات پر انحصار کرتے ہیں ، لہذا فلٹرنگ اور صفحہ بندی
+ڈٹرمینسٹک اور وہی جو SDK حاصل کرتا ہے۔
 
-## 2. Зарегистрируйте дефиницию актива
+## 2. اثاثہ کی تعریف کو رجسٹر کریں
 
-Создайте новый бесконечно mintable актив `coffee` в домене `wonderland`:
+ڈومین `wonderland` میں ایک نیا لامحدود ٹکسال اثاثہ `coffee` بنائیں:
 
 ```sh
 iroha --config defaults/client.toml asset definition register \
   --id coffee#wonderland
 ```
 
-CLI выведет хэш отправленной транзакции (например, `0x5f…`). Сохраните его, чтобы
-позже проверить статус.
+CLI جمع کروائے گئے ٹرانزیکشن (مثال کے طور پر ، `0x5f…`) کے ہیش کو آؤٹ پٹ کرے گا۔ اس کے لئے محفوظ کریں
+بعد میں حیثیت کو چیک کریں۔
 
-## 3. Замитьте единицы на операторский аккаунт
+## 3. اپنے آپریٹر اکاؤنٹ میں یونٹ شامل کریں
 
-Количество актива живет под парой `(asset definition, account)`. Замитьте 250
-единиц `coffee#wonderland` на `$ADMIN_ACCOUNT`:
+اثاثہ کی رقم جوڑی `(asset definition, account)` کے تحت رہتی ہے۔ 250 پکڑو
+یونٹ `coffee#wonderland` سے `$ADMIN_ACCOUNT`:
 
 ```sh
 iroha --config defaults/client.toml asset mint \
@@ -80,14 +82,14 @@ iroha --config defaults/client.toml asset mint \
   --quantity 250
 ```
 
-Снова сохраните хэш транзакции (`$MINT_HASH`) из вывода CLI. Чтобы проверить баланс,
-выполните:
+ایک بار پھر ، ٹرانزیکشن ہیش (`$MINT_HASH`) کو CLI آؤٹ پٹ سے محفوظ کریں۔ اپنا توازن چیک کرنے کے لئے ،
+کرو:
 
 ```sh
 iroha --config defaults/client.toml asset list all --limit 5 --table
 ```
 
-или, чтобы получить только новый актив:
+یا ، صرف نیا اثاثہ حاصل کرنے کے لئے:
 
 ```sh
 iroha --config defaults/client.toml asset list filter \
@@ -95,9 +97,9 @@ iroha --config defaults/client.toml asset list filter \
   --limit 1 | jq .
 ```
 
-## 4. Переведите часть баланса на другой аккаунт
+## 4. توازن کا ایک حصہ کسی دوسرے اکاؤنٹ میں منتقل کریں
 
-Переведите 50 единиц с операторского аккаунта на `$RECEIVER_ACCOUNT`:
+آپریٹر اکاؤنٹ سے 50 یونٹوں کو `$RECEIVER_ACCOUNT` میں منتقل کریں:
 
 ```sh
 iroha --config defaults/client.toml asset transfer \
@@ -106,8 +108,8 @@ iroha --config defaults/client.toml asset transfer \
   --quantity 50
 ```
 
-Сохраните хэш транзакции как `$TRANSFER_HASH`. Запросите holdings на обоих аккаунтах,
-чтобы проверить новые балансы:
+`$TRANSFER_HASH` کے بطور ٹرانزیکشن ہیش کو محفوظ کریں۔ دونوں اکاؤنٹس پر ہولڈنگ کی درخواست کریں ،
+نئے بیلنس کی جانچ پڑتال کے لئے:
 
 ```sh
 iroha --config defaults/client.toml asset list filter \
@@ -117,35 +119,33 @@ iroha --config defaults/client.toml asset list filter \
   "{\"id\":\"coffee#wonderland##${RECEIVER_ACCOUNT}\"}" --limit 1 | jq .
 ```
 
-## 5. Проверьте доказательства реестра
+## 5. رجسٹری کے ثبوت چیک کریں
 
-Используйте сохраненные хэши, чтобы подтвердить коммит обеих транзакций:
+دونوں لین دین کا ارتکاب کرنے کے لئے ذخیرہ شدہ ہیشوں کا استعمال کریں:
 
 ```sh
 iroha --config defaults/client.toml transaction get --hash $MINT_HASH | jq .
 iroha --config defaults/client.toml transaction get --hash $TRANSFER_HASH | jq .
 ```
 
-Вы также можете стримить последние блоки, чтобы увидеть, какой блок включил перевод:
+آپ یہ دیکھنے کے لئے جدید بلاکس کو بھی اسٹریم کرسکتے ہیں کہ کون سا بلاک فعال ترجمہ:
 
 ```sh
 # Стрим от последнего блока и остановка через ~5 секунд
 iroha --config defaults/client.toml blocks 0 --timeout 5s --table
 ```
 
-Все команды выше используют те же Norito payloads, что и SDK. Если вы повторите
-этот поток в коде (см. quickstarts SDK ниже), хэши и балансы совпадут при условии,
-что вы нацелены на ту же сеть и те же defaults.
+مذکورہ بالا تمام کمانڈز SDK کی طرح ایک جیسے Norito پے لوڈ کا استعمال کرتے ہیں۔ اگر آپ دہراتے ہیں
+کوڈ میں یہ بہاؤ (نیچے کوئیک اسٹارٹ ایس ڈی کے دیکھیں) ، ہیش اور بیلنس فراہم کردہ مماثل ہوں گے
+کہ آپ ایک ہی نیٹ ورک اور ایک ہی ڈیفالٹس کو نشانہ بنا رہے ہیں۔
 
-## Ссылки на паритет SDK
+## SDK برابری کے لنکس-۔
+  مورچا سے لین دین اور پولنگ کی حیثیت بھیجنا۔
+- [ازگر ایس ڈی کے کوئیک اسٹارٹ] (../sdks/python) - وہی رجسٹر/ٹکسال آپریشنز دکھاتا ہے
+  Norito کی حمایت یافتہ JSON مددگاروں کے ساتھ۔
+-.
+  گورننس مددگار اور ٹائپ شدہ استفسار ریپرس۔
 
-- [Rust SDK quickstart](../sdks/rust) — демонстрирует регистрацию инструкций,
-  отправку транзакций и polling статуса из Rust.
-- [Python SDK quickstart](../sdks/python) — показывает те же операции register/mint
-  с Norito-backed JSON helpers.
-- [JavaScript SDK quickstart](../sdks/javascript) — покрывает Torii запросы,
-  governance helpers и typed query wrappers.
-
-Сначала выполните walkthrough в CLI, затем повторите сценарий с предпочитаемым SDK,
-чтобы убедиться, что обе поверхности согласуются по хэшам транзакций, балансам и
-результатам запросов.
+پہلے CLI میں واک تھرو کریں ، پھر اسکرپٹ کو اپنے پسندیدہ SDK کے ساتھ دہرائیں ،
+اس بات کو یقینی بنانے کے لئے کہ دونوں سطحیں ٹرانزیکشن ہیشوں ، بیلنس اور پر متفق ہیں
+استفسار کے نتائج۔

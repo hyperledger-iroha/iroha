@@ -4,69 +4,67 @@ direction: rtl
 source: docs/portal/docs/sorafs/reports/ai-moderation-calibration-202602.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: Informe de calibración de moderación de IA (2026-02)
-summary: Dataset de calibración base, umbrales y scoreboard para el primer lanzamiento de gobernanza MINFO-1.
+العنوان: معلومات معايرة الاعتدال في IA (2026-02)
+ملخص: مجموعة بيانات قاعدة المعايرة والمظلات ولوحة النتائج للانطلاق الأولي لإدارة MINFO-1.
 ---
 
-# Informe de calibración de moderación de IA - Febrero 2026
+# إعلام معايرة الاعتدال IA - فبراير 2026
 
-Este informe empaqueta los artefactos de calibración inaugurales para **MINFO-1**. El
-dataset, manifest y scoreboard se produjeron el 2026-02-05, fueron revisados por el
-consejo del Ministerio el 2026-02-10 y se anclaron en el DAG de gobernanza en la altura
+تم الإبلاغ عن ذلك من خلال أدوات المعايرة الافتتاحية لـ **MINFO-1**. ش
+تم إصدار مجموعة البيانات والبيان ولوحة النتائج في 05/02/2026، وقد تمت مراجعتها من قبل
+مجلس الوزراء بتاريخ 10/02/2026 وتم إعلانه في DAG de gobernanza en la altura
 `912044`.
 
-## Manifiesto del dataset
+## بيان مجموعة البيانات
 
-- **Dataset reference:** `c0956583-355a-43cc-9a60-e3a5d9a0f7d0`
-- **Slug:** `ai-moderation-calibration-202602`
-- **Entries:** manifest 480, chunk 12,800, metadata 920, audio 160
-- **Label mix:** safe 68%, suspect 19%, escalate 13%
-- **Artefact digest:** `9c4f86a3c099a48d0e3d7cfbf14d22bb9492960c41cba3858f0722519ff612ab`
-- **Distribution:** `sora://datasets/ministry/ai-moderation/calibration/2026-02.tar.zst`
+- **مرجع مجموعة البيانات:** `c0956583-355a-43cc-9a60-e3a5d9a0f7d0`
+- **السبيكة:** `ai-moderation-calibration-202602`
+- **الإدخالات:** البيان 480، القطعة 12,800، البيانات الوصفية 920، الصوت 160
+- **مزيج التصنيف:** آمن بنسبة 68%، ومشتبه به بنسبة 19%، ومتصاعد بنسبة 13%
+- **ملخص المصنوعات:** `9c4f86a3c099a48d0e3d7cfbf14d22bb9492960c41cba3858f0722519ff612ab`
+- **التوزيع:** `sora://datasets/ministry/ai-moderation/calibration/2026-02.tar.zst`
 
-El manifiesto completo vive en `docs/examples/ai_moderation_calibration_manifest_202602.json`
-y contiene la firma de gobernanza más el hash del runner capturado en el momento del
-release.
+تم استكمال البيان في `docs/examples/ai_moderation_calibration_manifest_202602.json`
+وتحتوي على شركة تحكم أكبر من تجزئة العداء الذي تم التقاطه في لحظة واحدة
+الافراج.
 
-## Resumen del scoreboard
+## استئناف لوحة النتائج
 
-Las calibraciones se ejecutaron con opset 17 y el pipeline de semillas determinísticas. El
-JSON completo del scoreboard (`docs/examples/ai_moderation_calibration_scorecard_202602.json`)
-registra los hashes y digests de telemetry; la tabla siguiente destaca las métricas más
-importantes.
-
-| Modelo (familia) | Brier | ECE | AUROC | Precision@Quarantine | Recall@Escalate |
+يتم تنفيذ المعايرة بالمقابل 17 وسلسلة السلاسل المحددة. ش
+JSON لوحة النتائج الكاملة (`docs/examples/ai_moderation_calibration_scorecard_202602.json`)
+تسجيل التجزئات وخلاصات القياس عن بعد؛ تحذف اللوحة التالية المقاييس بشكل أكبر
+مهم.| موديلو (فاميليا) | برير | اللجنة الاقتصادية لأوروبا | أوروك | الدقة @ الحجر الصحي | استدعاء @ التصعيد |
 | --------------- | ----- | --- | ----- | -------------------- | --------------- |
-| ViT-H/14 Safety (vision) | 0.141 | 0.031 | 0.987 | 0.964 | 0.912 |
-| LLaVA-1.6 34B Safety (multimodal) | 0.118 | 0.028 | 0.978 | 0.942 | 0.904 |
-| Perceptual ensemble (perceptual) | 0.162 | 0.047 | 0.953 | 0.883 | 0.861 |
+| ViT-H/14 السلامة (الرؤية) | 0.141 | 0.031 | 0.987 | 0.964 | 0.912 |
+| LLaVA-1.6 34B السلامة (متعدد الوسائط) | 0.118 | 0.028 | 0.978 | 0.942 | 0.904 |
+| المجموعة الإدراكية (الإدراك الحسي) | 0.162 | 0.047 | 0.953 | 0.883 | 0.861 |
 
-Métricas combinadas: `Brier = 0.126`, `ECE = 0.034`, `AUROC = 0.982`. La distribución de
-veredictos en la ventana de calibración fue pass 91.2%, quarantine 6.8%,
-escalate 2.0%, coincidiendo con las expectativas de política registradas en el
-resumen del manifest. El backlog de falsos positivos se mantuvo en cero y el
-drift score (7.1%) quedó muy por debajo del umbral de alerta del 20%.
+المقاييس المجمعة: `Brier = 0.126`، `ECE = 0.034`، `AUROC = 0.982`. التوزيع دي
+تم تمرير نتائج معايرة نافذة المعايرة بنسبة 91.2%، والحجر الصحي بنسبة 6.8%،
+تصعيد بنسبة 2.0%، بالتزامن مع التوقعات السياسية المسجلة في البلاد
+استئناف البيان. يتم منع تراكم الأخطاء الإيجابية الزائفة من الصفر
+درجة الانجراف (7.1٪) كانت قوية جدًا بعد تحذير مظلة 20٪.
 
-## Umbrales y aprobación
+## مظلات واعتذارات
 
-- `thresholds.quarantine = 0.42`
-- `thresholds.escalate = 0.78`
-- Governance motion: `MINFO-2026-02-07`
-- Signed by `ministry-council-seat-03` at `2026-02-10T11:33:12Z`
+-`thresholds.quarantine = 0.42`
+-`thresholds.escalate = 0.78`
+- اقتراح الحوكمة: `MINFO-2026-02-07`
+- تم التوقيع عليه بواسطة `ministry-council-seat-03` في `2026-02-10T11:33:12Z`
 
-CI almacenó el bundle firmado en `artifacts/ministry/ai_moderation/2026-02/`
-junto con los binarios del moderation runner. El digest del manifest y los hashes
-del scoreboard anteriores deben referenciarse durante auditorías y apelaciones.
+قم بحفظ الحزمة الثابتة في `artifacts/ministry/ai_moderation/2026-02/`
+جنبًا إلى جنب مع عداء الاعتدال. ملخص البيان والتجزئات
+يجب الرجوع إلى لوحة النتائج السابقة خلال عمليات الاستماع والمكالمات.
 
-## Dashboards y alertas
-
-Los SRE de moderación deben importar el dashboard de Grafana en
-`dashboards/grafana/ministry_moderation_overview.json` y las reglas de alertas de
-Prometheus en `dashboards/alerts/ministry_moderation_rules.yml` (la cobertura de tests
-vive en `dashboards/alerts/tests/ministry_moderation_rules.test.yml`). Estos
-artefactos emiten alertas por bloqueos de ingesta, picos de drift y crecimiento de
-la cola de quarantine, cumpliendo los requisitos de monitoreo indicados en la
-[AI Moderation Runner Specification](../../ministry/ai-moderation-runner.md).
+## لوحات المعلومات والتنبيهاتيجب على SRE من الاعتدال استيراد لوحة القيادة من Grafana en
+`dashboards/grafana/ministry_moderation_overview.json` وأنظمة التنبيهات
+Prometheus en `dashboards/alerts/ministry_moderation_rules.yml` (تغطية الاختبارات
+يعيش أون `dashboards/alerts/tests/ministry_moderation_rules.test.yml`). إستوس
+تُصدر المصنوعات اليدوية تنبيهات بشأن حظر تناول الطعام وصور الانجراف وزيادة
+الكولا دي الحجر الصحي، تفي بمتطلبات المراقبة المشار إليها في لا
+[مواصفات مشغل الاعتدال AI](../../ministry/ai-moderation-runner.md).

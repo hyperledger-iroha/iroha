@@ -4,6 +4,8 @@ direction: rtl
 source: docs/portal/docs/sorafs/runbooks-index.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
@@ -20,7 +22,7 @@ description: نقطة الدخول المعتمدة لأدلة تشغيل مشغ
 يسرد كل إدخال الملكية ومسار المصدر المعتمد والنسخة في البوابة كي يتمكن المراجعون من
 الانتقال مباشرةً إلى الدليل المطلوب خلال المعاينة التجريبية.
 
-## مضيف المعاينة التجريبية
+## מאת
 
 لقد قامت موجة DocOps بترقية مضيف المعاينة التجريبية المعتمد من المراجعين إلى
 `https://docs.iroha.tech/`. عند توجيه المشغلين أو المراجعين إلى دليل تشغيل مُرحَّل،
@@ -29,15 +31,15 @@ description: نقطة الدخول المعتمدة لأدلة تشغيل مشغ
 [`devportal/preview-host-exposure`](../devportal/preview-host-exposure.md).
 
 | دليل التشغيل | المالك(ون) | نسخة البوابة | المصدر |
-|-------------|-----------|-------------|--------|
+|------------|--------|--------|--------|
 | انطلاقة Gateway وDNS | Networking TL, Ops Automation, Docs/DevRel | [`sorafs/gateway-dns-runbook`](./gateway-dns-runbook.md) | `docs/source/sorafs_gateway_dns_design_runbook.md` |
 | دليل تشغيل عمليات SoraFS | Docs/DevRel | [`sorafs/operations-playbook`](./operations-playbook.md) | `docs/source/sorafs/operations_playbook.md` |
-| تسوية السعة | Treasury / SRE | [`sorafs/capacity-reconciliation`](./capacity-reconciliation.md) | `docs/source/sorafs/runbooks/capacity_reconciliation.md` |
+| تسوية السعة | האוצר / SRE | [`sorafs/capacity-reconciliation`](./capacity-reconciliation.md) | `docs/source/sorafs/runbooks/capacity_reconciliation.md` |
 | عمليات سجل التثبيت | Tooling WG | [`sorafs/pin-registry-ops`](./pin-registry-ops.md) | `docs/source/sorafs/pin_registry_ops.md` |
-| قائمة تحقق عمليات العقد | Storage Team, SRE | [`sorafs/node-operations`](./node-operations.md) | `docs/source/sorafs/runbooks/sorafs_node_ops.md` |
-| دليل تشغيل النزاعات والإلغاءات | Governance Council | [`sorafs/dispute-revocation-runbook`](./dispute-revocation-runbook.md) | `docs/source/sorafs/dispute_revocation_runbook.md` |
+| قائمة تحقق عمليات العقد | צוות אחסון, SRE | [`sorafs/node-operations`](./node-operations.md) | `docs/source/sorafs/runbooks/sorafs_node_ops.md` |
+| دليل تشغيل النزاعات والإلغاءات | מועצת ממשל | [`sorafs/dispute-revocation-runbook`](./dispute-revocation-runbook.md) | `docs/source/sorafs/dispute_revocation_runbook.md` |
 | دليل تشغيل مانيفستات الـ staging | Docs/DevRel | [`sorafs/staging-manifest-playbook`](./staging-manifest-playbook.md) | `docs/source/sorafs/staging_manifest_playbook.md` |
-| قابلية الملاحظة لمرساة Taikai | Media Platform WG / DA Program / Networking TL | [`sorafs/taikai-anchor-runbook`](./taikai-anchor-runbook.md) | `docs/source/taikai_anchor_monitoring.md` |
+| قابلية الملاحظة لمرساة Taikai | פלטפורמת מדיה WG / DA Program / Networking TL | [`sorafs/taikai-anchor-runbook`](./taikai-anchor-runbook.md) | `docs/source/taikai_anchor_monitoring.md` |
 
 ## قائمة التحقق
 

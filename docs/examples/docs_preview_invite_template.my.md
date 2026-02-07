@@ -7,14 +7,15 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 6c819c8d2a9517f1235a66a4661efd061a166ea89c953fd599e102b3cfd9157b
 source_last_modified: "2025-12-29T18:16:35.072254+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Docs Portal Preview Invite (Template)
+# Docs Portal အကြိုကြည့်ရှုရန် ဖိတ်ကြားချက် (ပုံစံ)
 
-Use this template when sending preview access instructions to reviewers. Replace
-the placeholders (`<...>`) with the relevant values, attach the descriptor +
-archive artefacts referenced in the message, and store the final text inside
-the corresponding intake ticket.
+အစမ်းကြည့်ရှုခွင့် လမ်းညွှန်ချက်များကို သုံးသပ်သူများထံ ပေးပို့သည့်အခါ ဤပုံစံပလိတ်ကို အသုံးပြုပါ။ အစားထိုးပါ။
+သက်ဆိုင်ရာတန်ဖိုးများနှင့်အတူ placeholder (`<...>`)၊ ဖော်ပြချက်ကို ပူးတွဲပါ +
+မက်ဆေ့ဂျ်တွင် ကိုးကားထားသော ရှေးဟောင်းပစ္စည်းများကို သိမ်းဆည်းပြီး အတွင်း၌ နောက်ဆုံးစာသားကို သိမ်းဆည်းပါ။
+သက်ဆိုင်ရာ intake လက်မှတ်။
 
 ```text
 Subject: [DOCS-SORA] docs portal preview <preview_tag> invite for <reviewer/org>

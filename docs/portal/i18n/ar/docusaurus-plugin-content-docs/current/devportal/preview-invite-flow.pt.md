@@ -4,92 +4,94 @@ direction: rtl
 source: docs/portal/docs/devportal/preview-invite-flow.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Fluxo de convites do preview
+# يقوم Fluxo de convites بالمعاينة
 
-## Objetivo
+## أوبجيتيفو
 
-O item do roadmap **DOCS-SORA** destaca o onboarding de revisores e o programa de convites do preview publico como os ultimos bloqueadores antes de o portal sair de beta. Esta pagina descreve como abrir cada onda de convites, quais artefatos devem ser enviados antes de mandar convites e como provar que o fluxo e auditavel. Use junto com:
+يقوم عنصر خريطة الطريق **DOCS-SORA** بإلغاء إعداد المراجعة وبرنامج الدعوة لمعاينة عامة مثل آخر أدوات الحظر قبل الإصدار التجريبي من البوابة. توصف هذه الصفحة بأنها تفتح كل مرة من المكالمات، حيث يجب أن يتم إرسالها قبل بدء المكالمات وإثبات التدفق والتدقيق. استخدم جونتو كوم:
 
-- [`devportal/reviewer-onboarding`](./reviewer-onboarding.md) para o manejo por revisor.
-- [`devportal/preview-integrity-plan`](./preview-integrity-plan.md) para garantias de checksum.
-- [`devportal/observability`](./observability.md) para exports de telemetria e hooks de alertas.
+- [`devportal/reviewer-onboarding`](./reviewer-onboarding.md) لإدارة المراجعة.
+- [`devportal/preview-integrity-plan`](./preview-integrity-plan.md) لضمانات المجموع الاختباري.
+- [`devportal/observability`](./observability.md) لتصدير أدوات القياس عن بعد وخطافات التنبيه.
 
-## Plano de ondas
+## بلانو دي أونداس
 
-| Onda | Audiencia | Criterios de entrada | Criterios de saida | Notas |
+| اوندا | الجمهور | معايير الدخول | معايير الصيدة | نوتاس |
 | --- | --- | --- | --- | --- |
-| **W0 - Maintainers core** | Maintainers de Docs/SDK validando conteudo do dia um. | Time GitHub `docs-portal-preview` populado, gate de checksum `npm run serve` verde, Alertmanager silencioso por 7 dias. | Todos os docs P0 revisados, backlog tagueado, sem incidentes bloqueadores. | Usado para validar o fluxo; sem email de convite, apenas compartilhar os artefatos de preview. |
-| **W1 - Partners** | Operadores SoraFS, integradores Torii, revisores de governanca sob NDA. | W0 encerrado, termos legais aprovados, proxy Try-it em staging. | Sign-off dos partners coletado (issue ou formulario assinado), telemetria mostra <=10 revisores concorrentes, sem regressoes de seguranca por 14 dias. | Aplicar template de convite + tickets de solicitacao. |
-| **W2 - Comunidade** | Contribuidores selecionados da lista de espera da comunidade. | W1 encerrado, drills de incidentes ensaiados, FAQ publico atualizado. | Feedback digerido, >=2 releases de documentacao enviados via pipeline de preview sem rollback. | Limitar convites concorrentes (<=25) e agrupar semanalmente. |
+| **W0 - جوهر المشرفين** | المشرفون على Docs/SDK صالحون للمحتوى في هذا اليوم. | الوقت GitHub `docs-portal-preview` شعبي، بوابة المجموع الاختباري `npm run serve` أخضر، مدير التنبيهات صامت لمدة 7 أيام. | جميع مستندات P0 تمت مراجعتها، وتراكم الأعمال المتراكمة، دون أي حوادث. | تستخدم للتحقق من التدفق. بمجرد إرسال رسالة بريد إلكتروني، فقط قم بمشاركة عناصر المعاينة. |
+| **W1 - الشركاء** | المشغلون SoraFS، المتكاملون Torii، مراجعو الحوكمة sob NDA. | W0 مكتمل، شروط قانونية معتمدة، وكيل جربه في التدريج. | تسجيل الخروج من الشركاء المجمعين (الإصدار أو الصيغة المعطلة)، عرض القياس عن بعد <= 10 مراجعة متزامنة، بدون تراجعات أمان لمدة 14 يومًا. | تطبيق قالب الدعوة + تذاكر الاستدعاء. |
+| **W2 - الجماعة** | تم اختيار المساهمين من قائمة أمل المجتمع. | تم الانتهاء من W1، وتدريبات على الأحداث الرائعة، وتم تحديث الأسئلة الشائعة العامة. | تم إرسال التعليقات >=إصدارين من المستندات المرسلة عبر مسار المعاينة دون التراجع. | يتضمن الحد المتزامنات (<=25) ويتم تجميعها بشكل منفصل. |
 
-Documente qual onda esta ativa em `status.md` e no tracker de solicitacoes de preview para que a governanca veja o estado rapidamente.
+قم بتوثيق ما هو موجود في `status.md` ولا يمكنك تتبع طلبات المعاينة لإدارة الحالة بسرعة.
 
-## Checklist de preflight
+## قائمة التحقق من الاختبار المبدئي
 
-Conclua estas acoes **antes** de agendar convites para uma onda:
+اختتام هذه الكلمات **المسبقة** لجدول الأعمال المدعو لشخص ما:
 
 1. **Artefatos de CI disponiveis**
-   - Ultimo `docs-portal-preview` + descriptor enviado por `.github/workflows/docs-portal-preview.yml`.
-   - Pin de SoraFS anotado em `docs/portal/docs/devportal/deploy-guide.md` (descriptor de cutover presente).
-2. **Enforcement de checksum**
-   - `docs/portal/scripts/serve-verified-preview.mjs` invocado via `npm run serve`.
-   - Instrucoes de `scripts/preview_verify.sh` testadas em macOS + Linux.
-3. **Baseline de telemetria**
-   - `dashboards/grafana/docs_portal.json` mostra trafego Try it saudavel e o alerta `docs.preview.integrity` esta verde.
-   - Ultimo apendice de `docs/portal/docs/devportal/observability.md` atualizado com links do Grafana.
-4. **Artefatos de governanca**
-   - Issue do invite tracker pronta (uma issue por onda).
-   - Template de registro de revisores copiado (ver [`docs/examples/docs_preview_request_template.md`](../../../examples/docs_preview_request_template.md)).
-   - Aprovacoes legais e de SRE requeridas anexadas a issue.
+   - آخر `docs-portal-preview` + الواصف المرسل لـ `.github/workflows/docs-portal-preview.yml`.
+   - دبوس SoraFS موضح في `docs/portal/docs/devportal/deploy-guide.md` (واصف القطع الحالي).
+2. **تنفيذ المجموع الاختباري**
+   - استدعاء `docs/portal/scripts/serve-verified-preview.mjs` عبر `npm run serve`.
+   - تعليمات `scripts/preview_verify.sh` التي تم اختبارها على macOS + Linux.
+3. ** خط الأساس للقياس عن بعد **
+   - `dashboards/grafana/docs_portal.json` Mostra trafego جربه saudavel e o تنبيه `docs.preview.integrity` esta verde.
+   - تم تحديث آخر ملحق لـ `docs/portal/docs/devportal/observability.md` مع روابط Grafana.
+4. **مصنوعات الحكم**
+   - إصدار دعوة تعقب برونتا (uma Issue por onda).
+   - نموذج سجل المراجعات المنسوخ (الإصدار [`docs/examples/docs_preview_request_template.md`](../../../examples/docs_preview_request_template.md)).
+   - إجراءات قانونية وSRE تتطلب إضافة مشكلة.
 
-Registre a conclusao do preflight no invite tracker antes de enviar qualquer email.
+سجل نتيجة الاختبار المبدئي دون دعوة للتعقب قبل إرسال أي بريد إلكتروني.
 
-## Etapas do fluxo
+## إيتاباس دو فلوكسو
 
-1. **Selecionar candidatos**
-   - Puxar da planilha de espera ou fila de partners.
-   - Garantir que cada candidato tenha o template de solicitacao completo.
-2. **Aprovar acesso**
-   - Atribuir um aprovador a issue do invite tracker.
-   - Verificar prerequisitos (CLA/contrato, uso aceitavel, brief de seguranca).
-3. **Enviar convites**
-   - Preencher os placeholders de [`docs/examples/docs_preview_invite_template.md`](../../../examples/docs_preview_invite_template.md) (`<preview_tag>`, `<request_ticket>`, contatos).
-   - Anexar o descriptor + hash do archive, URL de staging do Try it, e canais de suporte.
-   - Guardar o email final (ou transcript do Matrix/Slack) na issue.
-4. **Acompanhar onboarding**
-   - Atualizar o invite tracker com `invite_sent_at`, `expected_exit_at`, e status (`pending`, `active`, `complete`, `revoked`).
-   - Linkar a solicitacao de entrada do revisor para auditabilidade.
-5. **Monitorar telemetria**
-   - Observar `docs.preview.session_active` e alertas `TryItProxyErrors`.
-   - Abrir um incidente se a telemetria desviar do baseline e registrar o resultado ao lado da entrada de convite.
-6. **Coletar feedback e encerrar**
-   - Encerrar convites quando o feedback chegar ou `expected_exit_at` expirar.
-   - Atualizar a issue da onda com um resumo curto (achados, incidentes, proximas acoes) antes de passar para a proxima coorte.
+1. **المرشحون المختارون**
+   - Puxar da Planilha de Espera أو عائلة الشركاء.
+   - ضمان أن كل مرشح لديه نموذج طلب كامل.
+2. **أبروفار أسيسو**
+   - Atribuir um aprovador aمسألة القيام بدعوة تعقب.
+   - التحقق من المتطلبات الأساسية (CLA/contrato، uso aceitavel، Summary de seguranca).
+3. ** إنفيار يدعو **
+   - قم بإظهار العناصر النائبة لـ [`docs/examples/docs_preview_invite_template.md`](../../../examples/docs_preview_invite_template.md) (`<preview_tag>`، `<request_ticket>`، جهات الاتصال).
+   - إضافة واصف + أرشيف تجزئة، وعنوان URL للتدريج، وقناة الدعم.
+   - حماية البريد الإلكتروني النهائي (أو نسخة Matrix/Slack) من المشكلة.
+4. **التأهيل المرافق**
+   - تحديث أو دعوة تعقب com `invite_sent_at`, `expected_exit_at`, الحالة الإلكترونية (`pending`, `active`, `complete`, `revoked`).
+   - رابط لطلب إدخال المراجعة للتدقيق.
+5. ** مراقبة القياس عن بعد **
+   - مراقبة `docs.preview.session_active` والتنبيهات `TryItProxyErrors`.
+   - فتح حادثة في حالة انتهاء القياس عن بعد من خط الأساس وتسجيل النتيجة بعد دخول المكالمة.
+6. **التعليقات والملاحظات الجماعية**
+   - قم بالاستدعاء عند بدء تشغيل الملاحظات أو انتهاء صلاحية `expected_exit_at`.
+   - تحديث المشكلة الموجودة مع ملخص مختصر (الأحداث، الأحداث، النقاط القريبة) قبل المرور إلى المنطقة القريبة.
 
-## Evidencia e reporting
+## التقارير الإلكترونية الأدلة
 
-| Artefato | Onde armazenar | Cadencia de atualizacao |
+| ارتيفاتو | أوندي أرمازينار | إيقاع التحديث |
 | --- | --- | --- |
-| Issue do invite tracker | Projeto GitHub `docs-portal-preview` | Atualizar apos cada convite. |
-| Export do roster de revisores | Registro vinculado em `docs/portal/docs/devportal/reviewer-onboarding.md` | Semanal. |
-| Snapshots de telemetria | `docs/source/sdk/android/readiness/dashboards/<date>/` (reutilizar bundle de telemetria) | Por onda + apos incidentes. |
-| Digest de feedback | `docs/portal/docs/devportal/preview-feedback/<wave>/summary.md` (criar pasta por onda) | Dentro de 5 dias apos a saida da onda. |
-| Nota de reuniao de governanca | `docs/portal/docs/devportal/preview-invite-notes/<date>.md` | Preencher antes de cada sync DOCS-SORA. |
+| قضية القيام بدعوة تعقب | بروجيتو جيثب `docs-portal-preview` | Atualizar apos cada convite. |
+| تصدير قائمة المراجعة | تم التسجيل في `docs/portal/docs/devportal/reviewer-onboarding.md` | سيمانال. |
+| لقطات القياس عن بعد | `docs/source/sdk/android/readiness/dashboards/<date>/` (إعادة استخدام حزمة القياس عن بعد) | بسبب حوادث + apos. |
+| ملخص التعليقات | `docs/portal/docs/devportal/preview-feedback/<wave>/summary.md` (تحضير المعكرونة بوروندا) | في غضون 5 أيام بعد أن وصلت إلى هناك. |
+| مذكرة إعادة توحيد الحكم | `docs/portal/docs/devportal/preview-invite-notes/<date>.md` | قم بالمزامنة المسبقة لكل DOCS-SORA. |
 
-Execute `cargo xtask docs-preview summary --wave <wave_label> --json artifacts/docs_portal_preview/<wave_label>_summary.json`
-apos cada lote para produzir um digest legivel por maquina. Anexe o JSON renderizado a issue da onda para que revisores de governanca confirmem as contagens de convite sem reproduzir todo o log.
+نفذ `cargo xtask docs-preview summary --wave <wave_label> --json artifacts/docs_portal_preview/<wave_label>_summary.json`
+كل الكثير من أجل إنتاج ملخص قانوني للآلة. تم إصدار ملف JSON المرفق لتأكيد مراجعة الإدارة كرسائل دعوة دون إعادة إنتاج كل شيء أو تسجيل الدخول.
 
-Anexe a lista de evidencias a `status.md` sempre que uma onda terminar para que a entrada do roadmap possa ser atualizada rapidamente.
+قم بإرفاق قائمة الأدلة إلى `status.md` حتى تنتهي دائمًا حتى يتم تحديث مدخل خريطة الطريق بسرعة.
 
-## Criterios de rollback e pausa
+## معايير التراجع والإيقاف المؤقت
 
-Pause o fluxo de convites (e notifique a governanca) quando qualquer um dos itens abaixo ocorrer:
+إيقاف تدفق المكالمات مؤقتًا (إشعار الإدارة) عند حدوث أي من العناصر التالية:
 
-- Incidente de proxy Try it que exigiu rollback (`npm run manage:tryit-proxy`).
-- Fadiga de alertas: >3 alert pages para endpoints apenas de preview em 7 dias.
-- Gap de compliance: convite enviado sem termos assinados ou sem registrar o template de solicitacao.
-- Risco de integridade: mismatch de checksum detectado por `scripts/preview_verify.sh`.
+- حادثة الوكيل حاول تجربة التراجع (`npm run manage:tryit-proxy`).
+- مجموعة التنبيهات: >3 صفحات تنبيه لنقاط النهاية قبل المعاينة في 7 أيام.
+- فجوة الامتثال: قم بإرسال دعوة دون شروط ملغاة أو بدون مسجل أو نموذج طلب.
+- خطر التكامل: عدم تطابق المجموع الاختباري المكتشف بواسطة `scripts/preview_verify.sh`.
 
-Retome somente apos documentar a remediacao no invite tracker e confirmar que o dashboard de telemetria esta estavel por pelo menos 48 horas.
+قم بعد ذلك بتوثيق عملية الإصلاح بدون دعوة متتبع وتأكيد أن لوحة القياس عن بعد قد تم وضعها لمدة لا تقل عن 48 ساعة.

@@ -7,65 +7,66 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 7aff8ba5247591a8c241a2b99393591ea0a2b11aed49ef15a23f008284b5ff05
 source_last_modified: "2026-01-22T14:35:36.738164+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-title: Data Availability Replication Policy
-sidebar_label: Replication Policy
-description: Governance-enforced retention profiles applied to all DA ingest submissions.
+ခေါင်းစဉ်- ဒေတာရရှိနိုင်မှု ကူးယူမှုမူဝါဒ
+sidebar_label- ကူးယူမှုမူဝါဒ
+ဖော်ပြချက်- DA မှ ထည့်သွင်းတင်ပြမှုအားလုံးတွင် အသုံးပြုထားသော အုပ်ချုပ်မှု-ထိန်းချုပ်ထားသော ထိန်းသိမ်းထားသော ပရိုဖိုင်များ။
 ---
 
-:::note Canonical Source
+::: Canonical Source ကို သတိပြုပါ။
 :::
 
-# Data Availability Replication Policy (DA-4)
+# ဒေတာရရှိနိုင်မှု ကူးယူမှုမူဝါဒ (DA-4)
 
-_Status: In Progress — Owners: Core Protocol WG / Storage Team / SRE_
+_အခြေအနေ- လုပ်ဆောင်နေသည် — ပိုင်ရှင်များ- Core Protocol WG / Storage Team / SRE_
 
-The DA ingestion pipeline now enforces deterministic retention targets for
-every blob class described in `roadmap.md` (workstream DA-4). Torii refuses to
-persist caller-provided retention envelopes that do not match the configured
-policy, guaranteeing that every validator/storage node retains the required
-number of epochs and replicas without relying on submitter intent.
+DA စားသုံးမိသော ပိုက်လိုင်းသည် ယခု တိကျသေချာသော ထိန်းသိမ်းထားနိုင်သော ပစ်မှတ်များကို ပြဋ္ဌာန်းထားသည်။
+`roadmap.md` (workstream DA-4) တွင်ဖော်ပြထားသော blob အတန်းတိုင်း။ Torii မှ ငြင်းဆိုသည်။
+စီစဉ်သတ်မှတ်ထားသည့် ပုံစံနှင့် မကိုက်ညီသော ခေါ်ဆိုသူ-ပေးသော သိမ်းဆည်းထားသော စာအိတ်များကို ဆက်လက်ထားရှိပါ။
+ပေါ်လစီအရ၊ တရားဝင်သူ/သိုလှောင်မှု Node တိုင်းသည် လိုအပ်သည့်အရာများကို ထိန်းသိမ်းထားကြောင်း အာမခံပါသည်။
+တင်ပြသူ၏ ရည်ရွယ်ချက်အပေါ် အားကိုးခြင်းမရှိဘဲ ခေတ်နှင့်ပုံတူများ အရေအတွက်။
 
-## Default policy
+## မူရင်းမူဝါဒ
 
-| Blob class | Hot retention | Cold retention | Required replicas | Storage class | Governance tag |
-|------------|---------------|----------------|-------------------|----------------|----------------|
-| `taikai_segment` | 24 hours | 14 days | 5 | `hot` | `da.taikai.live` |
-| `nexus_lane_sidecar` | 6 hours | 7 days | 4 | `warm` | `da.sidecar` |
-| `governance_artifact` | 12 hours | 180 days | 3 | `cold` | `da.governance` |
-| _Default (all other classes)_ | 6 hours | 30 days | 3 | `warm` | `da.default` |
+| Blob အတန်း | စွဲမြဲပူ | စွဲမြဲအေး | လိုအပ်သော ပုံတူများ | ထိန်တန်း | အုပ်ချုပ်မှုဂ် |
+|--------------------|----------------|------------------------------------------------|----------------|----------------|
+| `taikai_segment` | 24 နာရီ | 14 ရက် | 5 | `hot` | `da.taikai.live` |
+| `nexus_lane_sidecar` | ၆ နာရီ | 7 ရက် | 4 | `warm` | `da.sidecar` |
+| `governance_artifact` | 12 နာရီ | 180 ရက် | 3 | `cold` | `da.governance` |
+| _Default (အခြားအတန်းများအားလုံး)_ | ၆ နာရီ | 30 ရက် | 3 | `warm` | `da.default` |
 
-These values are embedded in `torii.da_ingest.replication_policy` and applied to
-all `/v1/da/ingest` submissions. Torii rewrites manifests with the enforced
-retention profile and emits a warning when callers provide mismatched values so
-operators can detect stale SDKs.
+ဤတန်ဖိုးများကို `torii.da_ingest.replication_policy` တွင် ထည့်သွင်းပြီး အသုံးပြုနိုင်မည်ဖြစ်သည်။
+`/v1/da/ingest` တင်ပြချက်အားလုံး။ Torii သည် manifests များဖြင့် ပြန်လည်ရေးသားခြင်းဟု ပြဋ္ဌာန်းထားသည်။
+ခေါ်ဆိုသူများနှင့် မကိုက်ညီသော တန်ဖိုးများကို ပေးဆောင်သည့်အခါ ထိန်းသိမ်းမှု ပရိုဖိုင်နှင့် သတိပေးချက် ထုတ်လွှတ်သည်။
+အော်ပရေတာများသည် ဟောင်းနွမ်းနေသော SDK များကို ရှာဖွေနိုင်သည်။
 
-### Taikai availability classes
+### Taikai ရရှိနိုင်သော အတန်းများ
 
-Taikai routing manifests (`taikai.trm`) declare an `availability_class`
-(`hot`, `warm`, or `cold`). Torii enforces the matching policy before chunking
-so operators can scale replica counts per stream without editing the global
-table. Defaults:
+Taikai လမ်းကြောင်းပြခြင်း မန်နီးဖက်စ် (`taikai.trm`) သည် `availability_class` ကို ကြေညာသည်
+(`hot`၊ `warm`၊ သို့မဟုတ် `cold`)။ Torii သည် အတုံးမလိုက်မီ ကိုက်ညီသည့်မူဝါဒကို ကျင့်သုံးသည်။
+ထို့ကြောင့် အော်ပရေတာများသည် ဂလိုဘယ်ကို တည်းဖြတ်ခြင်းမပြုဘဲ ထုတ်လွှင့်မှုတစ်ခုစီတွင် ပုံတူအရေအတွက်များကို တိုင်းတာနိုင်သည်။
+စားပွဲ။ ပုံသေများ-
 
-| Availability class | Hot retention | Cold retention | Required replicas | Storage class | Governance tag |
-|--------------------|---------------|----------------|-------------------|----------------|----------------|
-| `hot` | 24 hours | 14 days | 5 | `hot` | `da.taikai.live` |
-| `warm` | 6 hours | 30 days | 4 | `warm` | `da.taikai.warm` |
-| `cold` | 1 hour | 180 days | 3 | `cold` | `da.taikai.archive` |
+| ရရှိနိုင်မှုအတန်း | စွဲမြဲပူ | စွဲမြဲအေး | လိုအပ်သော ပုံတူများ | ထိန်တန်း | အုပ်ချုပ်မှုဂ် |
+|--------------------|----------------|----------------------------------------------------------------------------------------------------------------|
+| `hot` | 24 နာရီ | 14 ရက် | 5 | `hot` | `da.taikai.live` |
+| `warm` | ၆ နာရီ | 30 ရက် | 4 | `warm` | `da.taikai.warm` |
+| `cold` | ၁ နာရီ | 180 ရက် | 3 | `cold` | `da.taikai.archive` |
 
-Missing hints default to `hot` so live broadcasts retain the strongest policy.
-Override the defaults via
-`torii.da_ingest.replication_policy.taikai_availability` if your network uses
-different targets.
+မူရင်း `hot` သို့ အရိပ်အမြွက်များ ပျောက်ဆုံးနေသောကြောင့် တိုက်ရိုက်ထုတ်လွှင့်မှုများသည် အခိုင်မာဆုံးမူဝါဒကို ဆက်လက်ထိန်းသိမ်းထားရန်။
+ပုံသေမှတစ်ဆင့် အစားထိုးပါ။
+သင့်ကွန်ရက်ကိုအသုံးပြုပါက `torii.da_ingest.replication_policy.taikai_availability`
+မတူညီသောပစ်မှတ်များ။
 
-## Configuration
+## ဖွဲ့စည်းမှု
 
-The policy lives under `torii.da_ingest.replication_policy` and exposes a
-*default* template plus an array of per-class overrides. Class identifiers are
-case-insensitive and accept `taikai_segment`, `nexus_lane_sidecar`,
-`governance_artifact`, or `custom:<u16>` for governance-approved extensions.
-Storage classes accept `hot`, `warm`, or `cold`.
+မူဝါဒသည် `torii.da_ingest.replication_policy` အောက်တွင် နေထိုင်ပြီး a ကို ဖော်ထုတ်သည်။
+*default* template နှင့် အတန်းအလိုက် overrides များ array တစ်ခု။ Class identifiers တွေဖြစ်ပါတယ်။
+case-insensitive နှင့် `taikai_segment`, `nexus_lane_sidecar` လက်ခံ၊
+အုပ်ချုပ်မှု-အတည်ပြုထားသော တိုးချဲ့မှုများအတွက် `governance_artifact`၊ သို့မဟုတ် `custom:<u16>`။
+သိုလှောင်မှုအတန်းများသည် `hot`၊ `warm` သို့မဟုတ် `cold` လက်ခံသည်။
 
 ```toml
 [torii.da_ingest.replication_policy.default_retention]
@@ -85,12 +86,12 @@ storage_class = "hot"
 governance_tag = "da.taikai.live"
 ```
 
-Leave the block untouched to run with the defaults listed above. To tighten a
-class, update the matching override; to change the baseline for new classes,
-edit `default_retention`.
+အထက်ဖော်ပြပါ ပုံသေများနှင့်အတူ လုပ်ဆောင်ရန် ဘလောက်ကို မထိမိပါစေနှင့်။ တင်းကျပ်ရန်
+အတန်းအစား၊ ကိုက်ညီသော override ကို အပ်ဒိတ်လုပ်ပါ။ အတန်းသစ်များအတွက် အခြေခံအချက်ကို ပြောင်းလဲရန်၊
+`default_retention` ကိုတည်းဖြတ်ပါ။
 
-Taikai availability classes can be overridden independently via
-`torii.da_ingest.replication_policy.taikai_availability`:
+Taikai ရရှိနိုင်မှု အတန်းများမှတစ်ဆင့် လွတ်လပ်စွာ လွှမ်းမိုးနိုင်ပါသည်။
+`torii.da_ingest.replication_policy.taikai_availability`-
 
 ```toml
 [[torii.da_ingest.replication_policy.taikai_availability]]
@@ -103,30 +104,30 @@ storage_class = "cold"
 governance_tag = "da.taikai.archive"
 ```
 
-## Enforcement semantics
+## ပြဋ္ဌာန်းထားသော ဝေါဟာရများ
 
-- Torii replaces the user-supplied `RetentionPolicy` with the enforced profile
-  before chunking or manifest emission.
-- Pre-built manifests that declare a mismatched retention profile are rejected
-  with `400 schema mismatch` so stale clients cannot weaken the contract.
-- Every override event is logged (`blob_class`, submitted vs expected policy)
-  to surface non-compliant callers during rollout.
+- Torii သည် အသုံးပြုသူမှပံ့ပိုးပေးထားသော `RetentionPolicy` ကို အတင်းအကြပ်ပရိုဖိုင်ဖြင့် အစားထိုးသည်
+  အတုံးမလိုက်မီ သို့မဟုတ် ဓာတ်ငွေ့ထုတ်လွှတ်မှု မထင်ရှားမီ။
+- မကိုက်ညီသော ထိန်းသိမ်းထားမှု ပရိုဖိုင်ကို ကြေညာသည့် ကြိုတင်တည်ဆောက်ထားသော မန်နီးဖက်စ်များကို ပယ်ချသည်။
+  `400 schema mismatch` ဖြင့် ဖောက်သည်များသည် စာချုပ်ကို အားနည်းအောင် မလုပ်နိုင်ပါ။
+- အစားထိုးမှုတိုင်းကို မှတ်တမ်းတင်ထားသည် (`blob_class`၊ တင်ပြထားသည့် မျှော်မှန်းမူဝါဒနှင့်)
+  စတင်ရောင်းချစဉ်အတွင်း လိုက်နာမှုမရှိသော ခေါ်ဆိုသူများကို ဖော်ပြရန်။
 
-See [Data Availability Ingest Plan](ingest-plan.md) (Validation checklist) for the updated gate
-covering retention enforcement.
+အပ်ဒိတ်လုပ်ထားသောဂိတ်အတွက် [Data Availability Ingest Plan](ingest-plan.md) (စစ်ဆေးချက်စာရင်း) ကိုကြည့်ပါ
+ထိန်းသိမ်းခြင်းဆိုင်ရာ အကျုံးဝင်ခြင်း။
 
-## Re-replication workflow (DA-4 follow-up)
+## ပြန်လည်ပုံတူခြင်းလုပ်ငန်းအသွားအလာ (DA-4 နောက်ဆက်တွဲ)
 
-Retention enforcement is only the first step. Operators must also prove that
-live manifests and replication orders stay aligned with the configured policy so
-that SoraFS can automatically re-replicate out-of-compliance blobs.
+ထိန်းသိမ်းခြင်းအား တွန်းအားပေးခြင်းသည် ပထမအဆင့်သာဖြစ်သည်။ လုပ်ငန်းရှင်များကလည်း သက်သေပြရမည်ဖြစ်သည်။
+တိုက်ရိုက်ဖော်ပြချက်များနှင့် ပုံတူကူးယူမှုများသည် စီစဉ်သတ်မှတ်ထားသော မူဝါဒနှင့်အညီ ဆက်လက်တည်ရှိနေပါသည်။
+SoraFS သည် မလိုက်နာသော blobs များကို အလိုအလျောက် ပြန်လည်ကူးယူနိုင်ပါသည်။
 
-1. **Watch for drift.** Torii emits
-   `overriding DA retention policy to match configured network baseline` whenever
-   a caller submits stale retention values. Pair that log with
-   `torii_sorafs_replication_*` telemetry to spot replica shortfalls or delayed
-   redeployments.
-2. **Diff intent vs live replicas.** Use the new audit helper:
+1. ** ပျံ့လွင့်မှုကို စောင့်ကြည့်ပါ။** Torii ထွက်လာသည်
+   `overriding DA retention policy to match configured network baseline` အခါတိုင်း
+   ခေါ်ဆိုသူသည် ဟောင်းနွမ်းနေသော ထိန်းသိမ်းမှုတန်ဖိုးများကို တင်ပြသည်။ ထိုမှတ်တမ်းနှင့်တွဲပါ။
+   ပုံတူ ချို့ယွင်းချက်များ သို့မဟုတ် နှောင့်နှေးမှုများကို တွေ့ရှိရန် `torii_sorafs_replication_*`
+   ပြန်လည်နေရာချထားရေး။
+2. **ကွဲပြားသော ရည်ရွယ်ချက်နှင့် တိုက်ရိုက်ပုံတူများ။** စာရင်းစစ်အသစ်ကို အသုံးပြုပါ-
 
    ```bash
    cargo xtask da-replication-audit \
@@ -136,29 +137,29 @@ that SoraFS can automatically re-replicate out-of-compliance blobs.
      --json-out artifacts/da/replication_audit.json
    ```
 
-   The command loads `torii.da_ingest.replication_policy` from the provided
-   config, decodes each manifest (JSON or Norito), and optionally matches any
-   `ReplicationOrderV1` payloads by manifest digest. The summary flags two
-   conditions:
+   command သည် ပေးထားသောမှ `torii.da_ingest.replication_policy` ကို load လုပ်သည်။
+   config၊ manifest တစ်ခုစီကို decode လုပ်သည် (JSON သို့မဟုတ် Norito) နှင့် မည်သည့်အရာနှင့်မဆို ကိုက်ညီမှုရှိသည်
+   `ReplicationOrderV1` ကို မန်နီးဖက်စ် ချေဖျက်မှုဖြင့် ပေးဆောင်သည်။ အနှစ်ချုပ်မှာ အလံနှစ်ခု
+   အခြေအနေများ-
 
-   - `policy_mismatch` – the manifest retention profile diverges from the enforced
-     policy (this should never happen unless Torii is misconfigured).
-   - `replica_shortfall` – the live replication order requests fewer replicas than
-     `RetentionPolicy.required_replicas` or provides fewer assignments than its
-     target.
+   - `policy_mismatch` - ထင်ရှားသော ထိန်းသိမ်းမှုပရိုဖိုင်သည် ပြဌာန်းထားသည်နှင့် ကွဲပြားသည်
+     မူဝါဒ (Torii ကို မှားယွင်းစွာဖွဲ့စည်းထားခြင်းမရှိပါက ၎င်းသည် မည်သည့်အခါမျှ မဖြစ်သင့်ပါ)။
+   - `replica_shortfall` - တိုက်ရိုက်ပုံတူကူးယူမှုတွင် ပုံတူများထက် အနည်းငယ်သာ တောင်းဆိုသည်
+     `RetentionPolicy.required_replicas` သို့မဟုတ် ၎င်း၏ထက်နည်းသော တာဝန်များကို ပေးသည်။
+     ပစ်မှတ်။
 
-   A non-zero exit status indicates an active shortfall so CI/on-call automation
-   can page immediately. Attach the JSON report to the
+   သုညမဟုတ်သော ထွက်ပေါက်အခြေအနေသည် အသက်ဝင်နေသော ချို့ယွင်းချက်ကို ညွှန်ပြသောကြောင့် CI/ခေါ်ဆိုမှုတွင် အလိုအလျောက်လုပ်ဆောင်ခြင်း ဖြစ်သည်။
+   ချက်ချင်း page လို့ရပါတယ်။ JSON အစီရင်ခံစာကို the တွင် ပူးတွဲပါ။
    `docs/examples/da_manifest_review_template.md`
-   packet for Parliament votes.
-3. **Trigger re-replication.** When the audit reports a shortfall, issue a fresh
-   `ReplicationOrderV1` via the governance tooling described in
-   [SoraFS storage capacity marketplace](../sorafs/storage-capacity-marketplace.md) and re-run the audit
-   until the replica set converges. For emergency overrides, pair the CLI output
-   with `iroha app da prove-availability` so that SREs can reference the same digest
-   and PDP evidence.
+   လွှတ်တော်မဲစာရင်း။
+3. **ပြန်လည်ပုံတူခြင်းကို တွန်းအားပေးပါ။** စာရင်းစစ်သည် ချို့ယွင်းချက်တစ်ခုကို အစီရင်ခံသောအခါ၊ အသစ်ထုတ်ပေးပါ။
+   `ReplicationOrderV1` တွင်ဖော်ပြထားသောအုပ်ချုပ်မှုကိရိယာမှတဆင့်
+   [SoraFS သိုလှောင်မှုပမာဏစျေးကွက်](../sorafs/storage-capacity-marketplace.md) နှင့် စာရင်းစစ်ကို ပြန်လည်လုပ်ဆောင်ပါ
+   ပုံတူအစုများ ပေါင်းစည်းသည်အထိ။ အရေးပေါ်အခြေအနေများအတွက်၊ CLI အထွက်ကို တွဲချိတ်ပါ။
+   `iroha app da prove-availability` ဖြင့် SRE များသည် တူညီသောအချက်များကို ကိုးကားနိုင်စေရန်
+   နှင့် PDP အထောက်အထားများ။
 
-Regression coverage lives in `integration_tests/tests/da/replication_policy.rs`;
-the suite submits a mismatched retention policy to `/v1/da/ingest` and verifies
-that the fetched manifest exposes the enforced profile instead of the caller
-intent.
+ဆုတ်ယုတ်မှုလွှမ်းခြုံမှု `integration_tests/tests/da/replication_policy.rs` တွင် နေထိုင်သည်။
+အစုံလိုက်သည် `/v1/da/ingest` သို့ မကိုက်ညီသော ထိန်းသိမ်းမှုမူဝါဒကို တင်ပြပြီး အတည်ပြုသည်
+ရယူထားသော မန်နီးဖက်စ်သည် ခေါ်ဆိုသူအစား အတင်းအကြပ် ပရိုဖိုင်ကို ဖော်ထုတ်ပေးသည်။
+ရည်ရွယ်ချက်။

@@ -7,126 +7,127 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 4ac4c98cc4aa6ab0c34e58e6428d0ee33eb9a0c3fdad9e6958bdc75f2a48dc66
 source_last_modified: "2026-01-22T16:26:46.488648+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Fraud Governance Playbook
+# ማጭበርበር የአስተዳደር መጫወቻ መጽሐፍ
 
-This document summarizes the scaffolding required for the PSP fraud stack while
-full microservices and SDKs are under active development. It captures
-expectations for analytics, auditor workflows, and fallback procedures so that
-upcoming implementations can plug into the ledger safely.
+ይህ ሰነድ ለ PSP የማጭበርበር ቁልል የሚያስፈልገውን ስካፎልዲንግ ጠቅለል አድርጎ ያቀርባል
+ሙሉ ማይክሮ አገልግሎቶች እና ኤስዲኬዎች በንቃት ልማት ላይ ናቸው። ይይዛል
+ለትንታኔ፣የኦዲተር የስራ ሂደት እና የውድቀት ሂደቶች የሚጠበቁ ነገሮች ስለዚህ
+መጪ ትግበራዎች ወደ ደብተር ደህንነቱ በተጠበቀ ሁኔታ ይሰኩታል።
 
-## Services Overview
+የአገልግሎቶች አጠቃላይ እይታ
 
-1. **API Gateway** – receives synchronous `RiskQuery` payloads, forwards them to
-   feature aggregation, and relays `FraudAssessment` responses back to ledger
-   flows. High availability (active-active) is required; use regional pairs with
-   deterministic hashing to avoid request skew.
-2. **Feature Aggregation** – composes feature vectors for scoring. Emit
-   `FeatureInput` hashes only; sensitive payloads stay off-chain. Observability
-   must publish latency histograms, queue depth gauges, and replay counters per
-   tenant.
-3. **Risk Engine** – evaluates rules/models and produces deterministic
-   `FraudAssessment` outputs. Ensure rule execution order is stable and capture
-   audit logs per assessment ID.
+1. ** ኤፒአይ ጌትዌይ *** - የተመሳሰለ I18NI0000006X ጭነት ይቀበላል፣ ያስተላልፋቸዋል።
+   የባህሪ ድምር፣ እና የ `FraudAssessment` ምላሾችን ወደ ደብተር ይመለሳሉ
+   ፍሰቶች. ከፍተኛ ተገኝነት (ንቁ-ንቁ) ያስፈልጋል; ጋር የክልል ጥንዶችን ይጠቀሙ
+   የጥያቄ ማዛባትን ለማስቀረት deterministic hashing።
+2. **የባህሪ ድምር** - ለጎል ማስቆጠር የባህሪ ቬክተሮችን ያዘጋጃል። አስወጣ
+   `FeatureInput` ሃሽ ብቻ; ሚስጥራዊነት ያላቸው ሸክሞች ከሰንሰለት ውጪ ይቆያሉ። ታዛቢነት
+   የቆይታ ሂስቶግራሞችን፣ የወረፋ ጥልቀት መለኪያዎችን እና የድግግሞሽ ቆጣሪዎችን በ per
+   ተከራይ
+3. ** አደጋ ሞተር *** - ደንቦችን / ሞዴሎችን ይገመግማል እና ቆራጥነትን ያመነጫል።
+   I18NI0000009X ውጤቶች. የደንብ አፈፃፀም ትዕዛዝ የተረጋጋ እና የተያዘ መሆኑን ያረጋግጡ
+   የኦዲት መዝገቦች በግምገማ መታወቂያ።
 
-## Analytics & Model Promotion
+## ትንታኔ እና ሞዴል ማስተዋወቅ
 
-- **Anomaly Detection**: maintain a streaming job that flags deviations in
-  decision rates per tenant. Feed alerts into the governance dashboard and store
-  summaries for quarterly reviews.
-- **Graph Analysis**: run nightly graph traversals on relational exports to
-  identify collusion clusters. Export findings into the governance portal via
-  `GovernanceExport` with references to supporting evidence.
-- **Feedback Ingestion**: curate manual review outcomes and chargeback reports.
-  Convert them into feature deltas and incorporate them into training datasets.
-  Publish ingestion status metrics so the risk team can spot stalled feeds.
-- **Model Promotion Pipeline**: automate candidate evaluation (offline metrics,
-  canary scoring, rollback readiness). Promotions should emit a signed
-  `FraudAssessment` sample set and update the `model_version` field in
+- ** Anomaly Detection ***: ልዩነቶችን የሚጠቁም የዥረት ሥራ ይያዙ
+  የውሳኔ ዋጋዎች በአንድ ተከራይ. ወደ አስተዳደር ዳሽቦርድ እና ማከማቻ ማንቂያዎችን ይመግቡ
+  ለሩብ ዓመታዊ ግምገማዎች ማጠቃለያዎች.
+- ** የግራፍ ትንተና ***፡ ወደ ውጪ በሚላኩ ተያያዥነት ያላቸው የምሽት ግራፍ ጉዞዎችን ያካሂዱ
+  የትብብር ስብስቦችን መለየት። ግኝቶችን ወደ አስተዳደር ፖርታል በመላክ ይላኩ።
+  `GovernanceExport` ከደጋፊ ማስረጃዎች ጋር።
+- ** የግብረመልስ ማስገቢያ ***: በእጅ የሚገመገሙ ውጤቶችን እና የመመለሻ ሪፖርቶችን ያዘጋጁ።
+  ወደ ባህሪ ዴልታዎች ይቀይሯቸው እና ወደ የስልጠና ዳታ ስብስቦች ያካትቷቸው።
+  የአደጋው ቡድን የቆሙ ምግቦችን መለየት እንዲችል የመጠጫ ሁኔታ መለኪያዎችን ያትሙ።
+- ** የሞዴል ማስተዋወቂያ ቧንቧ ***: በራስ ሰር የእጩ ግምገማ (ከመስመር ውጭ መለኪያዎች ፣
+  የካናሪ የውጤት አሰጣጥ፣ የመመለሻ ዝግጁነት)። ማስተዋወቂያዎች የተፈረመ ወረቀት መልቀቅ አለባቸው
+  `FraudAssessment` ናሙና አዘጋጅቶ የI18NI0000012X መስኩን በ
   `GovernanceExport`.
 
-## Auditor Workflow
+## ኦዲተር የስራ ፍሰት
 
-1. Snapshot the latest `GovernanceExport` and verify the `policy_digest` matches
-   the manifest provided by the risk team.
-2. Validate that rule aggregates reconcile with ledger-side decision totals for
-   the sampled window.
-3. Review the anomaly detection and graph analysis reports for outstanding
-   issues. Document escalations and expected remediation owners.
-4. Sign and archive the review checklist. Store the Norito-encoded artifacts in
-   the governance portal for reproducibility.
+1. የቅርብ ጊዜውን `GovernanceExport` ያንሱ እና የ`policy_digest` ግጥሚያዎችን ያረጋግጡ
+   በአደጋው ቡድን የቀረበው አንጸባራቂ.
+2. ከደብዳቤ-ጎን የውሳኔ ድምር ጋር የሚታረቀውን ደንብ ያረጋግጡ
+   የናሙናውን መስኮት.
+3. ያልተለመደ የማግኘት እና የግራፍ ትንተና ሪፖርቶችን ላቅ ያለ ግምገማ ይገምግሙ
+   ጉዳዮች የሰነድ ጭማሪዎች እና የሚጠበቁ የማስተካከያ ባለቤቶች።
+4. የግምገማ ማረጋገጫ ዝርዝሩን ይፈርሙ እና በማህደር ያስቀምጡ። በNorito የተመሰጠሩ ቅርሶችን ያከማቹ
+   የመራቢያ ፖርታል የአስተዳደር ፖርታል.
 
-## Fallback Playbooks
+## የመልሶ ማጫወቻ መጽሐፍት።
 
-- **Engine Outage**: if the risk engine is unavailable for more than 60 seconds,
-  the gateway should flip into review-only mode, issuing `AssessmentDecision::Review`
-  for all requests and alerting operators.
-- **Telemetry Gap**: when metrics or traces fall behind (missing for 5 minutes),
-  halt automatic model promotions and notify the on-call engineer.
-- **Model Regression**: if post-deployment feedback indicates elevated fraud
-  losses, roll back to the previous signed model bundle and update the roadmap
-  with corrective actions.
+- ** የሞተር መጥፋት ***: የአደጋው ሞተር ከ 60 ሰከንድ በላይ የማይገኝ ከሆነ ፣
+  የመግቢያ መንገዱ `AssessmentDecision::Review` በማውጣት ወደ ግምገማ-ብቻ ሁነታ መቀየር አለበት።
+  ለሁሉም ጥያቄዎች እና ማንቂያ ኦፕሬተሮች.
+- ** የቴሌሜትሪ ክፍተት ***: መለኪያዎች ወይም ዱካዎች ወደ ኋላ ሲቀሩ (ለ 5 ደቂቃዎች ይጎድላሉ)
+  ራስ-ሰር የሞዴል ማስተዋወቂያዎችን ያቁሙ እና የጥሪ መሐንዲሱን ያሳውቁ።
+- ** የሞዴል ሪግሬሽን ***፡ ከቅንጅት በኋላ ግብረመልስ ከፍ ያለ ማጭበርበርን የሚያመለክት ከሆነ
+  ኪሳራዎች፣ ወደ ቀድሞው የተፈረመ የሞዴል ጥቅል ይመለሱ እና የመንገድ ካርታውን ያዘምኑ
+  ከማስተካከያ እርምጃዎች ጋር.
 
-## Data-Sharing Agreements
+## የውሂብ መጋራት ስምምነቶች
 
-- Maintain jurisdiction-specific appendices covering retention, encryption, and
-  breach notification SLAs. Partners must sign the appendix before receiving
-  `FraudAssessment` exports.
-- Document data minimization practices for each integration (e.g., hashing
-  account identifiers, truncating card numbers).
-- Refresh agreements annually or whenever regulatory requirements change.
+- ማቆየት፣ ምስጢራዊ እና ምስጠራን የሚሸፍኑ የዳኝነት-ተኮር አባሪዎችን ያቆዩ።
+  ጥሰት ማሳወቂያ SLAs. አጋሮች ከመቀበላቸው በፊት አባሪውን መፈረም አለባቸው
+  `FraudAssessment` ወደ ውጭ ይላካል.
+- ለእያንዳንዱ ውህደት የውሂብ ቅነሳ ልምዶችን (ለምሳሌ, hashing
+  የመለያ መለያዎች፣ የመቁረጥ ካርድ ቁጥሮች)።
+- ስምምነቶችን በየአመቱ ያድሱ ወይም የቁጥጥር መስፈርቶች ሲቀየሩ።
 
-## API Schemas
+## የኤፒአይ መርሃግብሮች
 
-The gateway now exposes concrete JSON envelopes that map one-to-one to the
-Norito types implemented in `crates/iroha_data_model::fraud`:
+የመግቢያ መንገዱ አሁን አንድ ለአንድ ካርታ የሚያሳዩ የኮንክሪት JSON ኤንቨሎፖችን ያጋልጣል
+Norito አይነቶች በI18NI0000018X ውስጥ ተተግብረዋል፡
 
-- **Risk intake** – `POST /v1/fraud/query` accepts the `RiskQuery` schema:
-  - `query_id` (`[u8; 32]`, hex encoded)
-  - `subject` (`AccountId`, canonical IH58 literal; optional `@<domain>` hint or alias)
-  - `operation` (tagged enum matching `RiskOperation`; the JSON `type`
-    discriminator mirrors the enum variant)
-  - `related_asset` (`AssetId`, optional)
-  - `features` (array of `{ key: String, value_hash: hex32 }` mapped from
+- **የአደጋ ቅበላ** - `POST /v1/fraud/query` የI18NI0000020X እቅድ ይቀበላል፡-
+  - `query_id` (`[u8; 32]`፣ ሄክስ ኮድ የተደረገ)
+  - `subject` (`AccountId`፣ ቀኖናዊ IH58 ቀጥተኛ፣ አማራጭ `@<domain>` ፍንጭ ወይም ተለዋጭ ስም)
+  - `operation` (መለያ የተሰጠው enum ተዛማጅ `RiskOperation`፣ JSON `type`
+    አድሎአዊ የቁጥር ልዩነትን ያንጸባርቃል)
+  - `related_asset` (`AssetId`፣ አማራጭ)
+  - `features` (የ`{ key: String, value_hash: hex32 }` ድርድር ከ
     `FeatureInput`)
   - `issued_at_ms` (`u64`)
-  - `context` (`RiskContext`; carries `tenant_id`, optional `session_id`,
-    optional `reason`)
-- **Risk decision** – `POST /v1/fraud/assessment` consumes the
-  `FraudAssessment` payload (also mirrored in the governance exports):
-  - `query_id`, `engine_id`, `risk_score_bps`, `confidence_bps`,
-    `decision` (`AssessmentDecision` enum), `rule_outcomes`
-    (array of `{ rule_id, score_delta_bps, rationale? }`)
+  - `context` (`RiskContext`፤ `tenant_id` ይይዛል፣ አማራጭ `session_id`፣
+    አማራጭ `reason`)
+- ** የአደጋ ውሳኔ *** - `POST /v1/fraud/assessment` ይበላል።
+  `FraudAssessment` ክፍያ (በአስተዳዳሪው ወደ ውጭ መላኮችም ይንጸባረቃል)
+  - `query_id`፣ `engine_id`፣ `risk_score_bps`፣ `confidence_bps`፣
+    `decision` (`AssessmentDecision` enum)፣ `rule_outcomes`
+    (የ`{ rule_id, score_delta_bps, rationale? }` ድርድር)
   - `generated_at_ms`
-  - `signature` (optional base64 wrapping the Norito-encoded assessment)
-- **Governance export** – `GET /v1/fraud/governance/export` returns the
-  `GovernanceExport` structure when the `governance` feature is enabled, bundling
-  active parameters, the latest enactment, model version, policy digest, and the
-  `DecisionAggregate` histogram.
+  - `signature` (አማራጭ base64 Norito-encoded ግምገማ መጠቅለል)
+- ** አስተዳደር ወደ ውጭ መላክ *** - `GET /v1/fraud/governance/export` ይመልሳል
+  የ`GovernanceExport` መዋቅር የ`governance` ባህሪ ሲነቃ፣ ማያያዝ
+  ንቁ መለኪያዎች፣ የቅርብ ጊዜ አፈጻጸም፣ የሞዴል ሥሪት፣ የፖሊሲ መፍጨት እና የ
+  `DecisionAggregate` ሂስቶግራም.
 
-Round-trip tests in `crates/iroha_data_model/src/fraud/types.rs` ensure these
-schemas remain binary-conformant with the Norito codec, and
-`integration_tests/tests/fraud_monitoring_requires_assessment_bands.rs` exercises
-the full intake/decision pipeline end-to-end.
+በ`crates/iroha_data_model/src/fraud/types.rs` ውስጥ ያሉ የዙር ጉዞ ሙከራዎች እነዚህን ያረጋግጣሉ
+መርሃግብሮች ከNorito ኮዴክ ጋር ሁለትዮሽ-ተስማሚ ሆነው ይቆያሉ፣ እና
+`integration_tests/tests/fraud_monitoring_requires_assessment_bands.rs` መልመጃዎች
+ሙሉውን የመግቢያ/የውሳኔ ቧንቧ መስመር ከጫፍ እስከ ጫፍ።
 
-## PSP SDK References
+## PSP SDK ዋቢዎች
 
-The following language stubs track the PSP-facing integration examples:
+የሚከተሉት የቋንቋ ቋጠሮዎች ከፒኤስፒ ጋር የተያያዙ የውህደት ምሳሌዎችን ይከታተላሉ፡
 
-- **Rust** – `integration_tests/tests/fraud_monitoring_requires_assessment_bands.rs`
-  uses the workspace `iroha` client to craft `RiskQuery` metadata and validate
-  admission failures/successes.
-- **TypeScript** – `docs/source/governance_api.md` documents the REST surface
-  consumed by the lightweight Torii gateway used in the PSP demo dashboard; the
-  scripted client lives in `scripts/ci/schedule_fraud_scoring.sh` for smoke
-  drills.
-- **Swift & Kotlin** – the existing SDKs (`IrohaSwift` and
-  `crates/iroha_cli/docs/multisig.md` references) expose the Torii metadata
-  hooks needed to attach `fraud_assessment_*` fields. PSP-specific helpers are
-  tracked under the “Fraud & Telemetry Governance Loop” milestone in
-  `status.md` and reuse those SDKs’ transaction builders.
+- ** ዝገት *** - `integration_tests/tests/fraud_monitoring_requires_assessment_bands.rs`
+  `RiskQuery` ሜታዳታ ለመስራት እና ለማረጋገጥ የስራ ቦታ I18NI0000060X ደንበኛን ይጠቀማል።
+  የመግቢያ ውድቀቶች / ስኬቶች.
+- ** ዓይነት ስክሪፕት *** - `docs/source/governance_api.md` የ REST ገጽን ይመዘግባል
+  በ PSP ማሳያ ዳሽቦርድ ውስጥ ጥቅም ላይ በሚውለው ቀላል ክብደት I18NT0000004X ጌትዌይ ተበላ; የ
+  ስክሪፕት የተደረገ ደንበኛ በ I18NI0000063X ለጭስ ይኖራል
+  ልምምዶች.
+- ** ስዊፍት እና ኮትሊን *** - ያሉት ኤስዲኬዎች (I18NI0000064X እና
+  `crates/iroha_cli/docs/multisig.md` ማጣቀሻዎች) የI18NT0000005X ሜታዳታ ያጋልጣሉ
+  I18NI0000066X መስኮችን ለማያያዝ መንጠቆዎች ያስፈልጋሉ። PSP-ተኮር ረዳቶች ናቸው።
+  በ"ማጭበርበር እና ቴሌሜትሪ የአስተዳደር ዑደት" ምእራፍ ስር ተከታትሏል።
+  `status.md` እና የእነዚያን የኤስዲኬዎች ግብይት ገንቢዎችን እንደገና ይጠቀሙ።
 
-These references will be kept in sync with the microservice gateway so PSP
-implementers always have an up-to-date schema and sample code path for each
-supported language.
+እነዚህ ማመሳከሪያዎች ከማይክሮ ሰርቪስ መግቢያ በር ስለዚህ PSP ጋር በማመሳሰል ይቀመጣሉ።
+ፈጻሚዎች ሁልጊዜ ለእያንዳንዳቸው ወቅታዊ የሆነ ንድፍ እና የናሙና ኮድ መንገድ አላቸው።
+የሚደገፍ ቋንቋ.

@@ -10,20 +10,21 @@ translation_last_reviewed: 2026-02-07
 title: JavaScript ledger flow recipe
 description: Register an asset, mint, transfer, and query balances with `@iroha2/torii-client`.
 slug: /sdks/recipes/javascript-ledger-flow
+translator: machine-google-reviewed
 ---
 
-import SampleDownload from '@site/src/components/SampleDownload';
+SampleDownload-ı '@site/src/components/SampleDownload'dan idxal edin;
 
-This recipe uses the Node.js `@iroha2/torii-client` and
-`@iroha2/crypto-target-node` packages to reproduce the CLI ledger walkthrough.
+Bu resept Node.js `@iroha2/torii-client` və istifadə edir
+`@iroha2/crypto-target-node` paketləri CLI mühasibat dəftərini təkrar etmək üçün.
 
-<SampleDownload
+<Nümunə Yüklə
   href="/sdk-recipes/javascript/ledger-flow.mjs"
-  filename="ledger-flow.mjs"
-  description="Download the exact JavaScript script used in this ledger walkthrough."
+  fayl adı = "ledger-flow.mjs"
+  description="Bu kitabda istifadə olunan dəqiq JavaScript skriptini yükləyin."
 />
 
-## Prerequisites
+## İlkin şərtlər
 
 ```bash
 npm install @iroha2/torii-client @iroha2/crypto-target-node
@@ -32,7 +33,7 @@ export RECEIVER_ACCOUNT="ih58..."
 export ADMIN_PRIVATE_KEY="802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53"
 ```
 
-## Example script
+## Nümunə skript
 
 ```ts title="ledger-flow.mjs"
 import {ToriiClient, buildTransaction} from '@iroha2/torii-client';
@@ -75,12 +76,12 @@ for (const asset of balances.items) {
 }
 ```
 
-Run with `node --env-file=.env ledger-flow.mjs` (or export the environment
-variables manually). The log should show the transaction hash (from the receipt
-payload) and the updated receiver balance.
+`node --env-file=.env ledger-flow.mjs` ilə işləyin (və ya ətraf mühiti ixrac edin
+dəyişənləri əl ilə). Jurnal əməliyyat hashını göstərməlidir (qəbzdən
+faydalı yük) və yenilənmiş qəbuledici balansı.
 
-## Verify parity
+## Pariteti yoxlayın
 
-- Fetch the transaction details via `iroha --config defaults/client.toml transaction get --hash <hash>`.
-- Cross-check balances with `iroha --config defaults/client.toml asset list filter '{"id":"coffee#wonderland##<account>"}'`.
-- Compare the emitted hash with the Rust and Python recipes to ensure SDK parity.
+- `iroha --config defaults/client.toml transaction get --hash <hash>` vasitəsilə əməliyyat təfərrüatlarını əldə edin.
+- `iroha --config defaults/client.toml asset list filter '{"id":"coffee#wonderland##<account>"}'` ilə balansları çarpaz yoxlayın.
+- SDK paritetini təmin etmək üçün buraxılan hashı Rust və Python reseptləri ilə müqayisə edin.

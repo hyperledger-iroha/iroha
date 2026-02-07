@@ -4,65 +4,67 @@ direction: ltr
 source: docs/portal/docs/da/replication-policy.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-title: Data Availability Replication Policy
-sidebar_label: Replication Policy
-description: Governance-enforced retention profiles applied to all DA ingest submissions.
+başlıq: Məlumatların Əlçatanlığının Replikasiya Siyasəti
+sidebar_label: Replikasiya Siyasəti
+təsvir: İdarəetmə tərəfindən tətbiq edilən saxlama profilləri bütün DA qəbulu təqdimatlarına tətbiq edilir.
 ---
 
-:::note Canonical Source
+:::Qeyd Kanonik Mənbə
 :::
 
-# Data Availability Replication Policy (DA-4)
+# Məlumatların Əlçatanlığının Replikasiya Siyasəti (DA-4)
 
-_Status: In Progress — Owners: Core Protocol WG / Storage Team / SRE_
+_Status: Davam edir — Sahiblər: Əsas Protokol WG / Saxlama Komandası / SRE_
 
-The DA ingestion pipeline now enforces deterministic retention targets for
-every blob class described in `roadmap.md` (workstream DA-4). Torii refuses to
-persist caller-provided retention envelopes that do not match the configured
-policy, guaranteeing that every validator/storage node retains the required
-number of epochs and replicas without relying on submitter intent.
+DA qəbulu kəməri indi deterministik saxlama hədəflərini tətbiq edir
+`roadmap.md` (iş axını DA-4)-də təsvir olunan hər blob sinfi. Torii imtina edir
+konfiqurasiyaya uyğun gəlməyən zəng edənin təmin etdiyi saxlama zərflərini davam etdirin
+hər bir validator/saxlama qovşağının tələb olunanı saxlamasına zəmanət verən siyasət
+təqdim edənin niyyətinə əsaslanmadan dövrlərin və replikaların sayı.
 
-## Default policy
+## Defolt siyasət
 
-| Blob class | Hot retention | Cold retention | Required replicas | Storage class | Governance tag |
+| Blob sinfi | İsti tutma | Soyuq tutma | Tələb olunan replikalar | Saxlama sinfi | İdarəetmə etiketi |
 |------------|---------------|----------------|-------------------|----------------|----------------|
-| `taikai_segment` | 24 hours | 14 days | 5 | `hot` | `da.taikai.live` |
-| `nexus_lane_sidecar` | 6 hours | 7 days | 4 | `warm` | `da.sidecar` |
-| `governance_artifact` | 12 hours | 180 days | 3 | `cold` | `da.governance` |
-| _Default (all other classes)_ | 6 hours | 30 days | 3 | `warm` | `da.default` |
+| `taikai_segment` | 24 saat | 14 gün | 5 | `hot` | `da.taikai.live` |
+| `nexus_lane_sidecar` | 6 saat | 7 gün | 4 | `warm` | `da.sidecar` |
+| `governance_artifact` | 12 saat | 180 gün | 3 | `cold` | `da.governance` |
+| _Defolt (bütün digər siniflər)_ | 6 saat | 30 gün | 3 | `warm` | `da.default` |
 
-These values are embedded in `torii.da_ingest.replication_policy` and applied to
-all `/v1/da/ingest` submissions. Torii rewrites manifests with the enforced
-retention profile and emits a warning when callers provide mismatched values so
-operators can detect stale SDKs.
+Bu dəyərlər `torii.da_ingest.replication_policy`-ə daxil edilib və tətbiq edilir
+bütün `/v1/da/ingest` təqdimatları. Torii manifestləri məcburi olanlarla yenidən yazır
+saxlama profili və zəng edənlər uyğun olmayan dəyərlər təqdim etdikdə xəbərdarlıq verir
+operatorlar köhnəlmiş SDK-ları aşkar edə bilər.
 
-### Taikai availability classes
+### Taikai mövcudluğu dərsləri
 
-Taikai routing manifests (`taikai.trm`) declare an `availability_class`
-(`hot`, `warm`, or `cold`). Torii enforces the matching policy before chunking
-so operators can scale replica counts per stream without editing the global
-table. Defaults:
+Taikai marşrutlaşdırma manifestləri (`taikai.trm`) `availability_class` elan edir
+(`hot`, `warm` və ya `cold`). Torii parçalanmadan əvvəl uyğunluq siyasətini tətbiq edir
+beləliklə, operatorlar qlobal redaktə etmədən hər bir axın üçün replikaların sayını ölçə bilər
+masa. Defoltlar:
 
-| Availability class | Hot retention | Cold retention | Required replicas | Storage class | Governance tag |
-|--------------------|---------------|----------------|-------------------|----------------|----------------|
-| `hot` | 24 hours | 14 days | 5 | `hot` | `da.taikai.live` |
-| `warm` | 6 hours | 30 days | 4 | `warm` | `da.taikai.warm` |
-| `cold` | 1 hour | 180 days | 3 | `cold` | `da.taikai.archive` |
+| Mövcudluq sinfi | İsti tutma | Soyuq tutma | Tələb olunan replikalar | Saxlama sinfi | İdarəetmə etiketi |
+|----------------|---------------|----------------|-------------------|----------------|----------------|
+| `hot` | 24 saat | 14 gün | 5 | `hot` | `da.taikai.live` |
+| `warm` | 6 saat | 30 gün | 4 | `warm` | `da.taikai.warm` |
+| `cold` | 1 saat | 180 gün | 3 | `cold` | `da.taikai.archive` |
 
-Missing hints default to `hot` so live broadcasts retain the strongest policy.
-Override the defaults via
-`torii.da_ingest.replication_policy.taikai_availability` if your network uses
-different targets.
+Çatışmayan göstərişlər defolt olaraq `hot`-dir, beləliklə canlı yayımlar ən güclü siyasəti saxlayır.
+vasitəsilə defoltları ləğv edin
+Şəbəkəniz istifadə edirsə, `torii.da_ingest.replication_policy.taikai_availability`
+müxtəlif hədəflər.
 
-## Configuration
+## Konfiqurasiya
 
-The policy lives under `torii.da_ingest.replication_policy` and exposes a
-*default* template plus an array of per-class overrides. Class identifiers are
-case-insensitive and accept `taikai_segment`, `nexus_lane_sidecar`,
-`governance_artifact`, or `custom:<u16>` for governance-approved extensions.
-Storage classes accept `hot`, `warm`, or `cold`.
+Siyasət `torii.da_ingest.replication_policy` altında yaşayır və a. ifşa edir
+*defolt* şablon üstəgəl hər sinif üzrə ləğvetmələr massivi. Sinif identifikatorları bunlardır
+hərflərə həssas deyil və `taikai_segment`, `nexus_lane_sidecar`,
+İdarəetmə tərəfindən təsdiqlənmiş genişləndirmələr üçün `governance_artifact` və ya `custom:<u16>`.
+Saxlama sinifləri `hot`, `warm` və ya `cold`-i qəbul edir.
 
 ```toml
 [torii.da_ingest.replication_policy.default_retention]
@@ -82,11 +84,11 @@ storage_class = "hot"
 governance_tag = "da.taikai.live"
 ```
 
-Leave the block untouched to run with the defaults listed above. To tighten a
-class, update the matching override; to change the baseline for new classes,
-edit `default_retention`.
+Yuxarıda sadalanan defoltlarla işləmək üçün bloku toxunulmaz buraxın. bərkitmək üçün a
+sinif, uyğunluğu ləğv etməyi yeniləmək; yeni siniflər üçün baza xəttini dəyişdirmək,
+redaktə edin `default_retention`.
 
-Taikai availability classes can be overridden independently via
+Taikai mövcudluğu sinifləri vasitəsilə müstəqil olaraq ləğv edilə bilər
 `torii.da_ingest.replication_policy.taikai_availability`:
 
 ```toml
@@ -100,30 +102,30 @@ storage_class = "cold"
 governance_tag = "da.taikai.archive"
 ```
 
-## Enforcement semantics
+## İcra semantikası
 
-- Torii replaces the user-supplied `RetentionPolicy` with the enforced profile
-  before chunking or manifest emission.
-- Pre-built manifests that declare a mismatched retention profile are rejected
-  with `400 schema mismatch` so stale clients cannot weaken the contract.
-- Every override event is logged (`blob_class`, submitted vs expected policy)
-  to surface non-compliant callers during rollout.
+- Torii istifadəçi tərəfindən təmin edilmiş `RetentionPolicy`-i məcburi profillə əvəz edir
+  parçalanmadan və ya açıq-aşkar emissiyadan əvvəl.
+- Uyğunsuz saxlama profilini elan edən əvvəlcədən qurulmuş manifestlər rədd edilir
+  `400 schema mismatch` ilə köhnə müştərilər müqaviləni zəiflədə bilməz.
+- Hər ləğvetmə hadisəsi qeyd olunur (`blob_class`, gözlənilən siyasətə qarşı təqdim olunur)
+  yayım zamanı uyğun gəlməyən zəng edənləri üzə çıxarmaq.
 
-See [Data Availability Ingest Plan](ingest-plan.md) (Validation checklist) for the updated gate
-covering retention enforcement.
+Yenilənmiş qapı üçün [Data Availability Ingest Plan](ingest-plan.md) (Təsdiqləmə yoxlama siyahısı) baxın
+saxlanmanın icrasını əhatə edir.
 
-## Re-replication workflow (DA-4 follow-up)
+## Yenidən təkrarlama iş axını (DA-4 təqibi)
 
-Retention enforcement is only the first step. Operators must also prove that
-live manifests and replication orders stay aligned with the configured policy so
-that SoraFS can automatically re-replicate out-of-compliance blobs.
+Saxlamanın tətbiqi yalnız ilk addımdır. Operatorlar da bunu sübut etməlidirlər
+canlı manifestlər və replikasiya sifarişləri konfiqurasiya edilmiş siyasətə uyğun olaraq qalır
+ki, SoraFS uyğun olmayan blobları avtomatik olaraq təkrarlaya bilər.
 
-1. **Watch for drift.** Torii emits
-   `overriding DA retention policy to match configured network baseline` whenever
-   a caller submits stale retention values. Pair that log with
-   `torii_sorafs_replication_*` telemetry to spot replica shortfalls or delayed
-   redeployments.
-2. **Diff intent vs live replicas.** Use the new audit helper:
+1. **Drift üçün baxın.** Torii yayır
+   `overriding DA retention policy to match configured network baseline` istənilən vaxt
+   zəng edən köhnə saxlama dəyərlərini təqdim edir. Həmin log ilə cütləşdirin
+   `torii_sorafs_replication_*` telemetriya replika çatışmazlıqlarını və ya gecikmələrini aşkar etmək üçün
+   yenidən yerləşdirmələr.
+2. **Məqsəd və canlı replikalar fərqlidir.** Yeni audit köməkçisindən istifadə edin:
 
    ```bash
    cargo xtask da-replication-audit \
@@ -133,29 +135,29 @@ that SoraFS can automatically re-replicate out-of-compliance blobs.
      --json-out artifacts/da/replication_audit.json
    ```
 
-   The command loads `torii.da_ingest.replication_policy` from the provided
-   config, decodes each manifest (JSON or Norito), and optionally matches any
-   `ReplicationOrderV1` payloads by manifest digest. The summary flags two
-   conditions:
+   Komanda təqdim olunandan `torii.da_ingest.replication_policy` yükləyir
+   konfiqurasiya edir, hər bir manifesti deşifrə edir (JSON və ya Norito) və istəyə görə hər hansı
+   `ReplicationOrderV1` manifest həzminə görə faydalı yüklər. Xülasə iki işarə edir
+   şərtlər:
 
-   - `policy_mismatch` – the manifest retention profile diverges from the enforced
-     policy (this should never happen unless Torii is misconfigured).
-   - `replica_shortfall` – the live replication order requests fewer replicas than
-     `RetentionPolicy.required_replicas` or provides fewer assignments than its
-     target.
+   - `policy_mismatch` – manifest saxlama profili məcburi profildən fərqlənir
+     siyasət (Torii səhv konfiqurasiya edilmədikdə bu heç vaxt baş verməməlidir).
+   - `replica_shortfall` – canlı replikasiya sifarişi daha az replika tələb edir
+     `RetentionPolicy.required_replicas` və ya ondan daha az tapşırıq verir
+     hədəf.
 
-   A non-zero exit status indicates an active shortfall so CI/on-call automation
-   can page immediately. Attach the JSON report to the
+   Sıfır olmayan çıxış statusu aktiv çatışmazlığı göstərir, beləliklə CI/zəng üzrə avtomatlaşdırma
+   dərhal səhifə edə bilərsiniz. JSON hesabatını əlavə edin
    `docs/examples/da_manifest_review_template.md`
-   packet for Parliament votes.
-3. **Trigger re-replication.** When the audit reports a shortfall, issue a fresh
-   `ReplicationOrderV1` via the governance tooling described in
-   [SoraFS storage capacity marketplace](../sorafs/storage-capacity-marketplace.md) and re-run the audit
-   until the replica set converges. For emergency overrides, pair the CLI output
-   with `iroha app da prove-availability` so that SREs can reference the same digest
-   and PDP evidence.
+   Parlament səs paketi.
+3. **Replikasiyanı işə salın.** Audit çatışmazlıq barədə məlumat verdikdə, yeni
+   `ReplicationOrderV1` -də təsvir edilən idarəetmə alətləri vasitəsilə
+   [SoraFS yaddaş tutumu bazarı](../sorafs/storage-capacity-marketplace.md) və auditi yenidən həyata keçirin
+   replika dəsti birləşənə qədər. Fövqəladə hallar üçün CLI çıxışını cütləşdirin
+   `iroha app da prove-availability` ilə, beləliklə, SRE-lər eyni digestə istinad edə bilər
+   və PDP sübutları.
 
-Regression coverage lives in `integration_tests/tests/da/replication_policy.rs`;
-the suite submits a mismatched retention policy to `/v1/da/ingest` and verifies
-that the fetched manifest exposes the enforced profile instead of the caller
-intent.
+Reqressiya əhatə dairəsi `integration_tests/tests/da/replication_policy.rs`-də yaşayır;
+paket `/v1/da/ingest`-ə uyğun olmayan saxlama siyasəti təqdim edir və təsdiqləyir
+ki, gətirilən manifest zəng edənin əvəzinə məcburi profili ifşa edir
+niyyət.

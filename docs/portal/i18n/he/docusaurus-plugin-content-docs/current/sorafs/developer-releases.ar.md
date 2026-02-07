@@ -4,6 +4,8 @@ direction: rtl
 source: docs/portal/docs/sorafs/developer-releases.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
@@ -20,12 +22,12 @@ summary: نفّذ بوابة إصدار CLI/SDK، وطبّق سياسة الإص
 
 ## 0. تأكيد اعتماد مراجعة الأمان
 
-قبل تنفيذ بوابة الإصدار التقنية، التقط أحدث آرتيفاكتات مراجعة الأمان:
+הצג מידע על זכויות יוצרים:
 
 - نزّل أحدث مذكرة مراجعة أمان SF-6 ([reports/sf6-security-review](./reports/sf6-security-review.md))
   وسجّل تجزئة SHA256 الخاصة بها في تذكرة الإصدار.
 - أرفق رابط تذكرة المعالجة (مثل `governance/tickets/SF6-SR-2026.md`) وسجّل
-  الموافقين من Security Engineering ومجموعة Tooling Working Group.
+  מידע על הנדסת אבטחה וקבוצת עבודה של כלי עבודה.
 - تحقّق من إغلاق قائمة المعالجة في المذكرة؛ العناصر غير المحسومة تحظر الإصدار.
 - استعد لرفع سجلات harness التكافؤ (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`)
   بجانب حزمة المانيفست.
@@ -46,9 +48,9 @@ CARGO_TARGET_DIR=.target ci/check_sorafs_cli_release.sh
 
 ينفذ السكربت التحققات التالية:
 
-- `cargo fmt --all -- --check` (workspace)
+- `cargo fmt --all -- --check` (סביבת עבודה)
 - `cargo clippy --locked --all-targets` لحزمة `sorafs_car` (مع ميزة `cli`)،
-  و`sorafs_manifest` و`sorafs_chunker`
+  ו-`sorafs_manifest` ו-`sorafs_chunker`
 - `cargo test --locked --all-targets` لتلك الحزم نفسها
 
 إذا فشل أيٌّ من الخطوات، أصلح التراجع قبل وضع الوسم. يجب أن تكون بناءات
@@ -64,7 +66,7 @@ CARGO_TARGET_DIR=.target ci/check_sorafs_cli_release.sh
   **إلى تغييرات كاسرة** في واجهة CLI أو مخططات Norito.
 - `MINOR`: ميزات متوافقة للخلف (أوامر/أعلام جديدة، حقول Norito جديدة خلف سياسة
   اختيارية، إضافات تليمترية).
-- `PATCH`: إصلاحات عيوب، وإصدارات وثائق فقط، وتحديثات تبعيات لا تغيّر السلوك
+- `PATCH`: תקשורת ותקשורת ותקשורת.
   الملاحظ.
 
 حافظ دائمًا على نسخ `sorafs_car` و`sorafs_manifest` و`sorafs_chunker` متطابقة كي
@@ -81,9 +83,7 @@ CARGO_TARGET_DIR=.target ci/check_sorafs_cli_release.sh
 الحوكمة. استخدم القالب في `docs/examples/sorafs_release_notes.md` (انسخه إلى
 دليل آرتيفاكتات الإصدار واملأ الأقسام بتفاصيل ملموسة).
 
-الحد الأدنى من المحتوى:
-
-- **أبرز النقاط**: عناوين الميزات لمستخدمي CLI وSDK.
+الحد الأدنى من المحتوى:- **أبرز النقاط**: عناوين الميزات لمستخدمي CLI وSDK.
 - **التوافق**: تغييرات كاسرة، ترقيات السياسات، المتطلبات الدنيا للبوابة/العقدة.
 - **خطوات الترقية**: أوامر TL;DR لتحديث تبعيات cargo وإعادة تشغيل fixtures الحتمية.
 - **التحقق**: تجزئات مخرجات الأوامر أو الأظرف والإصدار الدقيق لـ
@@ -97,7 +97,7 @@ CARGO_TARGET_DIR=.target ci/check_sorafs_cli_release.sh
 شغّل `scripts/release_sorafs_cli.sh` لتوليد حزمة التوقيع وملخص التحقق الذي
 يُشحن مع كل إصدار. يقوم الغلاف ببناء CLI عند الحاجة، ويستدعي
 `sorafs_cli manifest sign`، ثم يعيد تشغيل `manifest verify-signature` فورًا
-لتظهر الإخفاقات قبل وضع الوسم. مثال:
+لتظهر الإخفاقات قبل وضع الوسم. מיתאר:
 
 ```bash
 scripts/release_sorafs_cli.sh \
@@ -117,7 +117,7 @@ scripts/release_sorafs_cli.sh \
   المستودع أو إعداد النشر ليبقى السكربت قابلاً لإعادة الإنتاج. تُظهر حزمة
   fixtures في `fixtures/sorafs_manifest/ci_sample/` التخطيط المعتمد.
 - أسّس أتمتة CI على `.github/workflows/sorafs-cli-release.yml`؛ فهي تشغّل بوابة
-  الإصدار، وتستدعي السكربت أعلاه، وتؤرشف الحزم/التواقيع كآرتيفاكتات workflow.
+  זרימת עבודה, זרימת עבודה ותקשורת.
   حافظ على ترتيب الأوامر نفسه (بوابة الإصدار → التوقيع → التحقق) في أنظمة CI الأخرى
   حتى تتطابق سجلات التدقيق مع التجزئات الناتجة.
 - احتفظ بالملفات `manifest.bundle.json` و`manifest.sig` و`manifest.sign.summary.json`
@@ -142,12 +142,10 @@ scripts/sorafs_gateway_self_cert.sh --config docs/examples/sorafs_gateway_self_c
 
 ## 5. وضع الوسم والنشر
 
-بعد نجاح الفحوصات واكتمال الخطافات:
-
-1. شغّل `sorafs_cli --version` و`sorafs_fetch --version` لتأكيد أن الثنائيات تعلن
+بعد نجاح الفحوصات واكتمال الخطافات:1. شغّل `sorafs_cli --version` و`sorafs_fetch --version` لتأكيد أن الثنائيات تعلن
    الإصدار الجديد.
 2. جهّز إعداد الإصدار في ملف `sorafs_release.toml` مُلتزم في المستودع (مفضّل) أو
-   ملف إعداد آخر يتتبعه مستودع النشر. تجنّب الاعتماد على متغيرات بيئة عشوائية؛ مرّر
+   ملف إعداد آخر يتتبعه مستودع النشر. تجنّب الاعتماد على متغيرات بيئة عشوائية؛ מַרְכַּר
    المسارات إلى CLI عبر `--config` (أو ما يعادله) حتى تكون مدخلات الإصدار صريحة وقابلة
    لإعادة الإنتاج.
 3. أنشئ وسمًا موقّعًا (مفضّل) أو وسمًا مُعلّقًا:
@@ -159,8 +157,8 @@ scripts/sorafs_gateway_self_cert.sh --config docs/examples/sorafs_gateway_self_c
    الشهادات) إلى سجل المشروع وفق قائمة تحقق الحوكمة في [دليل النشر](./developer-deployment.md).
    إذا أنشأ الإصدار fixtures جديدة، ارفعها إلى مستودع fixtures المشترك أو مخزن الكائنات
    كي تتمكن أتمتة التدقيق من مقارنة الحزمة المنشورة مع التحكم بالمصدر.
-5. أخطر قناة الحوكمة بروابط الوسم الموقّع، وملاحظات الإصدار، وتجزئات حزمة المانيفست/
-   التواقيع، وملخصات `manifest.sign/verify` المؤرشفة، وأي أظرف شهادات. أضف رابط وظيفة CI
+5. תקצירי מערכות מידע ותקשורות.
+   תקשורת `manifest.sign/verify` תקשורת, ותקשורת. أضف رابط وظيفة CI
    (أو أرشيف السجلات) التي شغّلت `ci/check_sorafs_cli_release.sh` و
    `scripts/release_sorafs_cli.sh`. حدّث تذكرة الحوكمة ليتمكن المدققون من تتبع
    الموافقات إلى الآرتيفاكتات؛ وعندما يرسل job `.github/workflows/sorafs-cli-release.yml`

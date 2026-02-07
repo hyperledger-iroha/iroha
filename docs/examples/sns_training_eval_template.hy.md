@@ -7,39 +7,40 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 0397eec8373494a74060a7244a7f923714723e5feacc4a54374ee4461f0ddde1
 source_last_modified: "2025-12-29T18:16:35.078130+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# SNS Training Evaluation Template
+# SNS ուսուցման գնահատման ձևանմուշ
 
-Please distribute this survey immediately after each session. Responses can be
-captured via form tool or Markdown and archived under
+Խնդրում ենք յուրաքանչյուր նիստից անմիջապես հետո տարածել այս հարցումը: Պատասխանները կարող են լինել
+գրավված ձևի գործիքի կամ Markdown-ի միջոցով և արխիվացված տակ
 `artifacts/sns/training/<suffix>/<cycle>/feedback/`.
 
-## Session metadata
-- Suffix:
-- Cycle:
-- Language:
-- Date:
-- Facilitator(s):
+## Աշխատաշրջանի մետատվյալներ
+- վերջածանց:
+- Ցիկլ:
+- Լեզուն:
+- Ամսաթիվ:
+- Օժանդակող(ներ).
 
-## Rating scale
-1 — Poor · 2 — Fair · 3 — Good · 4 — Very good · 5 — Excellent
+## Վարկանիշային սանդղակ
+1 — Վատ · 2 — Արդար · 3 — Լավ · 4 — Շատ լավ · 5 — Գերազանց
 
-| Question | 1 | 2 | 3 | 4 | 5 |
+| Հարց | 1 | 2 | 3 | 4 | 5 |
 |----------|---|---|---|---|---|
-| Clarity of KPI walkthrough | ☐ | ☐ | ☐ | ☐ | ☐ |
-| Usefulness of labs | ☐ | ☐ | ☐ | ☐ | ☐ |
-| Pace + time allocation | ☐ | ☐ | ☐ | ☐ | ☐ |
-| Localization quality (slides + facilitation) | ☐ | ☐ | ☐ | ☐ | ☐ |
-| Overall confidence entering suffix launch | ☐ | ☐ | ☐ | ☐ | ☐ |
+| KPI-ի պարզություն | ☐ | ☐ | ☐ | ☐ | ☐ |
+| Լաբորատորիաների օգտակարությունը | ☐ | ☐ | ☐ | ☐ | ☐ |
+| Տեմպ + ժամանակի բաշխում | ☐ | ☐ | ☐ | ☐ | ☐ |
+| Տեղայնացման որակ (սլայդներ + դյուրացում) | ☐ | ☐ | ☐ | ☐ | ☐ |
+| Ընդհանուր վստահությունը մուտքագրելով վերջածանց գործարկում | ☐ | ☐ | ☐ | ☐ | ☐ |
 
-## Open questions
-1. Which topic needs more depth?
-2. Were any tools/docs missing from the workbook?
-3. Did the localization meet your expectations? If not, why?
-4. Additional comments / blockers the program should track.
+## Բաց հարցեր
+1. Ո՞ր թեմային պետք է ավելի խորություն:
+2. Արդյո՞ք աշխատանքային գրքույկում բացակայում էին որևէ գործիք/փաստաթուղթ:
+3. Արդյո՞ք տեղայնացումը արդարացրել է ձեր սպասելիքները: Եթե ​​ոչ, ապա ինչո՞ւ։
+4. Լրացուցիչ մեկնաբանություններ / արգելափակումներ, որոնք ծրագիրը պետք է հետևի:
 
-## Follow-up
-- `[]` Feedback logged in governance tracker (ticket: __________)
-- `[]` Annex export captured (path: ____________________)
-- `[]` Action items assigned (owner + due date)
+## Հետևում
+- `[]` Հետադարձ կապ մուտք գործած կառավարման հետագծում (տոմս՝ __________)
+- `[]` Հավելվածի արտահանումը գրավված է (ուղի` ____________________)
+- `[]` Գործողությունների կետերը նշանակված են (սեփականատեր + վերջնաժամկետ)

@@ -9,32 +9,33 @@ source_last_modified: "2025-12-29T18:16:35.067551+00:00"
 translation_last_reviewed: 2026-02-07
 title: Try It Sandbox Guide
 summary: How to run the Torii staging proxy and developer portal sandbox.
+translator: machine-google-reviewed
 ---
 
-The developer portal ships a “Try it” console for the Torii REST API. This guide
-explains how to launch the supporting proxy and connect the console to a staging
-gateway without exposing credentials.
+የገንቢው ፖርታል ለTorii REST API የ"ሞክሩት" ኮንሶል ይልካል። ይህ መመሪያ
+ደጋፊ ፕሮክሲውን እንዴት ማስጀመር እና ኮንሶሉን ከመድረክ ጋር ማገናኘት እንደሚቻል ያብራራል።
+ምስክርነቶችን ሳያጋልጥ መግቢያ.
 
-## Prerequisites
+## ቅድመ ሁኔታዎች
 
-- Iroha repository checkout (workspace root).
-- Node.js 18.18+ (matches the portal baseline).
-- Torii endpoint reachable from your workstation (staging or local).
+- Iroha ማከማቻ ፍተሻ (የስራ ቦታ ስር)።
+- Node.js 18.18+ (ከፖርታል መነሻ መስመር ጋር ይዛመዳል)።
+- Torii የመጨረሻ ነጥብ ከእርስዎ የስራ ጣቢያ (የማዘጋጀት ወይም የአካባቢ) ሊደረስበት የሚችል።
 
-## 1. Generate the OpenAPI snapshot (optional)
+## 1. የOpenAPI ቅጽበታዊ ገጽ እይታን ይፍጠሩ (አማራጭ)
 
-The console reuses the same OpenAPI payload as the portal reference pages. If
-you have changed Torii routes, regenerate the snapshot:
+ኮንሶሉ ልክ እንደ ፖርታል ማመሳከሪያ ገፆች ተመሳሳይ OpenAPI ክፍያን እንደገና ይጠቀማል። ከሆነ
+የ Torii መንገዶችን ቀይረሃል፣ ቅጽበተ-ፎቶውን እንደገና አሳድገው፡
 
 ```bash
 cargo xtask openapi
 ```
 
-The task writes `docs/portal/static/openapi/torii.json`.
+ተግባሩ `docs/portal/static/openapi/torii.json` ይጽፋል።
 
-## 2. Start the Try It proxy
+## 2. ሞክር ፕሮክሲውን ይጀምሩ
 
-From the repository root:
+ከማከማቻ ስር፡-
 
 ```bash
 cd docs/portal
@@ -48,26 +49,26 @@ export TRYIT_PROXY_LISTEN="127.0.0.1:8787"
 npm run tryit-proxy
 ```
 
-### Environment variables
+### የአካባቢ ተለዋዋጮች
 
-| Variable | Description |
-|----------|-------------|
-| `TRYIT_PROXY_TARGET` | Torii base URL (required). |
-| `TRYIT_PROXY_ALLOWED_ORIGINS` | Comma-separated list of origins allowed to use the proxy (defaults to `http://localhost:3000`). |
-| `TRYIT_PROXY_BEARER` | Optional default bearer token applied to all proxied requests. |
-| `TRYIT_PROXY_ALLOW_CLIENT_AUTH` | Set to `1` to forward the caller’s `Authorization` header verbatim. |
-| `TRYIT_PROXY_RATE_LIMIT` / `TRYIT_PROXY_RATE_WINDOW_MS` | In-memory rate limiter settings (defaults: 60 requests per 60 s). |
-| `TRYIT_PROXY_MAX_BODY` | Maximum request payload accepted (bytes, default 1 MiB). |
-| `TRYIT_PROXY_TIMEOUT_MS` | Upstream timeout for Torii requests (default 10 000 ms). |
+| ተለዋዋጭ | መግለጫ |
+|-------|-----------|
+| `TRYIT_PROXY_TARGET` | Torii ቤዝ ዩአርኤል (የሚያስፈልግ)። |
+| `TRYIT_PROXY_ALLOWED_ORIGINS` | በነጠላ ሰረዝ የተለዩ የመነሻዎች ዝርዝር ተኪውን እንዲጠቀም ተፈቅዶለታል (የ `http://localhost:3000` ነባሪዎች)። |
+| `TRYIT_PROXY_BEARER` | አማራጭ ነባሪ ተሸካሚ ማስመሰያ በሁሉም የተኪ ጥያቄዎች ላይ ተተግብሯል። |
+| `TRYIT_PROXY_ALLOW_CLIENT_AUTH` | የደዋዩን `Authorization` ራስጌ በቃል ለማስተላለፍ ወደ `1` ያቀናብሩ። |
+| `TRYIT_PROXY_RATE_LIMIT` / `TRYIT_PROXY_RATE_WINDOW_MS` | የማህደረ ትውስታ መጠን ገዳቢ ቅንብሮች (ነባሪዎች፡ በ60ዎቹ 60 ጥያቄዎች)። |
+| `TRYIT_PROXY_MAX_BODY` | ከፍተኛው የጥያቄ ጭነት ተቀባይነት አለው (ባይት፣ ነባሪ 1ሚቢ)። |
+| `TRYIT_PROXY_TIMEOUT_MS` | ለI18NT0000009X ጥያቄዎች (ነባሪ 10000ms) የወቅቱ ጊዜ ማብቂያ ጊዜ። |
 
-The proxy exposes:
+ፕሮክሲው ያጋልጣል፡-
 
-- `GET /healthz` — readiness check.
-- `/proxy/*` — proxied requests, preserving the path and query string.
+- `GET /healthz` - ዝግጁነት ማረጋገጥ.
+- `/proxy/*` - የተኪ ጥያቄዎች፣ መንገዱን እና የመጠይቅ ሕብረቁምፊን በመጠበቅ።
 
-## 3. Launch the portal
+## 3. መግቢያውን ያስጀምሩ
 
-In a separate terminal:
+በተለየ ተርሚናል ውስጥ፡-
 
 ```bash
 cd docs/portal
@@ -75,23 +76,23 @@ export TRYIT_PROXY_PUBLIC_URL="http://localhost:8787"
 npm run start
 ```
 
-Visit `http://localhost:3000/api/overview` and use the Try It console. The same
-environment variables configure the Swagger UI and RapiDoc embeds.
+`http://localhost:3000/api/overview` ይጎብኙ እና ይሞክሩት ኮንሶል ይጠቀሙ። ተመሳሳይ
+የአካባቢ ተለዋዋጮች Swagger UI እና RapiDoc መክተቻዎችን ያዋቅራሉ።
 
-## 4. Running unit tests
+## 4. የሩጫ ክፍል ሙከራዎች
 
-The proxy exposes a fast Node-based test suite:
+ተኪው ፈጣን በመስቀለኛ መንገድ ላይ የተመሰረተ የሙከራ ስብስብ ያጋልጣል፡
 
 ```bash
 npm run test:tryit-proxy
 ```
 
-The tests cover address parsing, origin handling, rate limiting, and bearer
-injection.
+ፈተናዎቹ የአድራሻ መተንተንን፣ የመነሻ አያያዝን፣ ተመን መገደብን እና ተሸካሚን ይሸፍናሉ።
+መርፌ.
 
-## 5. Probe automation & metrics
+## 5. የመርማሪ አውቶማቲክ እና መለኪያዎች
 
-Use the bundled probe to verify `/healthz` and a sample endpoint:
+`/healthz` እና የናሙና የመጨረሻ ነጥብ ለማረጋገጥ የተጠቀለለውን ምርመራ ይጠቀሙ፡-
 
 ```bash
 TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" \
@@ -99,18 +100,18 @@ TRYIT_PROXY_SAMPLE_PATH="/v1/status" \
 npm run probe:tryit-proxy
 ```
 
-Environment knobs:
+የአካባቢ ቁልፎች;
 
-- `TRYIT_PROXY_SAMPLE_PATH` — optional Torii route (without `/proxy`) to exercise.
-- `TRYIT_PROXY_SAMPLE_METHOD` — defaults to `GET`; set to `POST` for write routes.
-- `TRYIT_PROXY_PROBE_TOKEN` — injects a temporary bearer token for the sample call.
-- `TRYIT_PROXY_PROBE_TIMEOUT_MS` — overrides the default 5 s timeout.
-- `TRYIT_PROXY_PROBE_METRICS_FILE` — Prometheus textfile destination for `probe_success`/`probe_duration_seconds`.
-- `TRYIT_PROXY_PROBE_LABELS` — comma-separated `key=value` pairs appended to the metrics (defaults to `job=tryit-proxy` and `instance=<proxy URL>`).
+- `TRYIT_PROXY_SAMPLE_PATH` — አማራጭ Torii መንገድ (ያለ `/proxy`) የአካል ብቃት እንቅስቃሴ።
+- `TRYIT_PROXY_SAMPLE_METHOD` - ለ `GET` ነባሪዎች; ለመጻፍ መንገዶች ወደ `POST` ተዘጋጅቷል።
+- `TRYIT_PROXY_PROBE_TOKEN` - ለናሙና ጥሪ ጊዜያዊ ተሸካሚ ማስመሰያ ያስገባል።
+- `TRYIT_PROXY_PROBE_TIMEOUT_MS` - ነባሪውን የ 5s ጊዜ ማብቂያ ይሽራል።
+- `TRYIT_PROXY_PROBE_METRICS_FILE` — Prometheus የጽሑፍ ፋይል መድረሻ ለI18NI0000044X/I18NI0000045X።
+- `TRYIT_PROXY_PROBE_LABELS` — በነጠላ ሰረዝ የተለዩ `key=value` ጥንዶች በመለኪያዎቹ ላይ ተያይዘዋል (የ`job=tryit-proxy` እና `instance=<proxy URL>` ነባሪዎች)።
 
-When `TRYIT_PROXY_PROBE_METRICS_FILE` is set, the script rewrites the file
-atomically so your node_exporter/textfile collector always sees a complete
-payload. Example:
+`TRYIT_PROXY_PROBE_METRICS_FILE` ሲዋቀር ስክሪፕቱ ፋይሉን እንደገና ይጽፋል
+በአቶሚካል ስለዚህ የእርስዎ node_exporter/textፋይል ሰብሳቢ ሁል ጊዜ የተሟላ ሆኖ እንዲያይ
+ጭነት. ምሳሌ፡-
 
 ```bash
 TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" \
@@ -119,16 +120,16 @@ TRYIT_PROXY_PROBE_LABELS="job=tryit-proxy,cluster=staging" \
 npm run probe:tryit-proxy
 ```
 
-Forward the resulting metrics to Prometheus and reuse the sample alert in the
-developer-portal docs to page when `probe_success` drops to `0`.
+የተገኙትን መለኪያዎች ወደ Prometheus ያስተላልፉ እና የናሙና ማንቂያውን እንደገና ይጠቀሙ
+ገንቢ-ፖርታል ሰነዶች `probe_success` ወደ `0` ሲወርድ።
 
-## 6. Production hardening checklist
+## 6. የምርት ማጠንከሪያ ዝርዝር
 
-Before publishing the proxy beyond local development:
+ከአካባቢ ልማት በላይ ፕሮክሲውን ከማተምዎ በፊት፡-
 
-- Terminate TLS ahead of the proxy (reverse proxy or managed gateway).
-- Configure structured logging and forward to observability pipelines.
-- Rotate bearer tokens and store them in your secrets manager.
-- Monitor the proxy’s `/healthz` endpoint and aggregate latency metrics.
-- Align rate limits with your Torii staging quotas; adjust the `Retry-After`
-  behaviour to communicate throttling to clients.
+- TLSን ከፕሮክሲው ቀድመው ያቋርጡ (ተገላቢጦሽ ተኪ ወይም የሚተዳደር መግቢያ በር)።
+- የተዋቀረ ምዝግብ ማስታወሻን ያዋቅሩ እና ወደ ታዛቢነት ቧንቧዎች ያስተላልፉ።
+- ተሸካሚዎችን ያሽከርክሩ እና በሚስጥር አስተዳዳሪዎ ውስጥ ያከማቹ።
+- የተኪውን `/healthz` የመጨረሻ ነጥብ ይቆጣጠሩ እና የቆይታ ጊዜ መለኪያዎችን ያዋህዱ።
+- የዋጋ ገደቦችን ከእርስዎ Torii የማዘጋጃ ኮታዎች ጋር ያስተካክሉ። `Retry-After` አስተካክል
+  ጉሮሮዎችን ከደንበኞች ጋር የመግባባት ባህሪ ።

@@ -4,10 +4,12 @@ direction: rtl
 source: docs/portal/docs/nexus/nexus-operator-onboarding.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: nexus-operator-onboarding
+מזהה: nexus-operator-onboarding
 title: تاهيل مشغلي data-space في Sora Nexus
 description: نسخة مطابقة لـ `docs/source/sora_nexus_operator_onboarding.md` تتبع قائمة تدقيق الاصدار الشاملة لمشغلي Nexus.
 ---
@@ -21,7 +23,7 @@ description: نسخة مطابقة لـ `docs/source/sora_nexus_operator_onboard
 يلتقط هذا الدليل التدفق الشامل الذي يجب ان يتبعه مشغلو data-space في Sora Nexus بعد الاعلان عن اصدار. وهو يكمل دليل المسارين (`docs/source/release_dual_track_runbook.md`) ومذكرة اختيار القطع (`docs/source/release_artifact_selection.md`) عبر شرح كيفية مواءمة الحزم/الصور التي تم تنزيلها وملفات manifest وقوالب الاعداد مع توقعات الـ lane العالمية قبل تشغيل العقدة.
 
 ## الجمهور والمتطلبات المسبقة
-- تم اعتمادك من برنامج Nexus واستلمت تعيين data-space (فهرس lane، ومعرف/alias للـ data-space، ومتطلبات سياسة التوجيه).
+- קובץ נתונים של Nexus ו-data-space التوجيه).
 - يمكنك الوصول الى قطع الاصدار الموقعة المنشورة من Release Engineering (tarballs، صور، manifests، توقيعات، مفاتيح عامة).
 - قمت بتوليد او استلام مواد مفاتيح الانتاج لدور validator/observer (هوية عقدة Ed25519؛ مفتاح اجماع BLS + PoP للـ validators؛ بالاضافة الى اي مفاتيح او toggles للخصائص السرية).
 - يمكنك الوصول الى اقران Sora Nexus الحاليين الذين سيقومون بعملية bootstrap لعقدتك.
@@ -45,9 +47,7 @@ description: نسخة مطابقة لـ `docs/source/sora_nexus_operator_onboard
    - `profile = "iroha3"`
    - الحقول `version` و`commit` و`built_at` تطابق اعلان الاصدار.
    - نظام التشغيل/المعمارية تطابق هدف النشر.
-4. اذا كنت تستخدم صورة الحاوية، اعد التحقق من hash/التوقيع لملف `<profile>-<version>-<os>-image.tar` وتاكد من image ID المسجل في `<profile>-<version>-image.json`.
-
-## الخطوة 3 - تجهيز الاعداد من القوالب
+4. اذا كنت تستخدم صورة الحاوية، اعد التحقق من hash/التوقيع لملف `<profile>-<version>-<os>-image.tar` وتاكد من image ID المسجل في `<profile>-<version>-image.json`.## الخطوة 3 - تجهيز الاعداد من القوالب
 1. استخرج الحزمة وانسخ `config/` الى المكان الذي ستقرأ منه العقدة الاعدادات.
 2. تعامل مع الملفات تحت `config/` كقوالب:
    - استبدل `public_key`/`private_key` بمفاتيح Ed25519 الخاصة بالانتاج. ازل المفاتيح الخاصة من القرص اذا كانت العقدة ستجلبها من HSM; وقم بتحديث الاعداد لربطه بموصل HSM.
@@ -56,10 +56,10 @@ description: نسخة مطابقة لـ `docs/source/sora_nexus_operator_onboard
 3. احتفظ بالـ chain ID المقدم في الحزمة ما لم توجه Governance خلاف ذلك صراحة - الـ lane العالمي يتوقع معرف سلسلة قانوني واحد.
 4. خطط لتشغيل العقدة مع خيار ملف Sora: `irohad --sora --config <path>`. سيقوم محمل الاعدادات برفض اعدادات SoraFS او multi-lane اذا كان الخيار غائبا.
 
-## الخطوة 4 - مواءمة بيانات data-space وسياسات التوجيه
+## אוגדה 4 - מידע על מרחב נתונים ומרחב נתונים
 1. عدل `config/config.toml` بحيث تطابق مقطع `[nexus]` كتالوج data-space الذي قدمه Nexus Council:
    - يجب ان يساوي `lane_count` اجمالي الـ lanes المفعلة في الحقبة الحالية.
-   - يجب ان تحتوي كل خانة في `[[nexus.lane_catalog]]` و `[[nexus.dataspace_catalog]]` على `index`/`id` فريد والـ aliases المتفق عليها. لا تحذف الادخالات العالمية الحالية; اضف aliases المفوضة لك اذا خصص المجلس data-spaces اضافية.
+   - يجب ان تحتوي كل خانة في `[[nexus.lane_catalog]]` و `[[nexus.dataspace_catalog]]` على `index`/`id` فريد والـ aliases المتفق عليها. لا تحذف الادخالات العالمية الحالية; כינויים של רווחי נתונים.
    - تاكد من ان كل مدخل dataspace يتضمن `fault_tolerance (f)`; يتم تحديد لجان lane-relay بحجم `3f+1`.
 2. حدث `[[nexus.routing_policy.rules]]` لالتقاط السياسة المعطاة لك. القالب الافتراضي يوجه تعليمات الحوكمة الى lane `1` ونشر العقود الى lane `2`; اضف او عدل القواعد حتى يذهب المرور المخصص لـ data-space الخاص بك الى الـ lane والـ alias الصحيحين. نسق مع Release Engineering قبل تغيير ترتيب القواعد.
 3. راجع عتبات `[nexus.da]` و`[nexus.da.audit]` و`[nexus.da.recovery]`. من المتوقع ان يحتفظ المشغلون بالقيم المعتمدة من المجلس; لا تعدلها الا اذا تم التصديق على سياسة محدثة.
@@ -71,18 +71,16 @@ description: نسخة مطابقة لـ `docs/source/sora_nexus_operator_onboard
    ./bin/irohad --sora --config config/config.toml --trace-config
    ```
    يطبع هذا الاعدادات النهائية ويفشل مبكرا اذا كانت ادخالات الكتالوج/التوجيه غير متسقة او اذا كان genesis والاعدادات غير متطابقة.
-2. اذا كنت تنشر باستخدام الحاويات، شغل نفس الامر داخل الصورة بعد تحميلها عبر `docker load -i <profile>-<version>-<os>-image.tar` (تذكر تضمين `--sora`).
-3. راجع السجلات بحثا عن تحذيرات حول معرفات lane/data-space placeholder. اذا وجدت، ارجع الى الخطوة 4 - لا يجب ان تعتمد عمليات الانتاج على معرفات placeholder المرفقة مع القوالب.
-4. نفذ اجراء smoke المحلي (مثلا ارسل استعلام `FindNetworkStatus` عبر `iroha_cli`، وتاكد من ان نقاط نهاية التليمتري تعرض `nexus_lane_state_total`، وتحقق من ان مفاتيح البث تم تدويرها او استيرادها حسب الحاجة).
-
-## الخطوة 6 - التحويل والتسليم
-1. خزّن `manifest.json` الذي تم التحقق منه وقطع التوقيع في تذكرة الاصدار حتى يتمكن المدققون من اعادة فحوصاتك.
-2. اخطر Nexus Operations ان العقدة جاهزة للادراج; اشمل:
+3 (تذكر تضمين `--sora`).
+3. מציין מיקום של נתיב/מרחב נתונים. اذا وجدت، ارجع الى الخطوة 4 - لا يجب ان تعتمد عمليات الانتاج على معرفات placeholder المرفقة مع القوالب.
+4. نفذ اجراء smoke المحلي (مثلا ارسل استعلام `FindNetworkStatus` عبر `iroha_cli`، وتاكد من ان نقاط نهاية التليمتري تعرض `nexus_lane_state_total`، وتحقق من ان مفاتيح البث تم تدويرها او استيرادها حسب الحاجة).## الخطوة 6 - التحويل والتسليم
+5 اعادة فحوصاتك.
+2. اخطر Nexus Operations ان العقدة جاهزة للادراج; תשובה:
    - هوية العقدة (peer ID، اسماء المضيفين، نقطة نهاية Torii).
    - قيم كتالوج lane/data-space الفعلية وسياسات التوجيه.
    - Hashes للثنائيات/الصور التي تم التحقق منها.
 3. نسق القبول النهائي للاقران (gossip seeds وتخصيص lane) مع `@nexus-core`. لا تنضم للشبكة حتى تحصل على الموافقة; يفرض Sora Nexus اشغالا حتميا للـ lanes ويتطلب manifest قبول محدث.
-4. بعد تشغيل العقدة، حدث runbooks لديك باي overrides ادخلتها وسجل وسم الاصدار حتى تبدأ الدورة التالية من هذه baseline.
+3 من هذه baseline.
 
 ## قائمة تدقيق مرجعية
 - [ ] تم التحقق من ملف الاصدار كـ `iroha3`.

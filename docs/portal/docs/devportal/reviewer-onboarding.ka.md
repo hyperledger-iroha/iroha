@@ -11,64 +11,65 @@ id: reviewer-onboarding
 title: Preview reviewer onboarding
 sidebar_label: Reviewer onboarding
 description: Process and checklists for enrolling reviewers in the docs portal public preview.
+translator: machine-google-reviewed
 ---
 
-## Overview
+## მიმოხილვა
 
-DOCS-SORA tracks a staged launch of the developer portal. Checksum-gated builds
-(`npm run serve`) and hardened Try it flows unblock the next milestone:
-onboarding vetted reviewers before the public preview opens broadly. This guide
-describes how to collect requests, verify eligibility, provision access, and
-offboard participants safely. Refer to the
-[preview invite flow](./preview-invite-flow.md) for cohort planning, invite
-cadence, and telemetry exports; the steps below focus on the actions to take
-once a reviewer has been selected.
+DOCS-SORA თვალყურს ადევნებს დეველოპერის პორტალის ეტაპობრივ გაშვებას. საკონტროლო ჯამით შემოსაზღვრული შენობები
+(`npm run serve`) და გამაგრებული სცადეთ ის flows განბლოკეთ შემდეგი ეტაპები:
+ჩართეთ შემოწმებული მიმომხილველები, სანამ საჯარო გადახედვა ფართოდ გაიხსნება. ეს სახელმძღვანელო
+აღწერს, თუ როგორ უნდა შეაგროვოს მოთხოვნები, დაადასტუროს უფლებამოსილება, უზრუნველყოფის ხელმისაწვდომობა და
+ბორტგარე მონაწილეები უსაფრთხოდ. იხილეთ
+[მოწვევის ნაკადის გადახედვა] (./preview-invite-flow.md) კოჰორტის დაგეგმვისთვის, მოწვევა
+კადენცია და ტელემეტრიის ექსპორტი; ქვემოთ მოცემული ნაბიჯები ფოკუსირებულია განსახორციელებელ ქმედებებზე
+რეცენზენტის არჩევის შემდეგ.
 
-- **Scope:** reviewers who need access to the docs preview (`docs-preview.sora`,
-  GitHub Pages builds, or SoraFS bundles) before GA.
-- **Out-of-scope:** Torii or SoraFS operators (covered by their own onboarding
-  kits) and production portal deployments (see
+- **ფარგლები:** მიმომხილველები, რომლებსაც სჭირდებათ წვდომა დოკუმენტების გადახედვაზე (`docs-preview.sora`,
+  GitHub Pages builds, ან SoraFS პაკეტები) GA-მდე.
+- ** საზღვრებს გარეთ:** Torii ან SoraFS ოპერატორები (დაფარულია საკუთარი ბორტზე
+  კომპლექტები) და წარმოების პორტალის განლაგება (იხ
   [`devportal/deploy-guide`](./deploy-guide.md)).
 
-## Roles & prerequisites
+## როლები და წინაპირობები
 
-| Role | Typical goals | Required artefacts | Notes |
+| როლი | ტიპიური მიზნები | საჭირო არტეფაქტები | შენიშვნები |
 | --- | --- | --- | --- |
-| Core maintainer | Verify new guides, run smoke tests. | GitHub handle, Matrix contact, signed CLA on file. | Usually already in the `docs-preview` GitHub team; still file a request so access is auditable. |
-| Partner reviewer | Validate SDK snippets or governance content before public release. | Corporate email, legal POC, signed preview terms. | Must acknowledge telemetry + data handling requirements. |
-| Community volunteer | Provide usability feedback on guides. | GitHub handle, preferred contact, timezone, acceptance of CoC. | Keep cohorts small; prioritize reviewers who have signed the contributor agreement. |
+| ძირითადი შემნახველი | გადაამოწმეთ ახალი გიდები, ჩაატარეთ კვამლის ტესტები. | GitHub სახელური, Matrix კონტაქტი, ხელმოწერილი CLA ფაილში. | ჩვეულებრივ უკვე `docs-preview` GitHub გუნდში; კვლავ შეიტანეთ მოთხოვნა, რათა წვდომა აუდიტორული იყოს. |
+| პარტნიორი მიმომხილველი | დაადასტურეთ SDK ფრაგმენტები ან მმართველობის კონტენტი საჯარო გამოშვებამდე. | კორპორატიული ელფოსტა, იურიდიული POC, ხელმოწერილი გადახედვის პირობები. | უნდა აღიაროს ტელემეტრია + მონაცემთა დამუშავების მოთხოვნები. |
+| თემის მოხალისე | მიუთითეთ გამოყენებადობის გამოხმაურება გიდებზე. | GitHub სახელური, სასურველი კონტაქტი, დროის ზონა, CoC-ის მიღება. | შეინახეთ კოჰორტები პატარა; პრიორიტეტი მიენიჭოს რეცენზენტებს, რომლებმაც ხელი მოაწერეს კონტრიბუტორის ხელშეკრულებას. |
 
-All reviewer types must:
+მიმომხილველის ყველა ტიპი უნდა:
 
-1. Acknowledge the acceptable-use policy for preview artefacts.
-2. Read the security/observability appendices
+1. აღიარეთ არტეფაქტების წინასწარი გადახედვისთვის მისაღები გამოყენების პოლიტიკა.
+2. წაიკითხეთ უსაფრთხოების/დაკვირვებადობის დანართები
    ([`security-hardening`](./security-hardening.md),
    [`observability`](./observability.md),
    [`incident-runbooks`](./incident-runbooks.md)).
-3. Agree to run `docs/portal/scripts/preview_verify.sh` before serving any
-   snapshot locally.
+3. შეთანხმდით, რომ გაუშვათ `docs/portal/scripts/preview_verify.sh` ნებისმიერი სერვისის მიღებამდე
+   სნეპშოტი ადგილობრივად.
 
-## Intake workflow
+## მიღების სამუშაო პროცესი
 
-1. Ask the requester to fill out the
+1. სთხოვეთ მომთხოვნს შეავსოს
    [`docs/examples/docs_preview_request_template.md`](../../../examples/docs_preview_request_template.md)
-   form (or copy/paste it into an issue). Capture at least: identity, contact
-   method, GitHub handle, intended review dates, and confirmation that the
-   security docs were read.
-2. Record the request in the `docs-preview` tracker (GitHub issue or governance
-   ticket) and assign an approver.
-3. Validate prerequisites:
-   - CLA / contributor agreement on file (or partner contract reference).
-   - Acceptable-use acknowledgement stored in the request.
-   - Risk assessment complete (for example, partner reviewers approved by Legal).
-4. Approver signs off in the request and links the tracking issue to any
-   change-management entry (example: `DOCS-SORA-Preview-####`).
+   ჩამოაყალიბეთ (ან დააკოპირეთ/ჩასვით პრობლემაში). დაიჭირე მინიმუმ: ვინაობა, კონტაქტი
+   მეთოდი, GitHub სახელური, განხილვის სავარაუდო თარიღები და დადასტურება, რომ
+   წაიკითხეს უსაფრთხოების დოკუმენტები.
+2. ჩაწერეთ მოთხოვნა `docs-preview` ტრეკერში (GitHub პრობლემა ან მართვა
+   ბილეთი) და დანიშნეთ დამმტკიცებელი.
+3. დაადასტურეთ წინაპირობები:
+   - CLA / კონტრიბუტორის შეთანხმება ფაილზე (ან პარტნიორის ხელშეკრულების მითითება).
+   - მოთხოვნაში შენახული მისაღები გამოყენების აღიარება.
+   - რისკის შეფასება დასრულებულია (მაგალითად, პარტნიორი მიმომხილველები დამტკიცებული იურიდიული მიერ).
+4. დამმტკიცებელი ხელს აწერს მოთხოვნას და აკავშირებს თვალთვალის საკითხს ნებისმიერთან
+   ცვლილება-მართვის ჩანაწერი (მაგალითი: `DOCS-SORA-Preview-####`).
 
-## Provisioning & tooling
+## უზრუნველყოფა და ხელსაწყოები
 
-1. **Share artefacts** — Provide the latest preview descriptor + archive from
-   the CI workflow or SoraFS pin (`docs-portal-preview` artefact). Remind
-   reviewers to run:
+1. **არტეფაქტების გაზიარება** — მიაწოდეთ უახლესი გადახედვის აღმწერი + არქივი
+   CI სამუშაო პროცესი ან SoraFS პინი (`docs-portal-preview` არტეფაქტი). შეგახსენებთ
+   რეცენზენტები გასაშვებად:
 
    ```bash
    ./docs/portal/scripts/preview_verify.sh \
@@ -77,65 +78,65 @@ All reviewer types must:
      --archive artifacts/preview-site.tar.gz
    ```
 
-2. **Serve with checksum enforcement** — Point reviewers at the checksum-gated
-   command:
+2. **იმსახურეთ საკონტროლო ჯამის აღსრულებით** — მიუთითეთ მიმომხილველები საკონტროლო ჯამის შეზღუდვაზე
+   ბრძანება:
 
    ```bash
    DOCS_RELEASE_TAG=preview-<stamp> npm run --prefix docs/portal serve
    ```
 
-   This reuses `scripts/serve-verified-preview.mjs` so no unverified build can be
-   launched accidentally.
+   ეს ხელახლა იყენებს `scripts/serve-verified-preview.mjs`-ს, ასე რომ არ შეიძლება იყოს გადაუმოწმებელი კონსტრუქცია
+   შემთხვევით გაშვებული.
 
-3. **Grant GitHub access (optional)** — If reviewers need unpublished branches,
-   add them to the `docs-preview` GitHub team for the duration of the review and
-   record the membership change in the request.
+3. **მიეცით GitHub წვდომას (არასავალდებულო)** — თუ რეცენზენტებს სჭირდებათ გამოუქვეყნებელი ფილიალები,
+   დაამატეთ ისინი `docs-preview` GitHub გუნდში განხილვის ხანგრძლივობისთვის და
+   ჩაწერეთ წევრობის ცვლილება მოთხოვნაში.
 
-4. **Communicate support channels** — Share the on-call contact (Matrix/Slack)
-   and incident procedure from [`incident-runbooks`](./incident-runbooks.md).
+4. **მიმართეთ მხარდაჭერის არხებს** — გააზიარეთ ზარის კონტაქტი (Matrix/Slack)
+   და ინციდენტის პროცედურა [`incident-runbooks`]-დან (./incident-runbooks.md).
 
-5. **Telemetry + feedback** — Remind reviewers that anonymised analytics are
-  collected (see [`observability`](./observability.md)). Provide the feedback
-  form or issue template referenced in the invite and log the event with the
-  [`preview-feedback-log`](./preview-feedback-log) helper so the wave summary
-  stays current.
+5. **ტელემეტრია + გამოხმაურება** — შეახსენეთ მიმომხილველებს, რომ ანონიმური ანალიტიკა არის
+  შეგროვებული (იხ. [`observability`](./observability.md)). მიაწოდეთ უკუკავშირი
+  ფორმა ან გამოშვების შაბლონი მითითებულია მოწვევაში და დაარეგისტრირეთ ღონისძიება
+  [`preview-feedback-log`](./preview-feedback-log) დამხმარე ტალღის შეჯამება
+  რჩება აქტუალური.
 
-## Reviewer checklist
+## მიმომხილველი საკონტროლო სია
 
-Before accessing the preview, reviewers must complete the following:
+გადახედვაზე წვდომამდე, მიმომხილველებმა უნდა შეასრულონ შემდეგი:
 
-1. Verify the downloaded artefacts (`preview_verify.sh`).
-2. Launch the portal via `npm run serve` (or `serve:verified`) to ensure the
-   checksum guard is active.
-3. Read the security and observability notes linked above.
-4. Test the OAuth/Try it console using device-code login (if applicable) and
-   avoid reusing production tokens.
-5. File findings in the agreed tracker (issue, shared doc, or form) and tag
-   them with the preview release tag.
+1. გადაამოწმეთ გადმოწერილი არტეფაქტები (`preview_verify.sh`).
+2. გაუშვით პორტალი `npm run serve` (ან `serve:verified`) მეშვეობით, რათა უზრუნველყოთ
+   გამშვები ჯამის მცველი აქტიურია.
+3. წაიკითხეთ უსაფრთხოებისა და დაკვირვებადობის შენიშვნები, რომლებიც დაკავშირებულია ზემოთ.
+4. შეამოწმეთ OAuth/სცადეთ კონსოლი მოწყობილობის კოდის შესვლის გამოყენებით (თუ ეს შესაძლებელია) და
+   მოერიდეთ წარმოების ტოკენების ხელახლა გამოყენებას.
+5. დააფიქსირეთ დასკვნები შეთანხმებულ ტრეკერში (გამოცემა, გაზიარებული დოკუმენტი ან ფორმა) და თეგში
+   მათ გადახედვის გამოშვების ტეგით.
 
-## Maintainer responsibilities & offboarding
+## დამრიგებლის პასუხისმგებლობები და გათიშვა
 
-| Phase | Actions |
+| ფაზა | მოქმედებები |
 | --- | --- |
-| Kickoff | Confirm intake checklist is attached to the request, share artefacts + instructions, append an `invite-sent` entry via [`preview-feedback-log`](./preview-feedback-log), and schedule a midpoint sync if the review lasts longer than one week. |
-| Monitoring | Track preview telemetry (look for unusual Try it traffic, probe failures) and follow the incident runbook if anything suspicious occurs. Log `feedback-submitted`/`issue-opened` events as findings arrive so the wave metrics stay accurate. |
-| Offboarding | Revoke temporary GitHub or SoraFS access, record `access-revoked`, archive the request (include feedback summary + outstanding actions), and update the reviewer registry. Ask the reviewer to purge local builds and attach the digest generated from [`docs/examples/docs_preview_feedback_digest.md`](../../../examples/docs_preview_feedback_digest.md). |
+| Kickoff | დაადასტურეთ, რომ შეყვანის სია თან ერთვის მოთხოვნას, გააზიარეთ არტეფაქტები + ინსტრუქციები, დაამატეთ `invite-sent` ჩანაწერი [`preview-feedback-log`] (./preview-feedback-log) მეშვეობით და დაგეგმეთ შუა წერტილის სინქრონიზაცია, თუ განხილვა ერთ კვირაზე მეტხანს გაგრძელდება. |
+| მონიტორინგი | თვალყური ადევნეთ წინასწარი გადახედვის ტელემეტრიას (მოძებნეთ უჩვეულო Try it ტრაფიკი, გამოძიების წარუმატებლობები) და მიჰყევით ინციდენტების წიგნს, თუ რაიმე საეჭვო მოხდება. დაარეგისტრირეთ `feedback-submitted`/`issue-opened` მოვლენები, როგორც დასკვნები, რათა ტალღის მეტრიკა ზუსტი დარჩეს. |
+| Offboarding | გააუქმეთ დროებითი GitHub ან SoraFS წვდომა, ჩაწერეთ `access-revoked`, დაარქივეთ მოთხოვნა (შეიცავს გამოხმაურების შეჯამებას + გამორჩეულ მოქმედებებს) და განაახლეთ მიმომხილველი რეესტრი. სთხოვეთ მიმომხილველს გაწმინდოს ადგილობრივი ნაგებობები და დაურთოს [`docs/examples/docs_preview_feedback_digest.md`]-დან (../../../examples/docs_preview_feedback_digest.md) გენერირებული დაიჯესტი. |
 
-Use the same process when rotating reviewers between waves. Keeping the
-paper trail in the repo (issue + templates) helps DOCS-SORA remain auditable and
-lets governance confirm that preview access followed the documented controls.
+გამოიყენეთ იგივე პროცესი ტალღებს შორის მიმომხილველების მობრუნებისას. შენახვა
+ქაღალდის კვალი რეპოში (გამოცემა + შაბლონები) ეხმარება DOCS-SORA-ს დარჩეს აუდიტორული და
+ნებას რთავს მმართველობას დაადასტუროს, რომ წინასწარი წვდომა მოჰყვა დოკუმენტურ კონტროლს.
 
-## Invite templates & tracking
+## მოიწვიე შაბლონები და თვალთვალი
 
-- Start every outreach with the
+- დაიწყეთ ყოველი გაცნობა ამით
   [`docs/examples/docs_preview_invite_template.md`](../../../examples/docs_preview_invite_template.md)
-  file. It captures the minimum legal language, preview checksum instructions,
-  and the expectation that reviewers acknowledge the acceptable-use policy.
-- When editing the template, replace the placeholders for `<preview_tag>`,
-  `<request_ticket>`, and contact channels. Store a copy of the final message in
-  the intake ticket so reviewers, approvers, and auditors can reference the
-  exact wording that was sent.
-- After dispatching the invite, update the tracking spreadsheet or issue with
-  the `invite_sent_at` timestamp and expected end date so the
-  [preview invite flow](./preview-invite-flow.md) report can pick up the cohort
-  automatically.
+  ფაილი. ის იპყრობს მინიმალურ იურიდიულ ენას, გადახედეთ საკონტროლო ჯამის ინსტრუქციებს,
+  და მოლოდინი, რომ მიმომხილველები აღიარებენ მისაღები გამოყენების პოლიტიკას.
+- შაბლონის რედაქტირებისას შეცვალეთ ჩანაცვლების ველები `<preview_tag>`-ისთვის,
+  `<request_ticket>` და საკონტაქტო არხები. შეინახეთ საბოლოო შეტყობინების ასლი
+  მიღების ბილეთი, რათა რეცენზენტებს, დამმტკიცებლებს და აუდიტორებს შეუძლიათ მიმართონ მას
+  ზუსტი ფორმულირება, რომელიც გაიგზავნა.
+- მოწვევის გაგზავნის შემდეგ, განაახლეთ თვალთვალის ელცხრილი ან გაუშვით
+  `invite_sent_at` დროის შტამპი და მოსალოდნელი დასრულების თარიღი
+  [მოწვევის ნაკადის გადახედვა] (./preview-invite-flow.md) ანგარიშს შეუძლია კოჰორტის შერჩევა
+  ავტომატურად.

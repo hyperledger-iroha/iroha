@@ -11,29 +11,30 @@ id: pq-primitives
 title: SoraNet Post-Quantum Primitives
 sidebar_label: PQ Primitives
 description: Overview of the `soranet_pq` crate and how the SoraNet handshake consumes ML-KEM/ML-DSA helpers.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
+:::შენიშვნა კანონიკური წყარო
 :::
 
-The `soranet_pq` crate contains the post-quantum building blocks that every SoraNet
-relay, client, and tooling component relies on. It wraps the PQClean-backed Kyber
-(ML-KEM) and Dilithium (ML-DSA) suites and layers on protocol-friendly HKDF and
-hedged RNG helpers so all surfaces share identical implementations.
+`soranet_pq` კრატი შეიცავს პოსტ-კვანტურ სამშენებლო ბლოკებს, რომლებსაც ყოველი SoraNet
+რელეს, კლიენტს და ხელსაწყოების კომპონენტს ეყრდნობა. იგი ახვევს PQClean-ის მხარდაჭერით Kyber-ს
+(ML-KEM) და Dilithium (ML-DSA) კომპლექტები და ფენები პროტოკოლისთვის მეგობრულ HKDF-ზე და
+ჰეჯირებული RNG დამხმარეები, ასე რომ ყველა ზედაპირი იზიარებს იდენტურ განხორციელებას.
 
-## What ships in `soranet_pq`
+## რა იგზავნება `soranet_pq`-ში
 
-- **ML-KEM-512/768/1024:** deterministic key generation, encapsulation, and
-  decapsulation helpers with constant-time error propagation.
-- **ML-DSA-44/65/87:** detached signing/verification wired for
-  domain-separated transcripts.
-- **Labelled HKDF:** `derive_labeled_hkdf` namespaces every derivation with the
-  handshake stage (`DH/es`, `KEM/1`, …) so hybrid transcripts stay collision-free.
-- **Hedged randomness:** `hedged_chacha20_rng` blends deterministic seeds
-  with live OS entropy and zeroizes intermediate state on drop.
+- **ML-KEM-512/768/1024:** განმსაზღვრელი გასაღების გენერირება, ინკაფსულაცია და
+  დეკაფსულაციის დამხმარეები მუდმივი დროის შეცდომის გამრავლებით.
+- **ML-DSA-44/65/87:** მოწყვეტილი ხელმოწერა/დადასტურება გაყვანილია
+  დომენით გამოყოფილი ტრანსკრიპტები.
+- ** იარლიყით HKDF:** `derive_labeled_hkdf` ყოველი წარმოშობის სახელთა სივრცეში
+  ხელის ჩამორთმევის ეტაპი (`DH/es`, `KEM/1`,…) ასე რომ, ჰიბრიდული ტრანსკრიპტები შეჯახების გარეშე დარჩეს.
+- ** ჰეჯირებული შემთხვევითობა:** `hedged_chacha20_rng` აერთიანებს დეტერმინისტულ თესლებს
+  ცოცხალი OS ენტროპიით და ნულობს შუალედურ მდგომარეობას ვარდნისას.
 
-All secrets sit inside `Zeroizing` containers and CI exercises the PQClean
-bindings on every supported platform.
+ყველა საიდუმლო ზის `Zeroizing` კონტეინერებში და CI ახორციელებს PQClean-ს
+საკინძები ყველა მხარდაჭერილ პლატფორმაზე.
 
 ```rust
 use soranet_pq::{
@@ -56,21 +57,21 @@ let okm = derive_labeled_hkdf(
 ).unwrap();
 ```
 
-## How to consume it
+## როგორ მოვიხმაროთ
 
-1. **Add the dependency** to crates that sit outside the workspace root:
+1. **დამოკიდებულების დამატება** ყუთებს, რომლებიც დევს სამუშაო სივრცის ფესვის გარეთ:
 
    ```toml
    soranet_pq = { path = "../../crates/soranet_pq" }
    ```
 
-2. **Select the correct suite** at call sites. For the initial hybrid handshake
-   work, use `MlKemSuite::MlKem768` and `MlDsaSuite::MlDsa65`.
+2. **აირჩიეთ სწორი კომპლექტი** ზარის საიტებზე. პირველადი ჰიბრიდული ხელის ჩამორთმევისთვის
+   მუშაობა, გამოიყენეთ `MlKemSuite::MlKem768` და `MlDsaSuite::MlDsa65`.
 
-3. **Derive keys with labels.** Use `HkdfDomain::soranet("KEM/1")` (and siblings)
-   so transcript chaining stays deterministic across nodes.
+3. **გასაღები ეტიკეტებით.** გამოიყენეთ `HkdfDomain::soranet("KEM/1")` (და და-ძმები)
+   ასე რომ, ტრანსკრიპტის მიჯაჭვულობა დეტერმინისტული რჩება კვანძებში.
 
-4. **Use the hedged RNG** when sampling fallback secrets:
+4. **გამოიყენეთ ჰეჯირებული RNG** სარეზერვო საიდუმლოების შერჩევისას:
 
    ```rust
    use soranet_pq::{hedged_chacha20_rng, HedgedRngSeed};
@@ -78,13 +79,13 @@ let okm = derive_labeled_hkdf(
    let mut rng = hedged_chacha20_rng(HedgedRngSeed::new(b"snnet16", [0u8; 32]));
    ```
 
-The core SoraNet handshake and CID blinding helpers (`iroha_crypto::soranet`)
-pull these utilities directly, which means downstream crates inherit the same
-implementations without linking PQClean bindings themselves.
+SoraNet-ის ძირითადი ხელის ჩამორთმევისა და CID დამაბრმავებელი დამხმარეები (`iroha_crypto::soranet`)
+გაიყვანეთ ეს კომუნალური საშუალებები პირდაპირ, რაც ნიშნავს, რომ ქვედა დინების უჯრები იგივე მემკვიდრეობით მიიღება
+იმპლემენტაციები თავად PQClean აკავშირების გარეშე.
 
-## Validation checklist
+## ვალიდაციის საკონტროლო სია
 
 - `cargo test -p soranet_pq --offline`
 - `cargo fmt --package soranet_pq`
-- Audit the README usage samples (`crates/soranet_pq/README.md`)
-- Update the SoraNet handshake design doc once hybrids land
+- README გამოყენების ნიმუშების აუდიტი (`crates/soranet_pq/README.md`)
+- განაახლეთ SoraNet ხელის ჩამორთმევის დიზაინის დოკუმენტი, როგორც კი ჰიბრიდები დაეშვება

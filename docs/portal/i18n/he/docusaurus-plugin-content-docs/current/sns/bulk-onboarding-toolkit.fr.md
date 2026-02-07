@@ -4,51 +4,53 @@ direction: rtl
 source: docs/portal/docs/sns/bulk-onboarding-toolkit.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Source canonique
+:::הערה מקור קנוניק
 Cette page reflete `docs/source/sns/bulk_onboarding_toolkit.md` afin que les
-operateurs externes voient la meme guidance SN-3b sans cloner le depot.
+Operators externes voient la meme guidance SN-3b sans cloner le depot.
 :::
 
-# Toolkit d'onboarding massif SNS (SN-3b)
+# ערכת כלים ל- onboarding massif SNS (SN-3b)
 
-**Reference roadmap:** SN-3b "Bulk onboarding tooling"  
-**Artefacts:** `scripts/sns_bulk_onboard.py`, `scripts/tests/test_sns_bulk_onboard.py`,
+**מפת דרכים התייחסות:** SN-3b "כלי שילוב בכמות גדולה"  
+**חפצי אמנות:** `scripts/sns_bulk_onboard.py`, `scripts/tests/test_sns_bulk_onboard.py`,
 `docs/portal/scripts/sns_bulk_release.sh`
 
 Les grands registrars preparent souvent des centaines de registrations `.sora` ou
-`.nexus` avec les memes approbations de gouvernance et rails de settlement.
-Fabriquer des payloads JSON a la main ou relancer la CLI ne scale pas, donc SN-3b
-livre un builder deterministe CSV vers Norito qui prepare des structures
+`.nexus` avec les memes approbations de governance et rails de settlement.
+Fabriquer des payloads JSON a la main או relancer la CLI ne scale pas, donc SN-3b
+livre un Builder deterministe CSV vers Norito איך להכין את המבנים
 `RegisterNameRequestV1` pour Torii ou la CLI. L'helper valide chaque ligne en
-amont, emet a la fois un manifeste agrege et du JSON delimite par nouvelles
+amont, Emet a la fois un manifeste agrege et du JSON delimite par nouvelles
 lignes optionnel, et peut soumettre les payloads automatiquement tout en
-enregistrant des recus structures pour les audits.
+נרשם des recus structures pour les audits.
 
-## 1. Schema CSV
+## 1. סכימת CSV
 
-Le parseur exige la ligne d'en-tete suivante (l'ordre est flexible):
+Le parseur exige la ligne d'en-tete suivante (l'ordre est גמיש):
 
-| Colonne | Requis | Description |
-|---------|--------|-------------|
-| `label` | Oui | Libelle demande (casse mixte acceptee; l'outil normalise selon Norm v1 et UTS-46). |
-| `suffix_id` | Oui | Identifiant numerique de suffixe (decimal ou `0x` hex). |
-| `owner` | Oui | Chaine AccountId (IH58 literal; optional @domain hint) pour le proprietaire de l'enregistrement. |
+| קולון | דרישה | תיאור |
+|--------|--------|------------|
+| `label` | Oui | Libelle demande (case mixte acceptee; אני רוצה לנרמל את התקן של Norm v1 et UTS-46). |
+| `suffix_id` | Oui | זיהוי מספרי דה סיומת (עשרוני או `0x` hex). |
+| `owner` | Oui | Chaine AccountId (IH58 ליטרל; רמז @דומיין אופציונלי) pour le proprietaire de l'enregistrement. |
 | `term_years` | Oui | Entier `1..=255`. |
-| `payment_asset_id` | Oui | Actif de settlement (par exemple `xor#sora`). |
-| `payment_gross` / `payment_net` | Oui | Entiers non signes representant des unites natives de l'actif. |
-| `settlement_tx` | Oui | Valeur JSON ou chaine litterale decrivant la transaction de paiement ou hash. |
+| `payment_asset_id` | Oui | Actif de Settlement (למשל `xor#sora`). |
+| `payment_gross` / `payment_net` | Oui | Entiers non signnes representant des unites natives de l'actif. |
+| `settlement_tx` | Oui | Valeur JSON או שרשרת מילותי התוצאה של טרנזקציית ה-paiement או hash. |
 | `payment_payer` | Oui | AccountId qui a autorise le paiement. |
-| `payment_signature` | Oui | JSON ou chaine litterale contenant la preuve de signature du steward ou de la tresorerie. |
-| `controllers` | Optionnel | Liste separee par point-virgule ou virgule des adresses de compte controller. Par defaut `[owner]` si omis. |
-| `metadata` | Optionnel | JSON inline ou `@path/to/file.json` fournissant des hints de resolver, des enregistrements TXT, etc. Par defaut `{}`. |
-| `governance` | Optionnel | JSON inline ou `@path` pointant vers un `GovernanceHookV1`. `--require-governance` impose cette colonne. |
+| `payment_signature` | Oui | JSON או שרשרת המחזיקה הרשמית לה מקדמת חתימה של המנהל או דה לה טרסורריה. |
+| `controllers` | אופציונלי | רשימה נפרדת של נקודה-virgule או כתובות של קונטרולר. Par defaut `[owner]` סי אומיס. |
+| `metadata` | אופציונלי | JSON inline ou `@path/to/file.json` fournissant des hints de resolver, des enregistrements TXT, וכו'. Par defaut `{}`. |
+| `governance` | אופציונלי | JSON inline או `@path` pointant לעומת `GovernanceHookV1`. `--require-governance` להטיל cette colonne. |
 
 Toute colonne peut referencer un fichier externe en prefixant la valeur de cellule
 par `@`. Les chemins sont resolus relativement au fichier CSV.
 
-## 2. Executer l'helper
+## 2. מוציא לפועל
 
 ```bash
 python3 scripts/sns_bulk_onboard.py registrations.csv \
@@ -56,16 +58,16 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
   --ndjson artifacts/sns_bulk_requests.ndjson
 ```
 
-Options cles:
+אפשרויות קלס:
 
-- `--require-governance` rejette les lignes sans hook de gouvernance (utile pour
+- `--require-governance` rejette les lignes sans hook de governance (utile pour
   les encheres premium ou les affectations reservees).
-- `--default-controllers {owner,none}` decide si les cellules controllers vides
-  retombent sur le compte owner.
-- `--controllers-column`, `--metadata-column`, et `--governance-column` permettent
+- `--default-controllers {owner,none}` מחליטים על סרטונים של בקרי תאים
+  הבעלים של retombent sur le compte.
+- `--controllers-column`, `--metadata-column`, et `--governance-column` קבוע
   de renommer les colonnes optionnelles lors d'exports amont.
 
-En cas de succes le script ecrit un manifeste agrege:
+בסופו של דבר, התסריט כתוב בכתב הסכמה:
 
 ```json
 {
@@ -100,11 +102,9 @@ En cas de succes le script ecrit un manifeste agrege:
     "suffix_breakdown": {"1":118,"42":2}
   }
 }
-```
-
-Si `--ndjson` est fourni, chaque `RegisterNameRequestV1` est aussi ecrit comme un
-document JSON sur une ligne afin que les automatisations puissent streamer les
-requetes directement vers Torii:
+```Si `--ndjson` est fourni, chaque `RegisterNameRequestV1` est aussi ecrit comme un
+מסמך JSON sur une ligne afin que les automatisations puissent streamer les
+מבקש הכוונה גרסה Torii:
 
 ```bash
 jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
@@ -116,12 +116,12 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
   done
 ```
 
-## 3. Soumissions automatisees
+## 3. Soumissions אוטומציה
 
-### 3.1 Mode Torii REST
+### מצב 3.1 Torii REST
 
-Specifiez `--submit-torii-url` plus `--submit-token` ou `--submit-token-file` pour
-pousser chaque entree du manifeste directement vers Torii:
+Specificez `--submit-torii-url` פלוס `--submit-token` או `--submit-token-file` לשפוך
+pousser chaque entree du manifeste direction vers Torii:
 
 ```bash
 python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json \
@@ -133,18 +133,18 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
 ```
 
 - L'helper emet un `POST /v1/sns/registrations` par requete et s'arrete au premier
-  erreur HTTP. Les reponses sont ajoutees au log comme enregistrements NDJSON.
-- `--poll-status` re-interroge `/v1/sns/registrations/{selector}` apres chaque
+  שגיאה ב-HTTP. התשובות נשלחות לכניסה לרישום NDJSON.
+- `--poll-status` תחקור מחדש `/v1/sns/registrations/{selector}` אפר צ'אק
   soumission (jusqu'a `--poll-attempts`, defaut 5) pour confirmer que
-  l'enregistrement est visible. Fournissez `--suffix-map` (JSON de `suffix_id`
-  vers des valeurs "suffix") pour que l'outil derive les litteraux
+  הרישום נראה לעין. Fournissez `--suffix-map` (JSON de `suffix_id`
+  vers des valeurs "סיומת") pour que l'outil derive les litteraux
   `{label}.{suffix}` pour le polling.
-- Ajustables: `--submit-timeout`, `--poll-attempts`, et `--poll-interval`.
+- מתכווננים: `--submit-timeout`, `--poll-attempts`, et `--poll-interval`.
 
-### 3.2 Mode iroha CLI
+### מצב 3.2 עבור CLI
 
 Pour faire passer chaque entree du manifeste par la CLI, fournissez le chemin du
-binaire:
+בינארי:
 
 ```bash
 python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json \
@@ -155,19 +155,19 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
 ```
 
 - Les controllers doivent etre des entrees `Account` (`controller_type.kind = "Account"`)
-  car la CLI expose uniquement des controllers bases sur des comptes.
+  car la CLI לחשוף את הייחודיות של בקרי בסיסים סור des comptes.
 - Les blobs metadata et governance sont ecrits dans des fichiers temporaires par
-  requete et transmis a `iroha sns register --metadata-json ... --governance-json ...`.
+  בקש ושלח את `iroha sns register --metadata-json ... --governance-json ...`.
 - Le stdout et stderr de la CLI ainsi que les codes de sortie sont journalises;
-  les codes non zero interrompent l'execution.
+  les codes ללא אפס interrompent l'execution.
 
-Les deux modes de soumission peuvent fonctionner ensemble (Torii et CLI) pour
-croiser les deployments du registrar ou repeter des fallbacks.
+Les deux modes de soumission peuvent fonctionner אנסמבל (Torii et CLI) pour
+croiser les deployments du registrar או repeter des fallbacks.
 
 ### 3.3 Recus de soumission
 
 Quand `--submission-log <path>` est fourni, le script ajoute des entrees NDJSON
-capturant:
+לוכד:
 
 ```json
 {"timestamp":"2026-03-30T07:22:04.123Z","mode":"torii","index":12,"selector":"1:alpha","status":200,"success":true,"detail":"..."}
@@ -176,14 +176,14 @@ capturant:
 ```
 
 Les reponses Torii reussies incluent des champs structures extraits de
-`NameRecordV1` ou `RegisterNameResponseV1` (par exemple `record_status`,
+`NameRecordV1` או `RegisterNameResponseV1` (לדוגמה `record_status`,
 `record_pricing_class`, `record_owner`, `record_expires_at_ms`,
 `registry_event_version`, `suffix_id`, `label`) afin que les dashboards et les
-reports de gouvernance puissent parser le log sans inspecter du texte libre.
+דוחות de governance puissent parser le log sans inspecter du texte libre.
 Joignez ce log aux tickets registrar avec le manifeste pour une evidence
-reproductible.
+ניתן לשחזור.
 
-## 4. Automatisation de release du portail
+## 4. Automatization de release du portail
 
 Les jobs CI et portail appellent `docs/portal/scripts/sns_bulk_release.sh`, qui
 encapsule l'helper et stocke les artefacts sous
@@ -200,24 +200,22 @@ docs/portal/scripts/sns_bulk_release.sh \
   --cli-config configs/registrar.toml
 ```
 
-Le script:
-
-1. Construit `registrations.manifest.json`, `registrations.ndjson`, et copie le
-   CSV original dans le repertoire de release.
-2. Soumet le manifeste via Torii et/ou la CLI (quand configure), en ecrivant
+התסריט:1. צור `registrations.manifest.json`, `registrations.ndjson`, et copie le
+   CSV מקורי ברפרטואר השחרור.
+2. Soumet le manifeste דרך Torii et/ou la CLI (קונפיגורציית quand), en ecrivant
    `submissions.log` avec les recus structures ci-dessus.
-3. Emet `summary.json` decrivant la release (chemins, URL Torii, chemin CLI,
-   timestamp) afin que l'automatisation du portail puisse uploader le bundle vers
+3. Emet `summary.json` מגדיר את השחרור (chemins, URL Torii, chemin CLI,
+   חותמת זמן) afin que l'automatisation du portail puisse uploader le bundle vers
    le stockage d'artefacts.
-4. Produit `metrics.prom` (override via `--metrics`) contenant des compteurs
+4. מוצר `metrics.prom` (עקיפה דרך `--metrics`) Content des compteurs
    au format Prometheus pour le total de requetes, la distribution des suffixes,
-   les totaux d'asset et les resultats de soumission. Le JSON resume pointe vers
+   les totaux d'asset et les resultats de soumission. קורות חיים של Le JSON pointe vers
    ce fichier.
 
-Les workflows archivent simplement le repertoire de release comme un seul artefact,
-qui contient desormais tout ce dont la gouvernance a besoin pour l'audit.
+Les זרימות עבודה ארכיון פשוטות הרפרטואר של שחרור comme un seul artefact,
+qui contient desormais tout ce dont la governance a besoin pour l'audit.
 
-## 5. Telemetrie et dashboards
+## 5. טלמטריה ודשבורדים
 
 Le fichier de metriques genere par `sns_bulk_release.sh` expose les series
 suivantes:
@@ -231,41 +229,39 @@ sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="xor#sora"} 
 sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",success="true"} 118
 ```
 
-Injectez `metrics.prom` dans votre sidecar Prometheus (par exemple via Promtail ou
-un import batch) pour aligner registrars, stewards et pairs de gouvernance sur
-l'avancement en masse. Le tableau Grafana
-`dashboards/grafana/sns_bulk_release.json` visualise les memes donnees avec des
+Injectez `metrics.prom` dans votre car sidecar Prometheus (לדוגמה דרך Promtail ou
+un import batch) pour aligner aligners, stewards et pars de governance sur
+l'avancement בהמוניהם. Le tableau Grafana
+`dashboards/grafana/sns_bulk_release.json` הדמיית les memes donnees avec des
 panneaux pour les comptes par suffixe, le volume de paiement et les ratios de
-reussite/echec des soumissions. Le tableau filtre par `release` pour que les
-auditeurs puissent se concentrer sur une seule execution CSV.
+reussite/echec des soumissions. Le tableau filter par `release` pour que les
+המבקרים מתרכזים בביצוע CSV.
 
 ## 6. Validation et modes d'echec
 
-- **Normalisation des labels:** les entrees sont normalisees avec Python IDNA plus
-  lowercase et filtres de caracteres Norm v1. Les labels invalides echouent vite
+- **נורמליזציה של תוויות:** מנות ראשונות בעלות נורמליזציה עם Python IDNA plus
+  אותיות קטנות ומסנני תכונות נורמה v1. Les labels invalides echouent vite
   avant tout appel reseau.
-- **Garde-fous numeriques:** suffix ids, term years, et pricing hints doivent
+- **מספרים גרדיים:** מזהי סיומת, שנות טווח ורמזים לתמחור
   rester dans les bornes `u16` et `u8`. Les champs de paiement acceptent des
   entiers decimaux ou hex jusqu'a `i64::MAX`.
-- **Parsing metadata ou governance:** le JSON inline est parse directement; les
-  references a des fichiers sont resolues relativement a l'emplacement du CSV.
-  Les metadata non-objet produisent une erreur de validation.
-- **Controllers:** les cellules vides respectent `--default-controllers`. Fournissez
-  des listes explicites (par exemple `ih58...;ih58...`) quand vous deleguez a des
-  acteurs non owner.
+- **ניתוח מטא נתונים או ממשל:** כיוון הניתוח המוטבע של JSON; les
+  הפניות a des fichiers sont resolues relativement a l'emplacement du CSV.
+  Les metadata non-objet produisent une reur de validation.
+- **בקרים:** les cellules מגלה את `--default-controllers`. פורניסז
+  des lists explicites (לדוגמה `ih58...;ih58...`) quand vous deleguez a des
+  שחקנים שאינם בעלי.
 
-Les echecs sont signales avec des numeros de ligne contextuels (par exemple
-`error: row 12 term_years must be between 1 and 255`). Le script sort avec le
-code `1` sur erreurs de validation et `2` lorsque le chemin CSV manque.
+Les echecs sont signales avec des numeros de ligne contextuels (לדוגמה
+`error: row 12 term_years must be between 1 and 255`). מיון התסריט עם התסריט
+קוד `1` sur erreurs de validation et `2` lorsque le chemin CSV manque.
 
-## 7. Tests et provenance
+## 7. בדיקות ומוצא
 
 - `python3 -m pytest scripts/tests/test_sns_bulk_onboard.py` couvre le parsing CSV,
   l'emission NDJSON, l'enforcement governance, et les chemins de soumission CLI ou Torii.
 - L'helper est du Python pur (aucune dependance additionnelle) et tourne partout
-  ou `python3` est disponible. L'historique des commits est suivi aux cotes de la
-  CLI dans le depot principal pour la reproductibilite.
-
-Pour les runs de production, joignez le manifeste genere et le bundle NDJSON au
+  ou `python3` זמין. L'historique des commits est suivi aux cotes de la
+  CLI dans le depot principal pour la reproductibilite.Pour les runs de production, joignez le manifeste genere et le bundle NDJSON au
 ticket du registrar afin que les stewards puissent rejouer les payloads exacts
 soumis a Torii.

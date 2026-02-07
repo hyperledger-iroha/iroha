@@ -7,70 +7,71 @@ generator: scripts/sync_docs_i18n.py
 source_hash: c52d7f2c5ec9dc4cda81895561bc1261659935c94bf3f7febb0867f4981fe616
 source_last_modified: "2026-01-22T16:26:46.472177+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Repo Custodian Acknowledgement Template
+# Репо опека таныу ҡалып
 
-Use this template when a repo (bilateral or tri-party) references a custodian
-via `RepoAgreement::custodian`. The goal is to record the custody SLA, routing
-accounts, and drill contacts before assets move. Copy the template into your
-evidence directory (for example
-`artifacts/finance/repo/<slug>/custodian_ack_<custodian>.md`), fill the
-placeholders, and hash the file as part of the governance packet described in
-`docs/source/finance/repo_ops.md` §2.8.
+Был ҡалыпты ҡулланыу, ҡасан репо (ике яҡлы йәки три-партия) һылтанмалар опекун
+`RepoAgreement::custodian` аша. Маҡсат – опека SLA яҙып алыу, маршрутлаштырыу
+иҫәптәр, һәм быраулау контакттар активтар күсеп киткәнсе. Ҡалыпты күсерергә һеҙҙең
+дәлилдәр каталогы (мәҫәлән,
+`artifacts/finance/repo/<slug>/custodian_ack_<custodian>.md`), тултырырға
+урын хужалары, һәм хеш файл өлөшө булараҡ, идара итеү пакеты һүрәтләнгән .
+`docs/source/finance/repo_ops.md` §2,8.
 
-## 1. Metadata
+## 1. Метадата
 
-| Field | Value |
-|-------|-------|
-| Agreement identifier | `<repo-yyMMdd-XX>` |
-| Custodian account id | `<ih58...>` |
-| Prepared by / date | `<custodian ops lead>` |
-| Desk contacts acknowledged | `<desk lead + counterparty>` |
-| Evidence directory | ``artifacts/finance/repo/<slug>/`` |
-
-## 2. Custody Scope
-
-- **Collateral definitions received:** `<list of asset definition ids>`
-- **Cash leg currency / settlement rail:** `<xor#sora / other>`
-- **Custody window:** `<start/end timestamps or SLA summary>`
-- **Standing instructions:** `<hash + path to standing instruction document>`
-- **Automation prerequisites:** `<scripts, configs, or runbooks custodian will invoke>`
-
-## 3. Routing & Monitoring
-
-| Item | Value |
+| Ялан | Ҡиммәте |
 |------|-------|
-| Custody wallet / ledger account | `<asset ids or ledger path>` |
-| Monitoring channel | `<Slack/phone/on-call rotation>` |
-| Drill contact | `<primary + backup>` |
-| Required alerts | `<PagerDuty service, Grafana board, etc.>` |
+| Килешеү идентификаторы | `<repo-yyMMdd-XX>` |
+| Һаҡлаусы иҫәп id | `<ih58...>` |
+| / дата менән әҙерләнгән | I18NI0000007X |
+| Өҫтәл контакттар танылған | `<desk lead + counterparty>` |
+| Дәлилдәр каталогы | ``artifacts/finance/repo/<slug>/`` |
 
-## 4. Statements
+## 2. Һаҡлау даирәһе
 
-1. *Custody readiness:* “We reviewed the staged `repo initiate` payload with the
-   identifiers above and are prepared to accept collateral under the SLA listed
-   in §2.”
-2. *Rollback commitment:* “We will execute the rollback playbook named above if
-   directed by the incident commander, and will provide CLI logs plus hashes in
+- **Баллы аңлатмалар:** `<list of asset definition ids>`
+- **Аҡса аяҡ валютаһы / ҡасаба тимер юл:** `<xor#sora / other>`
+- **Тәҙрә опека:** `<start/end timestamps or SLA summary>`
+- **Төҙөү күрһәтмәләре:** `<hash + path to standing instruction document>`
+- **Автоматлаштырыу шарттары:** `<scripts, configs, or runbooks custodian will invoke>`
+
+## 3. Маршрутлаштырыу & Мониторинг
+
+| Элемент | Ҡиммәте |
+|------|-------|
+| Һаҡлау янсыҡы / баш китабы иҫәбенә | `<asset ids or ledger path>` |
+| Мониторинг каналы | `<Slack/phone/on-call rotation>` |
+| Дренаж контакт | `<primary + backup>` |
+| Кәрәкле иҫкәртмәләр | `<PagerDuty service, Grafana board, etc.>` |
+
+## 4. Һөйләмдәр
+
+1. *Мәҡәләмгә әҙерлек:* “Беҙ сәхнәләштерелгән I18NI000000019X faceboud менән ҡарап сыҡтыҡ.
+   идентификаторҙар өҫтә һәм әҙер ҡабул итеү өсөн залог буйынса SLA исемлегенә
+   §2-лә».
+2. *Роллбек йөкләмәһе:* “Беҙ өҫтә аталған кире ҡайтарыу плейбукты үтәйәсәкбеҙ, әгәр ҙә
+   режиссеры инцидент командиры, һәм CLI журналдары плюс хештар менән тәьмин итәсәк.
    `governance/drills/<timestamp>.log`.”
-3. *Evidence retention:* “We will keep the acknowledgement, standing
-   instructions, and CLI logs for at least `<duration>` and provide them to the
-   finance council upon request.”
+3. *Дәлилдәр һаҡлау:* “Беҙ таныуҙы һаҡларбыҙ, торған
+   күрһәтмәләр, һәм CLI журналдар өсөн кәмендә I18NI000000021X һәм уларҙы тәьмин итеү өсөн
+   финанс советы үтенес буйынса».
 
-Sign below (electronic signatures acceptable when routed through the governance
-tracker).
+Түбәндәге билдә (электрон ҡултамғалар ҡабул итеү ваҡытында идара итеү аша идара итеү
+трекер).
 
-| Name | Role | Signature / date |
-|------|------|------------------|
-| `<custodian ops lead>` | Custodian operator | `<signature>` |
-| `<desk lead>` | Desk | `<signature>` |
-| `<counterparty>` | Counterparty | `<signature>` |
+| Исем | Роль | Ҡултамға / дата |
+|-----|------|-------------------|
+| `<custodian ops lead>` | Һаҡлаусы оператор | `<signature>` |
+| `<desk lead>` | Өҫтәл | `<signature>` |
+| `<counterparty>` | Контраст | `<signature>` |
 
-> Once signed, hash the file (example: `sha256sum custodian_ack_<cust>.md`) and
-> record the digest in the governance packet table so reviewers can verify the
-> acknowledgement bytes referenced during the vote.
+> Бер тапҡыр ҡул ҡуйылған, хеш файл (миҫал: I18NI000000028X) һәм
+> яҙып алыу дигест идара итеү пакет таблицаһында шулай рецензенттар раҫлай ала
+> таныу байттары тауыш биргәндә һылтанма яһалған.

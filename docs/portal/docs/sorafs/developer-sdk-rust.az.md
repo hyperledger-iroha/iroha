@@ -11,19 +11,20 @@ id: developer-sdk-rust
 title: Rust SDK Snippets
 sidebar_label: Rust snippets
 description: Minimal Rust examples for consuming proof streams and manifests.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
+:::Qeyd Kanonik Mənbə
 :::
 
-The Rust crates in this repository power the CLI and can be embedded inside
-custom orchestrators or services. The snippets below highlight the helpers most
-developers ask for.
+Bu anbardakı Rust qutuları CLI-yə güc verir və içəriyə daxil edilə bilər
+xüsusi orkestrlər və ya xidmətlər. Aşağıdakı fraqmentlər köməkçiləri ən çox vurğulayır
+tərtibatçılar xahiş edirlər.
 
-## Proof stream helper
+## Sübut axını köməkçisi
 
-Reuse the existing proof stream parser to aggregate metrics from an HTTP
-response:
+HTTP-dən ölçüləri toplamaq üçün mövcud sübut axını təhlilçisindən yenidən istifadə edin
+cavab:
 
 ```rust
 use std::error::Error;
@@ -61,52 +62,52 @@ pub fn collect_proof_metrics(response: Response) -> Result<ProofStreamSummary, B
 }
 ```
 
-The full version (with tests) lives in `docs/examples/sorafs_rust_proof_stream.rs`.
-`ProofStreamSummary::to_json()` renders the same metrics JSON as the CLI, making
-it easy to feed observability backends or CI assertions.
+Tam versiya (testlərlə) `docs/examples/sorafs_rust_proof_stream.rs`-də yaşayır.
+`ProofStreamSummary::to_json()`, CLI ilə eyni ölçüləri JSON göstərir,
+müşahidə oluna bilən arxa uçları və ya CI təsdiqlərini qidalandırmaq asandır.
 
-## Multi-source fetch scoring
+## Çox mənbəli əldə etmə hesabı
 
-The `sorafs_car::multi_fetch` module exposes the asynchronous fetch scheduler
-used by the CLI. Implement `sorafs_car::multi_fetch::ScorePolicy` and pass it
-via `FetchOptions::score_policy` to tune provider ordering. The unit test
-`multi_fetch::tests::score_policy_can_filter_providers` shows how to enforce
-custom preferences.
+`sorafs_car::multi_fetch` modulu asinxron gətirmə planlaşdırıcısını ifşa edir
+CLI tərəfindən istifadə olunur. `sorafs_car::multi_fetch::ScorePolicy` tətbiq edin və keçin
+provayder sifarişini tənzimləmək üçün `FetchOptions::score_policy` vasitəsilə. Vahid sınağı
+`multi_fetch::tests::score_policy_can_filter_providers` necə tətbiq olunacağını göstərir
+fərdi üstünlüklər.
 
-Other knobs mirror CLI flags:
+Digər düymələr CLI bayraqlarını əks etdirir:
 
-- `FetchOptions::per_chunk_retry_limit` matches the `--retry-budget` flag for CI
-  runs that intentionally constrain retries.
-- Combine `FetchOptions::global_parallel_limit` with `--max-peers` to cap the
-  number of concurrent providers.
-- `OrchestratorConfig::with_telemetry_region("region")` tags the
-  `sorafs_orchestrator_*` metrics, while
-  `OrchestratorConfig::with_transport_policy` mirrors the CLI
-  `--transport-policy` flag. `TransportPolicy::SoranetPreferred` now ships as
-  the default across CLI/SDK surfaces; use `TransportPolicy::DirectOnly` only
-  when staging a downgrade or following a compliance directive, and reserve
-  `SoranetStrict` for PQ-only pilots with explicit approval.
-- Set `SorafsGatewayFetchOptions::write_mode_hint =
-  Some(WriteModeHint::UploadPqOnly)` to force PQ-only uploads; the helper will
-  automatically promote the transport/anonymity policies unless explicitly
-  overridden.
-- Use `SorafsGatewayFetchOptions::policy_override` to pin a temporary transport
-  or anonymity tier for a single request; supplying either field skips the
-  brownout demotion and fails when the requested tier cannot be satisfied.
-- The Python (`sorafs_multi_fetch_local` / `sorafs_gateway_fetch`) and
-  JavaScript (`sorafsMultiFetchLocal`) bindings reuse the same scheduler, so
-  set `return_scoreboard=true` in those helpers to retrieve the computed weights
-  alongside chunk receipts.
-- `SorafsGatewayScoreboardOptions::telemetry_source_label` records the OTLP
-  stream that produced an adoption bundle. When omitted, the client derives
-  `region:<telemetry_region>` (or `chain:<chain_id>`) automatically so metadata
-  always carries a descriptive label.
+- `FetchOptions::per_chunk_retry_limit` CI üçün `--retry-budget` bayrağına uyğun gəlir
+  təkrar cəhdləri qəsdən məhdudlaşdıran qaçışlar.
+- `FetchOptions::global_parallel_limit` ilə `--max-peers` birləşdirin
+  paralel provayderlərin sayı.
+- `OrchestratorConfig::with_telemetry_region("region")` etiketləri
+  `sorafs_orchestrator_*` ölçüləri isə
+  `OrchestratorConfig::with_transport_policy` CLI-ni əks etdirir
+  `--transport-policy` bayrağı. `TransportPolicy::SoranetPreferred` indi olaraq göndərilir
+  CLI/SDK səthlərində standart; yalnız `TransportPolicy::DirectOnly` istifadə edin
+  səviyyəni endirərkən və ya uyğunluq direktivinə əməl edərkən və ehtiyatda saxlayın
+  `SoranetStrict`, açıq təsdiqi olan yalnız PQ pilotları üçün.
+- `SorafsGatewayFetchOptions::write_mode_hint = seçin
+  Bəziləri(WriteModeHint::UploadPqOnly)` yalnız PQ üçün yükləmələri məcbur etmək; köməkçi olacaq
+  aydın olmadığı təqdirdə nəqliyyat/anonimlik siyasətini avtomatik olaraq təşviq edin
+  ləğv edildi.
+- Müvəqqəti nəqliyyatı bağlamaq üçün `SorafsGatewayFetchOptions::policy_override` istifadə edin
+  və ya bir sorğu üçün anonimlik səviyyəsi; hər hansı bir sahəni təmin edən sahəni atlayır
+  aşağı düşür və tələb olunan səviyyə təmin edilmədikdə uğursuz olur.
+- Python (`sorafs_multi_fetch_local` / `sorafs_gateway_fetch`) və
+  JavaScript (`sorafsMultiFetchLocal`) bağlamaları eyni planlaşdırıcıdan təkrar istifadə edir, buna görə də
+  hesablanmış çəkiləri əldə etmək üçün həmin köməkçilərdə `return_scoreboard=true` təyin edin
+  yığın qəbzləri ilə yanaşı.
+- `SorafsGatewayScoreboardOptions::telemetry_source_label` OTLP-ni qeyd edir
+  qəbul paketi yaradan axın. Buraxıldıqda, müştəri əldə edir
+  `region:<telemetry_region>` (və ya `chain:<chain_id>`) avtomatik olaraq metadata
+  həmişə təsviri etiket daşıyır.
 
-## Fetch via `iroha::Client`
+## `iroha::Client` vasitəsilə gətirin
 
-The Rust SDK bundles the gateway fetch helper; provide a manifest plus provider
-descriptors (including stream tokens) and let the client drive the multi-source
-fetch:
+Rust SDK şlüz gətirmə köməkçisini birləşdirir; manifest plus provayderi təmin edin
+deskriptorları (axın işarələri daxil olmaqla) və müştəriyə çox mənbəni idarə etməsinə icazə verin
+gətirmək:
 
 ```rust
 use eyre::Result;
@@ -155,23 +156,23 @@ pub async fn fetch_payload(
 }
 ```
 
-Set `transport_policy` to `Some(TransportPolicy::SoranetStrict)` when uploads
-must refuse classical relays, or `Some(TransportPolicy::DirectOnly)` when SoraNet
-must be bypassed entirely. Point `scoreboard.persist_path` at the release
-artefact directory, optionally fix `scoreboard.now_unix_secs`, and populate
-`scoreboard.metadata` with capture context (fixture labels, Torii target, etc.)
-so `cargo xtask sorafs-adoption-check` consumes deterministic JSON across SDKs
-with the provenance blob SF-6c expects.
-`Client::sorafs_fetch_via_gateway` now augments that metadata with the manifest
-identifier, optional manifest CID expectation, and the
-`gateway_manifest_provided` flag by inspecting the supplied
-`GatewayFetchConfig`, so captures that include a signed manifest envelope satisfy
-the SF-6c evidence requirement without duplicating those fields manually.
+Yükləmə zamanı `transport_policy`-i `Some(TransportPolicy::SoranetStrict)` olaraq təyin edin
+klassik relelərdən imtina etməlidir və ya SoraNet zaman `Some(TransportPolicy::DirectOnly)`
+tamamilə yan keçməlidir. Buraxılış zamanı `scoreboard.persist_path` nöqtəsi
+artefakt kataloqu, isteğe bağlı olaraq `scoreboard.now_unix_secs`-i düzəldin və doldurun
+Çəkmə konteksti ilə `scoreboard.metadata` (fiksator etiketləri, Torii hədəfi və s.)
+beləliklə, `cargo xtask sorafs-adoption-check` SDK-lar arasında deterministik JSON istehlak edir
+SF-6c gözlənilən mənşəli blob ilə.
+`Client::sorafs_fetch_via_gateway` indi həmin metadatanı manifestlə artırır
+identifikator, isteğe bağlı manifest CID gözləntisi və
+Verilənləri yoxlayaraq `gateway_manifest_provided` bayrağı
+`GatewayFetchConfig`, buna görə də imzalanmış manifest zərfini ehtiva edən çəkilişlər təmin edir
+bu sahələri əl ilə təkrarlamadan SF-6c sübut tələbi.
 
-## Manifest helpers
+## Aydın köməkçilər
 
-`ManifestBuilder` remains the canonical way to assemble Norito payloads
-programmatically:
+`ManifestBuilder`, Norito faydalı yükləri yığmaq üçün kanonik üsul olaraq qalır.
+proqramlı olaraq:
 
 ```rust
 use sorafs_manifest::{ManifestBuilder, ManifestV1, PinPolicy, StorageClass};
@@ -188,5 +189,5 @@ fn build_manifest(bytes: &[u8]) -> Result<ManifestV1, Box<dyn std::error::Error>
 }
 ```
 
-Embed the builder wherever services need to generate manifests on the fly; the
-CLI remains the recommended path for deterministic pipelines.
+Xidmətlərin tez bir zamanda manifestlər yaratması lazım olduğu yerdə qurucu yerləşdirin; the
+CLI deterministik boru kəmərləri üçün tövsiyə olunan yol olaraq qalır.

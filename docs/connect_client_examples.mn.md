@@ -7,20 +7,21 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 2ecdf23dc61024ae4c509806700773d9b34ddd36076c1182cbeccd3654b29144
 source_last_modified: "2026-01-05T18:22:23.392202+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-## Iroha Connect Client Examples (TypeScript and Kotlin)
+## Iroha Connect Client жишээнүүд (TypeScript болон Kotlin)
 
-This document shows minimal client-side snippets implementing v0 rules:
-- AEAD AAD binds outer header (version, sid, dir, seq, kind=Ciphertext).
-- Nonce derived from `seq` (12-byte IETF nonce: 0x00000000 || seq_le).
-- Post‑Approve control frames (Close/Reject) sent encrypted.
+Энэ баримт бичиг нь v0 дүрмийг хэрэгжүүлдэг үйлчлүүлэгчийн хамгийн бага хэсгийг харуулж байна:
+- AEAD AAD нь гадна талын толгой хэсгийг холбодог (хувилбар, sid, dir, seq, төрөл=Шифр текст).
+- `seq` (12 байт IETF бус: 0x00000000 || seq_le)-ээс үүсээгүй.
+- Зөвшөөрөгдсөний дараа хяналтын хүрээ (Хаах/Татгалзах) шифрлэгдсэнээр илгээгдсэн.
 
-These are illustrative; hardening/production checks omitted.
+Эдгээр нь тайлбар юм; хатууруулах/үйлдвэрлэлийн шалгалтыг орхигдуулсан.
 
 ### TypeScript (libsodium + WebCrypto)
 
-Dependencies: `libsodium-wrappers` (X25519, BLAKE2b, ChaCha20‑Poly1305), WebCrypto (HKDF‑SHA‑256).
+Хамаарал: `libsodium-wrappers` (X25519, BLAKE2b, ChaCha20‑Poly1305), WebCrypto (HKDF‑SHA‑256).
 
 ```ts
 import sodium from 'libsodium-wrappers';
@@ -99,9 +100,9 @@ async function openEnvelope(k: Uint8Array, sid: Uint8Array, dir: 'A2W'|'W2A', se
 })();
 ```
 
-### Kotlin (JDK 11 + BouncyCastle)
+### Котлин (JDK 11 + BouncyCastle)
 
-Dependencies:
+Хамаарал нь:
 
 ```kotlin
 dependencies { implementation("org.bouncycastle:bcprov-jdk15on:1.78.1") }
@@ -199,7 +200,7 @@ fun main() {
 }
 ```
 
-Notes:
-- Client computes `sid` (32 bytes; base64url/hex) and POSTs it to `/v1/connect/session` to obtain one‑time tokens; server echoes `sid`. Join WS with `Authorization: Bearer <token>` or `Sec-WebSocket-Protocol: iroha-connect.token.v1.<base64url(token)>`.
-- After keys exist (Approve), send Close/Reject in encrypted payloads.
-- Dedupe keys and `seq` must be monotonic per direction for app/wallet frames; `Envelope.seq == frame.seq`. Server events use a separate server-side sequence and are excluded from AEAD/dedupe.
+Тэмдэглэл:
+- Үйлчлүүлэгч нэг удаагийн жетон авахын тулд `sid` (32 байт; base64url/hex) тооцоолж, `/v1/connect/session` руу POST хийнэ; сервер `sid` цуурайтаж байна. `Authorization: Bearer <token>` эсвэл `Sec-WebSocket-Protocol: iroha-connect.token.v1.<base64url(token)>` ашиглан WS-д нэгдээрэй.
+- Түлхүүрүүд байгаа бол (Батлах) шифрлэгдсэн ачааллаар Хаах/Татгалзах илгээнэ үү.
+- Dedupe түлхүүрүүд болон `seq` нь апп/түрийвчний хүрээнүүдийн хувьд нэг чиглэлтэй байх ёстой; `Envelope.seq == frame.seq`. Серверийн үйл явдлууд нь тусдаа сервер талын дарааллыг ашигладаг бөгөөд AEAD/dedupe-ээс хасагдсан.

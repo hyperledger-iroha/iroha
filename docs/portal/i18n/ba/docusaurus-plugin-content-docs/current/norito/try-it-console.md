@@ -6,17 +6,19 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: Norito Try-It Console
 description: Use the developer-portal proxy, Swagger, and RapiDoc widgets to send real Torii / Norito-RPC requests directly from the documentation site.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-The portal bundles three interactive surfaces that relay traffic to Torii:
+Портал өйөмдәр өс интерактив ер өҫтө, улар трафикты тапшыра I18NT0000000009X:
 
-- **Swagger UI** at `/reference/torii-swagger` renders the signed OpenAPI spec and automatically rewrites requests through the proxy when `TRYIT_PROXY_PUBLIC_URL` is set.
-- **RapiDoc** at `/reference/torii-rapidoc` exposes the same schema with file uploads and content-type selectors that work well for `application/x-norito`.
-- **Try it sandbox** on the Norito overview page provides a lightweight form for ad-hoc REST requests and OAuth-device logins.
+- **Swagger UI** `/reference/torii-swagger`-та I18NT000000001X спец спектрын күрһәтә һәм автоматик рәүештә прокси аша үтенестәрҙе яңынан яҙа, ҡасан `TRYIT_PROXY_PUBLIC_URL` ҡуйылған.
+- **RapiDoc** I18NI000000023X-та файл тейәүҙәре һәм контент-тип һайлаусылары менән бер үк схеманы фашлай, улар `application/x-norito` өсөн яҡшы эшләй.
+- **I18NT000000004X дөйөмләштереү битендә ҡом йәшник** һынап ҡарағыҙ, махсус REST запростар һәм OAuth-ҡоролма логиндар өсөн еңел форма тәьмин итә.
 
-All three widgets send requests to the local **Try-It proxy** (`docs/portal/scripts/tryit-proxy.mjs`). The proxy verifies that `static/openapi/torii.json` matches the signed digest in `static/openapi/manifest.json`, enforces a rate limiter, redacts `X-TryIt-Auth` headers in logs, and tags every upstream call with `X-TryIt-Client` so Torii operators can audit traffic sources.
+Өс виджеттар ҙа урындағы **Ит прокси** (I18NI000000025XX)ға запростар ебәрә. 18NI0000026X матчта 18NI00000027X-та ҡул ҡуйылған матч, ставка сикләүсе, redacts I18NI0000000028X башлыҡтары журналдар, һәм һәр өҫкө шылтыратыу менән I18NI0000000029X шулай I18NNNNNNNNNNNNNNitоота операторҙары аудитор трафик була ала . сығанаҡтары.
 
-## Launch the proxy
+## Проксины эшләтеп ебәрегеҙ
 
 ```bash
 cd docs/portal
@@ -31,65 +33,59 @@ export DOCS_TRYIT_ALLOW_DEFAULT_BEARER=1
 npm run tryit-proxy
 ```
 
-- `TRYIT_PROXY_TARGET` is the Torii base URL you want to exercise.
-- `TRYIT_PROXY_ALLOWED_ORIGINS` must include every portal origin (local dev server, production hostname, preview URL) that should embed the console.
-- `TRYIT_PROXY_PUBLIC_URL` is consumed by `docusaurus.config.js` and injected into the widgets via `customFields.tryIt`.
-- `TRYIT_PROXY_BEARER` only loads when `DOCS_TRYIT_ALLOW_DEFAULT_BEARER=1`; otherwise users must supply their own token via the console or OAuth device flow.
-- `TRYIT_PROXY_CLIENT_ID` sets the `X-TryIt-Client` tag carried on every request.
-  Supplying `X-TryIt-Client` from the browser is allowed but values are trimmed
-  and rejected if they contain control characters.
+- I18NI000000030X - I18NT000000011X база URL-адресы һеҙ шөғөлләнергә теләй.
+- I18NI000000031X һәр порталь сығышын (урындағы dever серверы, етештереү хост исеме, алдан ҡарау URL) үҙ эсенә алырға тейеш, улар консолде индерергә тейеш.
+- I18NI000000032X I18NI000000033X аша ҡулланыла һәм виджеттарға I18NI000000034X аша инъекциялана.
+- `TRYIT_PROXY_BEARER` тик йөктәр ҡасан I18NI000000036X; юғиһә ҡулланыусылар үҙ токен менән тәьмин итергә тейеш консоль йәки OAuth ҡоролма ағымы аша.
+- `TRYIT_PROXY_CLIENT_ID` һәр запрос буйынса үткәрелгән I18NI000000038X билдәһе ҡуя.
+  Браузерҙан I18NI0000000039X тәьмин итеү рөхсәт ителә, әммә ҡиммәттәр ҡырҡылған
+  һәм уларҙа контроль символдар булһа, кире ҡағыла.
 
-On startup the proxy runs `verifySpecDigest` and exits with a remediation hint if the manifest is stale. Run `npm run sync-openapi -- --latest` to download the newest Torii specification or pass `TRYIT_PROXY_ALLOW_STALE_SPEC=1` for emergency overrides.
+Стартапта прокси эшләй I18NI000000040X һәм сығыу менән rememaration shint, әгәр манифест иҫке. Йүгереп I18NI000000041X скачать өсөн яңы I18NT00000000012X спецификацияһы йәки үткәреү I18NI0000000042 өсөн ғәҙәттән тыш хәлдәр өҫтөнлөктәре.
 
-To update or roll back the proxy target without editing environment files by hand, use the helper:
+Яңыртыу өсөн йәки прокси-маҡсаттарҙы кире ҡайтарыу өсөн, ҡул менән мөхит файлдарын мөхәррирләүһеҙ, ярҙамсы ҡулланыу:
 
-```bash
-npm run manage:tryit-proxy -- update --target https://new.torii.example
-npm run manage:tryit-proxy -- rollback
-```
+I18NF000000018X
 
-## Wire the widgets
+## виджеттар сым
 
-Serve the portal after the proxy is listening:
+Прокси тыңлауҙан һуң порталды бирергә:
 
-```bash
-cd docs/portal
-TRYIT_PROXY_PUBLIC_URL="http://localhost:8787" npm run start
-```
+I18NF000000019X
 
-`docusaurus.config.js` exposes the following knobs:
+`docusaurus.config.js` түбәндәге ручкаларҙы фашлай:
 
-| Variable | Purpose |
+| Үҙгәртеүсән | Маҡсат |
 | --- | --- |
-| `TRYIT_PROXY_PUBLIC_URL` | URL injected into Swagger, RapiDoc, and the Try it sandbox. Leave unset to hide the widgets during unauthorised previews. |
-| `TRYIT_PROXY_DEFAULT_BEARER` | Optional default token stored in memory. Requires `DOCS_TRYIT_ALLOW_DEFAULT_BEARER=1` and the HTTPS-only CSP guard (DOCS-1b) unless you pass `DOCS_SECURITY_ALLOW_INSECURE=1` locally. |
-| `DOCS_OAUTH_*` | Enable the OAuth device flow (`OAuthDeviceLogin` component) so reviewers can mint short-lived tokens without leaving the portal. |
+| `TRYIT_PROXY_PUBLIC_URL` | URL Swagger, RapiDoc, һәм уны ҡом йәшниктәрен һынап ҡарағыҙ. Рөхсәтһеҙ алдан ҡарау ваҡытында виджеттарҙы йәшерергә ҡуйылмаған ҡалдырырға. |
+| `TRYIT_PROXY_DEFAULT_BEARER` | Хәтерҙә һаҡланған жетон тыйнаҡ. Талаптар I18NI0000000046X һәм HTTPS-тик CSP һаҡсыһы (DOCS-1b) әгәр һеҙ үтмәһәгеҙ `DOCS_SECURITY_ALLOW_INSECURE=1` локаль. |
+| `DOCS_OAUTH_*` | OAuth ҡоролма ағымын индереү (`OAuthDeviceLogin` компоненты) шулай итеп, рецензенттар порталдан сыҡмайынса ҡыҫҡа ваҡытлы жетондар һуға ала. |
 
-When the OAuth variables are present the sandbox renders a **Sign in with device code** button that walks through the configured Auth server (see `config/security-helpers.js` for the exact shape). Tokens issued through the device flow are only cached in the browser session.
+Ҡасан OAuth үҙгәртеүселәре бар ҡом йәшник күрһәтә ** Ҡоролма коды менән ҡул ҡуйыу ** төймәһе, улар аша үтә конфигурацияланған Auth серверы (ҡара: `config/security-helpers.js` өсөн теүәл форма). Ҡоролма ағымы аша сығарылған жетондар браузер сессияһында ғына кэшлана.
 
-## Sending Norito-RPC payloads
+## I18NT0000000005X-RPC файҙалы йөктәр ебәреүҙе
 
-1. Build a `.norito` payload with the CLI or snippets described in the [Norito quickstart](./quickstart.md). The proxy forwards `application/x-norito` bodies unchanged, so you can reuse the same artefact you would post with `curl`.
-2. Open `/reference/torii-rapidoc` (preferred for binary payloads) or `/reference/torii-swagger`.
-3. Select the desired Torii snapshot from the drop-down. Snapshots are signed; the panel shows the manifest digest recorded in `static/openapi/manifest.json`.
-4. Choose the `application/x-norito` content type in the “Try it” drawer, click **Choose File**, and select your payload. The proxy rewrites the request to `/proxy/v1/pipeline/submit` and tags it with `X-TryIt-Client=docs-portal-rapidoc`.
-5. To download Norito responses, set `Accept: application/x-norito`. Swagger/RapiDoc expose the header selector in the same drawer and stream the binary back through the proxy.
+1. CLI йәки өҙөктәр менән I18NI0000000051X төҙөү [I18NT00000000006X caverstart] (I18NU000000020X). Прокси-формерҙар I18NI000000052X органдары үҙгәрешһеҙ, шуға күрә һеҙ шул уҡ артефактты ҡабаттан ҡулланырға мөмкин, һеҙ `curl` менән пост.
+2. Асыҡ `/reference/torii-rapidoc` (бинар файҙалы йөкләмәләр өсөн өҫтөнлөк бирелә) йәки I18NI000000055X.
+. Снэпшотҡа ҡул ҡуйыла; панель I18NI000000056X-та теркәлгән манифест дисциплинаһын күрһәтә.
+4. Һайлау I18NI000000057X контент тибы “Тырышып ҡарағыҙ” тартма, баҫығыҙ **Һайлау Файл**, һәм һайлау һеҙҙең файҙалы йөк. Прокси `/proxy/v1/pipeline/submit` тиклем үтенесте яңынан яҙа һәм уны I18NI000000059X менән билдәләй.
+. Swagger/RapiDoc бер үк тартмала баш селекторын фашлай һәм прокси аша бинар артҡа ағып сыға.
 
-For JSON-only routes the embedded Try it sandbox is often faster: enter the path (for example, `/v1/accounts/ih58.../assets`), select the HTTP method, paste a JSON body when needed, and hit **Send request** to inspect headers, duration, and payloads inline.
+JSON-тик маршруттар өсөн һеңдерелгән встроенный тырышып, уны ҡом йәшник йыш ҡына тиҙерәк: юлға инергә (мәҫәлән, I18NI000000061X), HTTP ысулын һайлағыҙ, кәрәк саҡта JSON тән йәбештереү, һәм **Запрос ебәрергә** баштарын тикшерергә, оҙайлылыҡ, һәм файҙалы йөктәр рәтендә.
 
-## Troubleshooting
+## Төҙөкләндереүҙең
 
-| Symptom | Likely cause | Remediation |
+| Симптом | Моғайын, сәбәп | Ремедиация |
 | --- | --- | --- |
-| Browser console shows CORS errors or the sandbox warns that the proxy URL is missing. | Proxy is not running or the origin is not whitelisted. | Start the proxy, make sure `TRYIT_PROXY_ALLOWED_ORIGINS` covers your portal host, and relaunch `npm run start`. |
-| `npm run tryit-proxy` exits with “digest mismatch”. | The Torii OpenAPI bundle changed upstream. | Run `npm run sync-openapi -- --latest` (or `--version=<tag>`) and retry. |
-| Widgets return `401` or `403`. | Token missing, expired, or insufficient scopes. | Use the OAuth device flow or paste a valid bearer token into the sandbox. For static tokens you must export `DOCS_TRYIT_ALLOW_DEFAULT_BEARER=1`. |
-| `429 Too Many Requests` from the proxy. | Per-IP rate limit exceeded. | Raise `TRYIT_PROXY_RATE_LIMIT`/`TRYIT_PROXY_RATE_WINDOW_MS` for trusted environments or throttle test scripts. All rate-limit rejections increment `tryit_proxy_rate_limited_total`. |
+| Браузер консоль CORS хаталарын күрһәтә йәки ҡом йәшниктәре иҫкәртә, тип прокси URL юҡ. | Прокси йүгермәй йәки сығышы аҡ исемлеккә инмәй. | Башланғыс прокси, ышаныслы I18NI0000000062X ҡаплай һеҙҙең порталь хост, һәм `npm run start` repectach. |
+| `npm run tryit-proxy` “иң һеңдереүҙең тап килмәүе” менән сыға. | Torii OpenAPI өйөмө өҫкә үҙгәрҙе. | Йүгереп I18NI000000065X (йәки I18NI000000066XX) һәм яңынан өҙөклөк. |
+| Виджеттар ҡайтарыу I18NI000000067X йәки I18NI0000000068X. | Токен юғалған, срогы үткән, йәки етерлек булмаған даирәләр. | OAuth ҡоролмаһы ағымын ҡулланыу йәки йәбештереү дөрөҫ йөрөтөүсе жетон ҡом йәшник. Статик жетондар өсөн һеҙ экспортларға тейеш I18NI0000000069X. |
+| `429 Too Many Requests` проксинан. | IP-перечок ставкаһы сиктәре артып китте. | Ышаныслы мөхит йәки дроссель һынау сценарийҙары өсөн `TRYIT_PROXY_RATE_LIMIT`/I18NI0000072X. Бөтә ставка-сикләү кире ҡағыуҙары өҫтәү `tryit_proxy_rate_limited_total`. |
 
-## Observability
+## Күҙәтеүсәнлек
 
-- `npm run probe:tryit-proxy` (wrapper around `scripts/tryit-proxy-probe.mjs`) calls `/healthz`, optionally exercises a sample route, and emits Prometheus textfiles for `probe_success` / `probe_duration_seconds`. Configure `TRYIT_PROXY_PROBE_METRICS_FILE` to integrate with node_exporter.
-- Set `TRYIT_PROXY_METRICS_LISTEN=127.0.0.1:9798` to expose counters (`tryit_proxy_requests_total`, `tryit_proxy_rate_limited_total`, `tryit_proxy_upstream_failures_total`) and latency histograms. The `dashboards/grafana/docs_portal.json` board reads these metrics to enforce DOCS-SORA SLOs.
-- Runtime logs live on stdout. Every entry includes the request id, upstream status, authentication source (`default`, `override`, or `client`), and duration; secrets are redacted before emission.
+- `npm run probe:tryit-proxy` (`scripts/tryit-proxy-probe.mjs` тирәһендә урау) `/healthz` шылтыратыуҙары, теләк буйынса өлгө маршрутын тормошҡа ашыра, ә I18NI000000007X / `probe_duration_seconds` өсөн I18NT0000000000000000000000007 өсөн сығарыла. `TRYIT_PROXY_PROBE_METRICS_FILE` конфигурациялау өсөн интеграция node_exporter.
+- `TRYIT_PROXY_METRICS_LISTEN=127.0.0.1:9798` счетчиктарҙы фашлау өсөн комплект (`tryit_proxy_requests_total`, `tryit_proxy_rate_limited_total`, I18NI0000083X) һәм латент гистограммалар. `dashboards/grafana/docs_portal.json` платаһы был метрикаларҙы уҡый, DOCS-SORA SLOs үтәү өсөн.
+- Йүгереп йөрөү журналдары stdout-та йәшәй. Һәр яҙма запрос id, өҫкө ағымдағы статусы, аутентификация сығанағы (`default`, `override`, йәки `client`) һәм оҙайлылыҡ; серҙәре эмиссия алдынан редакциялана.
 
-If you need to validate that `application/x-norito` payloads reach Torii unchanged, run the Jest suite (`npm test -- tryit-proxy`) or inspect the fixtures under `docs/portal/scripts/__tests__/tryit-proxy.test.mjs`. The regression tests cover compressed Norito binaries, signed OpenAPI manifests, and proxy downgrade paths so NRPC rollouts keep a permanent evidence trail.
+Әгәр һеҙгә кәрәк, тип раҫларға, тип I18NI0000000088X файҙалы йөктәр I18NT000000015X үҙгәрешһеҙ етергә, Jest люкс (`npm test -- tryit-proxy`) йәки I18NI00000000090X буйынса ҡорамалдарҙы тикшерергә. Регрессия һынауҙары ҡапланған ҡыҫылған I18NT000000000008X бинар, ҡул ҡуйҙы I18NT00000000003X манифесттар, һәм прокси-сград юлдар, шулай итеп, NRPC ролл-ауттар даими дәлилдәр эҙ тота.

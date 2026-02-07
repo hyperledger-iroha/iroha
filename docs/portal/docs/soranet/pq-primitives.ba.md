@@ -11,29 +11,30 @@ id: pq-primitives
 title: SoraNet Post-Quantum Primitives
 sidebar_label: PQ Primitives
 description: Overview of the `soranet_pq` crate and how the SoraNet handshake consumes ML-KEM/ML-DSA helpers.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
-:::
+:::иҫкәртергә канонлы сығанаҡ
+::: 1990 й.
 
-The `soranet_pq` crate contains the post-quantum building blocks that every SoraNet
-relay, client, and tooling component relies on. It wraps the PQClean-backed Kyber
-(ML-KEM) and Dilithium (ML-DSA) suites and layers on protocol-friendly HKDF and
-hedged RNG helpers so all surfaces share identical implementations.
+I18NI0000000003X йәшниктә кванттан һуңғы төҙөлөш блоктары бар, улар һәр SoraNet .
+реле, клиент, һәм инструменттар компоненты таяна. Ул PQClean-арҡалы Кибер уратып ала.
+(ML-KEM) һәм дилитий (МЛ-ДСА) люкс һәм ҡатламдар протокол-дуҫ HKDF һәм
+хеджировать RNG ярҙамсылары, шуға күрә бөтә ер өҫтө бер үк тормошҡа ашырыу менән уртаҡлаша.
 
-## What ships in `soranet_pq`
+## I18NI000000004X-тағы ниндәй караптар
 
-- **ML-KEM-512/768/1024:** deterministic key generation, encapsulation, and
-  decapsulation helpers with constant-time error propagation.
-- **ML-DSA-44/65/87:** detached signing/verification wired for
-  domain-separated transcripts.
-- **Labelled HKDF:** `derive_labeled_hkdf` namespaces every derivation with the
-  handshake stage (`DH/es`, `KEM/1`, …) so hybrid transcripts stay collision-free.
-- **Hedged randomness:** `hedged_chacha20_rng` blends deterministic seeds
-  with live OS entropy and zeroizes intermediate state on drop.
+- **МЛ-КЭМ-512/768/1024:** детерминистик төп быуын, капсулирование һәм
+  декапсуляция ярҙамсылары менән даими ваҡыт хаталар таралыу.
+- **МЛ-ДСА-44/65/87:** айырым ҡул ҡуйыу/тикшереү өсөн сымлы.
+  домен менән айырылған транскрипттар.
+- **Ярлыҡтар HKDF:** I18NI0000000005X исемдәр киңлеге менән һәр сығарылыш менән
+  ҡул ҡыҫыу этабы (`DH/es`, `KEM/1`, ...) шулай гибрид стенограммалар бәрелешһеҙ ҡала.
+- **Хеддж осраҡлылыҡ:** I18NI000000008X ҡатнашмалары детерминистик орлоҡтар
+  тере OS энтропияһы менән һәм нулгә тиклем арауыҡ хәле тамсы.
 
-All secrets sit inside `Zeroizing` containers and CI exercises the PQClean
-bindings on every supported platform.
+Бөтә серҙәр ҙә I18NI000000009X контейнерҙары эсендә ултыра һәм CI PQClean күнекмәләрен башҡара.
+һәр ярҙам платформаһында бәйләүҙәр.
 
 ```rust
 use soranet_pq::{
@@ -56,21 +57,21 @@ let okm = derive_labeled_hkdf(
 ).unwrap();
 ```
 
-## How to consume it
+## Нисек ҡулланырға .
 
-1. **Add the dependency** to crates that sit outside the workspace root:
+1. **Бәйләнеште өҫтәү** йәшниктәргә, улар эш урыны тамырынан ситтә ултыра:
 
    ```toml
    soranet_pq = { path = "../../crates/soranet_pq" }
    ```
 
-2. **Select the correct suite** at call sites. For the initial hybrid handshake
-   work, use `MlKemSuite::MlKem768` and `MlDsaSuite::MlDsa65`.
+2. **Шылтыратыу сайттарында дөрөҫ люкс** һайлағыҙ. Тәүге гибрид ҡул ҡыҫыһы өсөн
+   эш, ҡулланыу I18NI000000010X һәм `MlDsaSuite::MlDsa65`.
 
-3. **Derive keys with labels.** Use `HkdfDomain::soranet("KEM/1")` (and siblings)
-   so transcript chaining stays deterministic across nodes.
+3. **Ярлыҡтар менән асҡыстарҙы сығарыу.** `HkdfDomain::soranet("KEM/1")` (һәм бер туғандар) ҡулланыу.
+   тимәк, транскрипт сылбырлы төйөндәр буйынса детерминистик ҡала.
 
-4. **Use the hedged RNG** when sampling fallback secrets:
+4. **Хеджировать RNG** ҡулланып, ҡасан үлсәү fallback серҙәре:
 
    ```rust
    use soranet_pq::{hedged_chacha20_rng, HedgedRngSeed};
@@ -78,13 +79,13 @@ let okm = derive_labeled_hkdf(
    let mut rng = hedged_chacha20_rng(HedgedRngSeed::new(b"snnet16", [0u8; 32]));
    ```
 
-The core SoraNet handshake and CID blinding helpers (`iroha_crypto::soranet`)
-pull these utilities directly, which means downstream crates inherit the same
-implementations without linking PQClean bindings themselves.
+Ядро SoraNet ҡул ҡыҫыу һәм CID һуҡыр ярҙамсылары (`iroha_crypto::soranet`)
+был коммуналь хеҙмәттәр туранан-тура тартып, был тигәнде аңлата аҫҡы ағым йәшниктәр мираҫҡа бер үк
+тормошҡа ашырыуҙар PQClean бәйләүҙәрен бәйләүһеҙ үҙҙәре.
 
-## Validation checklist
+## Валидация тикшерелгән исемлеге
 
 - `cargo test -p soranet_pq --offline`
 - `cargo fmt --package soranet_pq`
-- Audit the README usage samples (`crates/soranet_pq/README.md`)
-- Update the SoraNet handshake design doc once hybrids land
+- README ҡулланыу өлгөләрен аудит (I18NI000000016X)
+- Яңыртыу SoraNet ҡул ҡыҫышыу дизайн doc бер тапҡыр гибридтар ер .

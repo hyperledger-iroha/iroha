@@ -8,66 +8,68 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraFS Deal Engine
 sidebar_label: Deal Engine
 description: Overview of the SF-8 deal engine, Torii integration, and telemetry surfaces.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
-:::
+:::иҫкәртергә канонлы сығанаҡ
+::: 1990 й.
 
-# SoraFS Deal Engine
+# SoraFS килешеп двигателе
 
-The SF-8 roadmap track introduces the SoraFS deal engine, providing
-deterministic accounting for storage and retrieval agreements between
-clients and providers. Agreements are described with the Norito payloads
-defined in `crates/sorafs_manifest/src/deal.rs`, covering deal terms, bond
-locking, probabilistic micropayments, and settlement records.
+SF-8 юл картаһы трассаһы I18NT000000002X килешеп двигателе менән таныштыра, тәьмин итеү
+детерминистик бухгалтерия өсөн һаҡлау һәм эҙләү килешә
+клиенттар һәм провайдерҙар. Килешәүҙәр I18NT0000000000X файҙалы йөктәр менән һүрәтләнә
+билдәләнгән I18NI000000009X, ҡаплаған килешеп шарттары, облигациялар
+бикләп, ихтималлыҡ микротүләүҙәре һәм ҡасаба яҙмалары.
 
-The embedded SoraFS worker (`sorafs_node::NodeHandle`) now instantiates a
-`DealEngine` instance for every node process. The engine:
+I18NT0000000003X эшсеһе (I18NI0000000010X) хәҙер экземпляр яһай.
+`DealEngine` экземпляр өсөн һәр төйөн процесы. Мотор:
 
-- validates and registers deals using `DealTermsV1`;
-- accrues XOR-denominated charges when replication usage is reported;
-- evaluates probabilistic micropayment windows using deterministic
-  Blake3-based sampling; and
-- produces ledger snapshots and settlement payloads suitable for governance
-  publishing.
+- раҫлай һәм `DealTermsV1` ҡулланып килешеп эшләй;
+- репликацияны ҡулланыу тураһында хәбәр ителгәндә XOR-номинацияланған зарядтар туплай;
+- детерминистик ҡулланып ихтималлыҡлы микротүләү тәҙрәләрен баһалай
+  Blake3-нигеҙендә үлсәү; һәм
+- баш кейеме снимоктары һәм идара итеү өсөн яраҡлы ҡасаба файҙалы йөктәр етештерә
+  нәшриәт.
 
-Unit tests cover validation, micropayment selection, and settlement flows so
-operators can exercise the APIs with confidence. Settlements now emit
-`DealSettlementV1` governance payloads, wiring directly into the SF-12
-publishing pipeline, and update the `sorafs.node.deal_*` OpenTelemetry series
+Блок һынауҙары ҡаплау раҫлау, микротүләү һайлау, һәм иҫәп-хисап ағымдары шулай
+операторҙары ышаныс менән API-ларҙы тормошҡа ашыра ала. Ҡушымталар хәҙер сыға
+I18NI000000013X идара итеү файҙалы йөктәр, туранан-тура SF-12-гә проводка.
+нәшриәт торбаһы, һәм яңыртыу I18NI0000000014X OpenTelemetremetrimetrimeterme серияһы .
 (`deal_settlements_total`, `deal_expected_charge_nano`, `deal_client_debit_nano`,
-`deal_outstanding_nano`, `deal_bond_slash_nano`, `deal_publish_total`) for Torii dashboards and SLO
-enforcement. Follow-up items focus on auditor-initiated slashing automation and
-coordinating cancellation semantics with governance policy.
+I18NI000000018X, `deal_bond_slash_nano`, I18NI000000020X) Torii приборҙар таҡталары һәм SLO
+үтәү. Һуңынан әйберҙәр аудитор-инициацияланған автоматлаштырыу һәм
+идара итеү сәйәсәте менән отмена семантикаһын координациялау.
 
-Usage telemetry now also feeds the `sorafs.node.micropayment_*` metrics set:
-`micropayment_charge_nano`, `micropayment_credit_generated_nano`,
-`micropayment_credit_applied_nano`, `micropayment_credit_carry_nano`,
-`micropayment_outstanding_nano`, and the ticket counters
-(`micropayment_tickets_processed_total`, `micropayment_tickets_won_total`,
-`micropayment_tickets_duplicate_total`). These totals expose the probabilistic
-lottery flow so operators can correlate micropayment wins and credit carry-over
-with settlement outcomes.
+Ҡулланыу телеметрияһы хәҙер шулай уҡ I18NI000000021X метрикаһы йыйылмаһын туҡландыра:
+`micropayment_charge_nano`, I18NI000000023X,
+I18NI000000024X, I18NI000000025X, .
+I18NI000000026X, ә билет иҫәпләүселәре
+(`micropayment_tickets_processed_total`, I18NI000000028X,
+`micropayment_tickets_duplicate_total` X). Был дөйөм алғанда, ихтималлыҡты фашлай
+лотерея ағымы, шулай итеп, операторҙар корреляция ала микротүләү еңә һәм кредит йөрөтөү-өҫтөндә
+иҫәп-хисап һөҙөмтәләре менән.
 
-## Torii Integration
+## I18NT000000006X интеграцияһы
 
-Torii exposes dedicated endpoints so providers can report usage and drive the
-deal lifecycle without bespoke wiring:
+I18NT000000007X махсус ос нөктәләре фашлай, шулай итеп, провайдерҙар ҡулланыу тураһында хәбәр итә ала һәм драйвер
+тормош циклы менән эш итеү өсөн заказ буйынса проводка:
 
-- `POST /v1/sorafs/deal/usage` accepts `DealUsageReport` telemetry and returns
-  deterministic accounting outcomes (`UsageOutcome`).
-- `POST /v1/sorafs/deal/settle` finalises the current window, streaming the
-  resulting `DealSettlementRecord` alongside a base64-encoded `DealSettlementV1`
-  ready for governance DAG publication.
-- Torii's `/v1/events/sse` feed now broadcasts `SorafsGatewayEvent::DealUsage`
-  records summarising each usage submission (epoch, metered GiB-hours, ticket
-  counters, deterministic charges), `SorafsGatewayEvent::DealSettlement`
-  records that include the canonical settlement ledger snapshot plus the
-  BLAKE3 digest/size/base64 of the on-disk governance artefact, and
-  `SorafsGatewayEvent::ProofHealth` alerts whenever PDP/PoTR thresholds are
-  exceeded (provider, window, strike/cooldown state, penalty amount). Consumers can
-  filter by provider to react to new telemetry, settlements, or proof-health alerts without polling.
+- I18NI0000000030X ҡабул итә I18NI0000000031X телеметрия һәм ҡайтарыу
+  детерминистик бухгалтерия һөҙөмтәләре (`UsageOutcome`).
+- I18NI000000033X ағымдағы тәҙрәне финалға сығара, стриминг
+  һөҙөмтәлә I18NI0000000034X base64-кодланған `DealSettlementV1` менән бергә .
+  идара итеү өсөн әҙер DAG баҫма.
+- I18NT000000008X&#8217;s I18NI000000036X канал хәҙер эфирға I18NI00000000037X
+  яҙмаларҙы дөйөмләштереү һәр ҡулланыу тапшырыу (эпоха, иҫәпләнгән GiB-сәғәт, билет
+  счетчиктар, детерминистик йөкләмәләр), `SorafsGatewayEvent::DealSettlement`
+  яҙмалар, улар үҙ эсенә канонлы ҡасаба китабы снимок плюс
+  BLAKE3 үҙләштереү/размер/база64 дискта идара итеү артефакт, һәм
+  I18NI0000000039X иҫкәртмәләр ҡасан да булһа PDP/PoTR сиктәре .
+  үтә (провайдер, тәҙрә, забастовка/һыуытҡыс хәле, штраф суммаһы). Ҡулланыусылар ала
+  фильтр провайдер яңы телеметрияға реакция, ҡасабалар, йәки иҫбатлау-һаулыҡ тураһында иҫкәртмәләр һорау алыуһыҙ.
 
-Both endpoints participate in the SoraFS quota framework via the new
-`torii.sorafs.quota.deal_telemetry` window, allowing operators to tune the
-allowed submission rate per deployment.
+Ике ос нөктәһе лә I18NT00000000004X квота рамкаһында яңы аша ҡатнаша.
+I18NI000000040X тәҙрә, операторҙарға көйләү мөмкинлеге бирә
+рөхсәт итеү ставкаһы тапшырыу өсөн бер таратыу.

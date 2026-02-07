@@ -4,83 +4,83 @@ direction: ltr
 source: docs/portal/docs/sorafs/reports/orchestrator-ga-parity.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 # تقرير تكافؤ GA لمنسق SoraFS
 
-يتم الآن تتبع تكافؤ multi-fetch الحتمي لكل SDK كي يتمكن مهندسو الإطلاق من تأكيد أن
-بايتات payload وإيصالات chunk وتقارير provider ونتائج scoreboard تبقى متطابقة عبر
-التطبيقات. كل harness يستهلك الحزمة القياسية متعددة المزوّدين تحت
-`fixtures/sorafs_orchestrator/multi_peer_parity_v1/`، والتي تجمع خطة SF1 وبيانات
-provider الوصفية ولقطة telemetry وخيارات orchestrator.
+Вы можете использовать функцию множественной выборки в SDK, используя функцию множественной выборки, которую вы хотите использовать.
+Загрузка полезной нагрузки, фрагмент, поставщик услуг, табло, отображение результатов.
+تطبيقات. Воспользуйтесь ремнями безопасности, чтобы их можно было использовать.
+`fixtures/sorafs_orchestrator/multi_peer_parity_v1/`, приложение для SF1 SF1
+поставщик услуг телеметрии и оркестратор.
 
-## خط الأساس في Rust
+## Обновление для Rust
 
 - **الأمر:** `cargo test -p sorafs_orchestrator --test orchestrator_parity -- --nocapture`
-- **النطاق:** يشغّل خطة `MultiPeerFixture` مرتين عبر orchestrator داخل العملية، مع التحقق
-  من بايتات payload المجمعة وإيصالات chunk وتقارير provider ونتائج scoreboard. كما
-  تتعقب أدوات القياس ذروة التوازي وحجم working-set الفعال (`max_parallel x max_chunk_length`).
-- **حاجز الأداء:** يجب أن يكتمل كل تشغيل خلال 2 s على عتاد CI.
-- **سقف مجموعة العمل:** مع ملف تعريف SF1 يفرض harness `max_parallel = 3`، مما ينتج
-  نافذة <= 196608 بايت.
+- **النطاق:** يشغّل خطة `MultiPeerFixture` مرتين عبر Orchestrator داخل العملية، مع التحقق
+  Табло для полезной нагрузки и фрагмента провайдера. Хана
+  Создан рабочий набор для рабочего набора (`max_parallel x max_chunk_length`).
+- **Обратное сообщение:** Он был в Уилсоне в течение 2 секунд в режиме CI.
+- **Зарегистрировано:** в комплектации SF1 для жгута `max_parallel = 3`, в наличии.
+  Число <= 196608 дней.
 
-مثال لمخرجات السجل:
+Сообщение от автора:
 
 ```
 Rust orchestrator parity: duration_ms=142.63 total_bytes=1048576 max_inflight=3 peak_reserved_bytes=196608
 ```
 
-## Harness لحزمة JavaScript SDK
+## Использование JavaScript SDK
 
 - **الأمر:** `npm run build:native && node --test javascript/iroha_js/test/sorafsOrchestrator.parity.test.js`
-- **النطاق:** يعيد تشغيل نفس fixture عبر `iroha_js_host::sorafsMultiFetchLocal`، ويقارن
-  payloads وreceipts وتقارير provider ولقطات scoreboard عبر تشغيلين متتاليين.
-- **حاجز الأداء:** يجب أن ينتهي كل تنفيذ خلال 2 s؛ يطبع harness المدة المقاسة وسقف
-  البايتات المحجوزة (`max_parallel = 3`, `peak_reserved_bytes <= 196608`).
+- **Установлено:** установлен светильник عبر `iroha_js_host::sorafsMultiFetchLocal`, ويقارن.
+  полезная нагрузка и квитанции провайдер ولقطات табло عبر تشغيلين متتاليين.
+- **Обратный ход:** Уинстон и Нэнси в течение 2 с; يطبع ремни безопасности المقاسة وسقف
+  Установите флажок (`max_parallel = 3`, `peak_reserved_bytes <= 196608`).
 
-سطر ملخص مثال:
+Сообщение от автора:
 
 ```
 JS orchestrator parity: duration_ms=187.42 total_bytes=1048576 max_parallel=3 peak_reserved_bytes=196608
 ```
 
-## Harness لحزمة Swift SDK
+## Использование Swift SDK
 
 - **الأمر:** `swift test --package-path IrohaSwift --filter SorafsOrchestratorParityTests/testLocalFetchParityIsDeterministic`
-- **النطاق:** يشغّل مجموعة التكافؤ المعرّفة في `IrohaSwift/Tests/IrohaSwiftTests/SorafsOrchestratorParityTests.swift`،
-  مع إعادة تشغيل fixture SF1 مرتين عبر جسر Norito (`sorafsLocalFetch`). يتحقق harness
-  من بايتات payload وإيصالات chunk وتقارير provider ومدخلات scoreboard باستخدام نفس
-  بيانات provider الوصفية الحتمية ولقطات telemetry الخاصة بحزم Rust/JS.
-- **تهيئة الجسر:** يفك harness ضغط `dist/NoritoBridge.xcframework.zip` عند الطلب ويحمل
-  شريحة macOS عبر `dlopen`. عند غياب xcframework أو افتقاره لروابط SoraFS، يتراجع إلى
+- **Уведомление:** يشغّل مجموعة التكافؤ المعرّفة في `IrohaSwift/Tests/IrohaSwiftTests/SorafsOrchestratorParityTests.swift`,
+  Для установки приспособления SF1 используется Norito (`sorafsLocalFetch`). ремни безопасности
+  Для полезной нагрузки, фрагмента, провайдера, табло, для просмотра результатов.
+  Поставщик услуг по удалению телеметрии и использованию Rust/JS.
+- **Подробнее:** Ремень безопасности `dist/NoritoBridge.xcframework.zip` находится в центре внимания.
+  Версия macOS `dlopen`. Установите xcframework и установите флажок SoraFS, проверьте файл.
   `cargo build -p connect_norito_bridge --release` ويربط مع
-  `target/release/libconnect_norito_bridge.dylib`، لذا لا يلزم إعداد يدوي في CI.
-- **حاجز الأداء:** يجب أن ينتهي كل تنفيذ خلال 2 s على عتاد CI؛ ويطبع harness المدة
-  المقاسة وسقف البايتات المحجوزة (`max_parallel = 3`, `peak_reserved_bytes <= 196608`).
+  `target/release/libconnect_norito_bridge.dylib`, телефонный звонок для CI.
+- **Обратное сообщение:** Он был в Нью-Йорке в 2 секунды в CI; ويطبع ремни безопасности
+  Установите флажок (`max_parallel = 3`, `peak_reserved_bytes <= 196608`).
 
-سطر ملخص مثال:
+Сообщение от автора:
 
 ```
 Swift orchestrator parity: duration_ms=183.54 total_bytes=1048576 max_parallel=3 peak_reserved_bytes=196608
 ```
 
-## Harness لربط Python
+## Использование Python
 
 - **الأمر:** `python -m pytest python/iroha_python/tests/test_sorafs_orchestrator.py -k multi_fetch_fixture_round_trip`
-- **النطاق:** يمارس wrapper عالي المستوى `iroha_python.sorafs.multi_fetch_local` وdataclasses
-  المقيّدة بالأنواع كي تمر fixture القياسية عبر نفس الواجهة التي يستخدمها مستهلكو
-  wheel. يعيد الاختبار بناء بيانات provider الوصفية من `providers.json`، ويحقن
-  لقطة telemetry، ويتحقق من بايتات payload وإيصالات chunk وتقارير provider ومحتوى
-  scoreboard مثل حزم Rust/JS/Swift.
-- **متطلب مسبق:** شغّل `maturin develop --release` (أو ثبّت wheel) كي يعرض `_crypto` ربط
-  `sorafs_multi_fetch_local` قبل تشغيل pytest؛ يتخطى harness تلقائيا عندما لا يكون
+- **Обращение:** Закрыть оболочку для `iroha_python.sorafs.multi_fetch_local` и dataclasses.
+  Завершение матча с Сан-Франциско состоится в матче с Манчестер Юнайтед в Нью-Йорке. مستهلكو
+  колесо. Поставщик услуг связи с поставщиком услуг `providers.json`, ويحقن
+  Телеметрия, поиск полезной нагрузки и фрагмент провайдера.
+  табло на платформе Rust/JS/Swift.
+- **Отображение:** شغّل `maturin develop --release` (с колесом) на `_crypto` ربط
+  `sorafs_multi_fetch_local` для pytest; يتخطى упряжь تلقائيا عندما لا يكون
   الربط متاحا.
-- **حاجز الأداء:** نفس حد <= 2 s مثل حزمة Rust؛ يسجل pytest عدد البايتات المجمعة
-  وملخص مشاركة providers لقطعة الإصدار.
-
-يجب أن يلتقط مسار اعتماد الإصدار مخرجات الملخص من كل harness (Rust وPython وJS وSwift)
-حتى يتمكن التقرير المؤرشف من مقارنة إيصالات payload والقياسات بشكل موحد قبل ترقية
-build. شغّل `ci/sdk_sorafs_orchestrator.sh` لتنفيذ كل مجموعات التكافؤ (Rust وPython
-bindings وJS وSwift) في تمريرة واحدة؛ ينبغي أن تُرفق مخرجات CI مقتطف السجل من هذا
-المساعد بالإضافة إلى ملف `matrix.md` المُنشأ (جدول SDK/الحالة/المدة) بتذكرة الإصدار
-حتى يتمكن المراجعون من تدقيق مصفوفة التكافؤ دون إعادة تشغيل المجموعة محليا.
+- **Обновление:** Время ожидания <= 2 с при запуске Rust; Используйте pytest для проверки
+  Обратитесь к поставщикам услуг.Создан для создания программного обеспечения для использования с ремнями безопасности (Rust, Python, JS и Swift)
+Он был создан в 2017 году в Колумбии, где полезная нагрузка была передана Бэнкс-Луи. ترقية
+строить. Создан `ci/sdk_sorafs_orchestrator.sh` для работы с приложениями (Rust и Python
+привязки (JS и Swift) в режиме реального времени Он был отправлен в CI в штате Калифорния.
+Загрузите файл `matrix.md` (установка SDK/поддержки/разрешения) إصدار
+Он сыграл в фильме "Тренер" в "Старом городе" в Вашингтоне. محليا.

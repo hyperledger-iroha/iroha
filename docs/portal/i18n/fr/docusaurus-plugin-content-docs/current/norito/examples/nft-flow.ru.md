@@ -4,28 +4,30 @@ direction: ltr
 source: docs/portal/docs/norito/examples/nft-flow.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-slug: /norito/examples/nft-flow
-title: Выпустить, перевести и сжечь NFT
-description: Проводит по жизненному циклу NFT от начала до конца: выпуск владельцу, перевод, добавление метаданных и сжигание.
-source: crates/ivm/docs/examples/12_nft_flow.ko
+limace : /norito/exemples/nft-flow
+titre : Découvrez, découvrez et recherchez NFT
+description : Le produit du cycle de vie NFT vient de ce qui suit : vous devez d'abord ajouter des métadonnées et des fonctionnalités.
+source : crates/ivm/docs/examples/12_nft_flow.ko
 ---
 
-Проводит по жизненному циклу NFT от начала до конца: выпуск владельцу, перевод, добавление метаданных и сжигание.
+Il s'agit d'un projet de cycle de vie NFT qui se résume à : avant de commencer, de créer des métadonnées et des mises à jour.
 
 ## Пошаговый обход реестра
 
-- Убедитесь, что определение NFT (например `n0#wonderland`) существует вместе с аккаунтами владельца/получателя, используемыми в сниппете (`ih58...`, `ih58...`).
-- Вызовите точку входа `nft_issue_and_transfer`, чтобы выпустить NFT, перевести его от Alice к Bob и прикрепить флаг метаданных, описывающий выпуск.
-- Проверьте состояние NFT-реестра через `iroha_cli ledger nfts list --account <id>` или эквиваленты SDK, чтобы подтвердить перевод, затем убедитесь, что актив удаляется после выполнения инструкции burn.
+- Assurez-vous que l'utilisation de NFT (par exemple `n0#wonderland`) corresponde à votre compte/compte, en utilisant des captures d'écran. (`ih58...`, `ih58...`).
+- Choisissez maintenant `nft_issue_and_transfer` pour utiliser NFT, en pensant à Alice et Bob et à acheter un drapeau de métadonnées, des informations sur выпуск.
+- Vérifiez que le logiciel NFT est disponible à partir du `iroha_cli ledger nfts list --account <id>` ou que le SDK est disponible, afin de mettre à jour l'ancien, afin de déterminer ce qui est actif. после выполнения инструкции brûler.
 
-## Связанные руководства SDK
+## SDK de démarrage rapide
 
-- [Quickstart Rust SDK](/sdks/rust)
-- [Quickstart Python SDK](/sdks/python)
-- [Quickstart JavaScript SDK](/sdks/javascript)
+- [SDK de démarrage rapide Rust](/sdks/rust)
+- [SDK Python de démarrage rapide](/sdks/python)
+- [SDK JavaScript de démarrage rapide](/sdks/javascript)
 
 [Скачать исходник Kotodama](/norito-snippets/nft-flow.ko)
 

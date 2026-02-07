@@ -7,83 +7,84 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 26e6f90205e98b5db87d442eb7e4e7691cce47e1c33ef3d11c9bfba25269294e
 source_last_modified: "2026-01-14T17:53:24.552406+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Iroha Documentation
+# I18NT000000012X Документация
 
-日本語版の概要は [`README.ja.md`](./README.ja.md) を参照してください。
+日本語版の概要は [I18NI000000047X](I18NU000000030X) を参照してくだいい。
 
-The workspace ships two release lines from the same codebase: **Iroha 2** (self-hosted deployments) and
-**Iroha 3 / SORA Nexus** (the single global Nexus ledger). Both reuse the same Iroha Virtual Machine (IVM) and
-Kotodama toolchain, so contracts and bytecode remain portable between deployment targets. Documentation applies
-to both unless otherwise noted.
+Эш урыны бер үк код базаһынан ике сығарыу линияһын йөкмәтә: **I18NT00000000013X 2** (үҙ-үҙен үткәреү) һәм
+*Iroha 3 / SORA I18NT000000020X*** (бер глобаль I18NT000000021X лидеры). Икеһе лә шул уҡ I18NT000000015X виртуаль машинаны (I18NT0000000028X) һәм
+I18NT00000000000000000000000000000000000000000000000000000000000000000, шуға күрә контракттар һәм байткод таратыу маҡсаттары араһында күсмә булып ҡала. Документация ҡағыла
+икеһенә лә башҡаса билдәләнмәһә.
 
-In the [main Iroha documentation](https://docs.iroha.tech/) you will find:
+[Төп I18NT000000016X документация] (I18NU000000031X) һеҙ таба алаһығыҙ:
 
-- [Get Started Guide](https://docs.iroha.tech/get-started/)
-- [SDK Tutorials](https://docs.iroha.tech/guide/tutorials/) for Rust, Python, Javascript, and Java/Kotlin
-- [API Reference](https://docs.iroha.tech/reference/torii-endpoints.html)
+- [Башланғыс етәксе] (https://docs.iroha.tech/get-started/)
+- [SDK өйрәтмәләр] (I18NU000000033X) Раст, Питон, Javascript һәм Java/Kotlin өсөн
+- [API Һылтанма] (https://docs.iroha.tech/reference/torii-endpoints.html)
 
-Release-specific whitepapers and specs:
+Релиз-специфик аҡ ҡағыҙҙар һәм спецификациялар:
 
-- [Iroha 2 Whitepaper](./source/iroha_2_whitepaper.md) — self-hosted network specification.
-- [Iroha 3 (SORA Nexus) Whitepaper](./source/iroha_3_whitepaper.md) — Nexus multi-lane and data-space design.
-- [Data Model & ISI Spec (implementation‑derived)](./source/data_model_and_isi_spec.md) — reverse-engineered behavior reference.
-- [ZK Envelopes (Norito)](./source/zk_envelopes.md) — native IPA/STARK Norito envelopes and verifier expectations.
+- [I18NT000000017X 2 Уайт-папер] (I18NU000000035X) — үҙ-үҙен хостинг селтәре спецификацияһы.
+- [Iroha 3 (I18NT000000027X Nexus) Уайт-папер] (I18NU0000000036X) — Nexus күп һыҙатлы һәм мәғлүмәт-киңлек дизайны.
+- [Мәғлүмәттәр моделе & ISI Spec (тормошҡа ашырыу‐алыу)] (I18NU000000037X) — кире инженерлыҡ тәртибе һылтанма.
+- [З.К. Конверт (Norito)] (I18NU000000038X) — тыуған IPA/STARK I18NT00000002Х конверттар һәм тикшерелгән өмөттәр.
 
-## Localization
+## локализация
 
-Japanese (`*.ja.*`), Hebrew (`*.he.*`), Spanish (`*.es.*`), Portuguese
-(`*.pt.*`), French (`*.fr.*`), Russian (`*.ru.*`), Arabic (`*.ar.*`), and Urdu
-(`*.ur.*`) documentation stubs live next to each English source file. See
-[`docs/i18n/README.md`](./i18n/README.md) for details on generating and
-maintaining translations, as well as guidance for adding new languages in the
-future.
+Япония (I18NI000000048X), еврей (I18NI000000049X), испан (I18NI000000050X), португал
+(`*.pt.*`), Француз (`*.fr.*`), рус (I18NI000000053X), ғәрәпсә (`*.ar.*`), Урду
+(`*.ur.*`) документация ҡоймалары һәр инглиз сығанаҡ файлы эргәһендә йәшәй. Күрергә
+[I18NI000000056X] (I18NU0000000039X) генерациялау һәм
+тәржемәләрҙе һаҡлау, шулай уҡ яңы телдәрҙе өҫтәү өсөн етәкселек итеү
+киләсәк.
 
-## Tools
+## Инструменттар
 
-In this repository you can find documentation for Iroha 2 tools:
+Был һаҡлағыста һеҙ I18NT0000000019X 2 ҡоралдары өсөн документация табырға мөмкин:
 
-- [Kagami](../crates/iroha_kagami/README.md)
-- [`iroha_derive`](../crates/iroha_derive/) macros for configuration structs (see the `config_base` feature)
-- [Profiling build steps](./profile_build.md) for identifying slow `iroha_data_model` compilation tasks
+- [Kagami] (I18NU000000040X)
+- [I18NI000000057X] (I18NU000000041X) макрос конфигурация структурҙары өсөн (ҡара: `config_base` функцияһы)
+- [Профильинг төҙөү аҙымдары] (I18NU000000042X) яй I18NI000000059X компиляция бурыстарын билдәләү өсөн
 
-## Swift / iOS SDK References
+## Свифт / iOS SDK Һылтанмалар
 
-- [Swift SDK overview](./source/sdk/swift/index.md) — pipeline helpers, acceleration toggles, and Connect/WebSocket APIs.
-- [Connect quickstart](./connect_swift_ios.md) — SDK-first walkthrough plus the CryptoKit reference.
-- [Xcode integration guide](./connect_swift_integration.md) — wiring NoritoBridgeKit/Connect into an app, with ChaChaPoly and frame helpers.
-- [SwiftUI demo contributor guide](./norito_demo_contributor.md) — running the iOS demo against a local Torii node, plus acceleration notes.
-- Run `make swift-ci` before publishing Swift artifacts or Connect changes; it verifies fixture parity, dashboard feeds, and Buildkite `ci/xcframework-smoke:<lane>:device_tag` metadata.
+- [Swift SDK дөйөм ҡараш](./source/sdk/swift/index.md) — торба ярҙамсылары, тиҙләтеү toggles, һәм тоташтырыу/WebSocket APIs.
+- [Тоташып тиҙ старт](./connect_swift_ios.md) — SDK-беренсе проходка плюс CryptoKit һылтанма.
+- [Xcode интеграцияһы етәксеһе](./connect_swift_integration.md) — проводка NoritoBridgeKit/Torconect ҡушымтаға, ChaChaPoly һәм рамка ярҙамсылары менән.
+- [SwiftUI демо-үҙ өлөшөн индереүсе етәксе](I18NU000000046X) — iOS демо-йүгеләү ҡаршы урындағы I18NT00000000024X төйөн, плюс тиҙләтеү тураһында иҫкәрмәләр.
+- Swift артефакттарын йәки тоташтырыу үҙгәрештәренә тиклем I18NI000000060X Run; ул нығытыу паритеты, приборҙар таҡтаһы каналдары, һәм Buildkite I18NI000000061X метамағлүмәттәрен раҫлай.
 
-## Norito (Serialization Codec)
+## I18NT000000003X (сериализация Кодек)
 
-Norito is the workspace serialization codec. We do not use `parity-scale-codec`
-(SCALE). Where documentation or benchmarks compare to SCALE, it is only for
-context; all production paths use Norito. The `norito::codec::{Encode, Decode}`
-APIs provide a headerless ("bare") Norito payload for hashing and wire
-efficiency — it is Norito, not SCALE.
+Norito — эш урыны сериализация кодек. Беҙ ҡулланмайбыҙ I18NI0000000062Х
+(МИЗАН). Ҡайҙа документация йәки ориентирҙар SCALE менән сағыштырырға, ул тик өсөн генә .
+контекст; бөтә етештереү юлдары Norito ҡуллана. I18NI000000063X
+API-лар хеширование һәм сым өсөн башһыҙ («яланғас») I18NT0000000000006X файҙалы йөк бирә.
+һөҙөмтәлелеге — ул Norito, SCALE түгел.
 
-Latest state:
+Һуңғы дәүләт:
 
-- Deterministic encoding/decoding with a fixed header (magic, version, 16‑byte schema, compression, length, CRC64, flags).
-- CRC64-XZ checksum with runtime‑selected acceleration:
-  - x86_64 PCLMULQDQ (carry‑less multiply) + Barrett reduction, folded over 32‑byte chunks.
-  - aarch64 PMULL with matching folding.
-  - Slicing‑by‑8 and bitwise fallbacks for portability.
-- Encoded length hints implemented by derives and core types to reduce allocations.
-- Larger streaming buffers (64 KiB) and incremental CRC update during decode.
-- Optional zstd compression; GPU acceleration is feature‑gated and deterministic.
-- Adaptive path selection: `norito::to_bytes_auto(&T)` chooses among no
-  compression, CPU zstd, or GPU‑offloaded zstd (when compiled and available)
-  based on payload size and cached hardware capabilities. Selection only affects
-  performance and the header's `compression` byte; payload semantics are unchanged.
+- Детерминистик кодлау/декодировка менән нығытылған баш (тылсымлы, версия, 16‐байт схемаһы, ҡыҫыу, оҙонлоғо, CRC64, флагтар).
+- CRC64-XZ тикшерелгән сумма менән эшләү ваҡыты һайланған тиҙләтеү:
+  - x86_64 PCLMULQDQ (тапшырыу һәм ҡабатлау) + Барретт кәметергә, йыйылған өҫтөндә 32‐байт өлөштәре.
+  - aarch64 PMULL менән тап килгән йыйылған.
+  - 8-се һәм битле fallbacks өсөн портативность.
+- Кодированный оҙонлоғо кәңәштәре тормошҡа ашырыла һәм ядро ​​типтары менән бүленештәрҙе кәметергә.
+- Ҙурыраҡ стриминг буферҙары (64 KiB) һәм инкременталь CRC яңыртыу ваҡытында декод.
+- Опциональ zstd ҡыҫыу; GPU тиҙләтеү функциялары һәм детерминистик.
+- Адаптив юл һайлау: I18NI000000064X nou no nut ne
+  ҡыҫыу, процессор zstd, йәки GPU‐тышланған zstd (төҙөлгән һәм доступный)
+  нигеҙендә файҙалы йөк күләме һәм кэш аппарат мөмкинлектәре. Һайлау ғына йоғонто яһай
+  етештереүсәнлеге һәм башының I18NI000000065X байт; файҙалы йөк семантикаһы үҙгәрешһеҙ.
 
-See `crates/norito/README.md` for parity tests, benchmarks, and usage examples.
+Паритет һынауҙары, ориентирҙар һәм ҡулланыу миҫалдары өсөн I18NI000000066X ҡарағыҙ.
 
-Note: Some subsystem docs (e.g., IVM acceleration and ZK circuits) are evolving. Where functionality is incomplete, the files call out the work that remains and the direction of travel.
+Иҫкәрмә: Ҡайһы бер подсистема docs (мәҫәлән, I18NT000000029X тиҙләтеү һәм ZK схемалары) үҫешә. Функциональ тулы булмаған урында файлдар ҡалған эште һәм сәйәхәт йүнәлешен саҡыра.
 
-Status endpoint encoding notes
-- Torii `/status` body uses Norito by default with a headerless ("bare") payload for compactness. Clients should attempt Norito decode first.
-- Servers may return JSON when requested; clients fall back to JSON if the `content-type` is `application/json`.
-- The wire format is Norito, not SCALE. The `norito::codec::{Encode,Decode}` APIs are used for the bare variant.
+Статус ос нөктәһе кодлау иҫкәрмәләр
+- I18NT0000025X I18NI000000067X органы компактлылыҡ өсөн башһыҙ («яланғас») файҙалы йөк менән ғәҙәттәгесә ҡулланыла. Клиенттар тырышырға тейеш I18NT0000000009X декод беренсе.
+- Серверҙар JSON ҡайтарырға мөмкин, ҡасан һорағанда; клиенттар ҡайтып төшә JSON, әгәр I18NI0000000068X `application/json`X.
+- Сым форматы I18NT000000010X, SCALE түгел. Яланғас вариант өсөн `norito::codec::{Encode,Decode}` API-лар ҡулланыла.

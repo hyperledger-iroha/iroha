@@ -7,13 +7,14 @@ generator: scripts/sync_docs_i18n.py
 source_hash: a947c289c13c15b09dfbbf28c23ae1539fd3e29ca3943fa8522c3eca32c28bf5
 source_last_modified: "2025-12-29T18:16:35.091070+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Telemetry Requirements
+# Телеметрия талаптары
 
-## Prometheus Targets
+## I18NT000000000X Маҡсаттар
 
-Scrape the relay and orchestrator with the following labels:
+Эстафета һәм оркестрҙы түбәндәге этикеткалар менән ҡырҡырға:
 
 ```yaml
 - job_name: "soranet-relay"
@@ -30,36 +31,36 @@ Scrape the relay and orchestrator with the following labels:
         role: "orchestrator"
 ```
 
-## Required Dashboards
+## Кәрәкле приборҙар таҡталары
 
-1. `dashboards/grafana/soranet_testnet_overview.json` *(to be published)* — load the JSON, import variables `region` and `relay_id`.
-2. `dashboards/grafana/soranet_privacy_metrics.json` *(existing SNNet-8 asset)* — ensure the privacy bucket panels render without gaps.
+.
+.
 
-## Alert Rules
+## Иҫкәртмә ҡағиҙәләре
 
-Thresholds must match the playbook expectation:
+Сәйәхәттәр пьесаларҙа көтөүгә тап килергә тейеш:
 
-- `soranet_privacy_circuit_events_total{kind="downgrade"}` increase > 0 over 10 minutes triggers `critical`.
-- `sorafs_orchestrator_policy_events_total{outcome="brownout"}` > 5 per 30 minutes triggers `warning`.
-- `up{job="soranet-relay"}` == 0 for 2 minutes triggers `critical`.
+- `soranet_privacy_circuit_events_total{kind="downgrade"}` артыуы > 0 10 минут эсендә `critical` триггерҙары.
+- 30 минутҡа `sorafs_orchestrator_policy_events_total{outcome="brownout"}` > 5 `warning` триггерҙары.
+- I18NI0000012X == 0 2 минут өсөн I18NI0000013X триггерҙар.
 
-Load your rules into Alertmanager with the `testnet-t0` receiver; validate with `amtool check-config`.
+Ҡағиҙәләрегеҙҙе `testnet-t0` приемнигы менән Alertmanager-ға йөкләгеҙ; `amtool check-config` менән раҫлау.
 
-## Metrics Evaluation
+## метрика баһалау
 
-Aggregate a 14-day snapshot and feed it to the SNNet-10 validator:
+көнлөк снимокты йыйып, уны SNNet-10 валидаторына ашатырға:
 
 ```
 cargo xtask soranet-testnet-metrics --input 07-metrics-sample.json --out metrics-report.json
 ```
 
-- Replace the sample file with your exported snapshot when running against live data.
-- A `status = fail` result blocks promotion; resolve the highlighted check(s) before retrying.
+- Өлгө файлды һеҙҙең экспортланған снимок менән алмаштырырға тура килә, ҡасан ҡаршы йүгерә тере мәғлүмәттәр.
+- `status = fail` һөҙөмтә блоктарын пропагандалау; хәл итеү өсөн айырып күрһәтелгән чек(тар) ҡабаттан тырышып.
 
-## Reporting
+## Отчет.
 
-Every week upload:
+Аҙна һайын тейәү:
 
-- Query snapshots (`.png` or `.pdf`) showing PQ ratio, circuit success rate, and PoW solve histogram.
-- Prometheus recording rule output for `soranet_privacy_throttles_per_minute`.
-- A brief narrative describing any alerts that fired and mitigation steps (include timestamps).
+- Һорау снимоктар (`.png` йәки I18NI000000018X) PQ нисбәте, схема уңыш ставкаһы, һәм PoW гистограмма хәл итеү.
+- Prometheus ҡағиҙәһе сығарыу өсөн I18NI000000019X.
+- Ҡыҫҡаса хикәйәләү һүрәтләү ниндәй ҙә булһа иҫкәртмәләр, улар ата һәм йомшартыу аҙымдары (ваҡыт маркалары инә).

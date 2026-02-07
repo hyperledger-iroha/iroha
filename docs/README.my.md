@@ -7,83 +7,84 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 26e6f90205e98b5db87d442eb7e4e7691cce47e1c33ef3d11c9bfba25269294e
 source_last_modified: "2026-01-14T17:53:24.552406+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Iroha Documentation
+#Iroha စာရွက်စာတမ်း
 
-日本語版の概要は [`README.ja.md`](./README.ja.md) を参照してください。
+日本語版の概要は [`README.ja.md`](./README.ja.md)を参照してください။
 
-The workspace ships two release lines from the same codebase: **Iroha 2** (self-hosted deployments) and
-**Iroha 3 / SORA Nexus** (the single global Nexus ledger). Both reuse the same Iroha Virtual Machine (IVM) and
-Kotodama toolchain, so contracts and bytecode remain portable between deployment targets. Documentation applies
-to both unless otherwise noted.
+အလုပ်ခွင်သည် တူညီသောကုဒ်ဘေ့စ်မှ ထွက်ရှိသည့် လိုင်းနှစ်ကြောင်းကို ပေးပို့သည်- **Iroha 2** (ကိုယ်တိုင် လက်ခံဆောင်ရွက်ပေးထားသည့် ဖြန့်ကျက်မှုများ) နှင့်
+**Iroha 3 / SORA Nexus** (တစ်ခုတည်းသော ကမ္ဘာလုံးဆိုင်ရာ Nexus စာရင်းဇယား)။ နှစ်ခုလုံးသည် တူညီသော Iroha Virtual Machine (IVM) ကို ပြန်လည်အသုံးပြု၍ လည်းကောင်း၊
+Kotodama toolchain၊ ထို့ကြောင့် စာချုပ်များနှင့် ဘိုက်ကုဒ်များသည် ဖြန့်ကျက်ပစ်မှတ်များကြားတွင် သယ်ဆောင်ရလွယ်ကူနေပါသည်။ စာရွက်စာတမ်းတွေပေါ့။
+နှစ်ခုစလုံးကို အခြားနည်းဖြင့် မှတ်သားထားခြင်းမရှိလျှင်။
 
-In the [main Iroha documentation](https://docs.iroha.tech/) you will find:
+[ပင်မ Iroha စာရွက်စာတမ်း](https://docs.iroha.tech/) တွင် သင်တွေ့လိမ့်မည်-
 
-- [Get Started Guide](https://docs.iroha.tech/get-started/)
-- [SDK Tutorials](https://docs.iroha.tech/guide/tutorials/) for Rust, Python, Javascript, and Java/Kotlin
-- [API Reference](https://docs.iroha.tech/reference/torii-endpoints.html)
+- [စတင်ရန်လမ်းညွှန်](https://docs.iroha.tech/get-started/)
+- [SDK Tutorials](https://docs.iroha.tech/guide/tutorials/) အတွက် Rust၊ Python၊ Javascript နှင့် Java/Kotlin
+- [API ကိုးကား](https://docs.iroha.tech/reference/torii-endpoints.html)
 
-Release-specific whitepapers and specs:
+ထုတ်ဝေသည့် တိကျသော အဖြူရောင်စာရွက်များနှင့် သတ်မှတ်ချက်များ-
 
-- [Iroha 2 Whitepaper](./source/iroha_2_whitepaper.md) — self-hosted network specification.
-- [Iroha 3 (SORA Nexus) Whitepaper](./source/iroha_3_whitepaper.md) — Nexus multi-lane and data-space design.
-- [Data Model & ISI Spec (implementation‑derived)](./source/data_model_and_isi_spec.md) — reverse-engineered behavior reference.
-- [ZK Envelopes (Norito)](./source/zk_envelopes.md) — native IPA/STARK Norito envelopes and verifier expectations.
+- [Iroha 2 Whitepaper](./source/iroha_2_whitepaper.md) — ကိုယ်တိုင်လက်ခံလုပ်ဆောင်ထားသော ကွန်ရက်သတ်မှတ်ချက်။
+- [Iroha 3 (SORA Nexus) Whitepaper](./source/iroha_3_whitepaper.md) — Nexus လမ်းကြောင်းပေါင်းစုံနှင့် ဒေတာနေရာလွတ် ဒီဇိုင်း။
+- [Data Model & ISI Spec (Implementation-derived)](./source/data_model_and_isi_spec.md) — အင်ဂျင်ပြောင်းပြန်အပြုအမူ ရည်ညွှန်းချက်။
+- [ZK စာအိတ်များ (Norito)](./source/zk_envelopes.md) — မူရင်း IPA/STARK Norito စာအိတ်များနှင့် အတည်ပြုသူမျှော်လင့်ချက်များ။
 
-## Localization
+## ဒေသအလိုက် ပြောင်းလဲခြင်း။
 
-Japanese (`*.ja.*`), Hebrew (`*.he.*`), Spanish (`*.es.*`), Portuguese
-(`*.pt.*`), French (`*.fr.*`), Russian (`*.ru.*`), Arabic (`*.ar.*`), and Urdu
-(`*.ur.*`) documentation stubs live next to each English source file. See
-[`docs/i18n/README.md`](./i18n/README.md) for details on generating and
-maintaining translations, as well as guidance for adding new languages in the
-future.
+ဂျပန် (`*.ja.*`)၊ ဟီးဘရူး (`*.he.*`)၊ စပိန် (`*.es.*`)၊ ပေါ်တူဂီ
+(`*.pt.*`)၊ ပြင်သစ် (`*.fr.*`)၊ ရုရှား (`*.ru.*`)၊ အာရဗီ (`*.ar.*`) နှင့် အူရဒူ
+(`*.ur.*`) စာတမ်းပါ ချလံများသည် အင်္ဂလိပ် အရင်းအမြစ် ဖိုင်တစ်ခုစီ၏ ဘေးတွင် ရှိနေသည်။ ကြည့်ပါ။
+ထုတ်လုပ်ခြင်းနှင့်အသေးစိတ်အချက်အလက်များအတွက် [`docs/i18n/README.md`](./i18n/README.md)
+ဘာသာပြန်ဆိုမှုများ ထိန်းသိမ်းခြင်းအပြင် ဘာသာစကားအသစ်များ ထည့်သွင်းခြင်းအတွက် လမ်းညွှန်ချက်
+အနာဂတ်
 
-## Tools
+## ကိရိယာများ
 
-In this repository you can find documentation for Iroha 2 tools:
+ဤသိုလှောင်ခန်းတွင် Iroha 2 ကိရိယာများအတွက် စာရွက်စာတမ်းများကို သင်ရှာတွေ့နိုင်သည်-
 
 - [Kagami](../crates/iroha_kagami/README.md)
-- [`iroha_derive`](../crates/iroha_derive/) macros for configuration structs (see the `config_base` feature)
-- [Profiling build steps](./profile_build.md) for identifying slow `iroha_data_model` compilation tasks
+- [`iroha_derive`](../crates/iroha_derive/) မက်ခရိုပုံစံများ (`config_base` အင်္ဂါရပ်ကို ကြည့်ပါ)
+- နှေးကွေးသော `iroha_data_model` စုစည်းခြင်းလုပ်ဆောင်စရာများကို ခွဲခြားသတ်မှတ်ရန်အတွက် [Profiling build steps](./profile_build.md)
 
-## Swift / iOS SDK References
+## Swift / iOS SDK ကိုးကားချက်များ
 
-- [Swift SDK overview](./source/sdk/swift/index.md) — pipeline helpers, acceleration toggles, and Connect/WebSocket APIs.
-- [Connect quickstart](./connect_swift_ios.md) — SDK-first walkthrough plus the CryptoKit reference.
-- [Xcode integration guide](./connect_swift_integration.md) — wiring NoritoBridgeKit/Connect into an app, with ChaChaPoly and frame helpers.
-- [SwiftUI demo contributor guide](./norito_demo_contributor.md) — running the iOS demo against a local Torii node, plus acceleration notes.
-- Run `make swift-ci` before publishing Swift artifacts or Connect changes; it verifies fixture parity, dashboard feeds, and Buildkite `ci/xcframework-smoke:<lane>:device_tag` metadata.
+- [Swift SDK ခြုံငုံသုံးသပ်ချက်](./source/sdk/swift/index.md) — ပိုက်လိုင်းအကူအညီများ၊ အရှိန်မြှင့်ခလုတ်များနှင့် ချိတ်ဆက်/WebSocket API များ။
+- [ချိတ်ဆက်မှုအမြန်စတင်ခြင်း](./connect_swift_ios.md) — SDK-ပထမလမ်းညွှန်ချက်နှင့် CryptoKit ရည်ညွှန်းချက်။
+- [Xcode ပေါင်းစည်းခြင်းလမ်းညွှန်](./connect_swift_integration.md) — ChaChaPoly နှင့် frame helpers များဖြင့် အက်ပ်တစ်ခုသို့ NoritoBridgeKit/Connect ကို ကြိုးပေးသည်။
+- [SwiftUI သရုပ်ပြပံ့ပိုးသူ လမ်းညွှန်](./norito_demo_contributor.md) — ပြည်တွင်း Torii နိုဒ်နှင့် အရှိန်မြှင့်မှတ်စုများနှင့် iOS သရုပ်ပြကို လုပ်ဆောင်နေသည်။
+- Swift artifacts သို့မဟုတ် Connect အပြောင်းအလဲများကို မထုတ်ဝေမီ `make swift-ci` ကိုဖွင့်ပါ။ ၎င်းသည် fixture parity၊ dashboard feeds နှင့် Buildkite `ci/xcframework-smoke:<lane>:device_tag` မက်တာဒေတာကို စစ်ဆေးသည်။
 
 ## Norito (Serialization Codec)
 
-Norito is the workspace serialization codec. We do not use `parity-scale-codec`
-(SCALE). Where documentation or benchmarks compare to SCALE, it is only for
-context; all production paths use Norito. The `norito::codec::{Encode, Decode}`
-APIs provide a headerless ("bare") Norito payload for hashing and wire
-efficiency — it is Norito, not SCALE.
+Norito သည် workspace serialization codec ဖြစ်သည်။ ကျွန်ုပ်တို့သည် `parity-scale-codec` ကို အသုံးမပြုပါ။
+(SCALE)။ စာရွက်စာတမ်း သို့မဟုတ် စံသတ်မှတ်ချက်များသည် SCALE နှင့် နှိုင်းယှဉ်ပါက၊ ၎င်းသည် အားလုံးအတွက်ဖြစ်သည်။
+အကြောင်းအရာ; ထုတ်လုပ်မှုလမ်းကြောင်းအားလုံး Norito ကိုအသုံးပြုသည်။ `norito::codec::{Encode, Decode}`
+API များသည် ခေါင်းစီးမဲ့ ("bare") Norito payload ကို hashing နှင့် wire အတွက် ပေးသည်
+ထိရောက်မှု — ၎င်းသည် Norito၊ SCALE မဟုတ်ပါ။
 
-Latest state:
+နောက်ဆုံးအခြေအနေ-
 
-- Deterministic encoding/decoding with a fixed header (magic, version, 16‑byte schema, compression, length, CRC64, flags).
-- CRC64-XZ checksum with runtime‑selected acceleration:
-  - x86_64 PCLMULQDQ (carry‑less multiply) + Barrett reduction, folded over 32‑byte chunks.
-  - aarch64 PMULL with matching folding.
-  - Slicing‑by‑8 and bitwise fallbacks for portability.
-- Encoded length hints implemented by derives and core types to reduce allocations.
-- Larger streaming buffers (64 KiB) and incremental CRC update during decode.
-- Optional zstd compression; GPU acceleration is feature‑gated and deterministic.
-- Adaptive path selection: `norito::to_bytes_auto(&T)` chooses among no
-  compression, CPU zstd, or GPU‑offloaded zstd (when compiled and available)
-  based on payload size and cached hardware capabilities. Selection only affects
-  performance and the header's `compression` byte; payload semantics are unchanged.
+- ပုံသေခေါင်းစီးဖြင့် ကုဒ်သွင်းခြင်း/ကုဒ်ဖြင့် ဆုံးဖြတ်ခြင်း (မှော်၊ ဗားရှင်း၊ 16-byte ပုံစံ၊ ချုံ့မှု၊ အရှည်၊ CRC64၊ အလံများ)။
+- runtime-ရွေးချယ်ထားသော အရှိန်ဖြင့် CRC64-XZ ချက်လက်မှတ်-
+  - x86_64 PCLMULQDQ (သယ်ဆောင်မှုနည်းသော များပြားခြင်း) + Barrett လျှော့ချခြင်း၊ 32-byte အတုံးများထက် ခေါက်ခြင်း။
+  ကိုက်ညီသောခေါက်နှင့်အတူ aarch64 PMULL။
+  - သယ်ယူရလွယ်ကူစေရန်အတွက် အပိုင်း-၈ ပိုင်းနှင့် အနည်းငယ် လှည့်ကွက်များ။
+- ခွဲဝေချထားမှုများကို လျှော့ချရန်အတွက် ကုဒ်နံပါတ်များနှင့် core အမျိုးအစားများဖြင့် လုပ်ဆောင်သည့် အရှည်အရိပ်အမြွက်များ။
+- ကုဒ်ကုဒ်လုပ်နေစဉ်အတွင်း ပိုမိုကြီးမားသော ထုတ်လွှင့်မှုကြားခံစနစ် (64 KiB) နှင့် တိုးမြှင့် CRC အပ်ဒိတ်။
+- ရွေးချယ်နိုင်သော zstd ချုံ့မှု; GPU အရှိန်မြှင့်မှုသည် အင်္ဂါရပ်ကို ကန့်သတ်ထားပြီး အဆုံးအဖြတ်ပေးသည်။
+- အလိုက်သင့် လိုက်လျောညီထွေရှိသော လမ်းကြောင်းရွေးချယ်မှု- `norito::to_bytes_auto(&T)` သည် နံပါတ်များကို ရွေးချယ်သည်။
+  ချုံ့ခြင်း၊ CPU zstd သို့မဟုတ် GPU-offloaded zstd (စုစည်းပြီးရရှိနိုင်သောအခါ)
+  payload အရွယ်အစားနှင့် cached hardware စွမ်းရည်များအပေါ်အခြေခံသည်။ ရွေးချယ်မှုသည်သာ သက်ရောက်မှုရှိသည်။
+  စွမ်းဆောင်ရည်နှင့် ခေါင်းစီး၏ `compression` byte; payload semantics သည် မပြောင်းလဲပါ။
 
-See `crates/norito/README.md` for parity tests, benchmarks, and usage examples.
+ညီမျှခြင်းစမ်းသပ်မှုများ၊ စံညွှန်းများနှင့် အသုံးပြုမှုဥပမာများအတွက် `crates/norito/README.md` ကို ကြည့်ပါ။
 
-Note: Some subsystem docs (e.g., IVM acceleration and ZK circuits) are evolving. Where functionality is incomplete, the files call out the work that remains and the direction of travel.
+မှတ်ချက်- အချို့သော စနစ်ခွဲစာရွက်စာတမ်းများ (ဥပမာ၊ IVM အရှိန်မြှင့်ခြင်းနှင့် ZK ဆားကစ်များ) သည် ပြောင်းလဲနေသည်။ လုပ်ဆောင်နိုင်စွမ်း မပြည့်စုံပါက၊ ဖိုင်များသည် ကျန်ရှိနေသော အလုပ်နှင့် ခရီးလမ်းညွှန်ချက်ကို ခေါ်ဆိုပါသည်။
 
-Status endpoint encoding notes
-- Torii `/status` body uses Norito by default with a headerless ("bare") payload for compactness. Clients should attempt Norito decode first.
-- Servers may return JSON when requested; clients fall back to JSON if the `content-type` is `application/json`.
-- The wire format is Norito, not SCALE. The `norito::codec::{Encode,Decode}` APIs are used for the bare variant.
+အခြေအနေအဆုံးမှတ် ကုဒ်သွင်းခြင်း မှတ်စုများ
+- Torii `/status` ကိုယ်ထည်သည် ကျစ်လစ်သိပ်သည်းမှုအတွက် ဦးခေါင်းမဲ့ ("bare") ပေးဆောင်မှုဖြင့် ပုံမှန်အားဖြင့် Norito ကို အသုံးပြုထားသည်။ ဖောက်သည်များသည် Norito ကုဒ်ကို ဦးစွာကြိုးစားသင့်သည်။
+- တောင်းဆိုသောအခါ ဆာဗာများသည် JSON ကို ပြန်ပေးနိုင်သည်။ `content-type` သည် `application/json` ဖြစ်ပါက client များသည် JSON သို့ ပြန်သွားကြသည်။
+- ဝိုင်ယာဖော်မတ်သည် Norito၊ SCALE မဟုတ်ပါ။ `norito::codec::{Encode,Decode}` APIs များကို ဗလာဗားရှင်းအတွက် အသုံးပြုပါသည်။

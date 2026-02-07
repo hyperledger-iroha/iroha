@@ -4,51 +4,53 @@ direction: ltr
 source: docs/portal/docs/sorafs/reports/sf2c-capacity-soak.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# تقرير اختبار soak لتراكم سعة SF-2c
+# تقرير اختبار замочить لتراكم سعة SF-2c
 
-التاريخ: 2026-03-21
+Сообщение: 21 марта 2026 г.
 
 ## النطاق
 
-يسجل هذا التقرير اختبارات soak الحتمية لتراكم سعة SoraFS والمدفوعات المطلوبة ضمن مسار خطة SF-2c.
+Воспользуйтесь функцией замачивания, чтобы замочить защитную пленку SoraFS. Он был создан на базе SF-2c.
 
-- **اختبار soak متعدد المزوّدين لمدة 30 يوما:** يتم عبر
-  `capacity_fee_ledger_30_day_soak_deterministic` في
+- **замачивание в течение 30 дней:**
+  `capacity_fee_ledger_30_day_soak_deterministic` в
   `crates/iroha_core/src/smartcontracts/isi/sorafs.rs`.
-  يقوم harness بإنشاء خمسة مزودين، ويمتد عبر 30 نافذة تسوية، ويتحقق من أن إجماليات
-  ledger تطابق إسقاطا مرجعيا محسوبا بشكل مستقل. يخرج الاختبار digest من Blake3
-  (`capacity_soak_digest=...`) حتى تتمكن CI من التقاط اللقطة القياسية ومقارنتها.
-- **عقوبات نقص التسليم:** تُفرض بواسطة
+  Его упряжь была пройдена в Нью-Йорке, 30 дней назад. إجماليات
+  бухгалтерская книга Дайджест новостей от Blake3
+  (`capacity_soak_digest=...`) Зарегистрирован CI в режиме онлайн-обновления.
+- ** عقوبات نقص التسليم:** تُفرض بواسطة
   `record_capacity_telemetry_penalises_persistent_under_delivery`
-  (نفس الملف). يؤكد الاختبار أن عتبات strikes وcooldowns وslashing للضمان وعدّادات
-  ledger تبقى حتمية.
+  (نفس الملف). Нанесение ударов и ударов с перезарядкой и рубящих ударов
+  бухгалтерская книга تبقى حتمية.
 
-## التنفيذ
+## تنفيذ
 
-شغّل تحقق soak محليا باستخدام:
+Вот пример замачивания в сказке:
 
 ```bash
 cargo test -p iroha_core -- record_capacity_telemetry_penalises_persistent_under_delivery
 cargo test -p iroha_core -- capacity_fee_ledger_30_day_soak_deterministic
 ```
 
-تكتمل الاختبارات في أقل من ثانية على حاسوب محمول قياسي ولا تتطلب fixtures خارجية.
+Футбольный клуб "Спорт-Сити" в матче с "Сент-Луис" и "Кейлсон Уиллс" - расписание матчей خارجية.
 
-## الرصد
+## عرصد
 
-يعرض Torii الآن لقطات رصيد المزوّدين جنبًا إلى جنب مع fee ledgers حتى تتمكن لوحات المتابعة
-من الضبط على الأرصدة المنخفضة وpenalty strikes:
+يعرض Torii الآن لقطات رصيد المزوّدين جنبًا إلى جنب ععرض المزيد لوحات المتابعة
+В случае с пенальти:
 
-- REST: `GET /v1/sorafs/capacity/state` يعيد إدخالات `credit_ledger[*]` التي
-  تعكس حقول ledger التي تم التحقق منها في اختبار soak. راجع
+- REST: `GET /v1/sorafs/capacity/state` в режиме `credit_ledger[*]`
+  Создал бухгалтерскую книгу, в которой он находится в замачивании. راجع
   `crates/iroha_torii/src/sorafs/registry.rs`.
-- Grafana import: `dashboards/grafana/sorafs_capacity_penalties.json` يرسم
-  عدادات strikes المصدّرة وإجمالي العقوبات والضمان المربوط حتى يتمكن فريق
-  المناوبة من مقارنة baselines soak مع البيئات الحية.
+- Grafana импорт: `dashboards/grafana/sorafs_capacity_penalties.json` يرسم
+  Скарлетт наносит удар
+  Базовые линии, которые используются в работе, впитывают изменения.
 
 ## المتابعة
 
-- جدولة تشغيل بوابة أسبوعي في CI لإعادة تشغيل اختبار soak (smoke-tier).
-- توسيع لوحة Grafana بأهداف scrape من Torii بمجرد تفعيل صادرات telemetry الإنتاجية.
+- Замачивание в CI-лабораторном шкафу для замачивания (дымовой уровень).
+- Запустите Grafana, чтобы очистить Torii, и включите телеметрию.

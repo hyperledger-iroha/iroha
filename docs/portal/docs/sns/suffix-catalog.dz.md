@@ -10,47 +10,48 @@ translation_last_reviewed: 2026-02-07
 title: Sora Name Service Suffix Catalog
 sidebar_label: Suffix catalog
 description: Canonical allowlist of SNS suffixes, stewards, and pricing knobs for `.sora`, `.nexus`, and `.dao`.
+translator: machine-google-reviewed
 ---
 
-# Sora Name Service Suffix Catalog
+# སོ་ར་མིང་ཞབས་ཏོག་རྗེས་འཇུག་དཀར་ཆག།
 
-The SNS roadmap tracks every approved suffix (SN-1/SN-2). This page mirrors the
-source-of-truth catalog so operators running registrars, DNS gateways, or wallet
-tooling can load the same parameters without scraping status docs.
+ཨེསི་ཨེན་ཨེསི་ལམ་སྟོན་གྱིས་ ཆ་འཇོག་གྲུབ་པའི་ རྗེས་འཇུག་རེ་རེ་བཞིན་ (SN-1/SN-2) གི་རྗེས་སྙེགས། ཤོག་ལེབ་འདི་གིས་ འདི་བཟུམ་འབད་ ལོང་ཡོདཔ་ཨིན།
+བདེན་པ་གི་ཐོ་གཞུང་ དེ་འབདཝ་ལས་ ཐོ་བཀོད་འབད་མི་ཚུ་ གཡོག་བཀོལ་མི་དང་ ཌི་ཨེན་ཨེསི་སྒོ་སྒྲིག་ ཡང་ན་ དངུལ་ཁུག་ཚུ་ གཡོག་བཀོལ་དོ་ཡོདཔ་ཨིན།
+ལག་ཆས་འདི་གིས་ གནས་ཚད་ཅན་གྱི་ཡིག་ཆ་ཚུ་ བརྡ་བཀོད་མ་འབད་བར་ ཚད་བཟུང་ཅོག་འཐདཔ་ཚུ་ མངོན་གསལ་འབད་ཚུགས།
 
-- **Snapshot:** [`docs/examples/sns/suffix_catalog_v1.json`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/examples/sns/suffix_catalog_v1.json)
-- **Consumers:** `iroha sns policy`, SNS onboarding kits, KPI dashboards, and
-  DNS/Gateway release scripts all read the same JSON bundle.
-- **Statuses:** `active` (registrations allowed), `paused` (temporarily gated),
-  `revoked` (announced but not currently available).
+- **Snapshot:** [`docs/examples/sns/suffix_catalog_v1.json`](I18NU0000002X)
+- **ཉོ་སྤྱོད་པ་:** `iroha sns policy`, ཨེསི་ཨེན་ཨེསི་ཨོན་བོང་ཌིང་ཆས་ཆས་, ཀེ་པི་ཨའི་ ཌེཤ་བོརཌི་དང་།
+  DNS/Gateway གསར་བཏོན་ཡིག་ཚུགས་ཚུ་ཆ་མཉམ་ JSON བང་རིམ་གཅིག་པ་ལྷག་ཡོདཔ་ཨིན།
+- **གནས་རིམ་ཚུ་:** `active` (ཐོ་བཀོད་འབད་ཆོགཔ་), I18NI000000006X (གནས་སྐབས་ཅིག་གི་དོན་ལུ་སྒོ་སྒྲིག)
+  I18NI000000007X (གསལ་བསྒྲགས་བྱས་ཀྱང་ད་ལྟ་མ་ཐོབ།)
 
-## Catalog schema
+## ཐོ་གཞུང་ལས་རིམ།
 
-| Field | Type | Description |
-|-------|------|-------------|
-| `suffix` | string | Human-readable suffix with leading dot. |
-| `suffix_id` | `u16` | Identifier stored on-ledger in `SuffixPolicyV1::suffix_id`. |
-| `status` | enum | `active`, `paused`, or `revoked` describing launch readiness. |
-| `steward_account` | string | Account responsible for stewardship (matches registrar policy hooks). |
-| `fund_splitter_account` | string | Account that receives payments before routing per `fee_split`. |
-| `payment_asset_id` | string | Asset used for settlement (`xor#sora` for the initial cohort). |
-| `min_term_years` / `max_term_years` | integer | Purchase term bounds from the policy. |
-| `grace_period_days` / `redemption_period_days` | integer | Renewal safety windows enforced by Torii. |
-| `referral_cap_bps` | integer | Maximum referral carve-out allowed by governance (basis points). |
-| `reserved_labels` | array | Governance-protected label objects `{label, assigned_to, release_at_ms, note}`. |
-| `pricing` | array | Tier objects with `label_regex`, `base_price`, `auction_kind`, and duration bounds. |
-| `fee_split` | object | `{treasury_bps, steward_bps, referral_max_bps, escrow_bps}` basis-point split. |
-| `policy_version` | integer | Monotonic counter incremented whenever governance edits the policy. |
+| ཕིལཌ་ | དབྱེ་བ་ | འགྲེལ་བཤད་ |
+|-------------------------------------|
+| I18NI0000008X | ཡིག་རྒྱུན་ | མི་གིས་ལྷག་ཚུགས་པའི་ རྗེས་འཇུག་ གཙོ་རིམ་ཅན་གྱི་ ཚག་དང་གཅིག་ཁར་ རྗེས་འཇུག་འབད་ནི། |
+| I18NI0000009X | `u16` | ངོས་འཛིན་འབད་མི་ `SuffixPolicyV1::suffix_id` ནང་ ལྕགས་ཤོག་ནང་ གསོག་འཇོག་འབད་ཡོདཔ། |
+| `status` | enum | I18NI0000000013X, `paused`, ཡང་ན་ I18NI000000015X འགོ་འབྱེད་ཀྱི་གྲ་སྒྲིག་ཡོད་པའི་འགྲེལ་བཤད་བརྐྱབ། |
+| `steward_account` | ཡིག་རྒྱུན་ | བདག་འཛིན་གྱི་ འགན་འཁྲི་ཅན་གྱི་རྩིས་ཁྲ་ (ཐོ་བཀོད་སྲིད་བྱུས་ཀྱི་ ཧུཀ་ཚུ་དང་མཐུན་སྒྲིག་)། |
+| `fund_splitter_account` | ཡིག་རྒྱུན་ | `fee_split` ལུ་ འགྲུལ་ལམ་མ་བཏང་པའི་ཧེ་མ་ དངུལ་སྤྲོད་ལེན་འབད་མི་ རྩིས་ཁྲ་ཚུ། |
+| `payment_asset_id` | ཡིག་རྒྱུན་ | གཞིས་ཆགས་དོན་ལུ་ལག་ལེན་འཐབ་མི་ རྒྱུ་དངོས་ (I18NI0000020X འགོ་ཐོག་སྡེ་ཚན་གྱི་དོན་ལུ་) |
+| `min_term_years` / `max_term_years` | ཧྲིལ་གྲངས་ | ཉོ་སྒྲུབ་ཀྱི་དུས་ཡུན་འདི་ སྲིད་བྱུས་ལས་བཀོད། |
+| `grace_period_days` / `redemption_period_days` | ཧྲིལ་གྲངས་ | བསྐྱར་གསོ་ཉེན་སྲུང་སྒོ་སྒྲིག་ཚུ་ Torii གིས་ བསྟར་སྤྱོད་འབད་ཡོདཔ། |
+| I18NI0000025X | ཧྲིལ་གྲངས་ | གཞུང་སྐྱོང་གིས་ གནང་བ་གནང་མི་ མཐོ་ཤོས་གཏང་ནིའི་ བརྐོས་བརྐོས། (གཞི་རྟེན་ས་ཚིགས།) |
+| `reserved_labels` | ཨེ་རེ་ | གཞུང་སྐྱོང་ཉེན་སྲུང་འབད་ཡོད་པའི་ཁ་ཡིག་དངོས་པོ་ཚུ་ `{label, assigned_to, release_at_ms, note}`. |
+| I18NI0000028X | ཨེ་རེ་ | I18NI000000029X, I18NI000000030X, I18NI000000031X, དང་ དུས་ཡུན་ཚད་གཞི་ཡོད་པའི་ རིམ་པ་ཅན་གྱི་དངོས་པོ་ཚུ་ཨིན། |
+| I18NI0000032X | དངོས་པོ་ | `{treasury_bps, steward_bps, referral_max_bps, escrow_bps}` གཞི་རྩའི་-ས་ཚིགས་དབྱེ། |
+| I18NI0000034X | ཧྲིལ་གྲངས་ | གཞུང་སྐྱོང་གིས་ སྲིད་བྱུས་ཞུན་དག་འབད་བའི་སྐབས་ མོ་ནོ་ཊོ་ནིག་ ཀའུན་ཊར་ཡར་སེང་འབད་ཡོདཔ། |
 
-## Current catalog
+## ད་ལྟའི་ཐོ་གཞུང་།
 
-| Suffix | ID (`hex`) | Steward | Fund splitter | Status | Payment asset | Referral cap (bps) | Term (min – max years) | Grace / Redemption (days) | Pricing tiers (regex → base price / auction) | Reserved labels | Fee split (T/S/R/E bps) | Policy version |
-|--------|------------|---------|---------------|--------|---------------|--------------------|--------------------------|---------------------------|----------------------------------------------|-----------------|-------------------------|----------------|
-| `.sora` | `0x0001` | `ih58...` | `ih58...` | Active | `xor#sora` | 500 | 1 – 5 | 30 / 60 | `T0: ^[a-z0-9]{3,}$ → 120 XOR (Vickrey)` | `treasury → ih58...` | `7000 / 3000 / 1000 / 0` | 1 |
-| `.nexus` | `0x0002` | `ih58...` | `ih58...` | Paused | `xor#sora` | 300 | 1 – 3 | 15 / 30 | `T0: ^[a-z0-9]{4,}$ → 480 XOR (Vickrey)`<br>`T1: ^[a-z]{2}$ → 4000 XOR (Dutch floor 500)` | `treasury → ih58...`, `guardian → ih58...` | `6500 / 2500 / 800 / 200` | 2 |
-| `.dao` | `0x0003` | `ih58...` | `ih58...` | Revoked | `xor#sora` | 0 | 1 – 2 | 30 / 30 | `T0: ^[a-z0-9]{3,}$ → 60 XOR (Vickrey)` | `dao (held for future release)` | `9000 / 1000 / 0 / 0` | 0 |
+| རྗེས་འཇུག་ | ID (`hex`) | སི་ཊི་ཝརཌ་ | མ་དངུལ་བགོ་སྡུད་པ། | གནས་ཚད་ | གླ་དངུལ་རྒྱུ་དངོས་ | གཞི་བསྟུན་གྱི་མགུ་ཏོག་ (bps) | གནས་ཡུན་ (min =  max ལོ) | བྱིན་རླབས་ / བསྐྱར་གསོ་ (ཉིན་གྲངས་) | གོང་ཚད་རིམ་པ་ (རེ་རེགསི་ → གཞི་རྟེན་གོང་ཚད་ / རིན་བསྡུར་) | བཀག་བཞག་ཡོད་པའི་ཁ་ཡིག་ཚུ་ | འཐུས་བགོ་བཤའ་ (T/S/R/E bps) | སྲིད་བྱུས་ཡིག་ཆའི་ཐོན་རིམ། |
+|-------------------------------------------------------------------------- -------------- -----|-|--------------------------------------------------------------- ----- - --------------------|------------------------------------------- ---|-----------------|-------------------------|----------------|
+| `.sora` | `0x0001` | `ih58...` | I18NI0000039X | ཤུགས་ལྡན་ | I18NI0000040X | ༥༠༠ | 1 – 5 | ༣༠ / ༦༠ | I18NI0000041X | I18NI0000042X | I18NI0000043X | 1 |
+| I18NI0000044X | `0x0002` | I18NI0000046X | I18NI0000047X | མཚམས་འཇོག་འབད་ཡོདཔ། | I18NI0000048X | 300 | 1 1 – 3 | ༡༥ / ༣༠ | I18NI0000049X<br>`T1: ^[a-z]{2}$ → 4000 XOR (Dutch floor 500)` | `treasury → ih58...`, `guardian → ih58...` | I18NI0000003X | 2 |
+| `.dao` | I18NI0000005X | I18NI0000005X | I18NI0000007X | ཆ་མེད་བཏང་ཡོདཔ། | I18NI0000008X | 0 | 1 – 2 | 30 / 30 | `T0: ^[a-z0-9]{3,}$ → 60 XOR (Vickrey)` | `dao (held for future release)` | `9000 / 1000 / 0 / 0` | 0 |
 
-## JSON excerpt
+## ཇའི་ཨེསི་ཨོན་ ཕྱིར་བཏོན་འབད་ནི།
 
 ```json
 {
@@ -80,12 +81,12 @@ tooling can load the same parameters without scraping status docs.
 }
 ```
 
-## Automation notes
+## རང་འཇགས་དྲན་འཛིན་ཚུ།
 
-1. Load the JSON snapshot and hash/sign it before distributing to operators.
-2. Registrar tooling should surface the `suffix_id`, term limits, and pricing
-   from the catalog whenever a request hits `/v1/sns/*`.
-3. DNS/Gateway helpers read the reserved label metadata when generating GAR
-   templates so DNS responses stay aligned with governance controls.
-4. KPI annex jobs tag dashboard exports with suffix metadata so alerts match the
-   launch state recorded here.
+༡ བཀོལ་སྤྱོད་པ་ཚུ་ལུ་བཀྲམ་སྤེལ་མ་འབད་བའི་ཧེ་མ་ JSON པར་ལེན་འདི་ མངོན་གསལ་འབད་ཞིནམ་ལས་ ཧེཤ་/མིང་རྟགས་བཀོད།
+༢ ཐོ་བཀོད་ཀྱི་ལག་ཆས་འདི་གིས་ `suffix_id` དང་ དུས་ཡུན་ཚད་གཞི་ དེ་ལས་ གོང་ཚད་ཚུ་ ཐོན་དགོ།
+   ཐོ་གཞུང་ལས་ ཞུ་བ་ཅིག་གིས་ `/v1/sns/*` ལུ་ ཕོག་པའི་སྐབས་ལུ་ཨིན།
+3. DNS/Gateway གྲོགས་རམ་པ་ཚུ་གིས་ GAR འདི་བཟོ་བཏོན་འབད་བའི་སྐབས་ བཀག་བཞག་ཡོད་པའི་ཁ་ཡིག་མེ་ཊ་ཌེ་ཊ་འདི་ལྷག་ཡོདཔ་ཨིན།
+   ཊེམ་པེལེཊི་ཚུ་ དེ་འབདཝ་ལས་ ཌི་ཨེན་ཨེསི་ལན་ཚུ་ གཞུང་སྐྱོང་ཚད་འཛིན་ཚུ་དང་ ཕྲང་སྒྲིག་སྦེ་སྡོད་དགོ།
+4. KPI ཟུར་མེད་ལཱ་གཡོག་ཚུ་གིས་ ཌེཤ་བོརཌི་ཕྱིར་འདྲེན་ཚུ་ རྗེས་འཇུག་མེ་ཊ་ཌེ་ཊ་དང་གཅིག་ཁར་ ངོ་རྟགས་བཀོད་ཡོདཔ་ལས་ ཉེན་བརྡ་ཚུ་དང་མཐུན་སྒྲིག་འབད།
+   འདི་ཁར་ འགོ་འབྱེད་གནས་སྟངས་ཐོ་བཀོད་འབད་ཡོདཔ་ཨིན།

@@ -7,96 +7,97 @@ generator: scripts/sync_docs_i18n.py
 source_hash: b11d23ecafbc158e0c83cdb6351085fde02f362cfc73a1a1a33555e90cc556ef
 source_last_modified: "2025-12-29T18:16:35.099277+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Norito SwiftUI Demo Contributor Guide
+# Norito SwiftUI ማሳያ አስተዋዋቂ መመሪያ
 
-This document captures the manual setup steps required to run the SwiftUI demo against a
-local Torii node and mock ledger. It complements `docs/norito_bridge_release.md` by
-focusing on day-to-day development tasks. For a deeper walkthrough of integrating the
-Norito bridge/Connect stack into Xcode projects, see `docs/connect_swift_integration.md`.
+ይህ ሰነድ የSwiftUI ማሳያን ከ ሀ ጋር ለማሄድ የሚያስፈልጉትን በእጅ የማዋቀር እርምጃዎችን ይይዛል
+የአካባቢ Torii መስቀለኛ መንገድ እና የማስመሰያ ደብተር። `docs/norito_bridge_release.md` በ
+በዕለት ተዕለት የልማት ተግባራት ላይ ማተኮር. ለማዋሃድ ጥልቅ የእግር ጉዞ
+Norito ድልድይ/ቁልል ወደ Xcode ፕሮጀክቶች ያገናኙ፣ `docs/connect_swift_integration.md` ይመልከቱ።
 
-## Environment setup
+## የአካባቢ ማዋቀር
 
-1. Install the Rust toolchain defined in `rust-toolchain.toml`.
-2. Install Swift 5.7+ and Xcode command line tools on macOS.
-3. (Optional) Install [SwiftLint](https://github.com/realm/SwiftLint) for linting.
-4. Run `cargo build -p irohad` to ensure the node compiles on your host.
-5. Copy `examples/ios/NoritoDemoXcode/Configs/demo.env.example` to `.env` and adjust the
-   values to match your environment. The app reads these variables on launch:
-   - `TORII_NODE_URL` — base REST URL (WebSocket URLs are derived from it).
-   - `CONNECT_SESSION_ID` — 32-byte session identifier (base64/base64url).
-   - `CONNECT_TOKEN_APP` / `CONNECT_TOKEN_WALLET` — tokens returned by `/v1/connect/session`.
-   - `CONNECT_CHAIN_ID` — chain identifier announced during the control handshake.
-   - `CONNECT_ROLE` — default role pre-selected in the UI (`app` or `wallet`).
-   - Optional helpers for manual testing: `CONNECT_PEER_PUB_B64`, `CONNECT_SHARED_KEY_B64`,
-     `CONNECT_APPROVE_ACCOUNT_ID`, `CONNECT_APPROVE_PRIVATE_KEY_B64`,
+1. በ `rust-toolchain.toml` ውስጥ የተገለጸውን የ Rust Toolchain ጫን።
+2. Swift 5.7+ እና Xcode የትእዛዝ መስመር መሳሪያዎችን በ macOS ላይ ይጫኑ።
+3. (የግድ ያልሆነ) ጫን [SwiftLint] (https://github.com/realm/SwiftLint) linting.
+4. መስቀለኛ መንገድ በአስተናጋጅዎ ላይ መጨመሩን ለማረጋገጥ I18NI0000020X ን ያሂዱ።
+5. I18NI0000021X ወደ I18NI0000022X ገልብጦ ማስተካከል
+   ከአካባቢዎ ጋር የሚዛመዱ እሴቶች። መተግበሪያው ሲጀመር እነዚህን ተለዋዋጮች ያነባል፡-
+   - `TORII_NODE_URL` — ቤዝ REST URL (የዌብሶኬት ዩአርኤሎች ከእሱ የተወሰዱ ናቸው)።
+   - `CONNECT_SESSION_ID` — ባለ 32-ባይት ክፍለ ጊዜ መለያ (base64/base64url)።
+   - `CONNECT_TOKEN_APP` / `CONNECT_TOKEN_WALLET` - በ I18NI0000027X የተመለሱ ቶከኖች።
+   - `CONNECT_CHAIN_ID` - በቁጥጥር መጨባበጥ ወቅት የሰንሰለት መለያ ታወቀ።
+   - `CONNECT_ROLE` - ነባሪ ሚና በ UI (`app` ወይም `wallet`) ውስጥ አስቀድሞ ተመርጧል።
+   - በእጅ ለመሞከር አማራጭ ረዳቶች፡ `CONNECT_PEER_PUB_B64`፣ `CONNECT_SHARED_KEY_B64`፣
+     `CONNECT_APPROVE_ACCOUNT_ID`፣ `CONNECT_APPROVE_PRIVATE_KEY_B64`፣
      `CONNECT_APPROVE_SIGNATURE_B64`.
 
-## Bootstrapping Torii + mock ledger
+## Bootstrapping I18NT0000005X + የማስመሰል ደብተር
 
-The repository ships helper scripts that start a Torii node with an in-memory ledger pre-
-loaded with demo accounts:
+የመረጃ ቋቱ Torii መስቀለኛ መንገድን ከውስጥ ማስታወሻ ደብተር ጋር የሚጀምሩ የረዳት ስክሪፕቶችን ይልካል።
+በማሳያ መለያዎች ተጭኗል፡-
 
 ```bash
 ./scripts/ios_demo/start.sh --config examples/ios/NoritoDemoXcode/Configs/SampleAccounts.json
 ```
 
-The script emits:
+ስክሪፕቱ ያወጣል፡-
 
-- Torii node logs to `artifacts/torii.log`.
-- Ledger metrics (Prometheus format) to `artifacts/metrics.prom`.
-- Client access tokens to `artifacts/torii.jwt`.
+- Torii መስቀለኛ መንገድ ወደ I18NI0000037X።
+- የመመዝገቢያ መለኪያዎች (Prometheus ቅርጸት) ወደ `artifacts/metrics.prom`።
+- የደንበኛ መዳረሻ ቶከኖች ወደ `artifacts/torii.jwt`።
 
-`start.sh` keeps the demo peer running until you press `Ctrl+C`. It writes a ready-state
-snapshot to `artifacts/ios_demo_state.json` (the source of truth for the other artefacts),
-copies the active Torii stdout log, polls `/metrics` until a Prometheus scrape is
-available, and renders the configured accounts into `torii.jwt` (including private keys
-when the config provides them). The script accepts `--artifacts` to override the output
-directory, `--telemetry-profile` to match custom Torii configurations, and
-`--exit-after-ready` for non-interactive CI jobs.
+`start.sh` `Ctrl+C` ን እስኪጫኑ ድረስ ማሳያውን ያቆያል። ዝግጁ-ግዛት ይጽፋል
+ቅጽበተ-ፎቶ ወደ I18NI0000042X (ለሌሎች ቅርሶች የእውነት ምንጭ)
+የ Prometheus መፋቅ እስኪሆን ድረስ ንቁውን I18NT0000008X stdout ሎግ ፣የምርጫ `/metrics` ይገለብጣል።
+ይገኛል እና የተዋቀሩ መለያዎችን ወደ `torii.jwt` (የግል ቁልፎችን ጨምሮ) ያቀርባል
+ውቅሩ ሲያቀርብላቸው)። ውጤቱን ለመሻር ስክሪፕቱ I18NI0000045X ይቀበላል
+ማውጫ፣ `--telemetry-profile` ብጁ I18NT0000009X ውቅሮችን ለማዛመድ፣ እና
+`--exit-after-ready` መስተጋብራዊ ላልሆኑ CI ስራዎች።
 
-Each entry in `SampleAccounts.json` supports the following fields:
+በ`SampleAccounts.json` ውስጥ ያለው እያንዳንዱ ግቤት የሚከተሉትን መስኮች ይደግፋል።
 
-- `name` (string, optional) — stored as account metadata `alias`.
-- `public_key` (multihash string, required) — used as the account signatory.
-- `private_key` (optional) — included in `torii.jwt` for client credential generation.
-- `domain` (optional) — defaults to the asset domain if omitted.
-- `asset_id` (string, required) — asset definition to mint for the account.
-- `initial_balance` (string, required) — numeric amount minted into the account.
+- `name` (ሕብረቁምፊ፣ አማራጭ) - እንደ መለያ ሜታዳታ `alias` ተከማችቷል።
+- `public_key` (multihash string, ያስፈልጋል) - እንደ መለያ ፈራሚ ጥቅም ላይ ይውላል.
+- `private_key` (አማራጭ) - በ`torii.jwt` ውስጥ የተካተተ ለደንበኛ ምስክርነት።
+- `domain` (አማራጭ) - ከተተወ የንብረቱ ጎራ ነባሪዎች።
+- `asset_id` (ሕብረቁምፊ፣ ያስፈልጋል) - ለመለያው ሚንት የንብረት ትርጉም።
+- `initial_balance` (ሕብረቁምፊ፣ ያስፈልጋል) - በሂሳብ ውስጥ የገባ የቁጥር መጠን።
 
-## Running the SwiftUI demo
+## የSwiftUI ማሳያን በማሄድ ላይ
 
-1. Build the XCFramework as described in `docs/norito_bridge_release.md` and bundle it
-   into the demo project (references expect `NoritoBridge.xcframework` in the project
-   root).
-2. Open the `NoritoDemoXcode` project in Xcode.
-3. Select the `NoritoDemo` scheme and target an iOS simulator or device.
-4. Ensure the `.env` file is referenced through the scheme's environment variables.
-   Populate the `CONNECT_*` values exported by `/v1/connect/session` so the UI is
-   pre-filled when the app launches.
-5. Verify hardware acceleration defaults: `App.swift` calls
-   `DemoAccelerationConfig.load().apply()` so the demo picks up either the
-   `NORITO_ACCEL_CONFIG_PATH` environment override or a bundled
-   `acceleration.{json,toml}`/`client.{json,toml}` file. Remove/adjust these inputs if you
-   want to force a CPU fallback before running.
-6. Build and launch the application. The home screen prompts for Torii URL/token if not
-   already set via `.env`.
-7. Initiate a "Connect" session to subscribe to account updates or approve requests.
-8. Submit an IRH transfer and inspect the on-screen log output along with Torii logs.
+1. በ`docs/norito_bridge_release.md` ላይ እንደተገለፀው የXCFrameworkን ይገንቡ እና ይጠቅልሉት
+   ወደ ማሳያ ፕሮጀክት (ማጣቀሻዎች በፕሮጀክቱ ውስጥ `NoritoBridge.xcframework` ይጠብቃሉ
+   ሥር)።
+2. የ I18NI0000059X ፕሮጀክትን በ Xcode ይክፈቱ።
+3. የI18NI0000060X እቅድን ይምረጡ እና የ iOS ሲሙሌተርን ወይም መሳሪያን ኢላማ ያድርጉ።
+4. የI18NI0000061X ፋይል በእቅዱ የአካባቢ ተለዋዋጮች በኩል መጠቀሱን ያረጋግጡ።
+   በ`/v1/connect/session` ወደ ውጭ የተላኩትን የI18NI0000062X እሴቶችን በብዛት ይሰብስቡ ስለዚህ UI ነው
+   መተግበሪያው ሲጀምር አስቀድሞ ተሞልቷል።
+5. የሃርድዌር ማጣደፍ ነባሪዎችን ያረጋግጡ፡ `App.swift` ጥሪዎች
+   `DemoAccelerationConfig.load().apply()` ስለዚህ ማሳያው ሁለቱንም ያነሳል።
+   `NORITO_ACCEL_CONFIG_PATH` አካባቢ መሻር ወይም ጥቅል
+   `acceleration.{json,toml}`/`client.{json,toml}` ፋይል። እነዚህን ግብዓቶች ካስወገዱ/ያስተካክሏቸው
+   ከመሮጥዎ በፊት የሲፒዩ ውድቀትን ማስገደድ ይፈልጋሉ።
+6. አፕሊኬሽኑን ይገንቡ እና ያስጀምሩት። የመነሻ ስክሪን ለ Torii URL/ ማስመሰያ ካልሆነ ይጠይቃል
+   አስቀድሞ በ `.env` በኩል ተዘጋጅቷል።
+7. ለመለያ ዝመናዎች ለመመዝገብ ወይም ጥያቄዎችን ለማጽደቅ "አገናኝ" ክፍለ ጊዜን ያስጀምሩ።
+8. የ IRH ማስተላለፍን አስገባ እና በስክሪኑ ላይ ያለውን የምዝግብ ማስታወሻ ከTorii ምዝግብ ማስታወሻዎች ጋር መርምር።
 
-### Hardware acceleration toggles (Metal / NEON)
+### የሃርድዌር ማጣደፍ መቀየሪያዎች (ብረት / NEON)
 
-`DemoAccelerationConfig` mirrors the Rust node configuration so developers can exercise
-Metal/NEON paths without hard-coding thresholds. The loader searches the following
-locations on launch:
+`DemoAccelerationConfig` ገንቢዎች የአካል ብቃት እንቅስቃሴ ማድረግ እንዲችሉ የ Rust node ውቅርን ያንጸባርቃል
+የብረታ ብረት/NEON ዱካዎች ያለ ሃርድ-ኮድ ጣራዎች። ጫኚው የሚከተለውን ይፈልጋል
+የሚጀመርባቸው ቦታዎች፡-
 
-1. `NORITO_ACCEL_CONFIG_PATH` (defined in `.env`/scheme arguments) — absolute path or
-   `tilde`-expanded pointer to an `iroha_config` JSON/TOML file.
-2. Bundled config files named `acceleration.{json,toml}` or `client.{json,toml}`.
-3. If neither source is available, the default settings (`AccelerationSettings()`) remain.
+1. `NORITO_ACCEL_CONFIG_PATH` (በI18NI0000072X/የዕቅድ ክርክሮች የተገለፀ) - ፍጹም መንገድ ወይም
+   `tilde`-የተዘረጋ ጠቋሚ ወደ I18NI0000074X JSON/TOML ፋይል።
+2. `acceleration.{json,toml}` ወይም `client.{json,toml}` የተሰየሙ የተዋቀሩ ፋይሎች።
+3. የትኛውም ምንጭ ከሌለ ነባሪ ቅንጅቶች (`AccelerationSettings()`) ይቀራሉ።
 
-Example `acceleration.toml` snippet:
+ምሳሌ `acceleration.toml` ቅንጫቢ፡
 
 ```toml
 [accel]
@@ -105,35 +106,35 @@ merkle_min_leaves_metal = 256
 prefer_cpu_sha2_max_leaves_aarch64 = 128
 ```
 
-Leaving the fields `nil` inherits the workspace defaults. Negative numbers are ignored,
-and missing `[accel]` sections fall back to deterministic CPU behaviour. When running on
-a simulator without Metal support the bridge silently keeps the scalar path even if the
-config requests Metal.
+መስኮችን መልቀቅ I18NI0000079X የስራ ቦታ ነባሪዎች ይወርሳል። አሉታዊ ቁጥሮች ችላ ይባላሉ,
+እና የጠፉ `[accel]` ክፍሎች ወደ ወሳኙ የሲፒዩ ባህሪ ይመለሳሉ። ሲሮጥ
+ብረት የሌለበት አስመሳይ ደጋፊ ድልድዩ በፀጥታ ስኩላር መንገዱን ያቆያል
+የማዋቀር ጥያቄዎች ብረት.
 
-## Integration tests
+## የውህደት ሙከራዎች
 
-- Integration tests reside in `Tests/NoritoDemoTests` (to be added once macOS CI is
-  available).
-- Tests spin up Torii using the scripts above and exercise WebSocket subscriptions, token
-  balances, and transfer flows via the Swift package.
-- Logs from test runs are stored in `artifacts/tests/<timestamp>/` alongside metrics and
-  sample ledger dumps.
+- የውህደት ሙከራዎች በ `Tests/NoritoDemoTests` ውስጥ ይኖራሉ (ማክኦኤስ ሲ ሲ ሲጨምር መታከል አለበት)
+  ይገኛል)።
+- ሙከራዎች ከላይ ያሉትን ስክሪፕቶች በመጠቀም Torii ይሽከረከራሉ እና የዌብሶኬት ምዝገባዎችን ይለማመዱ ፣ ቶከን
+  ሚዛኖች እና የዝውውር ፍሰቶች በስዊፍት ጥቅል በኩል።
+- ከሙከራ ሩጫዎች የተገኙ ምዝግብ ማስታወሻዎች በ `artifacts/tests/<timestamp>/` ውስጥ ከሜትሪዎች ጋር ተከማችተዋል እና
+  የናሙና ደብተር መጣያ.
 
-## CI parity checks
+## CI እኩልነት ማረጋገጫዎች
 
-- Run `make swift-ci` before sending a PR that touches the demo or shared fixtures. The
-  target executes fixture parity checks, validates the dashboard feeds, and renders the
-  summaries locally. In CI the same workflow depends on Buildkite metadata
-  (`ci/xcframework-smoke:<lane>:device_tag`) so dashboards can attribute results to the
-  correct simulator or StrongBox lane—verify the metadata is present if you adjust the
-  pipeline or agent tags.
-- When `make swift-ci` fails, follow the steps in `docs/source/swift_parity_triage.md`
-  and review the rendered `mobile_ci` output to determine which lane requires
-  regeneration or incident follow-up.
+- ማሳያውን ወይም የጋራ መገልገያውን የሚነካ PR ከመላክዎ በፊት `make swift-ci` ን ያሂዱ። የ
+  ኢላማ የቋሚ እኩልነት ፍተሻዎችን ይፈጽማል፣ የዳሽቦርድ ምግቦችን ያጸድቃል እና ያቀርባል
+  በአካባቢው ማጠቃለያዎች. በCI ውስጥ ተመሳሳይ የስራ ፍሰት በBuildkite ሜታዳታ ላይ የተመሰረተ ነው።
+  (`ci/xcframework-smoke:<lane>:device_tag`) ስለዚህ ዳሽቦርዶች ውጤቱን ለ
+  ትክክለኛ ሲሙሌተር ወይም StrongBox ሌይን - ካስተካከሉ ሜታዳታ መኖሩን ያረጋግጡ
+  የቧንቧ መስመር ወይም ወኪል መለያዎች.
+- `make swift-ci` ሳይሳካ ሲቀር፣ በ`docs/source/swift_parity_triage.md` ውስጥ ያሉትን ደረጃዎች ይከተሉ።
+  እና የትኛውን መስመር እንደሚያስፈልግ ለማወቅ የተሰራውን የI18NI0000087X ውጤት ይገምግሙ
+  እንደገና መወለድ ወይም የአደጋ ክትትል.
 
-## Troubleshooting
+## መላ መፈለግ
 
-- If the demo cannot connect to Torii, verify the node URL and TLS settings.
-- Ensure the JWT token (if required) is valid and not expired.
-- Check `artifacts/torii.log` for server-side errors.
-- For WebSocket issues, inspect the client log window or the Xcode console output.
+- ማሳያው ከTorii ጋር መገናኘት ካልቻለ የመስቀለኛ መንገዱን URL እና TLS ቅንብሮችን ያረጋግጡ።
+- የJWT ማስመሰያ (ከተፈለገ) የሚሰራ እና ጊዜው ያለፈበት መሆኑን ያረጋግጡ።
+- ለአገልጋይ-ጎን ስህተቶች `artifacts/torii.log` ያረጋግጡ።
+- ለዌብሶኬት ጉዳዮች የደንበኛ ሎግ መስኮቱን ወይም የ Xcode ኮንሶል ውፅዓትን ይመርምሩ።

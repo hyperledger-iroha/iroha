@@ -4,80 +4,82 @@ direction: ltr
 source: docs/portal/docs/norito/streaming.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Norito Streaming
+# Norito Ағын
 
-Norito Streaming defines the wire format, control frames, and reference codec
-used for live media flows across Torii and SoraNet. The canonical spec lives in
-`norito_streaming.md` at the workspace root; this page distills the pieces that
-operators and SDK authors need alongside the configuration touch points.
+Norito Streaming сым пішімін, басқару жақтауларын және анықтамалық кодекті анықтайды
+Torii және SoraNet арқылы тірі медиа ағындары үшін пайдаланылады. Канондық спецификация өмір сүреді
+`norito_streaming.md` жұмыс кеңістігінің түбірінде; бұл бет бөліктерді тазартады
+операторлар мен SDK авторлары конфигурацияның сенсорлық нүктелерімен қатар қажет.
 
-## Wire format and control plane
+## Сым пішімі және басқару жазықтығы
 
-- **Manifests & frames.** `ManifestV1` and `PrivacyRoute*` describe the segment
-  timeline, chunk descriptors, and route hints. Control frames (`KeyUpdate`,
-  `ContentKeyUpdate`, and cadence feedback) live alongside the manifest so
-  viewers can validate commitments before decoding.
-- **Baseline codec.** `BaselineEncoder`/`BaselineDecoder` enforce monotonic
-  chunk ids, timestamp arithmetic, and commitment verification. Hosts must call
-  `EncodedSegment::verify_manifest` before serving viewers or relays.
-- **Feature bits.** Capability negotiation advertises `streaming.feature_bits`
-  (default `0b11` = baseline feedback + privacy route provider) so relays and
-  clients can reject peers without matching capabilities deterministically.
+- **Манифесттер және фреймдер.** `ManifestV1` және `PrivacyRoute*` сегментті сипаттайды
+  уақыт шкаласы, кесінді дескрипторлары және бағыт бойынша кеңестер. Басқару жақтаулары (`KeyUpdate`,
+  `ContentKeyUpdate` және каденциялық кері байланыс) манифестпен қатар өмір сүреді
+  Көрермендер декодтаудан бұрын міндеттемелерді тексере алады.
+- **Базалық кодек.** `BaselineEncoder`/`BaselineDecoder` монотондылықты қамтамасыз етеді
+  бөлік идентификаторлары, уақыт белгісінің арифметикасы және міндеттемені тексеру. Хосттар қоңырау шалуы керек
+  `EncodedSegment::verify_manifest` көрермендерге немесе релелерге қызмет көрсету алдында.
+- **Мүмкіндік биттері.** Мүмкіндік туралы келіссөздер `streaming.feature_bits` жарнамалайды
+  (әдепкі `0b11` = бастапқы кері байланыс + құпиялылық маршрутының провайдері) осылайша реле және
+  клиенттер мүмкіндіктерді анықтаусыз сәйкестендірмей құрбыларынан бас тарта алады.
 
-## Keys, suites, and cadence
+## Кілттер, люкс және каденция
 
-- **Identity requirements.** Streaming control frames are always signed with
-  Ed25519. Dedicated keys can be supplied via
-  `streaming.identity_public_key`/`streaming.identity_private_key`; otherwise
-  the node identity is reused.
-- **HPKE suites.** `KeyUpdate` selects the lowest common suite; suite #1 is
-  mandatory (`AuthPsk`, `Kyber768`, `HKDF-SHA3-256`, `ChaCha20-Poly1305`), with
-  an optional `Kyber1024` upgrade path. Suite selection is stored on the
-  session and validated on every update.
-- **Rotation.** Publishers emit a signed `KeyUpdate` every 64 MiB or 5 minutes.
-  `key_counter` must increase strictly; regression is a hard error.
-  `ContentKeyUpdate` distributes the rolling Group Content Key, wrapped under
-  the negotiated HPKE suite, and gates segment decryption by ID + validity
-  window.
-- **Snapshots.** `StreamingSession::snapshot_state` and
-  `restore_from_snapshot` persist `{session_id, key_counter, suite, sts_root,
-  cadence state}` under `streaming.session_store_dir` (default
-  `./storage/streaming`). Transport keys are re-derived on restore so crashes
-  do not leak session secrets.
+- **Сәйкестік талаптары.** Ағынды басқару фреймдеріне әрқашан қол қойылады
+  Ed25519. Арнайы кілттер арқылы жеткізілуі мүмкін
+  `streaming.identity_public_key`/`streaming.identity_private_key`; әйтпесе
+  түйін идентификациясы қайта пайдаланылады.
+- **HPKE жиынтықтары.** `KeyUpdate` ең төменгі жалпы жинақты таңдайды; №1 люкс
+  міндетті (`AuthPsk`, `Kyber768`, `HKDF-SHA3-256`, `ChaCha20-Poly1305`), бар
+  қосымша `Kyber1024` жаңарту жолы. Люкс таңдауы мына жерде сақталады
+  сеанс және әрбір жаңартуда расталады.
+- **Айналу.** Баспагерлер 64МБ немесе 5 минут сайын `KeyUpdate` қолтаңбасын шығарады.
+  `key_counter` қатаң түрде өсуі керек; регрессия – қиын қате.
+  `ContentKeyUpdate` астына оралған топтық мазмұн кілтін таратады.
+  келісілген HPKE жиынтығы және идентификатор + жарамдылық бойынша гейтс сегментінің шифрын шешу
+  терезе.
+- **Лездік суреттер.** `StreamingSession::snapshot_state` және
+  `restore_from_snapshot` тұрақты `{session_id, key_counter, suite, sts_root,
+  каденс күйі}` under `streaming.session_store_dir` (әдепкі
+  `./storage/streaming`). Тасымалдау кілттері қалпына келтіру кезінде қайта алынады, сондықтан бұзылады
+  сеанс құпияларын ашпаңыз.
 
-## Runtime configuration
+## Орындалу уақытының конфигурациясы
 
-- **Key material.** Supply dedicated keys with
-  `streaming.identity_public_key`/`streaming.identity_private_key` (Ed25519
-  multihash) and optional Kyber material via
-  `streaming.kyber_public_key`/`streaming.kyber_secret_key`. All four must be
-  present when overriding defaults; `streaming.kyber_suite` accepts
-  `mlkem512|mlkem768|mlkem1024` (aliases `kyber512/768/1024`, default
+- **Кілт материалы.** Арнайы кілттермен қамтамасыз етіңіз
+  `streaming.identity_public_key`/`streaming.identity_private_key` (Ed25519)
+  мультихэш) және қосымша Kyber материалы арқылы
+  `streaming.kyber_public_key`/`streaming.kyber_secret_key`. Төртеуі де болуы керек
+  әдепкі мәндерді қайта анықтау кезінде бар; `streaming.kyber_suite` қабылдайды
+  `mlkem512|mlkem768|mlkem1024` (бүркеншік аттар `kyber512/768/1024`, әдепкі
   `mlkem768`).
-- **Codec guardrails.** CABAC stays disabled unless the build enables it;
-  bundled rANS requires `ENABLE_RANS_BUNDLES=1`. Enforce via
-  `streaming.codec.{entropy_mode,bundle_width,bundle_accel}` and optional
-  `streaming.codec.rans_tables_path` when supplying custom tables. Bundled
-- **SoraNet routes.** `streaming.soranet.*` controls anonymous transport:
-  `exit_multiaddr` (default `/dns/torii/udp/9443/quic`), `padding_budget_ms`
-  (default 25 ms), `access_kind` (`authenticated` vs `read-only`), optional
-  `channel_salt`, `provision_spool_dir` (default
-  `./storage/streaming/soranet_routes`), `provision_spool_max_bytes` (default 0,
-  unlimited), `provision_window_segments` (default 4), and
-  `provision_queue_capacity` (default 256).
-- **Sync gate.** `streaming.sync` toggles drift enforcement for audiovisual
-  streams: `enabled`, `observe_only`, `ewma_threshold_ms`, and `hard_cap_ms`
-  govern when segments are rejected for timing drift.
+- **Кодек қоршаулары.** Құрылым оны қоспайынша, CABAC өшірілген күйде қалады;
+  жинақталған rANS `ENABLE_RANS_BUNDLES=1` талап етеді. арқылы орындау
+  `streaming.codec.{entropy_mode,bundle_width,bundle_accel}` және қосымша
+  `streaming.codec.rans_tables_path` теңшелетін кестелерді беру кезінде. Жинақталған
+- **SoraNet маршруттары.** `streaming.soranet.*` анонимді тасымалдауды басқарады:
+  `exit_multiaddr` (әдепкі `/dns/torii/udp/9443/quic`), `padding_budget_ms`
+  (әдепкі 25 мс), `access_kind` (`authenticated` және `read-only`), қосымша
+  `channel_salt`, `provision_spool_dir` (әдепкі
+  `./storage/streaming/soranet_routes`), `provision_spool_max_bytes` (әдепкі 0,
+  шектеусіз), `provision_window_segments` (әдепкі 4) және
+  `provision_queue_capacity` (әдепкі 256).
+- **Синхрондау қақпасы.** `streaming.sync` аудиовизуал үшін дрейфті орындауды қосады
+  ағындар: `enabled`, `observe_only`, `ewma_threshold_ms` және `hard_cap_ms`
+  уақыттың ауытқуы үшін сегменттер қабылданбаған кезде басқарады.
 
-## Validation and fixtures
+## Валидация және қондырғылар
 
-- Canonical type definitions and helpers live in
+- Канондық тип анықтамалары мен көмекшілері тұрады
   `crates/iroha_crypto/src/streaming.rs`.
-- Integration coverage exercises the HPKE handshake, content-key distribution,
-  and snapshot lifecycle (`crates/iroha_crypto/tests/streaming_handshake.rs`).
-  Run `cargo test -p iroha_crypto streaming_handshake` to verify the streaming
-  surface locally.
-- For a deep dive into layout, error handling, and future upgrades, read
-  `norito_streaming.md` in the repository root.
+- Интеграциялық қамту HPKE қол алысуын, мазмұн кілтін таратуды жүзеге асырады,
+  және суреттің өмірлік циклі (`crates/iroha_crypto/tests/streaming_handshake.rs`).
+  Ағынды тексеру үшін `cargo test -p iroha_crypto streaming_handshake` іске қосыңыз
+  жергілікті жер беті.
+- Орналасуға, қателерді өңдеуге және болашақ жаңартуларға терең бойлау үшін оқыңыз
+  Репозиторий түбіріндегі `norito_streaming.md`.

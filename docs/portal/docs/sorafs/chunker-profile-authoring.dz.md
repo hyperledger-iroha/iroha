@@ -11,126 +11,120 @@ id: chunker-profile-authoring
 title: SoraFS Chunker Profile Authoring Guide
 sidebar_label: Chunker Authoring Guide
 description: Checklist for proposing new SoraFS chunker profiles and fixtures.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
+:::དྲན་ཐོའི་འབྱུང་ཁུངས།
 :::
 
-# SoraFS Chunker Profile Authoring Guide
+# SoraFS ཅར་ཀར་གསལ་སྡུད་རྩོམ་པ་བྲིས།
 
-This guide explains how to propose and publish new chunker profiles for SoraFS.
-It complements the architecture RFC (SF-1) and the registry reference (SF-2a)
-with concrete authoring requirements, validation steps, and proposal templates.
-For a canonical example, see
+ལམ་སྟོན་འདི་གིས་ I18NT0000003X གི་དོན་ལུ་ ཆ་ཤས་གསལ་སྡུད་གསརཔ་ཚུ་ གྲོས་འཆར་དང་ དཔར་བསྐྲུན་འབད་ཐངས་ཚུ་ འགྲེལ་བཤད་རྐྱབ་ཨིན།
+འདི་གིས་ བཟོ་བཀོད་ཀྱི་ RFC (SF-1) དང་ ཐོ་བཀོད་གཞི་བསྟུན་ (SF-2a) ཚུ་ མཐུན་སྒྲིག་འབདཝ་ཨིན།
+རྩོམ་སྒྲིག་པའི་དགོས་མཁོ་དང་ བདེན་དཔྱད་ཀྱི་གོ་རིམ་ དེ་ལས་ གྲོས་འཆར་གྱི་ ཊེམ་པེལེཊ་ཚུ་ཡོདཔ་ཨིན།
+ཀེ་ནོ་ནིག་དཔེ་ཅིག་གི་དོན་ལུ་ བལྟ།
 `docs/source/sorafs/proposals/sorafs_sf1_profile_v1.json`
-and the accompanying dry-run log in
-`docs/source/sorafs/reports/sf1_determinism.md`.
+དང་ མཉམ་དུ་ཡོད་པའི་སྐམ་རན་དྲན་ཐོ་ནང་།
+I18NI0000008X.
 
-## Overview
+## སྤྱི་མཐོང་།
 
-Every profile that enters the registry must:
+ཐོ་བཀོད་ནང་བཙུགས་མི་གསལ་སྡུད་ག་ར་དགོ།
 
-- advertise deterministic CDC parameters and multihash settings identical across
-  architectures;
-- ship replayable fixtures (Rust/Go/TS JSON + fuzz corpora + PoR witnesses) that
-  downstream SDKs can verify without bespoke tooling;
-- include governance-ready metadata (namespace, name, semver) plus migration
-- pass the deterministic diff suite before council review.
+- ཁྱབ་བསྒྲགས་གཏན་འབེབས་སི་ཌི་སི་ཚད་གཞི་དང་ སྣ་མང་ཧཤ་སྒྲིག་སྟངས་ཚུ་ འདྲ་མཚུངས་སྦེ་ཡོདཔ་ཨིན།
+  བཟོ་རིགས་ཚུ།
+- གྲུ་གཟིངས་བསྐྱར་རྩེད་འབད་བཏུབ་པའི་སྒྲིག་བཀོད་ (Rust/Go/TS JSON + fuzz corpora + PoR དཔང་པོ་) དེ་
+  གཤམ་གྱི་ཨེསི་ཌི་ཀེ་ཚུ་གིས་ བེ་སི་པོཀ་ལག་ཆས་མ་བཏོན་པར་ བདེན་དཔྱད་འབད་ཚུགས།
+- གཞུང་སྐྱོང་-གྲ་སྒྲིག་ཡོད་མི་ མེ་ཊ་ཌེ་ཊ་ (namepace, name, semver) དང་ གནས་སྤོ་འགྱོ་མི་ཚུ།
+- ཚོགས་སྡེ་བསྐྱར་ཞིབ་མ་འབད་བའི་ཧེ་མ་ ཐག་བཅད་མི་དབྱེ་བ་འདི་ ཆ་འཇོག་འབད་ནི།
 
-Follow the checklist below to prepare a proposal that satisfies those rules.
+ལམ་ལུགས་དེ་ཚུ་ གྲུབ་ཚུགས་པའི་ གྲོས་འཆར་ཅིག་ གྲ་སྒྲིག་འབད་ནིའི་དོན་ལུ་ འོག་གི་ བརྟག་ཞིབ་ཐོ་ཡིག་ལུ་ བལྟ།
 
-## Registry Charter Snapshot
+## ཐོ་འགོད་ཆིངས་ཡིག་འཕྲིན་ཡིག་འཕྲིན་གཏོང་།
 
-Before drafting a proposal, confirm it conforms to the registry charter enforced
+གྲོས་འཆར་མ་བཀོད་པའི་ཧེ་མ་ ཐོ་བཀོད་ཆོག་ཐམ་བཀག་དམ་འབད་མི་དང་འཁྲིལ་ཏེ་ ངེས་གཏན་བཟོ་དགོ།
 by `sorafs_manifest::chunker_registry::ensure_charter_compliance()`:
 
-- Profile IDs are positive integers that increase monotonically without gaps.
-- The canonical handle (`namespace.name@semver`) must appear in the alias list
-  and **must** be the first entry.
-- No alias may collide with another canonical handle or appear more than once.
-- Aliases must be non-empty and trimmed of whitespace.
+- གསལ་སྡུད་ཀྱི་ཨའི་ཌི་ཚུ་ བར་སྟོང་མེད་པར་ གཅིག་མཚུངས་སྦེ་ ཡར་སེང་རྐྱབ་མི་ ཧྲིལ་གྲངས་ཚུ་ཨིན།
+- ཀེ་ནི་ཀཱལ་ ལག་ལེབ་ (`namespace.name@semver`) འདི་ མིང་གཞན་ཐོ་ཡིག་ནང་ འཐོན་དགོཔ་ཨིན།
+  དང་ **དགོས་** འདི་ ཐོ་བཀོད་དང་པ་ཨིན།
+- མིང་ཚིག་གཞན་གཅིག་གིས་ཡང་ ཀེ་ནོ་ནིག་ལག་ལེན་འཐབ་མི་ཅིག་དང་ ཁ་ཐུག་རྐྱབ་མི་ཚུགས། ཡང་ན་ ཚར་གཅིག་ལས་ལྷག་སྟེ་ མཐོང་མི་ཚུགས།
+- ཁྱབ་ཁོངས་ཚུ་ སྟོང་ཆ་དང་ ས་སྟོང་དཀརཔོ་གི་ བཏོག་བཏང་དགོ།
 
-Handy CLI helpers:
+ཧན་ཌི་སི་ཨེལ་ཨའི་གྲོགས་རམ་པ།
 
-```bash
-# JSON listing of all registered descriptors (ids, handles, aliases, multihash)
-cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- --list-profiles
+I18NF0000004X
 
-# Emit metadata for a candidate default profile (canonical handle + aliases)
-cargo run -p sorafs_manifest --bin sorafs_manifest_chunk_store -- \
-  --promote-profile=sorafs.sf1@1.0.0 --json-out=-
-```
+བརྡ་བཀོད་འདི་ཚུ་གིས་ ཐོ་བཀོད་ཡིག་ཆ་དང་ཕྲང་སྒྲིག་འབད་དེ་ གྲོས་འཆར་ཚུ་བཞག་སྟེ་ 1 ལུ་བྱིནམ་ཨིན།
+གཞུང་སྐྱོང་གྲོས་བསྡུར་ནང་དགོ་པའི་ ཁྲིམས་ལུགས་ཀྱི་མེ་ཊ་ཌེ་ཊ་ཚུ།
 
-These commands keep proposals aligned with the registry charter and provide the
-canonical metadata needed in governance discussions.
+## དགོས་མཁོའི་མེ་ཊ་ཌེ་ཊ་
 
-## Required Metadata
+| ཕིལཌ་ | འགྲེལ་བཤད་ | དཔེ་ (`sorafs.sf1@1.0.0`) |
+|--------------------------------------------------------------------------- -|
+| `namespace` | འབྲེལ་ཡོད་གསལ་སྡུད་ཚུ་གི་དོན་ལུ་ ཚད་མ་རིག་པའི་སྡེ་ཚན་བཟོ་ནི། | `sorafs` |
+| `name` | མི་གིས་ལྷག་ཚུགས་པའི་ཁ་ཡིག་། | `sf1` |
+| `semver` | ཚད་བཟུང་ཆ་ཚན་གྱི་དོན་ལུ་ ཡིག་བརྡའི་ཐོན་རིམ་ཡིག་རྒྱུན། | `1.0.0` |
+| `profile_id` | གསལ་སྡུད་འདི་གི་ཤུལ་ལས་ མོ་ནོ་ཊོ་ནིག་ཨང་གྲངས་ངོས་འཛིན་འབད་མི་འདི་གིས་ འགན་སྤྲོད་འབད་ཡོདཔ་ཨིན། ཤུལ་མམ་གྱི་ཨའི་ཨའི་ཌི་འདི་བཞག་རུང་ ད་ལྟོ་ཡོད་པའི་ཨང་གྲངས་ཚུ་ལོག་ལག་ལེན་མ་འཐབ། | `1` |
+| `profile_aliases` | གྲོས་བསྟུན་གྱི་སྐབས་ལུ་ མཁོ་མངགས་འབད་མི་ཚུ་ལུ་ གདམ་ཁ་ཅན་གྱི་ ཁ་སྐོང་ལག་ཆས་ཚུ། ཨ་རྟག་རང་ ཐོ་བཀོད་དང་པ་སྦེ་ ཀེ་ནོ་ནིག་བཟུང་ཆས་འདི་ བཙུགས། | I18NI0000021X |
+| I18NI0000022X | བཱའིཊི་ནང་ ཆུང་ཆུང་ཆུང་ཆུང་། | I18NI0000023X |
+| `profile.target_size` | བཱའིཊིསི་ནང་ དམིགས་གཏད་ཆུང་ཆ། | I18NI0000025X |
+| `profile.max_size` | བཱའིཊིསི་ནང་ ཆུང་ཚད། | I18NI0000027X |
+| I18NI0000028X | བསྐོར་བའི་ཧེཤ་ (hex) གིས་ལག་ལེན་འཐབ་མི་ མཐུན་སྒྲིག་གདོང་ཁེབས། | I18NI0000029X |
+| `profile.polynomial` | Gear polynomial vanst (hex)། | I18NI0000031X |
+| I18NI0000032X | ༦༤KiB གི་ཡར་ཐིག་ཁྲམ་འདི་ བཏོན་ནིའི་དོན་ལུ་ སོན་ལག་ལེན་འཐབ་ཡོདཔ་ཨིན། | I18NI0000033X |
+| I18NI0000034X | ཆུམ་བཞུ་ནི་གི་དོན་ལུ་ མལ་ཊི་ཧཤ་ཨང་རྟགས་ཚུ། | `0x1f` (BLAKE3-256) |
+| `chunk_multihash.digest` | ཁྲིམས་ལུགས་ཀྱི་ བརྟན་བཞུགས་ཚུ་ བསྡམས་དགོ། | `13fa...c482` |
+| `fixtures_root` | བསྐྱར་བཟོ་འབད་ཡོད་པའི་སྒྲིག་བཀོད་ཚུ་ཡོད་པའི་འབྲེལ་རིམ་སྣོད་ཐོ། | I18NI0000039X |
+| I18NI0000040X | ཐག་བཅད་པའི་ POR དཔེ་ཚད་ (I18NI0000041X) གི་དོན་ལུ་ སོན་བཏབ་ནི། | I18NI0000042X (དཔེར་ན་) |
 
-| Field | Description | Example (`sorafs.sf1@1.0.0`) |
-|-------|-------------|------------------------------|
-| `namespace` | Logical grouping for related profiles. | `sorafs` |
-| `name` | Human-readable label. | `sf1` |
-| `semver` | Semantic version string for the parameter set. | `1.0.0` |
-| `profile_id` | Monotonic numeric identifier assigned once the profile lands. Reserve the next id but do not reuse existing numbers. | `1` |
-| `profile_aliases` | Optional additional handles exposed to clients during negotiation. Always include the canonical handle as the first entry. | `["sorafs.sf1@1.0.0"]` |
-| `profile.min_size` | Minimum chunk length in bytes. | `65536` |
-| `profile.target_size` | Target chunk length in bytes. | `262144` |
-| `profile.max_size` | Maximum chunk length in bytes. | `524288` |
-| `profile.break_mask` | Adaptive mask used by the rolling hash (hex). | `0x0000ffff` |
-| `profile.polynomial` | Gear polynomial constant (hex). | `0x3da3358b4dc173` |
-| `gear_seed` | Seed used to derive the 64 KiB gear table. | `sorafs-v1-gear` |
-| `chunk_multihash.code` | Multihash code for per-chunk digests. | `0x1f` (BLAKE3-256) |
-| `chunk_multihash.digest` | Digest of the canonical fixtures bundle. | `13fa...c482` |
-| `fixtures_root` | Relative directory containing the regenerated fixtures. | `fixtures/sorafs_chunker/sorafs.sf1@1.0.0/` |
-| `por_seed` | Seed for deterministic PoR sampling (`splitmix64`). | `0xfeedbeefcafebabe` (example) |
+མེ་ཊ་ཌེ་ཊ་འདི་ གྲོས་འཆར་ཡིག་ཆ་ནང་དང་ བཟོ་བཏོན་འབད་མི་ནང་ན་འབྱུང་དགོཔ་ཨིན།
+སྒྲིག་བཀོད་ཚུ་ དེ་འབདཝ་ལས་ ཐོ་བཀོད་དང་ སི་ཨེལ་ཨའི་ ལག་ཆས་ དེ་ལས་ གཞུང་སྐྱོང་རང་བཞིན་གྱིས་ བདེན་དཔྱད་འབད་ཚུགས།
+ལག་ཐོག་ལས་ ཕར་ཚུར་གཞི་བསྟུན་མེད་པའི་གནས་གོང་ཚུ། ཐེ་ཚོམ་ཡོད་པའི་སྐབས་ ཆུང་ཚོང་ཁང་དང་ གཡོག་བཀོལ།
+གློག་རིག་མེ་ཊ་ཌེ་ཊ་ བསྐྱར་ཞིབ་ནང་ བཀྲམ་སྤེལ་འབད་ནིའི་དོན་ལུ་ `--json-out=-` དང་གཅིག་ཁར་ CLIs གསལ་སྟོན་འབད།
+དྲན་ཐོ་ཚུ།
 
-The metadata must appear both in the proposal document and inside the generated
-fixtures so the registry, CLI tooling, and governance automation can confirm the
-values without manual cross-referencing. When in doubt, run the chunk-store and
-manifest CLIs with `--json-out=-` to stream the computed metadata into review
-notes.
+### CLI & ཐོ་བཀོད་ལག་ཆའི་འཁོར།
 
-### CLI & Registry Touchpoints
+- `sorafs_manifest_chunk_store --profile=<handle>` – བསྐྱར་ལོག་ཆུང་ཆུང་མེ་ཊ་ཌེ་ཊ་,
+  soundigest digest, གྲོས་འཆར་བཀོད་ཡོད་པའི་ཚད་གཞི་ཚུ་དང་གཅིག་ཁར་ PoR ཞིབ་དཔྱད་འབདཝ་ཨིན།
+- `sorafs_manifest_chunk_store --json-out=-` – ཆ་ཤས་ཚོང་ཁང་གི་སྙན་ཞུ་འདི་ ༡.
+  རང་བཞིན་ག་བསྡུར་གྱི་དོན་ལུ་ stdout ཨིན།
+- `sorafs_manifest_stub --chunker-profile=<handle>` – གསལ་སྟོན་དང་ CAR ངེས་གཏན་བཟོཝ་ཨིན།
+  འཆར་གཞི་ཚུ་གིས་ ཁྲིམས་ལུགས་དང་མཐུན་པའི་ལགཔ་དང་ མིང་གཞན་ཚུ་ བཙུགས་ཡོདཔ་ཨིན།
+- `sorafs_manifest_stub --plan=-` – ཧེ་མའི་`chunk_fetch_specs` ལུ་ལོག་འཐུས།
+  in offsets བདེན་དཔྱད་འབད་ནི་ལུ་ བསྒྱུར་བཅོས་འབད་བའི་ཤུལ་ལས་ བཞུ་ནི།
 
-- `sorafs_manifest_chunk_store --profile=<handle>` – re-run chunk metadata,
-  manifest digest, PoR checks with the proposed parameters.
-- `sorafs_manifest_chunk_store --json-out=-` – stream the chunk-store report to
-  stdout for automated comparisons.
-- `sorafs_manifest_stub --chunker-profile=<handle>` – confirm manifests and CAR
-  plans embed the canonical handle plus aliases.
-- `sorafs_manifest_stub --plan=-` – feed the previous `chunk_fetch_specs` back
-  in to verify offsets/digests post-change.
+གྲོས་འཆར་ནང་ བརྡ་བཀོད་ཨའུཊི་པུཊི་ (བཞུ་ནི་ པོ་ཨར་ རྩ་བ་, གསལ་སྟོན་ཧེ་ཤེ) དྲན་ཐོ་བཀོད།
+དེ་འབདཝ་ལས་ བསྐྱར་ཞིབ་འབད་མི་ཚུ་གིས་ ཚིག་ཕྲད་འདི་ བསྐྱར་བཟོ་འབད་ཚུགས།
 
-Record the command output (digests, PoR roots, manifest hashes) in the proposal
-so reviewers can reproduce them verbatim.
+## གཏན་འབེབས་དང་བདེན་དཔྱད་ཞིབ་དཔྱད་ཐོ་ཡིག་།
 
-## Determinism & Validation Checklist
-
-1. **Regenerate fixtures**
+1.*བསྐྱར་དུ་བསྐྱར་བཟོ་བྱེད་པ།**
    ```bash
    cargo run --locked -p sorafs_chunker --bin export_vectors \
      --signature-out=fixtures/sorafs_chunker/manifest_signatures.json
    ```
-2. **Run the parity suite** – `cargo test -p sorafs_chunker` and the
-   cross-language diff harness (`crates/sorafs_chunker/tests/vectors.rs`) must be
-   green with the new fixtures in place.
-3. **Replay fuzz/back-pressure corpora** – execute `cargo fuzz list` and the
-   streaming harness (`fuzz/sorafs_chunker`) against the regenerated assets.
-4. **Verify Proof-of-Retrievability witnesses** – run
-   `sorafs_manifest_chunk_store --por-sample=<n>` using the proposed profile and
-   confirm the roots match the fixture manifest.
-5. **CI dry run** – invoke `ci/check_sorafs_fixtures.sh` locally; the script
-   should succeed with the new fixtures and existing `manifest_signatures.json`.
-6. **Cross-runtime confirmation** – ensure Go/TS bindings consume the regenerated
-   JSON and emit identical chunk boundaries and digests.
+2. **ཆ་ཤར་ཆ་སྙོམ་** – `cargo test -p sorafs_chunker` དང་།
+   སྐད་ཡིག་བརྒལ་བའི་ཁྱད་པར་ (`crates/sorafs_chunker/tests/vectors.rs`) དགོས།
+   ལྗང་ཁུའི་སྒྲིག་ཆས་གསརཔ་ས་གནས་ནང་།
+3. **བསྐྱར་རྩེད་ཀྱི་ཕ་ཟི་/བེག་-གནོན་ཤུགས་ཀོར་པོ་ར་** – དང་ I18NI000000051X དང་།
+   བསྐྱར་བཟོ་འབད་ཡོད་པའི་རྒྱུ་དངོས་ཚུ་ལུ་ རྒྱབ་འགལ་འབད་མི་ ཧར་ནིསི་ (I18NI0000052X) གིས་ རྒྱུན་སྤེལ་འབདཝ་ཨིན།
+4. **བདེན་དཔང་བྱེད་ཐུབ་པའི་དཔང་པོ་** – run
+   གྲོས་འཆར་ཕུལ་མི་གསལ་སྡུད་དང་ SoraFS དང་།
+   རྩ་བ་ཚུ་ བརྟན་བཞུགས་གསལ་སྟོན་དང་མཐུན་སྒྲིག་འབད།
+༥. **CI སྐམ་པའི་བང་རྒྱུག་** – ས་གནས་ནང་ `ci/check_sorafs_fixtures.sh` ལུ་སྤྲོད་དགོ། ཡིག་གཟུགས་འདི།
+   བརྟན་བརྟན་གསརཔ་དང་ ད་ལྟོ་ཡོད་པའི་ I18NI0000005X དང་ཅིག་ཁར་ མཐར་འཁྱོལ་དགོ།
+6. **Cross-runtime བདེན་དཔང་** – Go/TS བཅིངས་པ་ཚུ་ བསྐྱར་བཟོ་འབད་ཡོདཔ་ངེས་གཏན་བཟོ།
+   JSON དང་ བཏོནམ་ད་ ཆ་ཤས་འདྲ་མཚུངས་དང་ བཞུ་བཅུགཔ་ཨིན།
 
-Document the commands and resulting digests in the proposal so the Tooling WG
-can re-run them without guesswork.
+བརྡ་བཀོད་ཚུ་ཡིག་ཆ་བཟོ་སྟེ་ གྲུབ་འབྲས་འཇུ་ནི་ཚུ་ གྲོས་འཆར་ནང་ བཞུ་བཅུག་སྟེ་ཡོདཔ་ལས་ ལག་ཆས་ཚུ་ ཌབ་ལུ་ཇི་ཨིན།
+ཚོད་དཔག་མེད་པར་ ལོག་གཡོག་བཀོལ་ཚུགས།
 
-### Manifest / PoR Confirmation
+### མ་པ་ / པོ་ཨར་ བདེན་དཔང་།
 
-After regenerating fixtures, run the full manifest pipeline to ensure CAR
-metadata and PoR proofs remain consistent:
+བསྐྱར་བཟོ་འབད་བའི་ཤུལ་ལས་ སི་ཨར་ ངེས་གཏན་བཟོ་ནི་ལུ་ གསལ་སྟོན་གྱི་ ཆུ་དུང་ཆ་ཚང་འདི་ གཡོག་བཀོལ།
+མེ་ཊ་ཌེ་ཊ་དང་ པོ་ཨར་ བདེན་ཁུངས་ཚུ་ རིམ་མཐུན་སྦེ་ལུསཔ་ཨིན།
 
 ```bash
 # Validate chunk metadata + PoR with the new profile
@@ -154,44 +148,44 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- \
   --plan=chunk_plan.json --json-out=-
 ```
 
-Replace the input file with any representative corpus used by your fixtures
-(e.g., the 1 GiB deterministic stream) and attach the resulting digests to the
-proposal.
+ཁྱོད་རའི་བརྟན་བརྟན་ཚུ་གིས་ལག་ལེན་འཐབ་མི་ ངོ་ཚབ་ཀོར་པ་ཚུ་གང་རུང་དང་གཅིག་ཁར་ ཨིན་པུཊི་ཡིག་སྣོད་འདི་ཚབ་བཙུགས།
+(དཔེར་ན་ 1GiB གཏན་འབེབས་ཀྱི་རྒྱུན་ལམ་) དེ་ལས་ གྲུབ་འབྲས་འདི་ བཞུ་ནི་ ལུ་མཉམ་སྦྲགས་འབདཝ་ཨིན།
+གྲོས་འཆར།
 
-## Proposal Template
+## གྲོས་འཆར་གྱི་དཔེ་ཚད།
 
-Proposals are submitted as `ChunkerProfileProposalV1` Norito records checked into
-`docs/source/sorafs/proposals/`. The JSON template below illustrates the expected
-shape (substitute your values as needed):
+གྲོས་འཆར་ཚུ་ I18NI000000056X I18NT0000000000X གི་དྲན་ཐོ་ཚུ་ནང་ལུ་ བརྟག་དཔྱད་འབད་ཡོདཔ་ཨིན།
+`docs/source/sorafs/proposals/`. འོག་གི་JSON ཊེམ་པེལེཊི་གིས་རེ་བ་སྐྱེད་པའི་གསལ་སྟོན་འབདཝ་ཨིན།
+དབྱིབས་ (དགོཔ་དང་འཁྲིལ་ ཁྱོད་རའི་གནས་གོང་ཚུ་ གཞི་བཙུགས་འབད།):
 
 
-Provide a matching Markdown report (`determinism_report`) that captures the
-command output, chunk digests, and any deviations encountered during validation.
+མཐུན་སྒྲིག་ཅན་གྱི་ རྟགས་བཀོད་སྙན་ཞུ་ (`determinism_report`) དེ་གིས་ བཟུང་ཡོདཔ་ཨིན།
+བརྡ་བཀོད་ཨའུཊི་པུཊི་ ཅནཀ་གིས་ བཞུ་ནི་ དེ་ལས་ བདེན་དཔྱད་ཀྱི་སྐབས་ལུ་ འཕྱད་མི་ ཐ་དད་ག་ཅི་ར་ཨིན་རུང་།
 
-## Governance Workflow
+## གཞུང་སྐྱོང་ལཱ་གི་རྒྱུན་རིམ།
 
-1. **Submit PR with proposal + fixtures.** Include the generated assets, the
-   Norito proposal, and updates to `chunker_registry_data.rs`.
-2. **Tooling WG review.** Reviewers re-run the validation checklist and confirm
-   the proposal aligns with registry rules (no id reuse, determinism satisfied).
-3. **Council envelope.** Once approved, council members sign the proposal digest
-   (`blake3("sorafs-chunker-profile-v1" || canonical_bytes)`) and append their
-   signatures to the profile envelope stored alongside the fixtures.
-4. **Registry publish.** Merge bumps the registry, docs, and fixtures. The
-   default CLI remains on the previous profile until governance declares the
-   migration ready.
-5. **Deprecation tracking.** After the migration window, update the registry to
-   ledger.
+1. ** PR གྲོས་འཆར་ + སྒྲིག་བཀོད་དང་བཅས་ PR འཚོལ་ཞིབ་འབད།** བཟོ་བཏོན་འབད་ཡོད་པའི་རྒྱུ་དངོས་ཚུ་ བཙུགས་དགོ།
+   Norito གྲོས་འཆར་དང་ I18NI000000059X ལུ་དུས་མཐུན་བཟོཝ་ཨིན།
+2. **Tooling WG བསྐྱར་ཞིབ་.** བསྐྱར་ཞིབ་པ་ཚུ་གིས་ བདེན་དཔྱད་ཞིབ་དཔྱད་ཐོ་ཡིག་འདི་ ལོག་གཡོག་བཀོལ་ཞིནམ་ལས་ ངེས་གཏན་བཟོཝ་ཨིན།
+   གྲོས་འཆར་ཚུ་ ཐོ་བཀོད་ལམ་ལུགས་ཚུ་དང་ མཐུན་སྒྲིག་ཡོདཔ་ཨིན།
+3. **Council ཡིག་ཤུབས་ཁང་།** ཆ་འཇོག་འབད་ཚར་བའི་ཤུལ་ལས་ ཚོགས་སྡེའི་འཐུས་མི་ཚུ་གིས་ གྲོས་འཆར་འདི་ལུ་ མཚན་རྟགས་བཀོད་ཡོདཔ་ཨིན།
+   (`blake3("sorafs-chunker-profile-v1" || canonical_bytes)`) དང་ཁོང་ཚོའི་ཟུར་འཛུམ།
+   བརྟན་བཞུགས་ཚུ་གི་མཉམ་དུ་གསོག་འཇོག་འབད་ཡོད་པའི་གསལ་སྡུད་ཡིག་ཆའི་ཤོག་གུ་ལུ་མིང་རྟགས།
+4. **ཐོ་བཀོད་དཔར་བསྐྲུན་འབདཝ་ཨིན།** མཉམ་སྡེབ་འབད་ནི། ཐོ་བཀོད་དང་ཡིག་ཆ་ དེ་ལས་ སྒྲིག་ཆས་ཚུ་ བསྡུ་བསྒྱོམ་འབདཝ་ཨིན། ཚིག༌ཕྲད
+   སྔོན་སྒྲིག་ CLI འདི་ ཧེ་མའི་གསལ་སྡུད་གུ་ ལུས་ཡོདཔ་ད་ གཞུང་སྐྱོང་གིས་ གསལ་བསྒྲགས་འབད་ཚུན་ཚོད་ གསལ་བསྒྲགས་མ་འབད་ཚུན་ཚོད་
+   གནས་སྤོ་བའི་གྲ་སྒྲིག་ཡོད།
+5. **Preprecation རྗེས་འདེད་འབད་ནི།** གནས་སྤོ་སྒོ་སྒྲིག་གི་ཤུལ་ལས་ ཐོ་བཀོད་འདི་ ལུ་དུས་མཐུན་བཟོ།
+   ལག་དེབ་.
 
-## Authoring Tips
+## རྩོམ་པ་བསྐྲུན།
 
-- Prefer even power-of-two bounds to minimise edge-case chunking behaviour.
-- Avoid changing the multihash code without coordinating manifest and gateway
-- Keep gear table seeds human-readable but globally unique to simplify audit
-  trails.
-- Store any benchmarking artefacts (e.g., throughput comparisons) under
-  `docs/source/sorafs/reports/` for future reference.
+- མཐའ་མཚམས་ཆ་ཤས་ཀྱི་སྤྱོད་ལམ་མར་ཕབ་འབད་ནི་ལུ་ མཐའ་མཚམས་གཉིས་ཡང་ མཐའ་མཚམས་གཉིས་ཀྱི་ མཐའ་མཚམས་གཉིས་ཡང་ དགའ་གདམ་འབད་ནི།
+- མལ་ཊི་ཧཤ་ཨང་རྟགས་འདི་ གསལ་སྟོན་དང་ འཛུལ་སྒོ་ཚུ་ མཉམ་འབྲེལ་མ་འབད་བར་ བསྒྱུར་བཅོས་འབད་ནི་ལས་འཛེམ་དགོ།
+- གཱར་ཐིག་ཁྲམ་གྱི་སོན་ཚུ་ མི་གིས་ལྷག་ཚུགསཔ་ཨིན་རུང་ འཛམ་གླིང་ནང་ རྩིས་ཞིབ་འཇམ་ཏོང་ཏོ་བཟོ་ནི་ལུ་ གཞན་དང་མ་འདྲཝ་ཅིག་བཞག་དགོ།
+  ལམ༌ལམ༌
+- ཚད་གཞི་བཀོད་པའི་ཅ་རྙིང་གང་རུང་ཅིག་ འོག་ལུ་བཞག་དགོ། (དཔེར་ན་ ཐོན་འབྲས་ག་བསྡུར་ཚུ་) གཤམ་ལུ།
+  མ་འོངས་པའི་གཞི་བསྟུན་གྱི་དོན་ལུ་ `docs/source/sorafs/reports/`.
 
-For operational expectations during rollout refer to the migration ledger
-(`docs/source/sorafs/migration_ledger.md`). For runtime conformance rules see
-`docs/source/sorafs/chunker_conformance.md`.
+འགོ་བཙུགས་པའི་སྐབས་ ལག་ལེན་གྱི་རེ་བ་ཚུ་གི་དོན་ལུ་ གནས་སྤོ་བའི་ རྩིས་ཁྲ་ལུ་གཞི་བསྟུན་འབད།
+(I 18NI00000062X). རན་ཊའིམ་མཐུན་སྒྲིག་ལམ་ལུགས་ཚུ་གི་དོན་ལུ་ བལྟ།
+I18NI000000063X.

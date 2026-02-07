@@ -11,19 +11,20 @@ id: developer-sdk-rust
 title: Rust SDK Snippets
 sidebar_label: Rust snippets
 description: Minimal Rust examples for consuming proof streams and manifests.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
-:::
+:::иҫкәртергә канонлы сығанаҡ
+::: 1990 й.
 
-The Rust crates in this repository power the CLI and can be embedded inside
-custom orchestrators or services. The snippets below highlight the helpers most
-developers ask for.
+Был һаҡлағыс ҡөҙрәтендә Rust йәшниктәр CLI һәм эсендә һеңдерергә мөмкин
+ҡулланыусылар өсөн оркестр йәки хеҙмәттәр. Түбәндәге өҙөктәр ярҙамсыларҙы иң айырып күрһәтә
+төҙөүселәр һорай.
 
-## Proof stream helper
+## Дәлилдәр ағымы ярҙамсыһы
 
-Reuse the existing proof stream parser to aggregate metrics from an HTTP
-response:
+Ҡабаттан ҡулланыу ғәмәлдәге иҫбатлау ағымы анализлаусы агрегация метрикаһы HTTP .
+яуап:
 
 ```rust
 use std::error::Error;
@@ -61,52 +62,52 @@ pub fn collect_proof_metrics(response: Response) -> Result<ProofStreamSummary, B
 }
 ```
 
-The full version (with tests) lives in `docs/examples/sorafs_rust_proof_stream.rs`.
-`ProofStreamSummary::to_json()` renders the same metrics JSON as the CLI, making
-it easy to feed observability backends or CI assertions.
+Тулы версия (тестар менән) йәшәй I18NI000000005X.
+I18NI000000006X шул уҡ метрика JSON CLI кеүек күрһәтә, етештереү
+был еңел туҡландырыу күҙәтеүсәнлеге бекэндтар йәки CI раҫлауҙары.
 
-## Multi-source fetch scoring
+## Күп сығанаҡлы фетч балл
 
-The `sorafs_car::multi_fetch` module exposes the asynchronous fetch scheduler
-used by the CLI. Implement `sorafs_car::multi_fetch::ScorePolicy` and pass it
-via `FetchOptions::score_policy` to tune provider ordering. The unit test
-`multi_fetch::tests::score_policy_can_filter_providers` shows how to enforce
-custom preferences.
+I18NI000000007X модуле асинхрон фетч планлаштырыусы фашлай
+CLI ҡулланған. I18NI000000008X тормошҡа ашырыу һәм уны тапшырырға
+аша `FetchOptions::score_policy` көйләү өсөн провайдер заказ. Блок һынауы
+I18NI000000010X нисек күрһәтеүен күрһәтә
+ҡулланыусылар өҫтөнлөктәре.
 
-Other knobs mirror CLI flags:
+Башҡа ручкалар CLI флагтарын көҙгөләй:
 
-- `FetchOptions::per_chunk_retry_limit` matches the `--retry-budget` flag for CI
-  runs that intentionally constrain retries.
-- Combine `FetchOptions::global_parallel_limit` with `--max-peers` to cap the
-  number of concurrent providers.
-- `OrchestratorConfig::with_telemetry_region("region")` tags the
-  `sorafs_orchestrator_*` metrics, while
-  `OrchestratorConfig::with_transport_policy` mirrors the CLI
-  `--transport-policy` flag. `TransportPolicy::SoranetPreferred` now ships as
-  the default across CLI/SDK surfaces; use `TransportPolicy::DirectOnly` only
-  when staging a downgrade or following a compliance directive, and reserve
-  `SoranetStrict` for PQ-only pilots with explicit approval.
-- Set `SorafsGatewayFetchOptions::write_mode_hint =
-  Some(WriteModeHint::UploadPqOnly)` to force PQ-only uploads; the helper will
-  automatically promote the transport/anonymity policies unless explicitly
-  overridden.
-- Use `SorafsGatewayFetchOptions::policy_override` to pin a temporary transport
-  or anonymity tier for a single request; supplying either field skips the
-  brownout demotion and fails when the requested tier cannot be satisfied.
-- The Python (`sorafs_multi_fetch_local` / `sorafs_gateway_fetch`) and
-  JavaScript (`sorafsMultiFetchLocal`) bindings reuse the same scheduler, so
-  set `return_scoreboard=true` in those helpers to retrieve the computed weights
-  alongside chunk receipts.
-- `SorafsGatewayScoreboardOptions::telemetry_source_label` records the OTLP
-  stream that produced an adoption bundle. When omitted, the client derives
-  `region:<telemetry_region>` (or `chain:<chain_id>`) automatically so metadata
-  always carries a descriptive label.
+- `FetchOptions::per_chunk_retry_limit` матчтар I18NI0000000012X өсөн CI .
+  йүгерә, тип аңлы рәүештә сикләү ретт.
+- `FetchOptions::global_parallel_limit` менән I18NI0000000014X менән берләшергә кәрәк.
+  һаны бер үк ваҡытта провайдерҙар.
+- `OrchestratorConfig::with_telemetry_region("region")` тегтар
+  `sorafs_orchestrator_*` метрикаһы, шул уҡ ваҡытта
+  I18NI000000017X CLI көҙгөләй
+  `--transport-policy` флагы. I18NI000000019X хәҙер суднолар тип атала.
+  CLI/SDK өҫтө буйынса ғәҙәттәгесә; ҡулланыу I18NI0000000020X ғына
+  ҡасан сәхнәләштереү түбән йәки үтәү директиваһын үтәү, һәм запас
+  `SoranetStrict` өсөн PQ-тик осоусылар өсөн асыҡ раҫлау менән.
+- SorafsGateawayFetchOptions ҡуйырға::яҙа_mode_hint = .
+  Ҡайһы бер(Яҙма ModeHint::UploadPqOnly)` PQ-тик тейәүҙәрҙе көсләү өсөн; ярҙамсы буласаҡ
+  автоматик рәүештә транспорт/анонимлыҡ сәйәсәтен пропагандалау, әгәр асыҡтан-асыҡ
+  өҫтөнлөк иткән.
+- I18NI000000022X ҡулланыу, ваҡытлыса транспортты нығытыу өсөн
+  йәки бер үтенес өсөн анонимлыҡ ярус; тәьмин итеү йәки ялан үткәрә
+  браунут демократ һәм уңышһыҙлыҡҡа осрай, ҡасан һораған ярус ҡәнәғәтләндерергә мөмкин түгел.
+- Питон (`sorafs_multi_fetch_local` / I18NI000000024X) һәм
+  JavaScript (I18NI000000025X) бәйләүҙәре шул уҡ планлаштырыусыны ҡабаттан ҡуллана, шулай уҡ
+  18NI000000026X был ярҙамсыларҙа иҫәпләнгән ауырлыҡтарҙы алыу өсөн ҡуйылған
+  өлөшө менән бер рәттән квитанциялар.
+- I18NI000000027X OTLP-ны теркәй.
+  ағымы, тип етештерә ҡабул итеү өйөмө. Ҡасан төшөрөп ҡалдырылған, клиент ала
+  I18NI000000028X (йәки I18NI000000029X X) автоматик рәүештә шулай метамағлүмәт
+  һәр ваҡыт тасуири ярлыҡ йөрөтә.
 
-## Fetch via `iroha::Client`
+## I18NI000000030X аша Фетч
 
-The Rust SDK bundles the gateway fetch helper; provide a manifest plus provider
-descriptors (including stream tokens) and let the client drive the multi-source
-fetch:
+Rust SDK шлюз ярҙамсыһы өйөмдәре; манифест плюс тәьмин итеүсе тәьмин итеү
+дескрипторҙар (шул иҫәптән ағым токендары) һәм клиентҡа күп сығанаҡлы драйвер рөхсәт итә.
+алып килтерергә:
 
 ```rust
 use eyre::Result;
@@ -155,23 +156,23 @@ pub async fn fetch_payload(
 }
 ```
 
-Set `transport_policy` to `Some(TransportPolicy::SoranetStrict)` when uploads
-must refuse classical relays, or `Some(TransportPolicy::DirectOnly)` when SoraNet
-must be bypassed entirely. Point `scoreboard.persist_path` at the release
-artefact directory, optionally fix `scoreboard.now_unix_secs`, and populate
-`scoreboard.metadata` with capture context (fixture labels, Torii target, etc.)
-so `cargo xtask sorafs-adoption-check` consumes deterministic JSON across SDKs
-with the provenance blob SF-6c expects.
-`Client::sorafs_fetch_via_gateway` now augments that metadata with the manifest
-identifier, optional manifest CID expectation, and the
-`gateway_manifest_provided` flag by inspecting the supplied
-`GatewayFetchConfig`, so captures that include a signed manifest envelope satisfy
-the SF-6c evidence requirement without duplicating those fields manually.
+I18NI000000031X комплекты I18NI0000000032X-ҡа тиклем тейәгәндә
+классик релеларҙан баш тартырға тейеш, йәки I18NI0000000333X ҡасан SoraNet
+тулыһынса урап үтергә тейеш. Поинт I18NI0000000034X релизда
+артефакт каталогы, теләк буйынса төҙәтеү I18NI00000000035X, һәм халыҡ
+I18NI000000036X менән тотоу контексы (фикстура лейблдары, I18NT000000001X маҡсатлы һ.б.)
+тимәк, I18NI000000037X SDKs буйынса детерминистик JSON ҡуллана
+провенанс менән блоб SF-6c көтә.
+I18NI0000000038X хәҙер манифест менән метамағлүмәттәрҙе арттыра
+идентификатор, өҫтәмә манифест CID көтөү, һәм был
+I18NI0000000039X флагы менән тәьмин ителгән
+I18NI0000000040X, шуға күрә ҡул ҡуйылған манифест конверт ҡәнәғәтләндереүҙе үҙ эсенә ала
+SF-6c дәлилдәр талабы был яландарҙы ҡул менән ҡабатламай.
 
-## Manifest helpers
+## Манифест ярҙамсылары
 
-`ManifestBuilder` remains the canonical way to assemble Norito payloads
-programmatically:
+I18NI000000041X канонлы ысул булып ҡала йыйыу I18NT00000000000000 .
+программалы рәүештә:
 
 ```rust
 use sorafs_manifest::{ManifestBuilder, ManifestV1, PinPolicy, StorageClass};
@@ -188,5 +189,5 @@ fn build_manifest(bytes: &[u8]) -> Result<ManifestV1, Box<dyn std::error::Error>
 }
 ```
 
-Embed the builder wherever services need to generate manifests on the fly; the
-CLI remains the recommended path for deterministic pipelines.
+Төҙөүсегә ҡайҙа ғына хеҙмәттәр генерациялау кәрәк, осоуҙа манифест; был
+CLI детерминистик торбалар өсөн тәҡдим ителгән юл булып ҡала.

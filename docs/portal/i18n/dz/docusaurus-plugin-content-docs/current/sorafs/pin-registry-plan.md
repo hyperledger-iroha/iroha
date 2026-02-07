@@ -8,136 +8,138 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraFS Pin Registry Implementation Plan
 sidebar_label: Pin Registry Plan
 description: SF-4 implementation plan covering registry state machine, Torii facade, tooling, and observability.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
+:::དྲན་ཐོའི་འབྱུང་ཁུངས།
 :::
 
-# SoraFS Pin Registry Implementation Plan (SF-4)
+# SoraFS པིན་ཐོ་བཀོད་ལག་བསྟར་འཆར་གཞི་ (SF-4)
 
-SF-4 delivers the Pin Registry contract and supporting services that store
-manifest commitments, enforce pin policies, and expose APIs to Torii, gateways,
-and orchestrators. This document expands the validation plan with concrete
-implementation tasks, covering on-chain logic, host-side services, fixtures,
-and operational requirements.
+SF-4 གིས་ པིན་ཐོ་བཀོད་ཀྱི་གན་རྒྱ་དང་ རྒྱབ་སྐྱོར་གྱི་ཞབས་ཏོག་ཚུ་ གསོག་འཇོག་འབདཝ་ཨིན།
+གསལ་སྟོན་ཁས་བླངས་, པིན་སྲིད་བྱུས་བསྟར་སྤྱོད་འབད་ཞིནམ་ལས་ I18NT0000014X, འཛུལ་སྒོ་ཚུ་ APIs ཚུ་ ཕྱིར་བཏོན་འབདཝ་ཨིན།
+དང་ སྙན་ཆའི་སྡེ་ཚན་ཚུ། ཡིག་ཆ་འདི་གིས་ བདེན་དཔྱད་འཆར་གཞི་འདི་ བརྟན་པོ་སྦེ་རྒྱ་སྐྱེད་འབདཝ་ཨིན།
+ལག་ལེན་འཐབ་ཐངས་ཚུ་ རིམ་སྒྲིག་ཚད་མ་དང་ གཙོ་བོར་གྱི་ཞབས་ཏོག་ དེ་ལས་ སྒྲིག་ཆས་ཚུ་ ཁྱབ་སྟེ་ཡོདཔ་ཨིན།
+དང་ ལག་ལེན་གྱི་ དགོས་མཁོ།
 
-## Scope
+## གོ་སྐབས
 
-1. **Registry state machine**: Norito-defined records for manifests, aliases,
-   successor chains, retention epochs, and governance metadata.
-2. **Contract implementation**: deterministic CRUD operations for pin lifecycle
-   (`ReplicationOrder`, `Precommit`, `Completion`, eviction).
-3. **Service facade**: gRPC/REST endpoints backed by the registry that Torii
-   and SDKs consume, including pagination and attestation.
-4. **Tooling & fixtures**: CLI helpers, test vectors, and documentation to keep
-   manifests, aliases, and governance envelopes in sync.
-5. **Telemetry & ops**: metrics, alerts, and runbooks for registry health.
+1. **ཐོ་བཀོད་གནས་སྟངས་འཕྲུལ་ཆས་**: Norito-ངེས་འཛིན་འབད་ཡོད་པའི་དྲན་ཐོ་ཚུ་ གསལ་སྟོན་ཚུ་གི་དོན་ལུ་ ཚིག་བརྗོད་ཚུ།
+   ཤུལ་འཛིན་པའི་རིམ་པ་དང་ བཀག་འཛིན་གྱི་དུས་སྐབས་ དེ་ལས་ གཞུང་སྐྱོང་མེ་ཊ་ཌེ་ཊ་ཚུ་ཨིན།
+2. **གན་ཡིག་ལག་ལེན་འཐབ་ཐངས་**: པིན་མི་ཚེ་འཁོར་རིམ་གྱི་དོན་ལུ་ གཏན་འབེབས་བཟོ་ནིའི་ CRUD བཀོལ་སྤྱོད་ཚུ།
+   (I 18NI00000021X, `Precommit`, `Completion`, ཕྱིར་འདོན་པ།)
+3. **ཞབས་ཏོག་གདོང་ཕྱོགས་**: ཇི་ཨར་པི་སི་/ཨར་ཨི་ཨེསི་ཊི་མཐའ་ཐིག་ཚུ་ ཐོ་བཀོད་ཀྱིས་རྒྱབ་སྐྱོར་འབད་མི་ I18NT0000015X ཨིན།
+   དང་ SDKs ཚུ་ ཤོག་ལེབ་དང་ བདེན་ཁུངས་ཚུ་རྩིས་ཏེ་ ཟ་སྤྱོད་འབདཝ་ཨིན།
+4. **Tooling དང་ Teons**: CLI རོགས་རམ་འབད་མི་ བརྟག་དཔྱད་བེག་ཊར་ དེ་ལས་ ཡིག་ཆ་ཚུ་ བདག་འཛིན་འཐབ་ནིའི་དོན་ལུ་ཨིན།
+   མཉམ་མཐུན་ནང་ གསལ་སྟོན་དང་ མིང་གཞན་ དེ་ལས་ གཞུང་སྐྱོང་ཡིག་ཆ་ཚུ་ གསལ་སྟོན་འབདཝ་ཨིན།
+༥. *Telemetry & Ops**: ཐོ་བཀོད་གསོ་བའི་དོན་ལུ་ མེ་ཊིག་དང་ ཉེན་བརྡ་ དེ་ལས་ རྒྱུག་དེབ་ཚུ།
 
-## Data Model
+## གནད་སྡུད་དཔེ་གཞི།
 
-### Core Records (Norito)
+### ཀོར་དྲན་ཐོ་ (I18NT0000004X)
 
-| Struct | Description | Fields |
-|--------|-------------|--------|
-| `PinRecordV1` | Canonical manifest entry. | `manifest_cid`, `chunk_plan_digest`, `por_root`, `profile_handle`, `approved_at`, `retention_epoch`, `pin_policy`, `successor_of`, `governance_envelope_hash`. |
-| `AliasBindingV1` | Maps alias -> manifest CID. | `alias`, `manifest_cid`, `bound_at`, `expiry_epoch`. |
-| `ReplicationOrderV1` | Instruction for providers to pin manifest. | `order_id`, `manifest_cid`, `providers`, `redundancy`, `deadline`, `policy_hash`. |
-| `ReplicationReceiptV1` | Provider acknowledgement. | `order_id`, `provider_id`, `status`, `timestamp`, `por_sample_digest`. |
-| `ManifestPolicyV1` | Governance policy snapshot. | `min_replicas`, `max_retention_epochs`, `allowed_profiles`, `pin_fee_basis_points`. |
+| སྒྲིག་བཀོད་ | འགྲེལ་བཤད་ | ཕིལཌ་ |
+|---------------------------|-------------|
+| `PinRecordV1` | ཀེར་ནིག་གསལ་སྟོན་ཐོ་འགོད། | `manifest_cid`, `chunk_plan_digest`, `por_root`, `profile_handle`, `approved_at`, `retention_epoch`, `pin_policy`, I18NI0000032X, `governance_envelope_hash`. |
+| I18NI0000034X | སབ་ཁྲ་ཚུ་ -> གསལ་སྟོན་སི་ཨའི་ཌི་། | `alias`, `manifest_cid`, I18NI000000003X, I18NI0000000038X. |
+| I18NI0000039X | བྱིན་མི་ཚུ་གིས་ གསལ་སྟོན་འབད་ནི་ལུ་ བཀོད་རྒྱ། | `manifest_cid`, I18NI0000000042X, I18NI000000043X, `deadline`, `deadline`, `policy_hash`. |
+| I18NI0000046X | མཁོ་སྤྲོད་འབད་མི་ངོས་ལེན་འབད་ནི། | I18NI000000047X, `provider_id`, I18NI000000049X, I18NI000000000500X, I18NI00000000500, I18NI000000051X. |
+| I18NI0000002X | གཞུང་སྐྱོང་སྲིད་བྱུས་པར་བཀོད། | I18NI000000053X, `max_retention_epochs`, Norito, I18NI000000066X. |
 
-Implementation reference: see `crates/sorafs_manifest/src/pin_registry.rs` for the
-Rust Norito schemas and validation helpers backing these records. Validation
-mirrors the manifest tooling (chunker registry lookup, pin policy gating) so the
-contract, Torii facades, and CLI share identical invariants.
+ལག་ལེན་འཐབ་ནིའི་གཞི་བསྟུན་: འདི་གི་དོན་ལུ་ `crates/sorafs_manifest/src/pin_registry.rs` ལུ་བལྟ།
+དྲན་ཐོ་ Norito ལས་འཆར་དང་ བདེན་དཔྱད་ཀྱི་གྲོགས་རམ་པ་ དྲན་ཐོ་འདི་ཚུ་ལུ་རྒྱབ་སྐྱོར་འབད་མི་ གྲོགས་རམ་ཚུ། བདེན་དཔང་།
+གསལ་སྟོན་ལག་ཆ་(ཆུ་གཞིའི་ཐོ་བཀོད་འཚོལ་ཞིབ་ སྲིད་བྱུས་སྒོ་སྒྲིག་པིན་ ) དེ་འབདཝ་ལས་
+གན་རྒྱ་ Torii གདོང་ཁེབས་དང་ CLI གི་འགྱུར་ལྡོག་འདྲ་མཚུངས་ཡོད།
 
-Tasks:
-- Finalise Norito schemas in `crates/sorafs_manifest/src/pin_registry.rs`.
-- Generate code (Rust + other SDKs) using Norito macros.
-- Update docs (`sorafs_architecture_rfc.md`) once schemas land.
+ལས་འགན་ཚུ།
+- `crates/sorafs_manifest/src/pin_registry.rs` ནང་ Norito གི་ལས་རིམ་མཇུག་བསྡུ།
+- གསང་གྲངས་ (Rust + གཞན་ SDKs) འདི་ Norito མེཀ་རོ་ཚུ་ལག་ལེན་འཐབ་ཐོག་ལས་ བཏོན་གཏང་།
+- འཆར་གཞིའི་ས་ཆ་དུས་མཐུན་ (`sorafs_architecture_rfc.md`) ཚར་ཅིག་ས་ཆ་.
 
-## Contract Implementation
+## གན་འཛིན་ལག་ལེན།
 
-| Task | Owner(s) | Notes |
-|------|----------|-------|
-| Implement registry storage (sled/sqlite/off-chain) or smart contract module. | Core Infra / Smart Contract Team | Provide deterministic hashing, avoid floating point. |
-| Entry points: `submit_manifest`, `approve_manifest`, `bind_alias`, `issue_replication_order`, `complete_replication`, `evict_manifest`. | Core Infra | Leverage `ManifestValidator` from validation plan. Alias binding now flows through `RegisterPinManifest` (Torii DTO surfacing) while dedicated `bind_alias` remains planned for successive updates. |
-| State transitions: enforce succession (manifest A -> B), retention epochs, alias uniqueness. | Governance Council / Core Infra | Alias uniqueness, retention limits, and predecessor approval/retirement checks now live in `crates/iroha_core/src/smartcontracts/isi/sorafs.rs`; multi-hop succession detection and replication bookkeeping remain open. |
-| Governed parameters: load `ManifestPolicyV1` from config/governance state; allow updates via governance events. | Governance Council | Provide CLI for policy updates. |
-| Event emission: emit Norito events for telemetry (`ManifestApproved`, `ReplicationOrderIssued`, `AliasBound`). | Observability | Define event schema + logging. |
+| ལས་ཀ་ | ཇོ་བདག་(ཚུ་) | དྲན་ཐོ། |
+|-------|---------------|-|-------------------------------------------
+| ཐོ་བཀོད་གསོག་འཇོག་ (sled/sqlite/off-chain) ཡང་ན་ གན་ཡིག་ སརཊ་ གན་རྒྱ་ཚད་གཞི་ལག་ལེན་འཐབ། | Core Infra / ཁག་འབག་སྡེ་ཚན། | གཏན་འབེབས་ཀྱི་ཧ་ཤིང་བྱིན། ཆུ་ནང་ལུ་འཕྱོ་བའི་ས་ཚིགས་འདི་སྤང་། |
+| འཛུལ་ཞུགས་ཀྱི་སྐུགས་: `submit_manifest`, I18NI000000061X, I18NI0000000062X, I18NI000000063X, I18NI0000000064X, `evict_manifest`. | ཀོར་ཨིན་ཕ་ར་ | བདེན་དཔྱད་འཆར་གཞི་ལས་ `ManifestValidator` ལྕི་བ། ད་ལྟོ་ `RegisterPinManifest` (Torii DTO surfacing) དང་ I18NI000000068X འདི་ རིམ་མཐུན་དུས་མཐུན་བཟོ་ནིའི་དོན་ལུ་ འཆར་གཞི་བརྩམས་ཏེ་ཡོདཔ་ཨིན། |
+| རྒྱལ་ཁབ་ཀྱི་འགྱུར་བ་ཚུ་: རིམ་འབྱུང་འདི་ བསྟར་སྤྱོད་འབད་ནི། (མནར་གཅོད་ A -> ཁ) བཀག་འཛིན་གྱི་དུས་སྐབས་དང་ གཞན་དང་མ་འདྲ་བའི་ཁྱད་པར་ཚུ། | གཞུང་སྐྱོང་ཚོགས་སྡེ་ / Core Infra | ད་ལྟ་ `crates/iroha_core/src/smartcontracts/isi/sorafs.rs` ནང་ ཁྱད་པར་ཅན་དང་ བཀག་འཛིན་ཚད་གཞི་ དེ་ལས་ དགོངས་ཞུའི་ཆ་འཇོག་/དགོངས་ཞུའི་བརྟག་དཔྱད་ཚུ་ ཡོདཔ་ཨིན། སྣ་མང་ཧོབ་རིམ་འབྱུང་བརྟག་དཔྱད་དང་ འདྲ་བཤུས་དེབ་བདག་འཛིན་འཐབ་ནི་འདི་ ཁ་ཕྱེ་སྟེ་ཡོདཔ་ཨིན། |
+| རིམ་སྒྲིག་ཚད་གཞི་ཚུ་: རིམ་སྒྲིག་/གཞུང་སྐྱོང་གནས་སྟངས་ལས་ མངོན་གསལ་ I18NI0000070X; གཞུང་སྐྱོང་ལས་རིམ་ཚུ་བརྒྱུད་དེ་ དུས་མཐུན་འབད་བཅུགཔ་ཨིན། | གཞུང་སྐྱོང་ལྷན་ཚོགས། | སྲིད་བྱུས་དུས་མཐུན་བཟོ་ནིའི་དོན་ལུ་ སི་ཨེལ་ཨའི་བྱིན། |
+| བྱུང་ལས་ཐོན་རླུང་: Norito འདི་ ཊེ་ལི་མི་ཊི་གི་དོན་ལུ་ ཕྱིར་བཏོན་འབདཝ་ཨིན། | བལྟ་རྟོག་འབད་ཚུགསཔ་ | བྱུང་ལས་འཆར་གཞི་ + ནང་བྲིས ངེས་འཛིན་འབད། |
 
-Testing:
-- Unit tests for each entry point (positive + rejection).
-- Property tests for succession chain (no cycles, monotonic epochs).
-- Fuzz validation by generating random manifests (bounded).
+བརྟག་དཔྱད།
+- ཐོ་བཀོད་ས་ཚིགས་རེ་རེའི་དོན་ལུ་ ཡུ་ནིཊི་བརྟག་དཔྱད།
+- རིམ་འབྱུང་རྒྱུན་རིམ་གྱི་ རྒྱུ་དངོས་བརྟག་དཔྱད།(འཁོར་རིམ་མེད།
+- གང་བྱུང་གསལ་སྟོན་ཚུ་ (མཐའ་མཚམས་) བཟོ་བཏོན་ཐོག་ལས་ ཕཱཛ་བདེན་དཔྱད་འབད་ནི།
 
-## Service Facade (Torii/SDK Integration)
+## ཞབས་ཏོག་ཕེཌ་ (Torii/SDK མཉམ་བསྡོམས།)
 
-| Component | Task | Owner(s) |
-|-----------|------|----------|
-| Torii Service | Expose `/v1/sorafs/pin` (submit), `/v1/sorafs/pin/{cid}` (lookup), `/v1/sorafs/aliases` (list/bind), `/v1/sorafs/replication` (orders/receipts). Provide pagination + filtering. | Networking TL / Core Infra |
-| Attestation | Include registry height/hash in responses; add Norito attestation struct consumed by SDKs. | Core Infra |
-| CLI | Extend `sorafs_manifest_stub` or new `sorafs_pin` CLI with `pin submit`, `alias bind`, `order issue`, `registry export`. | Tooling WG |
-| SDK | Generate client bindings (Rust/Go/TS) from Norito schema; add integration tests. | SDK Teams |
+| ཆ་ཤས་ | ལས་ཀ་ | ཇོ་བདག་(ཚུ་) |
+|-------------------------------------|
+| I18NT0000019X ཞབས་ཏོག་ | ཕྱིར་ཐོན་ I18NI000000000074X (ཡན་ལག་), `/v1/sorafs/pin/{cid}` (ལྟ་ཞིབ) I18NI000000076X (ཐོ་ཡིག་/བཱའིན་ཌི) I18NI0000000077X (གོ་རིམ་/ཐོབ་ཐང་)། ཤོག་ལེབ་ + ཚགས་མ་བྱིན། | ཡོངས་འབྲེལ་ TL / Core Infra |
+| ཉེས་འཛུགས་ | ལན་འདེབས་ནང་ ཐོ་བཀོད་མཐོ་ཚད་/ཧ་ཤི་ཚུ་ བཙུགས་དགོ། ཁ་སྐོང་ I18NT0000009X ཨེསི་ཌི་ཀེ་ཨེསི་གིས་ བཀོལ་སྤྱོད་འབད་མི་ གསལ་སྟོན་གྱི་ བཀོད་སྒྲིག་། | ཀོར་ཨིན་ཕ་ར་ |
+| CLI | I18NI0000000000078X རྒྱ་བསྐྱེད་ ཡང་ན་ `sorafs_pin` དང་ I18NI00000080000X, `alias bind`, I18NI000000082X, I18NI000000083X, I18NI0000083X. | ལག་ཆས་ WG |
+| ཨེསི་ཌི་ཀེ་ | མཁོ་སྤྲོད་འབད་མི་བཱའིན་ཌིང་ཚུ་ (Rust/Go/TS) ལས་ Norito ལས་འཆར་ལས་ བཏོན་གཏང་། མཉམ་བསྡོམས་བརྟག་དཔྱད་ཚུ་ཁ་སྐོང་འབད། | SDK སྡེ་ཚན་ |
 
-Operations:
-- Add caching layer/ETag for GET endpoints.
-- Provide rate limiting / auth consistent with Torii policies.
+བཀོལ་སྤྱོད་ཚུ།
+- ཇི་ཨི་ཊི་མཇུག་སྣོད་ཚུ་གི་དོན་ལུ་ འདྲ་མཛོད་བང་རིམ་/ཨེ་ཊི་ཇི་ཁ་སྐོང་འབད།
+- ཚད་གཞི་ཚད་འཛིན་འབད་ / auth འདི་ Torii སྲིད་བྱུས་དང་མཐུན་སྒྲིག་འབད།
 
-## Fixtures & CI
+## བཅོས་མ་དང་སི་ཨའི།
 
-- Fixtures directory: `crates/iroha_core/tests/fixtures/sorafs_pin_registry/` stores signed manifest/alias/order snapshots regenerated by `cargo run -p iroha_core --example gen_pin_snapshot`.
-- CI step: `ci/check_sorafs_fixtures.sh` regenerates the snapshot and fails if diffs appear, keeping CI fixtures aligned.
-- Integration tests (`crates/iroha_core/tests/pin_registry.rs`) exercise the happy path plus duplicate-alias rejection, alias approval/retention guards, mismatched chunker handles, replica-count validation, and successor-guard failures (unknown/pre-approved/retired/self pointers); see `register_manifest_rejects_*` cases for coverage details.
-- Unit tests now cover alias validation, retention guards, and successor checks in `crates/iroha_core/src/smartcontracts/isi/sorafs.rs`; multi-hop succession detection once state machine lands.
-- Golden JSON for events used by observability pipelines.
+- བདེ་སྒྲིག་སྣོད་ཐོ་: I18NI0000084X ཚོང་ཁང་ཚུ་གིས་ `cargo run -p iroha_core --example gen_pin_snapshot` གིས་ བསྐྱར་བཟོ་འབད་མི་ གསལ་སྟོན་/མིང་ཚིག་/གོ་རིམ་གྱི་པར་ཚུ་ མཚན་རྟགས་བཀོད་ཡོདཔ་ཨིན།
+- CI གོ་རིམ་: `ci/check_sorafs_fixtures.sh` གིས་ པར་རིས་འདི་ བསྐྱར་བཟོ་འབདཝ་ཨིནམ་དང་ གལ་སྲིད་ ཌིཕ་ཚུ་ཐོན་པ་ཅིན་ འཐུས་ཤོར་བྱུངམ་ཨིན།
+- མཉམ་བསྡོམས་བརྟག་དཔྱད་ (I18NI0000087X) གིས་ དགའ་སྤྲོའི་ལམ་དང་ འདྲ་བཤུས་ཆ་འཇོག་/བཀག་ཆ་འབད་མི་ མཐུན་སྒྲིག་ཅན་གྱི་ ཆུ་བོ་འཛིན་ཆས་ འདྲ་གྲངས་བདེན་དཔྱད་ དེ་ལས་ ཤུལ་འཛིན་ལམ་སྟོན་གྱི་ འཐུས་ཤོར་ (མ་ཤེས་/སྔོན་སྒྲིག་འབད་ཡོདཔ་/བཀག་ཆ་འབད་མི་/སེཕ་པོའིནཊི་ཚུ་) ཚུ་ ལག་ལེན་འཐབ་ཨིན། ཁྱབ་ཁོངས་ཁ་གསལ་གྱི་དོན་ལུ་ Norito གནད་དོན་ཚུ་བལྟ།
+- ད་ལྟོ་ ཡུ་ནིཊ་བརྟག་དཔྱད་ཚུ་གིས་ བདེན་དཔྱད་དང་ བཀག་འཛིན་འབད་མི་ དེ་ལས་ ཤུལ་འཛིན་གྱི་བརྟག་དཔྱད་ཚུ་ `crates/iroha_core/src/smartcontracts/isi/sorafs.rs` ནང་ལུ་ ཁྱབ་ཚུགསཔ་ཨིན། མང་ཚོགས་ཀྱི་འཕྲུལ་ཆས་ས་ཆ་ཚུ་ ཚར་གཅིག་ སྣ་མང་-ཧོབ་ཀྱི་ རིམ་སྒྲིག་བརྟག་དཔྱད་ འབད་ནི།
+- བལྟ་བརྟོག་འབད་བཏུབ་པའི་ པའིཔ་མདོང་གིས་ལག་ལེན་འཐབ་མི་ བྱུང་ལས་ཚུ་གི་དོན་ལུ་ གསེར་གྱི་ཇེ་ཨེསི་ཨོ་ཨེན་།
 
-## Telemetry & Observability
+## བརྒྱུད་འཕྲིན་དང་བལྟ་ཚུགས།
 
-Metrics (Prometheus):
+མེ་ཊིག་ (I18NT000000000X):
 - `torii_sorafs_registry_manifests_total{status="pending|approved|retired"}`
 - `torii_sorafs_registry_aliases_total`
 - `torii_sorafs_registry_orders_total{status="pending|completed|expired"}`
 - `torii_sorafs_replication_sla_total{outcome="met|missed|pending"}`
 - `torii_sorafs_replication_completion_latency_epochs{stat="avg|p95|max|count"}`
 - `torii_sorafs_replication_deadline_slack_epochs{stat="avg|p95|max|count"}`
-- Existing provider telemetry (`torii_sorafs_capacity_*`, `torii_sorafs_fee_projection_nanos`) remains in scope for end-to-end dashboards.
+- ད་ལྟོ་ཡོད་པའི་ བྱིན་མི་ བརྒྱུད་འཕྲིན་ (I18NI0000096X, `torii_sorafs_fee_projection_nanos`) འདི་ མཇུག་ལས་མཇུག་ཚུན་ཚོད་ ཌེཤ་བོརཌི་ཚུ་གི་དོན་ལུ་ གོ་སྐབས་ནང་ ལུས་ཡོདཔ་ཨིན།
 
-Logs:
-- Structured Norito event stream for governance audits (signed?).
+དྲན་ཐོ་།
+- གཞུང་སྐྱོང་རྩིས་ཞིབ་ཚུ་གི་དོན་ལུ་ བཀོད་སྒྲིག་ I18NT0000011X བྱུང་ལས་རྒྱུན་ལམ་ (མིང་རྟགས་བཀོད་ཡོདཔ་?)།
 
-Alerts:
-- Pending replication orders exceeding SLA.
-- Alias expiry < threshold.
-- Retention violations (manifest not renewed before expiry).
+ཉེན་བརྡ་:
+- ཨེསི་ཨེལ་ཨེ་ལས་བརྒལ་ཏེ་ འདྲ་དཔེ་བཟོ་ནིའི་བཀའ་རྒྱ་ཚུ་ བསྒུག་ནི།
+- མིང་གཞན་ < ཚད་གཞི།
+- བཀག་འཛིན་གྱི་འགལ་འཛོལ་ཚུ་ (དུས་ཡུན་མ་རྫོགས་པའི་ཧེ་མར་ གཡོ་སྒྱུ་འདི་ བསྐྱར་གསོ་མ་འབད་བས།)
 
-Dashboards:
-- Grafana JSON `docs/source/grafana_sorafs_pin_registry.json` tracks manifest lifecycle totals, alias coverage, backlog saturation, SLA ratio, latency vs slack overlays, and missed-order rates for on-call review.
+ཌེཤ་བོརཌ་ཚུ།
+- I18NT000000002X JSON I18NI0000098X གིས་ མི་ཚེ་གི་བསྡོམས་རྩིས་དང་ མིང་གཞན་ རྒྱབ་ལོག་ཚད་གཞི་ SLA ཆ་ཚད་ བསྐྱར་ལོག་དང་ བཀབ་སྟེ་ དེ་ལས་ བཀའ་རྒྱ་བསྐྱར་ཞིབ་ཀྱི་ གོ་རིམ་ཚུ་ བཏོནམ་ཨིན།
 
-## Runbooks & Documentation
+## གཡོག་བཀོལ་དེབ་དང་ཡིག་ཆ།
 
-- Update `docs/source/sorafs/migration_ledger.md` to include registry status updates.
-- Operator guide: `docs/source/sorafs/runbooks/pin_registry_ops.md` (now published) covering metrics, alerting, deployment, backup, and recovery flows.
-- Governance guide: describe policy parameters, approval workflow, dispute handling.
-- API reference pages for each endpoint (Docusaurus docs).
+- ཐོ་བཀོད་གནས་རིམ་དུས་མཐུན་ཚུ་བཙུགས་ནིའི་དོན་ལུ་ `docs/source/sorafs/migration_ledger.md` དུས་མཐུན་བཟོ།
+- བཀོལ་སྤྱོད་ལམ་སྟོན་པ་: `docs/source/sorafs/runbooks/pin_registry_ops.md` (ད་ལྟོ་དཔར་བསྐྲུན་འབད་ཡོད་པའི་) མེ་ཊིག་དང་ ཉེན་བརྡ་ བཀྲམ་སྤེལ་ རྒྱབ་ཐག་ དེ་ལས་ སླར་གསོ་རྒྱུན་འབབ་ཚུ་ བཀབ་ནི།
+- གཞུང་སྐྱོང་ལམ་སྟོན་: སྲིད་བྱུས་ཚད་གཞི་དང་ ཆ་འཇོག་ལཱ་གི་རྒྱུན་རིམ་ རྩོད་གཞི་འཛིན་སྐྱོང་།
+- མཐའ་མཚམས་རེ་རེ་གི་དོན་ལུ་ ཨེ་པི་ཨའི་ གཞི་བསྟུན་ཤོག་ལེབ་ (I18NT0000001X docs).
 
-## Dependencies & Sequencing
+## བརྟེན་པ་དང་གོ་རིམ།
 
-1. Complete validation plan tasks (ManifestValidator integration).
-2. Finalise Norito schema + policy defaults.
-3. Implement contract + service, wire telemetry.
-4. Regenerate fixtures, run integration suites.
-5. Update docs/runbooks and mark roadmap items complete.
+༡ བདེན་དཔྱད་འཆར་གཞི་ལས་འགན་ཚུ་མཇུག་བསྡུ་ (འགན་འཁུར་མཉམ་བསྡོམས)།
+2. Norito ལས་འཆར་ + སྲིད་བྱུས་སྔོན་སྒྲིག་ཚུ་ མཇུག་བསྡུ།
+༣ གན་རྒྱ་ + ཞབས་ཏོག་ གློག་ཐག་བརྡ་འཕྲིན་ལག་ལེན་འཐབ་དགོ།
+༤ བསྐྱར་བཟོ་འབད་ནི། མཉམ་བསྡོམས་ཁང་མིག་ཚུ་གཡོག་བཀོལ།
+༥ ཡིག་ཆ་ཚུ་དུས་མཐུན་བཟོ་ཞིནམ་ལས་ ལམ་སྟོན་གྱི་ཅ་ཆས་ཚུ་ མཇུག་བསྡུ་དགོ།
 
-Each roadmap checklist item under SF-4 should reference this plan when progress is made.
-The REST façade now ships with attested listing endpoints:
+ཡར་རྒྱས་འགྱོ་བའི་སྐབས་ལུ་ SF-4 གི་འོག་ལུ་ཡོད་པའི་ ལམ་སབ་ཁྲ་གི་ཞིབ་དཔྱད་ཐོ་ཡིག་རེ་རེ་གིས་ འཆར་གཞི་འདི་ གཞི་བསྟུན་འབད་དགོ།
+ད་ལྟོ་ REST གི་གདོང་ཕྱོགས་འདི་གིས་ ཐོ་བཀོད་ཀྱི་མཇུག་བསྡུའི་བདེན་ཁུངས་ཚུ་ བདེན་ཁུངས་བཀལ་ཡོདཔ་ཨིན།
 
-- `GET /v1/sorafs/pin` and `GET /v1/sorafs/pin/{digest}` return manifests with
-  alias bindings, replication orders, and an attestation object derived from the
-  latest block hash.
-- `GET /v1/sorafs/aliases` and `GET /v1/sorafs/replication` expose the active
-  alias catalogue and replication order backlog with consistent pagination and
-  status filters.
+- `GET /v1/sorafs/pin` དང་ `GET /v1/sorafs/pin/{digest}` དང་བཅས་པའི་མངོན་རྟགས་
+  alias binds དང་འདྲ་དཔེ་གི་བཀའ་རྒྱ་ དེ་ལས་ བདེན་ཁུངས་བཀལ་བའི་དངོས་པོ་འདི་ འདི་ལས་ཐོབ་ཡོདཔ་ཨིན།
+  སྡེབ་ཚན་གསརཔ་ ཧེཤ་.
+- `GET /v1/sorafs/aliases` དང་ `GET /v1/sorafs/replication` ཤུགས་ལྡན་ཕྱིར་སྟོན་འབདཝ་ཨིན།
+  alias ཐོ་གཞུང་དང་ འདྲ་དཔེ་བཀོད་པའི་གོ་རིམ་འདི་ རྟག་བརྟན་གྱི་ ཤོག་ལེབ་དང་ དང་།
+  གནས་ཚད་ཚགས་མ་ཚུ།
 
-The CLI wraps these calls (`iroha app sorafs pin list`, `pin show`, `alias list`,
-`replication list`) so operators can script registry audits without touching
-lower-level APIs.
+CLI གིས་ འབོད་བརྡ་འདི་ཚུ་ (`iroha app sorafs pin list`, `pin show`, `alias list`, འདི་ བཀབ་བཞགཔ་ཨིན།
+`replication list`) དེ་འབདཝ་ལས་ བཀོལ་སྤྱོད་པ་ཚུ་གིས་ ཡིག་ཚུགས་ཐོ་བཀོད་རྩིས་ཞིབ་ཚུ་ ལགཔ་མ་རྐྱབ་པར་ འབད་ཚུགས།
+དམའ་རིམ་ཨེ་པི་ཨའི་ཚུ།

@@ -7,18 +7,19 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 727a648141405b0c8f12a131ff903d3e7ce5b74a7f899dd99fe9aa6490b55ef2
 source_last_modified: "2025-12-29T18:16:35.080764+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# SoraFS Capacity Simulation Toolkit
+# I18NT0000000006X ҡөҙрәте моделләштереү ҡоралы.
 
-This directory ships the reproducible artefacts for the SF-2c capacity marketplace
-simulation. The toolkit exercises quota negotiation, failover handling, and slashing
-remediation using the production CLI helpers and a lightweight analysis script.
+Был каталогта SF-2c ҡорамалдар баҙары өсөн ҡабатланған артефакттарҙы суднолар .
+моделләштереү. Ҡорамалдар күнекмәләре квота һөйләшеүҙәр, етешһеҙлектәр менән эш итеү, һәм ҡырҡылған
+етештереүҙе ҡулланыу етештереү CLI ярҙамсылары һәм еңел анализ сценарийы.
 
-## Prerequisites
+## Алдан шарттар
 
-- Rust toolchain capable of running `cargo run` for workspace members.
-- Python 3.10+ (standard library only).
+- Эш майҙаны ағзалары өсөн `cargo run`X идара итеүгә һәләтле Rust инструменттары.
+- Питон 3.10+ (стандарт китапханаһы ғына).
 
 ## Quickstart
 
@@ -30,39 +31,39 @@ remediation using the production CLI helpers and a lightweight analysis script.
 ./analyze.py --artifacts ./artifacts
 ```
 
-The `run_cli.sh` script invokes `sorafs_manifest_stub capacity` to build:
+I18NI000000010X сценарийы I18NI000000011X-ты төҙөү өсөн саҡыра:
 
-- Deterministic provider declarations for the quota negotiation fixture set.
-- A replication order matching the negotiation scenario.
-- Telemetry snapshots for the failover window.
-- A dispute payload capturing the slashing request.
+- Детерминистик провайдер декларациялары өсөн квота һөйләшеүҙәр ҡоролмаһы йыйылмаһы.
+- Һөйләшеүҙәр сценарийына тап килгән репликация тәртибе.
+- Телеметрия авария тәҙрәһе өсөн снимоктар.
+- Бәхәс файҙалы йөктәрҙе ҡырҡып алыу тураһында үтенесте тотоу.
 
-The script writes Norito bytes (`*.to`), base64 payloads (`*.b64`), Torii request
-bodies, and human-readable summaries (`*_summary.json`) under the chosen artifact
-directory.
+Сценарий I18NT00000000005X байт яҙа (`*.to`), base64 файҙалы йөктәр (`*.b64`), I18NT0000007X запрос
+тән, һәм кеше уҡыла торған резюме (I18NI000000014X) һайланған артефакт аҫтында
+каталогы.
 
-`analyze.py` consumes the generated summaries, produces an aggregated report
-(`capacity_simulation_report.json`), and emits a Prometheus textfile
-(`capacity_simulation.prom`) carrying:
+I18NI000000015X генерацияланған резюме ҡуллана, йыйылған отчет етештерә
+(`capacity_simulation_report.json`), һәм I18NT000000001X текстфайл сығара
+(`capacity_simulation.prom`) йөрөтөү:
 
-- `sorafs_simulation_quota_*` gauges describing negotiated capacity and allocation
-  share per provider.
-- `sorafs_simulation_failover_*` gauges highlighting downtime deltas and the selected
-  replacement provider.
-- `sorafs_simulation_slash_requested` recording the remediation percentage extracted
-  from the dispute payload.
+- I18NI0000000018X һөйләшеүҙәр алып барылған ҡәҙерен һәм бүленешен тасуирлаған датчиктар
+  өлөшө бер провайдер.
+- I18NI0000000019X датчиктар өҙөлгән дельта һәм һайланған өҙөклөктәр
+  алмаштырыу провайдеры.
+- I18NI000000020X сығарылған, уларҙы тергеҙеү проценты сығарылған
+  бәхәс файҙалы йөктән.
 
-Import the Grafana bundle in `dashboards/grafana/sorafs_capacity_simulation.json`
-and point it at a Prometheus datasource that scrapes the generated textfile (for
-example via the node-exporter textfile collector). The runbook at
-`docs/source/sorafs/runbooks/sorafs_capacity_simulation.md` walks through the full
-workflow, including Prometheus configuration tips.
+Импорт I18NT0000000004X өйөмө `dashboards/grafana/sorafs_capacity_simulation.json`
+һәм уны I18NT000000002X мәғлүмәт сығанағында күрһәтә, ул генерацияланған текст файлын ҡырҡып ала ( өсөн
+миҫал аша төйөн-экспортер тексты йыйыусы). 1990 йылда лауреат.
+I18NI0000000022X тулы аша йөрөй
+эш ағымы, шул иҫәптән I18NT000000003X конфигурация кәңәштәре.
 
-## Fixtures
+## Фикстуралар
 
-- `scenarios/quota_negotiation/` — Provider declaration specs and replication order.
-- `scenarios/failover/` — Telemetry windows for the primary outage and failover lift.
-- `scenarios/slashing/` — Dispute spec referencing the same replication order.
+- `scenarios/quota_negotiation/` — Провайдер декларация спецификацияһы һәм репликация тәртибе.
+- `scenarios/failover/` — Телеметрия тәҙрәләре өсөн беренсел өҙөклөк һәм авария күтәреү.
+- `scenarios/slashing/` — репликация тәртибенә һылтанма яһаған бәхәс спектры.
 
-These fixtures are validated in `crates/sorafs_car/tests/capacity_simulation_toolkit.rs`
-to guarantee they remain in sync with the CLI schema.
+Был ҡорамалдар `crates/sorafs_car/tests/capacity_simulation_toolkit.rs`-та раҫлана.
+гарантиялау өсөн, улар синхронизация ҡала CLI схемаһы.

@@ -7,13 +7,15 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: Nexus SDK quickstarts
 description: Minimal steps for Rust/JS/Swift/Android/CLI SDKs to connect to Sora Nexus.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-The full quickstart lives at `docs/source/nexus_sdk_quickstarts.md`. This portal
-summary highlights the shared prerequisites and per-SDK commands so developers
-can verify their setup quickly.
+Тулы тиҙ старт йәшәй I18NI000000012X. Был портал
+дөйөм айырып күрһәтә дөйөм алшарттар һәм пер-СДК командалары шулай эшләүселәр .
+уларҙы тиҙ генә раҫлай ала.
 
-## Shared setup
+## Дөйөм ҡоролма
 
 ```bash
 export NEXUS_TORII_URL="https://torii.nexus.sora.org"
@@ -22,11 +24,11 @@ export NEXUS_CHAIN_ID="iroha3"
 export NEXUS_TRUSTED_PUBKEY="<peer-public-key>"
 ```
 
-Download the Nexus config bundle, install each SDK’s dependencies, and ensure
-TLS certificates match the release profile (see
+Скачать I18NT000000000000000000 конфигурация өйөм, ҡуйырға һәр SDK’s бәйлелек, һәм тәьмин итеү .
+TLS сертификаттары тура килә релиз профиле (ҡара
 `docs/source/sora_nexus_operator_onboarding.md`).
 
-## Rust
+## Тут
 
 ```bash
 cargo run --bin nexus_quickstart \
@@ -35,24 +37,24 @@ cargo run --bin nexus_quickstart \
   --chain "${NEXUS_CHAIN_ID}"
 ```
 
-Refs: `docs/source/sdk/rust.md`
+Һылтанмалар: `docs/source/sdk/rust.md`
 
-## JavaScript / TypeScript
+## JavaScript / тип Скрипт
 
 ```bash
 npm run demo:nexus
 ```
 
-The script instantiates `ToriiClient` with the env vars above and prints the
-latest block.
+Сценарий I18NI000000015X инстанциялары менән өҫтәге env vars һәм баҫтырып сығара
+һуңғы блок.
 
-## Swift
+## Свифт
 
 ```bash
 make swift-nexus-demo
 ```
 
-Uses `Torii.Client` from `IrohaSwift` to fetch `FindNetworkStatus`.
+Ҡулланыу I18NI0000000016X `IrohaSwift` тиклем `FindNetworkStatus` алыу.
 
 ## Android
 
@@ -60,9 +62,9 @@ Uses `Torii.Client` from `IrohaSwift` to fetch `FindNetworkStatus`.
 ./gradlew :iroha-android:nexusQuickstartTest \
   -PNEXUS_TORII_URL="${NEXUS_TORII_URL}" \
   -PNEXUS_PIPELINE_URL="${NEXUS_PIPELINE_URL}"
-```
+``` X
 
-Runs the managed-device test hitting the Nexus staging endpoint.
+Йүгереп идара итеү-ҡоролма һынау I18NT000000001X стадияһы ос нөктәһенә тейҙе.
 
 ## CLI
 
@@ -73,13 +75,13 @@ iroha_cli app nexus quickstart \
   --chain-id "${NEXUS_CHAIN_ID}"
 ```
 
-## Troubleshooting
+## Төҙөкләндереүҙең
 
-- TLS failures → confirm the CA bundle from the Nexus release tarball.
-- `ERR_UNKNOWN_LANE` → pass `--lane-id`/`--dataspace-id` once multi-lane routing
-  is enforced.
-- `ERR_SETTLEMENT_PAUSED` → check [Nexus operations](../nexus/nexus-operations) for the
-  incident process; governance may have paused the lane.
+- TLS етешһеҙлектәре → раҫлау CA өйөмө I18NT000000002X татарбол сығарыу.
+- I18NI000000019X → тапшырыу I18NI000000020X/I18NI000000021X бер тапҡыр күп һыҙатлы маршрутлаштырыу
+  үтәлгән.
+- I18NI000000022X → чек [I18NT000000003X операциялары] (../nexus/nexus-operations) өсөн
+  инцидент процесы; идара итеү һыҙатты туҡтатҡандыр.
 
-For deeper context and SDK-specific explanations see
+Тәрән контекст һәм SDK-махсус аңлатмалар өсөн ҡарағыҙ
 `docs/source/nexus_sdk_quickstarts.md`.

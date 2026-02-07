@@ -7,26 +7,27 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 035600f179f4dd225778fae57c927b2a6c9a0f1c45ca949e3536b99283c2dde3
 source_last_modified: "2026-01-28T17:11:30.697433+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Rust SDK Quickstart
+# རསཊ་ཨེསི་ཌི་ཀེ་ མགྱོགས་འགོ་བཙུགས་པ།
 
-The Rust client API lives in the `iroha` crate, which exposes a `client::Client`
-type for talking to Torii. Use it when you need to submit transactions,
-subscribe to events, or query state from a Rust application.
+རསཊ་མཁོ་མངགས་ཨེ་པི་ཨའི་འདི་ `iroha` cret ནང་ལུ་སྡོད་དོ་ཡོདཔ་ད་ དེ་གིས་ `client::Client` གསལ་སྟོན་འབདཝ་ཨིན།
+Torii ལུ་སླབ་ནིའི་དོན་ལུ་ཡིག་དཔར་རྐྱབས། ཁྱོད་ཀྱིས་ ཚོང་འབྲེལ་ཚུ་ བཙུགས་དགོཔ་ད་ ལག་ལེན་འཐབ།
+བྱུང་ལས་ཚུ་ལུ་ མཉམ་བསྡོམས་འབད་ ཡང་ན་ རཱསིཊི་གློག་རིམ་ལས་ འདྲི་དཔྱད་གནས་སྟངས་ཨིན།
 
-## 1. Add the crate
+## 1. ཀྲེག་བསྣན།
 
 ```toml title="Cargo.toml"
 [dependencies]
 iroha = { path = "../../crates/iroha", features = ["client"] }
 ```
 
-The workspace example unlocks the client module via the `client` feature. If you
-consume the published crate, replace the `path` attribute with the current
-version string.
+ལཱ་གི་ས་སྒོ་འདི་གིས་ `client` ཁྱད་རྣམ་བརྒྱུད་དེ་ མཁོ་སྤྲོད་འབད་མི་ཚད་གཞི་འདི་ ལྡེ་མིག་ཕྱེཝ་ཨིན། ཁྱོད།
+དཔར་བསྐྲུན་འབད་ཡོད་པའི་ཀེརེཊི་འདི་བཟའ་སྤྱོད་འབད་ ད་ལྟོའི་འདི་གིས་ `path` ཁྱད་ཆོས་འདི་ཚབ་བཙུགསཔ་ཨིན།
+ཐོན་རིམ་ཡིག་རྒྱུན་།
 
-## 2. Configure the client
+## 2. མཁོ་སྤྲོད་པ་རིམ་སྒྲིག་འབད།
 
 ```rust title="src/main.rs"
 use iroha::client::{Client, ClientConfiguration};
@@ -45,10 +46,10 @@ fn main() -> eyre::Result<()> {
 }
 ```
 
-`ClientConfiguration` mirrors the CLI configuration file: it includes Torii and
-telemetry URLs, authentication material, timeouts, and batching preferences.
+I18NI000000026X གིས་ སི་ཨེལ་ཨའི་རིམ་སྒྲིག་ཡིག་སྣོད་འདི་ གཟུགས་བརྙན་བཟོཝ་ཨིན།
+telemetry URLs བདེན་བཤད་རྒྱུ་ཆ་ དུས་ཚོད་རྫོགས་ནི་ དེ་ལས་ བེཆ་དགའ་གདམ་ཚུ།
 
-## 3. Submit a transaction
+## 3. ཚོང་འབྲེལ་ཅིག་ཕུལ་ནི།
 
 ```rust
 use iroha::client::{Client, ClientConfiguration};
@@ -88,11 +89,11 @@ fn submit_example() -> eyre::Result<()> {
 }
 ```
 
-Under the hood the client uses Norito to encode the transaction payload before
-posting it to Torii. If submission succeeds, the returned hash can be used to
-track status via `client.poll_transaction_status(hash)`.
+ཁ་དོག་འོག་ལུ་ མཁོ་མངགས་འབད་མི་གིས་ I18NT0000001X འདི་ ཧེ་མ་ལས་ བརྗེ་སོར་གྱི་ པེ་ལོཌི་འདི་ སྔོན་མ་ལས་ ཨིན་ཀོ་ཌིང་འབད་ནི་གི་དོན་ལུ་ ལག་ལེན་འཐབ་ཨིན།
+I18NT0000008X ལུ་བཙུགས་ནི། ཞུ་ཡིག་འདི་མཐར་འཁྱོལ་ཅན་ཨིན་པ་ཅིན་ སླར་ལོག་འབད་མི་ ཧ་ཤི་འདི་ ལག་ལེན་འཐབ་བཏུབ།
+བརྟག་ཞིབ་གནས་རིམ་ `client.poll_transaction_status(hash)` བརྒྱུད་དེ་ཨིན།
 
-## 4. Submit DA blobs
+## 4. DA blobs ཕུལ་བ།
 
 ```rust
 use iroha::client::{Client, ClientConfiguration};
@@ -115,11 +116,11 @@ fn submit_da_blob() -> eyre::Result<()> {
 }
 ```
 
-When you need to inspect or persist the Norito payload without sending it to
-Torii, call `client.build_da_ingest_request(...)` to obtain the signed request
-and render it as JSON/bytes, mirroring `iroha app da submit --no-submit`.
+ཁྱོད་ཀྱིས་ Norito གི་སྤྲོད་ལེན་འདི་ བརྟག་དཔྱད་འབད་དགོཔ་ད་ དེ་ ལུ་མ་གཏང་པར་
+Torii, མཚན་རྟགས་བཀོད་པའི་ཞུ་བ་འདི་ཐོབ་ནིའི་དོན་ལུ་ `client.build_da_ingest_request(...)` ལུ་ ཁ་པར་གཏང་།
+དང་ JSON/bytes སྦེ་སྟོན་ཞིནམ་ལས་ `iroha app da submit --no-submit` མེ་ལོང་བཟོཝ་ཨིན།
 
-## 5. Query data
+## 5. འདྲི་དཔྱད་གནས་སྡུད།
 
 ```rust
 use iroha::client::{Client, ClientConfiguration};
@@ -135,11 +136,11 @@ fn list_domains() -> eyre::Result<()> {
 }
 ```
 
-Queries follow the request/response pattern: construct a query type from
-`iroha_data_model::query`, send it via `client.request`, and iterate over the
-results. Responses use Norito-backed JSON, so the wire format is deterministic.
+འདྲི་དཔྱད་ཚུ་གིས་ ཞུ་བ་/ལན་འདེབས་དཔེ་གཞི་ལུ་རྗེས་སུ་འཇུག་སྟེ་ འདྲི་དཔྱད་ཀྱི་དབྱེ་བ་འདི་ ལས་བཟོ་བསྐྲུན་འབད།
+`iroha_data_model::query`, I18NI000000031X བརྒྱུད་དེ་གཏང་ཞིནམ་ལས་ བསྐྱར་དུ་བསྐྱར་ཟློས་འབད་དགོ།
+གྲུབ་འབྲས། ལན་ཚུ་གིས་ Norito-backed JSON ལག་ལེན་འཐབ་དོ་ཡོདཔ་ལས་ གློག་ཐག་རྩ་སྒྲིག་འདི་ གཏན་འབེབས་བཟོཝ་ཨིན།
 
-## 6. Explorer QR snapshots
+## 6. འཚོལ་ཞིབ་པ་ QR པར་ལེན་པ།
 
 ```rust
 use iroha::client::{
@@ -160,15 +161,15 @@ fn download_qr() -> eyre::Result<()> {
 }
 ```
 
-`ExplorerAccountQrSnapshot` mirrors the `/v1/explorer/accounts/{id}/qr` JSON
-surface: it includes the canonical account id, the literal rendered with the
-requested format, network prefix/error-correction metadata, QR dimensions, and
-the inline SVG payload that wallets/explorers can embed directly. Omit
-`ExplorerAccountQrOptions` to default to the preferred IH58 output or set
-`address_format: Some(AddressFormat::Compressed)` to retrieve the second-best
-`sora…` variant used by ADDR-6b.
+`ExplorerAccountQrSnapshot` གིས་ `/v1/explorer/accounts/{id}/qr` JSON
+ཁ་ཐོག་: དེ་ནང་ལུ་ ཀེ་ནོ་ནིག་རྩིས་ཐོ་ id དང་ ཡིག་ཆའི་བརྡ་སྟོན་འབད་མི་ཚུ་ཨིན།
+ཞུ་བ་འབད་ཡོད་པའི་རྩ་སྒྲིག་, ཡོངས་འབྲེལ་སྔོན་སྒྲིག་/ནོར་འཁྲུལ་-ནོར་བཅོས་མེ་ཊ་ཌེ་ཊ་, ཀིའུ་ཨར་རྒྱ་ཚད་, དང་།
+དངུལ་ཁུག་/འཚོལ་ཞིབ་འབད་མི་ ནང་ཐིག་ཨེསི་ཝི་ཇི་ པེ་ལོཌ་འདི་ ཐད་ཀར་དུ་ བཙུགས་ཚུགས། བདོད༌ནི༌; བདོབར༌ནི
+IH58 ཐོན་འབྲས་ཡང་ན་ གཞི་སྒྲིག་ལུ་ སྔོན་སྒྲིག་འབད་ནི་ལུ་ I18NI000000034X ཨིན།
+I18NI000000035X ལ་དྲག་ཤོས་གཉིས་པ་བསྐྱར་ལེན་བྱེད་པར་།
+I18NI000000036X གིས་ ADDR-6b གིས་ལག་ལེན་འཐབ་མི་ འགྱུར་ལྡོག་ཅན་།
 
-## 7. Subscribe to events
+## 7. བྱུང་རིམ་ཚུ་ མཁོ་སྒྲུབ་འབད་ནི།
 
 ```rust
 use iroha::client::{Client, ClientConfiguration};
@@ -188,29 +189,29 @@ async fn listen_for_blocks() -> eyre::Result<()> {
 }
 ```
 
-The client exposes async streams for Torii’s SSE endpoints, including pipeline
-events, data events, and telemetry feeds.
+མཁོ་མངགས་འབད་མི་གིས་ Torii གི་ SSE མཇུག་བསྡུའི་དོན་ལུ་ async tways, དེ་ཡང་ པའིཔ་ལཱའིན་རྩིས་ཏེ་ ཕྱིར་བཏོན་འབདཝ་ཨིན།
+བྱུང་ལས་དང་ གནད་སྡུད་བྱུང་ལས་ དེ་ལས་ ཊེ་ལི་མི་ཊི་ཕིཌི་ཚུ།
 
-## More examples
+## དཔེར་བརྗོད།
 
-- End-to-end flows live under `tests/` in `crates/iroha`. Search for integration
-  tests such as `transaction_submission.rs` for richer scenarios.
-- The CLI (`iroha_cli`) uses the same client module; browse
-  `crates/iroha_cli/src/` to see how authentication, batching, and retries are
-  handled in production tooling.
-- Keep Norito in mind: the client never falls back to `serde_json`. When you
-  extend the SDK, rely on `norito::json` helpers for JSON endpoints and
-  `norito::codec` for binary payloads.
+- མཐའ་མའི་རྒྱུན་འབབ་འདི་ I18NI000000037X འོག་ལུ་ I18NI000000038X ནང་ལུ་ཡོདཔ་ཨིན། མཉམ་བསྡོམས་འཚོལ།
+  བརྟག་དཔྱད་ཚུ་ དཔེར་ན་ I18NI000000039X ཚུ་ ཕྱུགཔོ་སྦེ་ཡོད་མི་ཚུ་གི་དོན་ལུ་ཨིན།
+- སི་ཨེལ་ཨའི་ (`iroha_cli`) གིས་ མཁོ་སྤྲོད་འབད་མི་ཚད་གཞི་གཅིག་པ་ལག་ལེན་འཐབ་ཨིན། བལྟ་; བལྟ་ནི
+  `crates/iroha_cli/src/` བདེན་བཤད་དང་ བེཆ་ དེ་ལས་ བསྐྱར་ལོག་ཚུ་ ག་དེ་སྦེ་ཨིན་ན་ བལྟ་ནི་ལུ་ བལྟ་ནི་ལུ་ བལྟ་ནི་ལུ་ཨིན།
+  བཀོལ་སྤྱོད་འབད་ནི། བཟོ་བསྐྲུན་ལག་ཆས།
+- སེམས་ཁར་བཞག་དགོཔ་འདི་ སེམས་ཁར་བཞག་དགོ། ཁྱེད་རང་གི་ཚེ།
+  SDK རྒྱ་སྐྱེད་འབད་ནི། `norito::json` གྲོགས་རམ་པ་ཚུ་ལུ་ JSON མཇུག་བསྡུའི་ས་ཚིགས་ཚུ་དང་ བརྟེན་དགོ།
+  `norito::codec` གཉིས་ལྡན་གྱི་པེ་ལོཊི་ཚུ་གི་དོན་ལུ་.
 
-## Related Norito examples
+## འབྲེལ་ཡོད་ Norito དཔེར་ན།
 
-- [Hajimari entrypoint skeleton](../norito/examples/hajimari-entrypoint) — compile, run, and deploy
-  the minimal Kotodama scaffold that mirrors the setup phase in this quickstart.
-- [Register domain and mint assets](../norito/examples/register-and-mint) — aligns with the
-  `Register` + `Mint` flow shown above so you can replay the same operations from a contract.
-- [Transfer asset between accounts](../norito/examples/transfer-asset) — demonstrates the
-  `transfer_asset` syscall with the same account IDs the SDK quickstarts use.
+- [ཧ་ཇི་མ་རི་འཛུལ་སྒོ་ ཀེང་རུས་](I18NU0000019X) — བསྡུ་སྒྲིག་འབད་ནི་དང་ གཡོག་བཀོལ་ནི།
+  ཉུང་མཐའ་ I1NT00000000X གིས་ མགྱོགས་འགོ་བཙུགས་འདི་ནང་ གཞི་སྒྲིག་འབད་བའི་ གནས་རིམ་འདི་ མེ་ལོང་ནང་ བཏོནམ་ཨིན།
+- [མངའ་ཁོངས་དང་ མིན་ཊི་རྒྱུ་དངོས་ཐོ་འགོད་](../norito/examples/register-and-mint) — འདི་དང་གཅིག་ཁར་ཕྲང་སྒྲིག་འབདཝ་ཨིན།
+  I18NI000000045X + `Mint` གིས་ གོང་ལུ་སྟོན་ཡོད་མི་དེ་ལུ་ ཁྱོད་ཀྱིས་ གན་རྒྱ་ཅིག་ལས་ བཀོལ་སྤྱོད་གཅིག་མཚུངས་ཚུ་ ལོག་གཏང་ཚུགས།
+- [རྩིས་ཐོ་ཚུ་གི་བར་ན་ བརྒྱུད་འཕྲིན་གྱི་རྒྱུ་དངོས་ཚུ་ ] (../norito/examples/transfer-asset) — འདི་སྟོནམ་ཨིན།
+  I18NI000000047X རྩིས་ཐོ་གཅིག་པའི་ཨའི་ཌི་ཚུ་ ཨེསི་ཌི་ཀེ་ མགྱོགས་དྲགས་འགོ་བཙུགས་ལག་ལེན་འཐབ་ཨིན།
 
-With these building blocks you can integrate Torii into Rust services or CLIs.
-Refer to the generated documentation and data-model crates for the full set of
-instructions, queries, and events.
+འ་ནི་སྒྲིང་ཁྱིམ་གྱི་སྡེབ་ཚན་ཚུ་གིས་ ཁྱོད་ཀྱིས་ Torii འདི་ Rust ཞབས་ཏོག་ཡང་ན་ CLIs ནང་ལུ་ མཉམ་བསྡོམས་འབད་ཚུགས།
+བཟོ་བཏོན་འབད་ཡོད་པའི་ཡིག་ཆ་དང་ གནད་སྡུད་-དཔེ་ཚད་ཀེརེསི་ལུ་ ཆ་ཚང་ཆ་ཚང་གི་དོན་ལུ་ གཞི་བསྟུན་འབད།
+བཀོད་རྒྱ་དང་འདྲི་དཔྱད་ དེ་ལས་བྱུང་ལས་ཚུ།

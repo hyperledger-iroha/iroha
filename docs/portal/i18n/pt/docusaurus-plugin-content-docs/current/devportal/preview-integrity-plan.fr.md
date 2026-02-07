@@ -4,38 +4,40 @@ direction: ltr
 source: docs/portal/docs/devportal/preview-integrity-plan.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Plan de previsualisation controle par checksum
+# Plano de controle de pré-visualização por checksum
 
-Ce plan decrit le travail restant necessaire pour rendre chaque artefact de previsualisation du portail verifiable avant publication. L'objectif est de garantir que les relecteurs telechargent exactement le snapshot construit en CI, que le manifeste de checksum est immuable et que la previsualisation est decouvrable via SoraFS avec des metadonnees Norito.
+Este plano descreve o trabalho restante necessário para tornar cada artefato de pré-visualização do portal verificável antes da publicação. O objetivo é garantir que os leitores carreguem exatamente o instantâneo construído em CI, que o manifesto da soma de verificação seja imuável e que a pré-visualização seja decupável via SoraFS com os metadonnes Norito.
 
-## Objectifs
+## Objetivos
 
-- **Builds deterministes:** S'assurer que `npm run build` produit une sortie reproductible et emet toujours `build/checksums.sha256`.
-- **Previsualisations verifiees:** Exiger que chaque artefact de previsualisation fournisse un manifeste de checksum et refuser la publication lorsque la verification echoue.
-- **Metadonnees publiees via Norito:** Persister les descripteurs de previsualisation (metadonnees de commit, digest de checksum, CID SoraFS) en JSON Norito afin que les outils de gouvernance puissent auditer les releases.
-- **Outillage operateur:** Fournir un script de verification en une etape que les consommateurs peuvent executer localement (`./docs/portal/scripts/preview_verify.sh --build-dir build --descriptor <path> --archive <path>`); le script encapsule desormais le flux de validation checksum + descripteur de bout en bout. La commande de previsualisation standard (`npm run serve`) invoque maintenant cet assistant automatiquement avant `docusaurus serve` afin que les snapshots locaux restent sous controle de checksum (avec `npm run serve:verified` conserve comme alias explicite).
+- **Builds deterministas:** Garanta que `npm run build` produza uma saída reproduzível e continue sempre `build/checksums.sha256`.
+- **Pré-visualizações verificadas:** Exigir que cada artefato de pré-visualização forneça um manifesto de soma de verificação e recuse a publicação quando a verificação for repetida.
+- **Metadonnees publicados via Norito:** Persistir os descritores de pré-visualização (metadonnees de commit, digest de checksum, CID SoraFS) em JSON Norito para que as ferramentas de governança possam auditar os lançamentos.
+- **Operador de inicialização:** Fornece um script de verificação em uma etapa em que os usuários podem executar a localização do executado (`./docs/portal/scripts/preview_verify.sh --build-dir build --descriptor <path> --archive <path>`); o script encapsula o fluxo de verificação de validação + descritor de luta em luta. O comando de pré-visualização padrão (`npm run serve`) invoca a manutenção deste assistente automaticamente antes de `docusaurus serve` para que os instantâneos localizados permaneçam sob o controle de soma de verificação (com `npm run serve:verified` conservam como alias explícito).
 
-## Phase 1 - Application CI
+## Fase 1 - CI de aplicação
 
-1. Mettre a jour `.github/workflows/docs-portal-preview.yml` pour:
-   - Executer `node docs/portal/scripts/write-checksums.mjs` apres le build Docusaurus (deja invoque localement).
-   - Executer `cd build && sha256sum -c checksums.sha256` et echouer le job en cas de divergence.
-   - Empaqueter le repertoire build en `artifacts/preview-site.tar.gz`, copier le manifeste de checksum, executer `scripts/generate-preview-descriptor.mjs`, et executer `scripts/sorafs-package-preview.sh` avec une configuration JSON (voir `docs/examples/sorafs_preview_publish.json`) afin que le workflow emette a la fois les metadonnees et un bundle SoraFS deterministe.
-   - Televerser le site statique, les artefacts de metadonnees (`docs-portal-preview`, `docs-portal-preview-metadata`) et le bundle SoraFS (`docs-portal-preview-sorafs`) afin que le manifeste, le resume CAR et le plan puissent etre inspectes sans relancer le build.
-2. Ajouter un commentaire de badge CI qui resume le resultat de la verification checksum dans les pull requests (implemente via l'etape de commentaire GitHub Script de `docs-portal-preview.yml`).
-3. Documenter le workflow dans `docs/portal/README.md` (section CI) et lier les etapes de verification dans la checklist de publication.
+1. Coloque um dia `.github/workflows/docs-portal-preview.yml` para:
+   - O executor `node docs/portal/scripts/write-checksums.mjs` após a compilação Docusaurus (deixa de chamar a localização).
+   - Execute `cd build && sha256sum -c checksums.sha256` e reproduza o trabalho em caso de divergência.
+   - Empaque o repertório construído em `artifacts/preview-site.tar.gz`, copie o manifesto de checksum, o executor `scripts/generate-preview-descriptor.mjs` e o executor `scripts/sorafs-package-preview.sh` com uma configuração JSON (veja `docs/examples/sorafs_preview_publish.json`) para que o fluxo de trabalho seja emitido para os metadonnees e um pacote Determinador SoraFS.
+   - Televerse le site statique, les artefatos de metadonnes (`docs-portal-preview`, `docs-portal-preview-metadata`) et le bundle SoraFS (`docs-portal-preview-sorafs`) afin que le manifeste, le resume CAR et le plan puissent etre inspeciona sans relancer le build.
+2. Adicione um comentário de crachá CI para retomar o resultado da soma de verificação de verificação nas solicitações pull (implementado por meio da fita de comentário GitHub Script de `docs-portal-preview.yml`).
+3. Documente o fluxo de trabalho em `docs/portal/README.md` (seção CI) e coloque as etapas de verificação na lista de verificação de publicação.
 
-## Script de verification
+## Script de verificação
 
-`docs/portal/scripts/preview_verify.sh` valide les artefacts de previsualisation telecharges sans exiger d'invocations manuelles de `sha256sum`. Utilisez `npm run serve` (ou l'alias explicite `npm run serve:verified`) pour executer le script et lancer `docusaurus serve` en une seule etape lorsque vous partagez des snapshots locaux. La logique de verification:
+`docs/portal/scripts/preview_verify.sh` valida os artefatos de pré-visualização telecarregados sem a necessidade de invocações manuais de `sha256sum`. Use `npm run serve` (ou o alias explícito `npm run serve:verified`) para executar o script e lancer `docusaurus serve` em uma única etapa ao compartilhar snapshots locais. A lógica de verificação:
 
-1. Execute l'outil SHA approprie (`sha256sum` ou `shasum -a 256`) contre `build/checksums.sha256`.
-2. Compare optionnellement le digest/nom de fichier du descripteur de previsualisation `checksums_manifest` et, lorsque fourni, le digest/nom de fichier de l'archive de previsualisation.
-3. Sort avec un code non nul lorsqu'une divergence est detectee afin que les relecteurs puissent bloquer des previsualisations alterees.
+1. Execute o utilitário SHA apropriado (`sha256sum` ou `shasum -a 256`) contra `build/checksums.sha256`.
+2. Compare as opções do resumo/nome do arquivo do descritor de pré-visualização `checksums_manifest` e, quando for o caso, o resumo/nome do arquivo do arquivo de pré-visualização.
+3. Classifique com um código não nulo quando uma divergência for detectada para que os reletores possam bloquear as pré-visualizações alteradas.
 
-Exemple d'utilisation (apres extraction des artefacts CI):
+Exemplo de utilização (após extração de artefatos CI):
 
 ```bash
 ./docs/portal/scripts/preview_verify.sh \
@@ -44,37 +46,35 @@ Exemple d'utilisation (apres extraction des artefacts CI):
   --archive artifacts/preview-site.tar.gz
 ```
 
-Les ingenieurs CI et release doivent appeler le script chaque fois qu'ils telechargent un bundle de previsualisation ou attachent des artefacts a un ticket de release.
+Os engenheiros de CI e lançamento devem chamar o script cada vez que eles baixam um pacote de pré-visualização ou anexam os artefatos a um bilhete de lançamento.
 
-## Phase 2 - Publication SoraFS
+## Fase 2 - Publicação SoraFS
 
-1. Etendre le workflow de previsualisation avec un job qui:
-   - Televerse le site construit vers la passerelle de staging SoraFS en utilisant `sorafs_cli car pack` et `manifest submit`.
-   - Capture le digest du manifeste renvoye et le CID SoraFS.
-   - Serialise `{ commit, branch, checksum_manifest, cid }` en JSON Norito (`docs/portal/preview/preview_descriptor.json`).
-2. Stocker le descripteur avec l'artefact de build et exposer le CID dans le commentaire de pull request.
-3. Ajouter des tests d'integration qui exercent `sorafs_cli` en mode dry-run afin d'assurer que les evolutions futures conservent la coherence du schema de metadonnees.
+1. Crie o fluxo de trabalho de pré-visualização com um trabalho aqui:
+   - Televerse le site construit ver la passerelle de staging SoraFS en utilisant `sorafs_cli car pack` et `manifest submit`.
+   - Capture o resumo do manifesto enviado e o CID SoraFS.
+   - Serialize `{ commit, branch, checksum_manifest, cid }` em JSON Norito (`docs/portal/preview/preview_descriptor.json`).
+2. Armazene o descritor com o artefato de construção e exponha o CID no comentário da solicitação pull.
+3. Adicionar testes de integração que exercem `sorafs_cli` em modo de simulação para garantir que as evoluções futuras conservam a coerência do esquema de metadonnees.
 
-## Phase 3 - Gouvernance et audit
+## Fase 3 - Governança e auditoria1. Publique um esquema Norito (`PreviewDescriptorV1`) que descreve a estrutura do descritor sob `docs/portal/schemas/`.
+2. Insira hoje a lista de verificação da publicação DOCS-SORA para exigir:
+   - Lancer `sorafs_cli manifest verify` na carga CID.
+   - Registre o resumo do manifesto da soma de verificação e o CID na descrição do PR de lançamento.
+3. Conecte a automação de governança para cruzar o descritor com o manifesto da soma de verificação pendente dos votos de liberação.
 
-1. Publier un schema Norito (`PreviewDescriptorV1`) decrivant la structure du descripteur sous `docs/portal/schemas/`.
-2. Mettre a jour la checklist de publication DOCS-SORA pour exiger:
-   - Lancer `sorafs_cli manifest verify` sur le CID charge.
-   - Enregistrer le digest du manifeste de checksum et le CID dans la description de la PR de release.
-3. Connecter l'automatisation de gouvernance pour croiser le descripteur avec le manifeste de checksum pendant les votes de release.
+## Livrables e responsabilidades
 
-## Livrables et responsabilites
-
-| Jalon | Proprietaire(s) | Cible | Notes |
+| Jalão | Proprietário(s) | Cível | Notas |
 |-------|-----------------|-------|-------|
-| Application des checksums en CI livree | Infrastructure Docs | Semaine 1 | Ajoute un gate de validation et des uploads d'artefacts. |
-| Publication des previews SoraFS | Infrastructure Docs / Equipe Storage | Semaine 2 | Necessite l'acces aux identifiants de staging et des mises a jour du schema Norito. |
-| Integration gouvernance | Responsable Docs/DevRel / WG Gouvernance | Semaine 3 | Publie le schema et met a jour les checklists et les entrees du roadmap. |
+| Aplicação de somas de verificação em CI grátis | Documentos de infraestrutura | Semana 1 | Adicione uma porta de validação e upload de artefatos. |
+| Publicação de prévias SoraFS | Documentos de Infraestrutura / Equipe Storage | Semana 2 | Necessário acesso a identificadores de teste e erros no dia do esquema Norito. |
+| Governança da integração | Documentos Responsáveis/DevRel / WG Governança | Semana 3 | Publique o esquema e apresente recentemente as listas de verificação e as entradas do roteiro. |
 
-## Questions ouvertes
+## Perguntas abertas
 
-- Quel environnement SoraFS doit heberger les artefacts de previsualisation (staging vs. lane de previsualisation dediee)?
-- Avons-nous besoin de doubles signatures (Ed25519 + ML-DSA) sur le descripteur de previsualisation avant publication?
-- Le workflow CI doit-il epingler la configuration de l'orchestrateur (`orchestrator_tuning.json`) lors de l'execution de `sorafs_cli` pour garder des manifestes reproductibles?
+- Qual ambiente SoraFS possui artefatos de pré-visualização (staging vs. lane de previsualization dediee)?
+- Avons-nous besoin de assinaturas duplas (Ed25519 + ML-DSA) no descritor de pré-visualização antes da publicação?
+- O fluxo de trabalho CI deve copiar a configuração do orquestrador (`orchestrator_tuning.json`) durante a execução de `sorafs_cli` para armazenar manifestos reproduzíveis?
 
-Consignez les decisions dans `docs/portal/docs/reference/publishing-checklist.md` et mettez a jour ce plan une fois les inconnues resolues.
+Transmita as decisões em `docs/portal/docs/reference/publishing-checklist.md` e faça um plano diário para as resoluções inconnuas.

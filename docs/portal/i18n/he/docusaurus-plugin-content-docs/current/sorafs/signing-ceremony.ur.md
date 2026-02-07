@@ -4,21 +4,23 @@ direction: rtl
 source: docs/portal/docs/sorafs/signing-ceremony.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: signing-ceremony
+מזהה: טקס חתימה
 title: دستخطی تقریب کی جگہ نیا عمل
 description: Sora پارلیمنٹ کس طرح SoraFS chunker fixtures کی منظوری اور تقسیم کرتی ہے (SF-1b).
 sidebar_label: دستخطی تقریب
 ---
 
-> Roadmap: **SF-1b — Sora Parliament fixture approvals.**
+> מפת דרכים: **SF-1b - אישורים של אירועי הפרלמנט של סורה.**
 > پارلیمنٹ کا ورک فلو پرانی آف لائن "کونسل دستخطی تقریب" کی جگہ لیتا ہے۔
 
 SoraFS chunker fixtures کے لیے دستی دستخطی رسم ریٹائر کر دی گئی ہے۔ اب تمام منظوری
 **Sora Parliament** کے ذریعے ہوتی ہے، جو Nexus کو گورن کرنے والی sortition-based DAO ہے۔
-پارلیمنٹ کے اراکین شہری بننے کے لیے XOR bond کرتے ہیں، پینلز کے درمیان گردش کرتے ہیں،
+پارلیمنٹ کے اراکین شہری بننے کے لیے XOR bond کرتے ہیں، پینلز کے درمیان گردش کرتے 20,
 اور on-chain ووٹس کے ذریعے fixtures ریلیزز کو منظور، مسترد یا رول بیک کرتے ہیں۔
 یہ گائیڈ عمل اور developer tooling کی وضاحت کرتی ہے۔
 
@@ -26,29 +28,29 @@ SoraFS chunker fixtures کے لیے دستی دستخطی رسم ریٹائر ک
 
 - **شہریت** — آپریٹرز مطلوبہ XOR bond کر کے شہری بنتے ہیں اور sortition کے اہل ہوتے ہیں۔
 - **پینلز** — ذمہ داریاں گردش کرنے والے پینلز میں تقسیم ہیں (Infrastructure,
-  Moderation, Treasury, ...). Infrastructure Panel SoraFS fixture approvals کا ذمہ دار ہے۔
+  מתינות, משרד האוצר, ...). Infrastructure Panel SoraFS fixture approvals کا ذمہ دار ہے۔
 - **Sortition اور rotation** — پینل سیٹس پارلیمنٹ دستور میں متعین cadence پر دوبارہ
   قرعہ اندازی سے منتخب ہوتے ہیں تاکہ کوئی ایک گروہ منظوریوں پر اجارہ داری نہ رکھ سکے۔
 
-## Fixture approval flow
+## זרימת אישור מתקן
 
-1. **Proposal submission**
+1. **הגשת הצעה**
    - Tooling WG امیدوار `manifest_blake3.json` bundle اور fixture diff کو `sorafs.fixtureProposal`
      کے ذریعے on-chain registry میں اپلوڈ کرتا ہے۔
    - پروپوزل BLAKE3 digest، semantic version اور تبدیلی نوٹس ریکارڈ کرتا ہے۔
-2. **Review & voting**
+2. **סקירה והצבעה**
    - Infrastructure Panel پارلیمنٹ task queue کے ذریعے اسائنمنٹ وصول کرتا ہے۔
    - پینل ممبرز CI artefacts دیکھتے ہیں، parity tests چلاتے ہیں، اور on-chain weighted votes ڈالتے ہیں۔
-3. **Finalisation**
+3. **סיום**
    - جب quorum پورا ہو جائے تو runtime ایک approval event جاری کرتا ہے جس میں canonical manifest digest
      اور fixture payload کے لیے Merkle commitment شامل ہوتا ہے۔
    - یہ event SoraFS registry میں mirror کیا جاتا ہے تاکہ کلائنٹس تازہ ترین Parliament-approved manifest حاصل کر سکیں۔
-4. **Distribution**
+4. **הפצה**
    - CLI helpers (`cargo xtask sorafs-fetch-fixture`) Nexus RPC سے منظور شدہ manifest کھینچتے ہیں۔
      ریپو کے JSON/TS/Go constants `export_vectors` دوبارہ چلا کر اور digest کو on-chain ریکارڈ کے
      مقابل validate کر کے sync رہتے ہیں۔
 
-## Developer workflow
+## זרימת עבודה של מפתחים
 
 - Fixtures دوبارہ بنائیں:
 
@@ -79,22 +81,20 @@ sorafs-fetch \
   --gateway-manifest-id=<manifest_id_hex> \
   --gateway-chunker-handle=sorafs.sf1@1.0.0 \
   --json-out=reports/staging_gateway.json
-```
-
-- مقامی CI اب `signer.json` roster کا تقاضا نہیں کرتا۔
+```- مقامی CI اب `signer.json` roster کا تقاضا نہیں کرتا۔
   `ci/check_sorafs_fixtures.sh` repo کی حالت کو تازہ ترین on-chain commitment سے موازنہ کرتا ہے اور
   فرق ہونے پر fail کر دیتا ہے۔
 
-## Governance notes
+## הערות ממשל
 
 - پارلیمنٹ دستور quorum، rotation اور escalation کو govern کرتا ہے — crate-level configuration درکار نہیں۔
-- ہنگامی rollbacks پارلیمنٹ moderation panel کے ذریعے سنبھالے جاتے ہیں۔ Infrastructure Panel ایک revert
+- ہنگامی rollbacks پارلیمنٹ moderation panel کے ذریعے سنبھالے جاتے ہیں۔ פאנל תשתית חוזר
   proposal فائل کرتا ہے جو پچھلے manifest digest کو حوالہ دیتا ہے، اور منظوری کے بعد release بدل دی جاتی ہے۔
-- تاریخی approvals SoraFS registry میں forensics replay کے لیے دستیاب رہتے ہیں۔
+- אישורי אישורים SoraFS רישום חוזר של זיהוי פלילי.
 
-## FAQ
+## שאלות נפוצות
 
-- **`signer.json` کہاں گیا؟**  
+- **`signer.json` מכשיר**  
   اسے ہٹا دیا گیا ہے۔ تمام signer attribution on-chain موجود ہے؛ ریپو میں `manifest_signatures.json`
   صرف developer fixture ہے جو آخری approval event سے میچ ہونا چاہیے۔
 

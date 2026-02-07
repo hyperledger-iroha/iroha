@@ -4,43 +4,43 @@ direction: rtl
 source: docs/portal/docs/norito/ledger-walkthrough.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: Walkthrough do ledger
-description: Reproduza um fluxo deterministico de register -> mint -> transfer com o CLI `iroha` e verifique o estado do ledger resultante.
-slug: /norito/ledger-walkthrough
+العنوان: تجول في دفتر الأستاذ
+الوصف: إعادة إنتاج التدفق الحتمي للتسجيل -> النعناع -> النقل عبر CLI `iroha` والتحقق من حالة دفتر الأستاذ الناتج.
+سبيكة: /norito/ledger-walkthrough
 ---
 
-Este walkthrough complementa o [Norito quickstart](./quickstart.md) ao mostrar como mutar e inspecionar o estado do ledger com o CLI `iroha`. Voce vai registrar uma nova definicao de ativo, mintar unidades na conta de operador padrao, transferir parte do saldo para outra conta e verificar as transacoes e holdings resultantes. Cada passo espelha os fluxos cobertos nos quickstarts de SDK Rust/Python/JavaScript para confirmar a paridade entre CLI e SDK.
+تكمل هذه الإرشادات التفصيلية [Norito Quickstart](./quickstart.md) لعرضها كتغيير وفحص حالة دفتر الأستاذ مع CLI `iroha`. قم بتسجيل اسم جديد محدد للنشاط، وإنشاء وحدات في حساب المشغل الرئيسي، ونقل جزء من المبلغ إلى حساب آخر والتحقق من المعاملات والممتلكات الناتجة. كل خطوة تخص التدفقات الشاملة لنا Quickstarts لـ SDK Rust/Python/JavaScript لتأكيد التكافؤ بين CLI وSDK.
 
-## Pre-requisitos
+## المتطلبات المسبقة
 
-- Siga o [quickstart](./quickstart.md) para iniciar a rede de um unico peer via
+- اضغط على [quickstart](./quickstart.md) لبدء تشغيل نظير واحد عبر
   `docker compose -f defaults/docker-compose.single.yml up --build`.
-- Garanta que `iroha` (o CLI) esteja compilado ou baixado e que voce consiga
-  acessar o peer usando `defaults/client.toml`.
-- Helpers opcionais: `jq` (formatacao de respostas JSON) e um shell POSIX para
-  os snippets de variaveis de ambiente usados abaixo.
+- ضمان أن `iroha` (o CLI) تم تجميعه أو حذفه وأنك ستوصي بذلك
+  الوصول أو النظير باستخدام `defaults/client.toml`.
+- خيارات المساعدة: `jq` (تنسيق الاستجابة JSON) وقشرة POSIX للفقرة
+  هذه المقتطفات المتنوعة من البيئة المستخدمة مؤخرًا.
 
-Ao longo do guia, substitua `$ADMIN_ACCOUNT` e `$RECEIVER_ACCOUNT` pelos IDs de
-conta que voce planeja usar. O bundle padrao ja inclui duas contas derivadas das
-chaves de demo:
+منذ فترة طويلة إلى الدليل، استبدل `$ADMIN_ACCOUNT` و`$RECEIVER_ACCOUNT` بمعرفات الشعر
+conta que voceplaneja usar. تحتوي الحزمة على حسابين مشتقين من ذلك
+شافيز دي التجريبي:
 
 ```sh
 export ADMIN_ACCOUNT="ih58..."
 export RECEIVER_ACCOUNT="ih58..."
 ```
 
-Confirme os valores listando as primeiras contas:
+قم بتأكيد القيم المدرجة كحسابات أولية:
 
 ```sh
 iroha --config defaults/client.toml account list all --limit 5 --table
 ```
 
-## 1. Inspecione o estado de genesis
-
-Comece explorando o ledger que o CLI esta mirando:
+## 1. فحص حالة التكوينتعال لاستكشاف دفتر الأستاذ الذي يعجبك CLI:
 
 ```sh
 # Domains registrados no genesis
@@ -55,11 +55,11 @@ iroha --config defaults/client.toml account list filter \
 iroha --config defaults/client.toml asset definition list all --table
 ```
 
-Esses comandos dependem de respostas respaldadas por Norito, entao o filtro e a paginacao sao deterministas e batem com o que os SDKs recebem.
+تعتمد هذه الأوامر على الإجابات التي تم الرد عليها لـ Norito، بما في ذلك التصفية والصفحة وتحديد ما إذا كانت مجموعات SDK ستستقبل.
 
-## 2. Registre uma definicao de ativo
+## 2. سجل تعريفًا للموضوع
 
-Crie um novo ativo infinitamente mintable chamado `coffee` dentro do dominio
+اصرخ بجديد لا نهائي من السحر `coffee` في دومينيو
 `wonderland`:
 
 ```sh
@@ -67,13 +67,13 @@ iroha --config defaults/client.toml asset definition register \
   --id coffee#wonderland
 ```
 
-O CLI imprime o hash da transacao enviada (por exemplo, `0x5f...`). Guarde-o para
-consultar o status mais tarde.
+يقوم CLI بطباعة تجزئة التحويل المرسل (على سبيل المثال، `0x5f...`). Guarde-o الفقرة
+مستشار أو حالة متأخرة.
 
-## 3. Minte unidades na conta do operador
+## 3. احفظ الوحدات بحساب المشغل
 
-As quantidades de ativos vivem sob o par `(asset definition, account)`. Minte 250
-unidades de `coffee#wonderland` em `$ADMIN_ACCOUNT`:
+كما تحيا كميات كبيرة من الأشياء على قدم المساواة `(asset definition, account)`. النعناع 250
+وحدات `coffee#wonderland` في `$ADMIN_ACCOUNT`:
 
 ```sh
 iroha --config defaults/client.toml asset mint \
@@ -81,14 +81,14 @@ iroha --config defaults/client.toml asset mint \
   --quantity 250
 ```
 
-De novo, capture o hash da transacao (`$MINT_HASH`) na saida do CLI. Para
-confirmar o saldo, rode:
+من جديد، قم بالتقاط تجزئة التحويل (`$MINT_HASH`) من خلال CLI. الفقرة
+أكد يا سالدو، ركب:
 
 ```sh
 iroha --config defaults/client.toml asset list all --limit 5 --table
 ```
 
-ou, para mirar apenas o novo ativo:
+أو، لرؤية المزيد من الأحداث:
 
 ```sh
 iroha --config defaults/client.toml asset list filter \
@@ -96,9 +96,9 @@ iroha --config defaults/client.toml asset list filter \
   --limit 1 | jq .
 ```
 
-## 4. Transfira parte do saldo para outra conta
+## 4. تحويل جزء من المبلغ إلى حساب آخر
 
-Mova 50 unidades da conta do operador para `$RECEIVER_ACCOUNT`:
+Mova 50 وحدة حساب المشغل لـ `$RECEIVER_ACCOUNT`:
 
 ```sh
 iroha --config defaults/client.toml asset transfer \
@@ -107,8 +107,8 @@ iroha --config defaults/client.toml asset transfer \
   --quantity 50
 ```
 
-Guarde o hash da transacao como `$TRANSFER_HASH`. Consulte os holdings em ambas
-as contas para verificar os novos saldos:
+قم بحماية تجزئة التحويل مثل `$TRANSFER_HASH`. قم بمراجعة المقتنيات لدى السفراء
+كمعلومات للتحقق من الصلوات الجديدة:
 
 ```sh
 iroha --config defaults/client.toml asset list filter \
@@ -118,36 +118,34 @@ iroha --config defaults/client.toml asset list filter \
   "{\"id\":\"coffee#wonderland##${RECEIVER_ACCOUNT}\"}" --limit 1 | jq .
 ```
 
-## 5. Verifique as evidencias do ledger
+## 5. تحقق كما تفعل الأدلة في دفتر الأستاذ
 
-Use os hashes salvos para confirmar que ambas as transacoes foram committed:
+استخدم طلقات التجزئات لتأكيد رسالتك كعمليات تحويل ملتزم بها:
 
 ```sh
 iroha --config defaults/client.toml transaction get --hash $MINT_HASH | jq .
 iroha --config defaults/client.toml transaction get --hash $TRANSFER_HASH | jq .
 ```
 
-Voce tambem pode fazer stream de blocos recentes para ver qual bloco incluiu a
-transferencia:
+قد يؤدي هذا أيضًا إلى إنشاء تيار من الكتل الأخيرة لرؤية أي كتلة تتضمن ذلك
+ترانسفيرنسيا:
 
 ```sh
 # Stream a partir do ultimo bloco e pare apos ~5 segundos
 iroha --config defaults/client.toml blocks 0 --timeout 5s --table
-```
+```كل أمر يستخدم حمولات كل من Norito وSDKs. إنه يكرر الصوت
+يتم تدفق هذا التدفق عبر الكوديجو (الحصول على عمليات التشغيل السريع لـ SDK من أعلى)، والتجزئات والأوراق المالية
+vao alinhar fromde que voce mire a mesma rede e os mesmos defaults.
 
-Cada comando acima usa os mesmos payloads Norito que os SDKs. Se voce repetir
-este fluxo via codigo (veja os quickstarts de SDK abaixo), os hashes e saldos
-vao alinhar desde que voce mire a mesma rede e os mesmos defaults.
+## روابط حزمة SDK
 
-## Links de paridade de SDK
-
-- [Rust SDK quickstart](../sdks/rust) - demonstra registrar instrucoes,
-  submeter transacoes e consultar status a partir de Rust.
-- [Python SDK quickstart](../sdks/python) - mostra as mesmas operacoes register/mint
+- [البدء السريع لـ Rust SDK] (../sdks/rust) - عرض تعليمات المسجل،
+  تحويلات مقياس فرعي وحالة استشارية من الصدأ.
+- [Python SDK Quickstart](../sdks/python) - يتم تسجيل/نعناع عمليات التشغيل mesmas
   com helpers JSON respaldados por Norito.
-- [JavaScript SDK quickstart](../sdks/javascript) - cobre requests Torii,
-  helpers de governanca e wrappers de query tipados.
+- [البدء السريع لـ JavaScript SDK](../sdks/javascript) - طلبات الكوبري Torii،
+  مساعدو الإدارة ومغلفات الاستعلام ذات أنواع مختلفة.
 
-Rode o walkthrough do CLI primeiro, depois repita o cenario com o SDK de sua
-preferencia para garantir que as duas superficies concordem em hashes de
-transacao, saldos e outputs de query.
+اتبع الإرشادات التفصيلية لـ CLI الأولى، بعد تكرار السيناريو باستخدام SDK الخاص بها
+تفضيل لضمان توافق سطحين مع التجزئات
+المعاملات والمبيعات ومخرجات الاستعلام.

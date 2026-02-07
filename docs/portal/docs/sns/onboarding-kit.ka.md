@@ -9,27 +9,28 @@ source_last_modified: "2025-12-29T18:16:35.174056+00:00"
 translation_last_reviewed: 2026-02-07
 title: SNS metrics & onboarding kit
 description: Dashboard, pricing, and automation artifacts referenced by roadmap item SN-8.
+translator: machine-google-reviewed
 ---
 
-# SNS Metrics & Onboarding Kit
+# SNS Metrics & Inboarding Kit
 
-Roadmap item **SN-8** bundles two promises:
+საგზაო რუკის პუნქტი **SN-8** აერთიანებს ორ დაპირებას:
 
-1. Publish dashboards that expose registrations, renewals, ARPU, disputes, and
-   freeze windows for `.sora`, `.nexus`, and `.dao`.
-2. Ship an onboarding kit so registrars and stewards can wire DNS, pricing, and
-   APIs consistently before any suffix goes live.
+1. გამოაქვეყნეთ დაფები, რომლებიც ასახავს რეგისტრაციას, განახლებას, ARPU-ს, დავებს და
+   გაყინეთ ფანჯრები `.sora`, `.nexus` და `.dao`.
+2. გაგზავნეთ საბორტო ნაკრები, რათა რეგისტრატორებმა და სტიუარდებმა შეძლონ DNS-ის, ფასების და ა.შ.
+   API-ები თანმიმდევრულად, სანამ რაიმე სუფიქსი გამოვა.
 
-This page mirrors the source version
+ეს გვერდი ასახავს წყაროს ვერსიას
 [`docs/source/sns/onboarding_kit.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sns/onboarding_kit.md)
-so external reviewers can follow the same procedure.
+ასე რომ, გარე რეცენზენტებს შეუძლიათ იგივე პროცედურის შესრულება.
 
-## 1. Metric bundle
+## 1. მეტრიკული პაკეტი
 
-### Grafana dashboard & portal embed
+### Grafana დაფის და პორტალის ჩაშენება
 
-- Import `dashboards/grafana/sns_suffix_analytics.json` into Grafana (or another
-  analytics host) via the standard API:
+- იმპორტი `dashboards/grafana/sns_suffix_analytics.json` Grafana-ში (ან სხვა
+  ანალიტიკის ჰოსტი) სტანდარტული API-ის მეშვეობით:
 
 ```bash
 curl -H "Content-Type: application/json" \
@@ -38,31 +39,31 @@ curl -H "Content-Type: application/json" \
      --data-binary @dashboards/grafana/sns_suffix_analytics.json
 ```
 
-- The same JSON powers this portal page’s iframe (see **SNS KPI Dashboard**).
-  Whenever you bump the dashboard, run
-  `npm run build && npm run serve-verified-preview` inside `docs/portal` to
-  confirm both Grafana and the embed stay in sync.
+- იგივე JSON უზრუნველყოფს ამ პორტალის გვერდის iframe-ს (იხ. **SNS KPI Dashboard**).
+  ყოველთვის, როცა დაფაზე შეხვალთ, გაუშვით
+  `npm run build && npm run serve-verified-preview` შიგნით `docs/portal`
+  დაადასტურეთ როგორც Grafana, ასევე ჩაშენებული დარჩენა სინქრონიზებული.
 
-### Panels & evidence
+### პანელები და მტკიცებულებები
 
-| Panel | Metrics | Governance evidence |
-|-------|---------|---------------------|
-| Registrations & renewals | `sns_registrar_status_total` (success + renewal resolver labels) | Per-suffix throughput + SLA tracking. |
-| ARPU / net units | `sns_bulk_release_payment_net_units`, `sns_bulk_release_payment_gross_units` | Finance can match registrar manifests to revenue. |
-| Disputes & freezes | `guardian_freeze_active`, `sns_dispute_outcome_total`, `sns_governance_activation_total` | Shows active freezes, arbitration cadence, and guardian workload. |
-| SLA/error rates | `torii_request_duration_seconds`, `sns_registrar_status_total{status="error"}` | Highlights API regressions before they impact customers. |
-| Bulk manifest tracker | `sns_bulk_release_manifest_total`, payment metrics with `manifest_id` labels | Connects CSV drops to settlement tickets. |
+| პანელი | მეტრიკა | მმართველობის მტკიცებულება |
+|-------|---------|--------------------|
+| რეგისტრაცია და განახლება | `sns_registrar_status_total` (წარმატება + განახლების გადამწყვეტი ეტიკეტები) | თითო სუფიქსის გამტარუნარიანობა + SLA თვალთვალი. |
+| ARPU / წმინდა ერთეული | `sns_bulk_release_payment_net_units`, `sns_bulk_release_payment_gross_units` | ფინანსებს შეუძლია შეესაბამებოდეს რეგისტრატორის მანიფესტებს შემოსავალს. |
+| დავები და ყინვები | `guardian_freeze_active`, `sns_dispute_outcome_total`, `sns_governance_activation_total` | აჩვენებს აქტიურ გაყინვას, საარბიტრაჟო კადენციას და მეურვის დატვირთვას. |
+| SLA/შეცდომის განაკვეთები | `torii_request_duration_seconds`, `sns_registrar_status_total{status="error"}` | ხაზს უსვამს API რეგრესიებს, სანამ ისინი გავლენას მოახდენენ მომხმარებლებზე. |
+| მასობრივი მანიფესტის ტრეკერი | `sns_bulk_release_manifest_total`, გადახდის მეტრიკა `manifest_id` ეტიკეტებით | აკავშირებს CSV წვეთებს ანგარიშსწორების ბილეთებთან. |
 
-Export a PDF/CSV from Grafana (or the embedded iframe) during the monthly KPI
-review and attach it to the relevant annex entry under
-`docs/source/sns/regulatory/<suffix>/YYYY-MM.md`. Stewards also capture the SHA-256
-of the exported bundle under `docs/source/sns/reports/` (for example,
-`steward_scorecard_2026q1.md`) so audits can replay the evidence path.
+PDF/CSV-ის ექსპორტი Grafana-დან (ან ჩაშენებული iframe) ყოველთვიური KPI-ის განმავლობაში
+განიხილავს და დაურთოს შესაბამის დანართს ქვემოთ
+`docs/source/sns/regulatory/<suffix>/YYYY-MM.md`. სტიუარდებმა ასევე დაიჭირეს SHA-256
+ექსპორტირებული პაკეტის `docs/source/sns/reports/` ქვეშ (მაგალითად,
+`steward_scorecard_2026q1.md`), რათა აუდიტმა შეძლოს მტკიცებულების ბილიკის ხელახალი თამაში.
 
-### Annex automation
+### დანართის ავტომატიზაცია
 
-Generate annex files directly from the dashboard export so reviewers get a
-consistent digest:
+შექმენით დანართის ფაილები პირდაპირ დაფის ექსპორტიდან, რათა მიმომხილველებმა მიიღონ ა
+თანმიმდევრული დაიჯესტი:
 
 ```bash
 cargo xtask sns-annex \
@@ -75,77 +76,77 @@ cargo xtask sns-annex \
   --portal-entry docs/portal/docs/sns/regulatory/eu-dsa-2026-03.md
 ```
 
-- The helper hashes the export, captures the UID/tags/panel count, and writes a
-  Markdown annex under `docs/source/sns/reports/.<suffix>/<cycle>.md` (see the
-  `.sora/2026-03` sample committed alongside this doc).
-- `--dashboard-artifact` copies the export into
-  `artifacts/sns/regulatory/<suffix>/<cycle>/` so the annex references the
-  canonical evidence path; use `--dashboard-label` only when you need to point
-  at an out-of-band archive.
-- `--regulatory-entry` points at the governing memo. The helper inserts (or
-  replaces) a `KPI Dashboard Annex` block that records the annex path, dashboard
-  artefact, digest, and timestamp so evidence stays in sync after re-runs.
-- `--portal-entry` keeps the Docusaurus copy (`docs/portal/docs/sns/regulatory/*.md`)
-  aligned so reviewers do not have to diff separate annex summaries manually.
-- If you skip `--regulatory-entry`/`--portal-entry`, attach the generated file to
-  the memos manually and still upload the PDF/CSV snapshots captured from Grafana.
-- For recurring exports, list the suffix/cycle pairs in
-  `docs/source/sns/regulatory/annex_jobs.json` and run
-  `python3 scripts/run_sns_annex_jobs.py --verbose`. The helper walks every entry,
-  copies the dashboard export (defaulting to `dashboards/grafana/sns_suffix_analytics.json`
-  when unspecified), and refreshes the annex block inside each regulatory (and,
-  when available, portal) memo in one pass.
-- Run `python3 scripts/check_sns_annex_schedule.py --jobs docs/source/sns/regulatory/annex_jobs.json --regulatory-root docs/source/sns/regulatory --report-root docs/source/sns/reports` (or `make check-sns-annex`) to prove the job list stays sorted/deduped, each memo carries the matching `sns-annex` marker, and the annex stub exists. The helper writes `artifacts/sns/annex_schedule_summary.json` beside the locale/hash summaries used in governance packets.
-This removes manual copy/paste steps and keeps SN-8 annex evidence consistent while
-guarding schedule, marker, and localization drift in CI.
+- დამხმარე ჰაშებს ექსპორტს, იღებს UID/ტეგების/პანელის რაოდენობას და წერს
+  მარკდაუნის დანართი `docs/source/sns/reports/.<suffix>/<cycle>.md` ქვეშ (იხ
+  `.sora/2026-03` ნიმუში ჩადენილი ამ დოკუმენტთან ერთად).
+- `--dashboard-artifact` აკოპირებს ექსპორტს
+  `artifacts/sns/regulatory/<suffix>/<cycle>/` ამიტომ დანართში მითითებულია
+  კანონიკური მტკიცებულების გზა; გამოიყენეთ `--dashboard-label` მხოლოდ მაშინ, როცა უნდა მიუთითოთ
+  ჯგუფურ არქივში.
+- `--regulatory-entry` მიუთითებს მმართველ მემორანდუმზე. დამხმარე ჩანართები (ან
+  ცვლის) `KPI Dashboard Annex` ბლოკი, რომელიც ჩაწერს დანართის გზას, დაფა
+  არტეფაქტი, დაიჯესტი და დროის შტამპი, ასე რომ მტკიცებულებები სინქრონიზებული რჩება ხელახალი გაშვების შემდეგ.
+- `--portal-entry` ინახავს Docusaurus ასლს (`docs/portal/docs/sns/regulatory/*.md`)
+  გასწორებულია ისე, რომ მიმომხილველებს არ სჭირდებათ ცალკეული დანართების შეჯამების ხელით განსხვავება.
+- თუ გამოტოვებთ `--regulatory-entry`/`--portal-entry`, მიამაგრეთ გენერირებული ფაილი
+  შენიშვნები ხელით და მაინც ატვირთეთ PDF/CSV კადრები, რომლებიც გადაღებულია Grafana-დან.
+- განმეორებადი ექსპორტისთვის, ჩამოთვალეთ სუფიქსი/ციკლის წყვილები
+  `docs/source/sns/regulatory/annex_jobs.json` და გაუშვით
+  `python3 scripts/run_sns_annex_jobs.py --verbose`. დამხმარე დადის ყოველ შესასვლელში,
+  აკოპირებს დაფის ექსპორტს (ნაგულისხმევად `dashboards/grafana/sns_suffix_analytics.json`
+  როდესაც დაუზუსტებელია) და განაახლებს დანართის ბლოკს თითოეული მარეგულირებელი ორგანოს შიგნით (და,
+  როდესაც ხელმისაწვდომია, პორტალი) მემორანდუმი ერთი პასით.
+- გაუშვით `python3 scripts/check_sns_annex_schedule.py --jobs docs/source/sns/regulatory/annex_jobs.json --regulatory-root docs/source/sns/regulatory --report-root docs/source/sns/reports` (ან `make check-sns-annex`), რათა დაამტკიცოთ, რომ ვაკანსიების სია დალაგებულია/მოშლილი რჩება, თითოეული მემორანდუმი ატარებს შესატყვისი `sns-annex` მარკერის და დანართის ნაკერი არსებობს. დამხმარე წერს `artifacts/sns/annex_schedule_summary.json` ლოკალის/ჰაშის შეჯამების გვერდით, რომლებიც გამოიყენება მართვის პაკეტებში.
+ეს წაშლის მექანიკური კოპირების/ჩასმის ნაბიჯებს და ინარჩუნებს SN-8 დანართის მტკიცებულებებს თანმიმდევრულად
+დაცვის განრიგი, მარკერი და ლოკალიზაციის დრიფტი CI-ში.
 
-## 2. Onboarding kit components
+## 2. საბორტო ნაკრების კომპონენტები
 
-### Suffix wiring
+### სუფიქსის გაყვანილობა
 
-- Registry schema + selector rules:
+- რეესტრის სქემა + შერჩევის წესები:
   [`docs/source/sns/registry_schema.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sns/registry_schema.md)
-  and [`docs/source/sns/local_to_global_toolkit.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sns/local_to_global_toolkit.md).
-- DNS skeleton helper:
+  და [`docs/source/sns/local_to_global_toolkit.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sns/local_to_global_toolkit.md).
+- DNS ჩონჩხის დამხმარე:
   [`scripts/sns_zonefile_skeleton.py`](https://github.com/hyperledger-iroha/iroha/blob/master/scripts/sns_zonefile_skeleton.py)
-  with the rehearsal flow captured in the
-  [gateway/DNS runbook](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs_gateway_dns_owner_runbook.md).
-- For every registrar launch, file a short note under
-  `docs/source/sns/reports/` summarising selector samples, GAR proofs, and DNS hashes.
+  სარეპეტიციო ნაკადით დატყვევებული
+  [Gateway/DNS runbook] (https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs_gateway_dns_owner_runbook.md).
+- რეგისტრატორის ყოველი გაშვებისთვის, შეიტანეთ მოკლე შენიშვნა ქვემოთ
+  `docs/source/sns/reports/` აჯამებს სელექტორის ნიმუშებს, GAR მტკიცებულებებს და DNS ჰეშებს.
 
-### Pricing cheatsheet
+### ფასების თაღლითური ცხრილი
 
-| Label length | Base fee (USD equiv) |
-|--------------|---------------------|
+| ეტიკეტის სიგრძე | საბაზისო გადასახადი (USD ეკვივა) |
+|--------------|--------------------|
 | 3 | $240 |
 | 4 | $90 |
 | 5 | $30 |
 | 6–9 | $12 |
 | 10+ | $8 |
 
-Suffix coefficients: `.sora` = 1.0×, `.nexus` = 0.8×, `.dao` = 1.3×.  
-Term multipliers: 2‑year −5 %, 5‑year −12 %; grace window = 30 days, redemption
-= 60 days (20 % fee, min $5, max $200). Record negotiated deviations in the
-registrar ticket.
+სუფიქსის კოეფიციენტები: `.sora` = 1.0×, `.nexus` = 0.8×, `.dao` = 1.3×.  
+ვადის მულტიპლიკატორები: 2-წლიანი -5%, 5-წლიანი -12%; მადლის ფანჯარა = 30 დღე, გამოსყიდვა
+= 60 დღე (20% საკომისიო, მინიმუმ $5, მაქსიმუმ $200). ჩაწერეთ შეთანხმებული გადახრები
+რეგისტრატორის ბილეთი.
 
-### Premium auctions vs renewals
+### პრემიუმ აუქციონები განახლებების წინააღმდეგ
 
-1. **Premium pool** — sealed-bid commit/reveal (SN-3). Track bids with
-   `sns_premium_commit_total`, and publish the manifest under
+1. **პრემიუმ აუზი** — დალუქული შეთავაზების ვალდებულება/გამოვლენა (SN-3). აკონტროლეთ შეთავაზებები
+   `sns_premium_commit_total` და გამოაქვეყნეთ მანიფესტი ქვეშ
    `docs/source/sns/reports/`.
-2. **Dutch reopen** — after grace + redemption expire, start a 7‑day Dutch sale
-   at 10× that decays 15 % per day. Label manifests with `manifest_id` so the
-   dashboard can surface progress.
-3. **Renewals** — monitor `sns_registrar_status_total{resolver="renewal"}` and
-   capture the autorenew checklist (notifications, SLA, fallback payment rails)
-   inside the registrar ticket.
+2. **ჰოლანდიის ხელახლა გახსნა** — შეღავათი + გამოსყიდვის ვადის ამოწურვის შემდეგ დაიწყეთ 7-დღიანი ჰოლანდიური გაყიდვა
+   10×ზე, რომელიც იშლება 15% დღეში. ლეიბლი გამოიხატება `manifest_id`-ით ასე რომ
+   დაფაზე შეუძლია პროგრესი.
+3. **განახლებები** — მონიტორი `sns_registrar_status_total{resolver="renewal"}` და
+   გადაიღეთ ავტორიზებული განახლების საკონტროლო სია (შეტყობინებები, SLA, გადახდის რელსები)
+   რეგისტრატორის ბილეთის შიგნით.
 
-### Developer APIs & automation
+### დეველოპერის API და ავტომატიზაცია
 
-- API contracts: [`docs/source/sns/registrar_api.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sns/registrar_api.md).
-- Bulk helper & CSV schema:
+- API კონტრაქტები: [`docs/source/sns/registrar_api.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sns/registrar_api.md).
+- ნაყარი დამხმარე და CSV სქემა:
   [`docs/source/sns/bulk_onboarding_toolkit.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sns/bulk_onboarding_toolkit.md).
-- Example command:
+- ბრძანების მაგალითი:
 
 ```bash
 python3 scripts/sns_bulk_onboard.py registrations.csv \
@@ -155,27 +156,27 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
   --submit-token-file ~/.config/sora/tokens/registrar.token
 ```
 
-Include the manifest ID (`--submission-log` output) in the KPI dashboard filter
-so finance can reconcile revenue panels per release.
+შეიყვანეთ manifest ID (`--submission-log` გამომავალი) KPI დაფის ფილტრში
+ასე რომ, ფინანსებს შეუძლია შემოსავლების პანელების შეჯერება თითო გამოშვებაზე.
 
-### Evidence bundle
+### მტკიცებულებათა ნაკრები
 
-1. Registrar ticket with contacts, suffix scope, and payment rails.
-2. DNS/resolver evidence (zonefile skeletons + GAR proofs).
-3. Pricing worksheet + any overrides approved by governance.
-4. API/CLI smoke-test artefacts (`curl` samples, CLI transcripts).
-5. KPI dashboard screenshot + CSV export, attached to the monthly annex.
+1. რეგისტრატორის ბილეთი კონტაქტებით, სუფიქსის ფარგლებით და გადახდის რელსებით.
+2. DNS/გამხსნელის მტკიცებულება (zonefile ჩონჩხები + GAR მტკიცებულებები).
+3. ფასების სამუშაო ფურცელი + მმართველობის მიერ დამტკიცებული ნებისმიერი უგულებელყოფა.
+4. API/CLI კვამლის ტესტის არტეფაქტები (`curl` ნიმუშები, CLI ტრანსკრიპტები).
+5. KPI დაფის სკრინშოტი + CSV ექსპორტი, თან ერთვის ყოველთვიურ დანართს.
 
-## 3. Launch checklist
+## 3. გაუშვით საკონტროლო სია
 
-| Step | Owner | Artefact |
+| ნაბიჯი | მფლობელი | არტეფაქტი |
 |------|-------|----------|
-| Dashboard imported | Product Analytics | Grafana API response + dashboard UID |
-| Portal embed validated | Docs/DevRel | `npm run build` logs + preview screenshot |
-| DNS rehearsal complete | Networking/Ops | `sns_zonefile_skeleton.py` outputs + runbook log |
-| Registrar automation dry run | Registrar Eng | `sns_bulk_onboard.py` submissions log |
-| Governance evidence filed | Governance Council | Annex link + SHA-256 of exported dashboard |
+| დაფა შემოტანილია | პროდუქტის ანალიტიკა | Grafana API პასუხი + დაფის UID |
+| პორტალის ჩაშენება დადასტურებულია | Docs/DevRel | `npm run build` ჟურნალები + გადახედვის ეკრანის სურათი |
+| DNS-ის რეპეტიცია დასრულდა | ქსელი/ოპერაციები | `sns_zonefile_skeleton.py` გამომავალი + runbook ჟურნალი |
+| რეგისტრატორის ავტომატიზაციის მშრალი გაშვება | რეგისტრატორი Eng | `sns_bulk_onboard.py` წარდგენის ჟურნალი |
+| წარდგენილია მმართველობის მტკიცებულებები | მმართველობის საბჭო | დანართის ბმული + ექსპორტირებული დაფის SHA-256 |
 
-Complete the checklist before activating a registrar or suffix. The signed
-bundle clears the SN-8 roadmap gate and gives auditors a single reference when
-reviewing marketplace launches.
+შეავსეთ ჩამონათვალი რეგისტრატორის ან სუფიქსის გააქტიურებამდე. ხელმოწერილი
+Bundle ასუფთავებს SN-8 საგზაო რუქის კარიბჭეს და აუდიტორებს აძლევს ერთ მითითებას როდის
+ბაზარზე გაშვების მიმოხილვა.

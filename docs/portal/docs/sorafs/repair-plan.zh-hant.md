@@ -11,29 +11,30 @@ id: repair-plan
 title: SoraFS Repair Automation & Auditor API
 sidebar_label: Repair Automation
 description: Governance policy, escalation lifecycle, and API expectations for SoraFS repair automation.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
-Mirrors `docs/source/sorafs_repair_plan.md`. Keep both versions in sync until the Sphinx set is retired.
+:::注意規範來源
+鏡子 `docs/source/sorafs_repair_plan.md`。保持兩個版本同步，直到 Sphinx 集退役。
 :::
 
-## Governance Decision Lifecycle
-1. Escalated repairs create a slash proposal draft and open the dispute window.
-2. Governance voters submit approve/reject votes during the dispute window.
-3. At `escalated_at_unix + dispute_window_secs` the decision is computed deterministically: minimum voters, approvals exceed rejections, and the approval ratio meets the quorum threshold.
-4. Approved decisions open an appeal window; appeals recorded before `approved_at_unix + appeal_window_secs` mark the decision as appealed.
-5. Penalty caps apply to all proposals; submissions above the cap are rejected.
+## 治理決策生命週期
+1. 升級修復創建斜杠提案草案並打開爭議窗口。
+2. 治理投票者在爭議窗口期間提交批准/拒絕投票。
+3. 在 `escalated_at_unix + dispute_window_secs` 中，決策是確定性計算的：最少投票者、批准超過拒絕，並且批准率滿足法定人數閾值。
+4. 批准的決定打開上訴窗口； `approved_at_unix + appeal_window_secs` 之前記錄的上訴將決定標記為已上訴。
+5. 處罰上限適用於所有提案；超過上限的提交將被拒絕。
 
-## Governance Escalation Policy
-The escalation policy is sourced from `governance.sorafs_repair_escalation` in `iroha_config` and is enforced for every repair slash proposal.
+## 治理升級政策
+升級策略源自 `iroha_config` 中的 `governance.sorafs_repair_escalation`，並對每個修復削減提案強制執行。
 
-| Setting | Default | Meaning |
+|設置|默認|意義|
 |---------|---------|---------|
-| `quorum_bps` | 6667 | Minimum approval ratio (basis points) among counted votes. |
-| `minimum_voters` | 3 | Minimum number of distinct voters required to resolve a decision. |
-| `dispute_window_secs` | 86400 | Time after escalation before votes are finalized (seconds). |
-| `appeal_window_secs` | 604800 | Time after approval during which appeals are accepted (seconds). |
-| `max_penalty_nano` | 1,000,000,000 | Maximum slash penalty allowed for repair escalations (nano-XOR). |
+| `quorum_bps` | 6667 |計票中的最低支持率（基點）。 |
+| `minimum_voters` | 3 |做出決定所需的最小數量的不同選民。 |
+| `dispute_window_secs` | 86400 |升級後到投票最終確定之前的時間（秒）。 |
+| `appeal_window_secs` | 604800 |批准後接受申訴的時間（秒）。 |
+| `max_penalty_nano` | 1,000,000,000 |修復升級允許的最大斜線懲罰（納米異或）。 |
 
-- Scheduler-generated proposals are capped at `max_penalty_nano`; auditor submissions above the cap are rejected.
-- Vote records are stored in `repair_state.to` with deterministic ordering (`voter_id` sorting) so all nodes derive the same decision timestamp and outcome.
+- 調度程序生成的提案上限為 `max_penalty_nano`；審核員提交的超出上限的意見將被拒絕。
+- 投票記錄以確定性排序（`voter_id` 排序）存儲在 `repair_state.to` 中，因此所有節點都得出相同的決策時間戳和結果。

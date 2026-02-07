@@ -11,20 +11,21 @@ id: pq-ratchet-runbook
 title: SoraNet PQ Ratchet Fire Drill
 sidebar_label: PQ Ratchet Runbook
 description: On-call rehearsal steps for promoting or demoting the staged PQ anonymity policy with deterministic telemetry validation.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
+:::དྲན་ཐོའི་འབྱུང་ཁུངས།
 :::
 
-## Purpose
+## དགོས༌དོན
 
-This runbook guides the fire-drill sequence for SoraNet's staged post-quantum (PQ) anonymity policy. Operators rehearse both promotion (Stage A -> Stage B -> Stage C) and controlled demotion back to Stage B/A when PQ supply drops. The drill validates telemetry hooks (`sorafs_orchestrator_policy_events_total`, `sorafs_orchestrator_brownouts_total`, `sorafs_orchestrator_pq_ratio_*`) and collects artefacts for the incident rehearsal log.
+འ་ནི་རན་དེབ་འདི་གིས་ SoraNet གི་གནས་རིམ་གྱི་ ཚད་གཞི་ (PQ) མིང་མ་བཀོད་པའི་སྲིད་བྱུས་ཀྱི་དོན་ལུ་ མེ་བཏེགས་ཀྱི་གོ་རིམ་ལམ་སྟོན་འབདཝ་ཨིན། བཀོལ་སྤྱོད་པ་ཚུ་གིས་ ཡར་འཕེལ་ (གནས་རིམ་ཀ་ -> གནས་རིམ་བི་ -> གནས་རིམ་ ག) གཉིས་ཆ་ར་ བསྐྱར་སྦྱོང་འབད་ཞིནམ་ལས་ པི་ཀིའུ་བཀྲམ་སྤེལ་གྱི་ མར་ཕབ་ཚུ་ གནས་རིམ་བི་/ཨེ་ལུ་ ལོག་ཚད་འཛིན་འབདཝ་ཨིན། དམག་སྦྱོང་འདི་གིས་ ཊེ་ལི་མི་ཊི་རི་ཧུཀ་ (I18NI000000014X, `sorafs_orchestrator_brownouts_total`, I18NI000000016X) བྱུང་རྐྱེན་གྱི་ བསྐྱར་སྦྱོང་དྲན་དེབ་ཀྱི་དོན་ལུ་ ཅ་རྙིང་ཚུ་ བསྡུ་ལེན་འབདཝ་ཨིན།
 
-## Prerequisites
+## སྔོན་འགྲོའི་ཆ་རྐྱེན།
 
-- Latest `sorafs_orchestrator` binary with capability-weighting (commit at or after the drill reference shown in `docs/source/soranet/reports/pq_ratchet_validation.md`).
-- Access to the Prometheus/Grafana stack serving `dashboards/grafana/soranet_pq_ratchet.json`.
-- Nominal guard directory snapshot. Fetch and verify a copy prior to the drill:
+- ལེ་ཊེཊ་ `sorafs_orchestrator` ལྕོགས་གྲུབ་ཀྱི་ལྗིད་ཚད་དང་གཅིག་ཁར་ གཉིས་ལྡན་ (`docs/source/soranet/reports/pq_ratchet_validation.md` ནང་སྟོན་ཡོད་པའི་ དྲིལ་གཞི་བསྟུན་ནང་ ཡང་ན་ ཤུལ་ལས་ བཀོདཔ་ཨིན།)
+- I18NT00000000000X/I18NT000000002X ལུ་འཛུལ་སྤྱོད་འབད་ནི། `dashboards/grafana/soranet_pq_ratchet.json`.
+- མིང་ཚིག་སྲུང་ཆས་སྣོད་ཐོ་པར་བཀོད། དམག་སྦྱོང་མ་འབད་བའི་ཧེ་མ་ འདྲ་བཤུས་ཅིག་ བཀལ་ཞིནམ་ལས་ བདེན་དཔྱད་འབད།
 
 ```bash
 sorafs_cli guard-directory fetch \
@@ -33,9 +34,9 @@ sorafs_cli guard-directory fetch \
   --expected-directory-hash <directory-hash-hex>
 ```
 
-If the source directory only publishes JSON, re-encode it to Norito binary with `soranet-directory build` before running the rotation helpers.
+འབྱུང་ཁུངས་སྣོད་ཐོ་འདི་གིས་ JSON རྐྱངམ་ཅིག་དཔར་བསྐྲུན་འབད་བ་ཅིན་ བསྒྱིར་མི་གྲོགས་རམ་པ་ཚུ་ གཡོག་བཀོལ་བའི་ཧེ་མ་ I18NI000000000X དང་གཅིག་ཁར་ I18NT000000004X གཉིས་ལྡན་ལུ་ ལོག་གཏང་དགོ།
 
-- Capture metadata and pre-stage issuer rotation artefacts with the CLI:
+- སི་ཨེལ་ཨའི་དང་གཅིག་ཁར་ མེ་ཊ་ཌེ་ཊ་དང་ སྔོན་རིམ་བཏོན་མི་ བསྐོར་འཁོར་གྱི་ ཅ་ཆས་ཚུ་ བསྡུ་ལེན་འབད་ནི།
 
 ```bash
 soranet-directory inspect \
@@ -46,67 +47,61 @@ soranet-directory rotate \
   --keys-out ./artefacts/guard_issuer_rotation --overwrite
 ```
 
-- Change window approved by networking and observability on-call teams.
+- འབོད་བརྡ་གུ་ཡོད་པའི་སྡེ་ཚན་ཚུ་གིས་ ཆ་འཇོག་འབད་མི་ སྒོ་སྒྲིག་བསྒྱུར་བཅོས་འབད།
 
-## Promotion steps
+## འཕེལ་རྒྱས་ཀྱི་གོམ་པ།
 
-1. **Stage audit**
+1. **གནས་རིམ་རྩིས་ཞིབ་**
 
-   Record the starting stage:
+   འགོ་བཙུགས་གནས་རིམ་ཐོ་བཀོད་འབད།
 
    ```bash
    sorafs_cli config get --config orchestrator.json sorafs.anonymity_policy
    ```
 
-   Expect `anon-guard-pq` before promotion.
+   ཁྱབ་སྤེལ་མ་འབད་བའི་ཧེ་མ་ `anon-guard-pq` ལུ་རེ་བ་བསྐྱེད།
 
-2. **Promote to Stage B (Majority PQ)**
+2. **གནས་རིམ་ཁ་ (Majority PQ)** ལུ་ཁྱབ་སྤེལ་འབད།
 
-   ```bash
-   sorafs_cli config set --config orchestrator.json \
-     sorafs.anonymity_policy anon-majority-pq
-   ```
+   I18NF0000008X
 
-   - Wait >=5 minutes for manifests to refresh.
-   - In Grafana (`SoraNet PQ Ratchet Drill` dashboard) confirm the "Policy Events" panel shows `outcome=met` for `stage=anon-majority-pq`.
-   - Capture a screenshot or panel JSON and attach it to the incident log.
+   - གསལ་སྟོན་གྱི་དོན་ལུ་ གསལ་སྟོན་ཚུ་གི་དོན་ལུ་ བསྒུགས་ >སྐར་མ་༥།
+   - Grafana (I18NI000002X dashboard) གིས་ "སྲིད་བྱུས་བྱུང་ལས་" པེ་ནཱལ་གྱིས་ I18NI000000023X གི་དོན་ལུ་ I18NI00000000024X འདི་སྟོནམ་ཨིན།
+   - གསལ་གཞི་པར་བཏབ་ནི་ཡང་ན་ པེ་ནཱལ་ཇེ་ཨེསི་ཨོ་ཨེན་ཅིག་ བསྡུ་སྒྲིག་འབད་ཞིནམ་ལས་ བྱུང་རྐྱེན་དྲན་ཐོ་ལུ་མཉམ་སྦྲགས་འབད།
 
-3. **Promote to Stage C (Strict PQ)**
+3. **གནས་རིམ་ C (Scrit PQ)** ལུ་ཁྱབ་སྤེལ་འབད།
 
-   ```bash
-   sorafs_cli config set --config orchestrator.json \
-     sorafs.anonymity_policy anon-strict-pq
-   ```
+   I18NF0000009X
 
-   - Verify `sorafs_orchestrator_pq_ratio_*` histograms trend to 1.0.
-   - Confirm the brownout counter remains flat; otherwise follow the demotion steps.
+   - `sorafs_orchestrator_pq_ratio_*` ཧིསི་ཊོ་གཱརམ་ཚུ་ ༡.༠ ལུ་བདེན་དཔྱད་འབད།
+   - བཱརའུ་ཨའུཊ་ཀའུན་ཊར་འདི་ ཕྲང་ཏང་ཏ་སྦེ་ལུསཔ་ཨིན། དེ་མེན་པ་ཅིན་ མར་ཕབ་ཀྱི་གོ་རིམ་ཚུ་ རྗེས་སུ་འཇུགཔ་ཨིན།
 
-## Demotion / brownout drill
+## བརླག་གཏོར་ / རྒྱ་སྨུག་སྦྱོང་བརྡར།
 
-1. **Induce a synthetic PQ shortage**
+1. **བཅོས་མའི་ PQ མ་ལང་པའི་དཀའ་ངལ་**།
 
-   Disable PQ relays in the playground environment by trimming the guard directory to classical entries only, then reload the orchestrator cache:
+   སྲུང་སྐྱོབ་སྣོད་ཐོ་འདི་ སྔར་ལུགས་ཀྱི་ཐོ་བཀོད་ཚུ་ལུ་རྐྱངམ་ཅིག་ བཏོག་བཏང་ཞིནམ་ལས་ རྩེད་ཐང་གི་མཐའ་འཁོར་ནང་ པི་ཀིའུ་ རི་ལེ་ཚུ་ ལྕོགས་ཅན་བཟོ་ཞིནམ་ལས་ རོལ་དབྱངས་འདྲ་མཛོད་འདི་ ལོག་མངོན་གསལ་འབད།
 
    ```bash
    sorafs_cli guard-cache prune --config orchestrator.json --keep-classical-only
    ```
 
-2. **Observe brownout telemetry**
+2. **བགྲོད་ལམ་བརྙན་བའི་བརྡ་འཕྲིན་**།
 
-   - Dashboard: panel "Brownout Rate" spikes above 0.
-   - PromQL: `sum(rate(sorafs_orchestrator_brownouts_total{region="$region"}[5m]))`
-   - `sorafs_fetch` should report `anonymity_outcome="brownout"` with `anonymity_reason="missing_majority_pq"`.
+   - ཌེཤ་བོརཌི་: པེ་ནཱལ་ "Brownout Rate" འདི་ ༠ ལས་ལྷག་པའི་ སྤེཝ་ཨིན།
+   - པྲོམཀིའུ་ཨེལ་: I18NI0000026X
+   - I18NI000000027X གིས་ `anonymity_outcome="brownout"` གིས་ `anonymity_reason="missing_majority_pq"` དང་ཅིག་ཁར་སྙན་ཞུ་འབད་དགོ།
 
-3. **Demote to Stage B / Stage A**
+3. **Demote B / Stage A**
 
    ```bash
    sorafs_cli config set --config orchestrator.json \
      sorafs.anonymity_policy anon-majority-pq
    ```
 
-   If PQ supply is still insufficient, demote to `anon-guard-pq`. The drill completes once brownout counters settle and promotions can be reapplied.
+   PQ བཀྲམ་སྤེལ་འདི་ད་ལྟོ་ཡང་ལངམ་སྦེ་མེད་པ་ཅིན་ I18NI000000030X ལུ་མར་ཕབ་འབདཝ་ཨིན། སྦྱོང་བརྡར་འདི་ བཱརའོན་ཨའུཊ་ཀའུན་ཊར་ཚུ་ གཞི་བཅག་ཞིནམ་ལས་ ཁྱབ་སྤེལ་ཚུ་ ལོག་སྟེ་བཙུགས་ཚུགས་པའི་སྐབས་ མཇུག་བསྡུཝ་ཨིན།
 
-4. **Restore guard directory**
+༤. **སྲུང་སྐྱོབ་སྣོད་ཐོ་སླར་གསོ་འབད་ནི།**།
 
    ```bash
    sorafs_cli guard-directory import \
@@ -114,14 +109,14 @@ soranet-directory rotate \
      --input ./artefacts/guard_directory_pre_drill.json
    ```
 
-## Telemetry & artefacts
+## བརྒྱུད་འཕྲིན་དང་ཅ་ཆས།
 
-- **Dashboard:** `dashboards/grafana/soranet_pq_ratchet.json`
-- **Prometheus alerts:** ensure `sorafs_orchestrator_policy_events_total` brownout alert stays below the configured SLO (&lt;5% across any 10 minute window).
-- **Incident log:** append the captured telemetry snippets and operator notes to `docs/examples/soranet_pq_ratchet_fire_drill.log`.
-- **Signed capture:** use `cargo xtask soranet-rollout-capture` to copy the drill log and scoreboard into `artifacts/soranet_pq_rollout/<timestamp>/`, compute BLAKE3 digests, and produce a signed `rollout_capture.json`.
+- **ཌེཤ་བོརཌ་:** I18NI0000031X
+- **I18NT0000001X དྲན་སྐུལ་ཚུ་:** རིམ་སྒྲིག་འབད་ཡོད་པའི་ཨེསི་ཨེལ་ཨོ་གི་འོག་ལུ་སྡོད་ནི་ཨིན་ (<5% སྒོ་སྒྲིག་གང་རུང་ནང་)
+- **རྐྱེན་ངན་དྲན་ཐོ་:** བཟུང་ཡོད་པའི་ ཊེ་ལི་མི་ཊི་ པར་ཆས་དང་ བཀོལ་སྤྱོད་པ་ཚུ་ I18NI000000033X ལུ་ མཉམ་སྦྲགས་འབད།
+- **མཚན་རྟགས་བཀོད་མི་:** དམག་སྦྱོང་དང་ སྐུགས་བཀོད་སྒྲིག་འདི་ I18NI000000035X, copite BLAKE3 ནང་ལུ་འདྲ་བཤུས་རྐྱབ་ནི་དང་ མཚན་རྟགས་བཀོད་ཡོད་པའི་ I18NI000000036X བཟོ་བསྐྲུན་འབདཝ་ཨིན།
 
-Example:
+དཔེ:
 
 ```
 cargo xtask soranet-rollout-capture \
@@ -133,12 +128,12 @@ cargo xtask soranet-rollout-capture \
   --label "drill-2026-02-21"
 ```
 
-Attach the generated metadata and signature to the governance packet.
+བཟོ་བཏོན་འབད་ཡོད་པའི་མེ་ཊ་ཌེ་ཊ་དང་ གཞུང་སྐྱོང་སྦུང་ཚན་ལུ་ མཚན་རྟགས་མཉམ་སྦྲགས་འབད།
 
-## Rollback
+## རོལ་རིམ།
 
-If the drill uncovers real PQ shortages, remain on Stage A, notify the Networking TL, and attach the collected metrics plus guard directory diffs to the incident tracker. Use the guard directory export captured earlier to restore normal service.
+གལ་སྲིད་ དམག་སྦྱོང་འདི་གིས་ PQ མ་ལང་པའི་དཀའ་ངལ་ངོ་མ་ཚུ་ གསལ་སྟོན་འབད་བ་ཅིན་ གནས་རིམ་ཀ་གུ་སྡོད་ཞིནམ་ལས་ ཡོངས་འབྲེལ་ TL ལུ་ བརྡ་དོན་སྤྲོད་ཞིནམ་ལས་ བསྡུ་སྒྲིག་འབད་ཡོད་པའི་ མེ་ཊིག་ཚུ་ དང་ སྲུང་རྒྱབ་སྣོད་ཐོ་ཚུ་ བྱུང་རྐྱེན་འཚོལ་ཞིབ་པ་ལུ་ མཐུད་དགོ། སྤྱིར་བཏང་ཞབས་ཏོག་སླར་གསོ་འབད་ནི་ལུ་ ཧེ་མ་ལས་བཟུང་ཡོད་པའི་ ཉེན་སྲུང་སྣོད་ཐོ་ཕྱིར་འདྲེན་འདི་ལག་ལེན་འཐབ།
 
-:::tip Regression Coverage
-`cargo test -p sorafs_orchestrator pq_ratchet_fire_drill_records_metrics` provides the synthetic validation backing this drill.
+:::tip རི་རིམ་ཁྱོན་ཁྱབ་ཁོངས།
+I18NI000000037X གིས་ བཅོས་མའི་བདེན་དཔྱད་རྒྱབ་ཐག་འདི་ དྲིལ་འདི་བྱིནམ་ཨིན།
 :::

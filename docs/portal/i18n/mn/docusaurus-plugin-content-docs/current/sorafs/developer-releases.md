@@ -6,99 +6,101 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: Release Process
 summary: Run the CLI/SDK release gate, apply the shared versioning policy, and publish canonical release notes.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Release Process
+# Суллах үйл явц
 
-SoraFS binaries (`sorafs_cli`, `sorafs_fetch`, helpers) and SDK crates
-(`sorafs_car`, `sorafs_manifest`, `sorafs_chunker`) ship together. The release
-pipeline keeps the CLI and libraries aligned, ensures lint/test coverage, and
-captures artefacts for downstream consumers. Run the checklist below for every
-candidate tag.
+SoraFS хоёртын файлууд (`sorafs_cli`, `sorafs_fetch`, туслахууд) болон SDK хайрцаг
+(`sorafs_car`, `sorafs_manifest`, `sorafs_chunker`) хамт тээвэрлэнэ. Хувилбар
+дамжуулах хоолой нь CLI болон номын сангуудыг зэрэгцүүлж, хөвөн/туршилтын хамрах хүрээг баталгаажуулдаг
+доод урсгалын хэрэглэгчдэд зориулсан олдворуудыг барьж авдаг. Доорх шалгах хуудсыг тус бүрээр нь ажиллуулна уу
+нэр дэвшигчийн шошго.
 
-## 0. Confirm security review sign-off
+## 0. Аюулгүй байдлын шалгалтын бүртгэлийг баталгаажуулна уу
 
-Before executing the technical release gate, capture the latest security review
-artefacts:
+Техникийн хувилбарын хаалгыг гүйцэтгэхийн өмнө хамгийн сүүлийн үеийн аюулгүй байдлын тоймыг аваарай
+олдворууд:
 
-- Download the most recent SF-6 security review memo ([reports/sf6-security-review](./reports/sf6-security-review.md))
-  and record its SHA256 hash in the release ticket.
-- Attach the remediation ticket link (e.g., `governance/tickets/SF6-SR-2026.md`) and note the sign-off
-  approvers from Security Engineering and the Tooling Working Group.
-- Verify that the remediation checklist in the memo is closed; unresolved items block the release.
-- Prepare to upload parity harness logs (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`)
-  alongside the manifest bundle.
-- Confirm the signing command you plan to run includes both `--identity-token-provider` and an explicit
-  `--identity-token-audience=<aud>` so Fulcio scope is captured in the release evidence.
+- Хамгийн сүүлийн үеийн SF-6 аюулгүй байдлын хяналтын тэмдэглэлийг татаж авах ([reports/sf6-security-review](./reports/sf6-security-review.md))
+  мөн түүний SHA256 хэшийг хувилбарын тасалбарт бичнэ үү.
+- Засах тасалбарын холбоосыг (жишээ нь, `governance/tickets/SF6-SR-2026.md`) хавсаргаж, гарын үсэг зурсныг тэмдэглэ.
+  Аюулгүй байдлын инженер, багаж хэрэгслийн ажлын хэсгийн зөвшөөрлөөр .
+- Санамжид байгаа засварын хяналтын хуудас хаагдсан эсэхийг шалгах; шийдэгдээгүй зүйлс хувилбарыг блоклодог.
+- Паритын логуудыг байршуулахад бэлтгэ (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`)
+  манифест багцын хажууд.
+- Ажиллуулахаар төлөвлөж буй гарын үсэг зурах тушаалдаа `--identity-token-provider` болон тодорхой кодыг хоёуланг нь агуулна.
+  `--identity-token-audience=<aud>` тиймээс Fulcio хамрах хүрээг суллах нотлох баримтад оруулсан болно.
 
-Include these artefacts when notifying governance and publishing the release.
+Эдгээр олдворуудыг засаглалд мэдэгдэж, хэвлэлд нийтлэхдээ оруулаарай.
 
-## 1. Execute the release/test gate
+## 1. Суллах/туршилтын хаалгыг гүйцэтгэнэ
 
-The `ci/check_sorafs_cli_release.sh` helper runs formatting, Clippy, and tests
-across the CLI and SDK crates with a workspace-local target directory (`.target`)
-to avoid permission conflicts when executing inside CI containers.
+`ci/check_sorafs_cli_release.sh` туслах нь форматлах, Clippy болон тестүүдийг ажиллуулдаг.
+CLI болон SDK хайрцагнууд дээр ажлын талбар-локал зорилтот лавлах (`.target`)
+CI контейнер дотор гүйцэтгэх үед зөвшөөрлийн зөрчлөөс зайлсхийхийн тулд.
 
 ```bash
 CARGO_TARGET_DIR=.target ci/check_sorafs_cli_release.sh
 ```
 
-The script performs the following assertions:
+Скрипт нь дараахь мэдэгдлийг гүйцэтгэдэг.
 
-- `cargo fmt --all -- --check` (workspace)
-- `cargo clippy --locked --all-targets` for `sorafs_car` (with the `cli` feature),
-  `sorafs_manifest`, and `sorafs_chunker`
-- `cargo test --locked --all-targets` for those same crates
+- `cargo fmt --all -- --check` (ажлын талбар)
+- `sorafs_car`-д зориулсан `cargo clippy --locked --all-targets` (`cli` онцлогтой),
+  `sorafs_manifest`, `sorafs_chunker`
+- Эдгээр хайрцагт зориулсан `cargo test --locked --all-targets`
 
-If any step fails, fix the regression before tagging. Release builds must be
-continuous with main; do not cherry-pick fixes into release branches. The gate
-also checks that keyless signing flags (`--identity-token-issuer`, `--identity-token-audience`)
-are provided where applicable; missing arguments fail the run.
+Хэрэв ямар нэг алхам амжилтгүй болбол шошго хийхээсээ өмнө регрессийг засаарай. Хувилбарын бүтэц нь байх ёстой
+голтой тасралтгүй; суллах мөчрүүдэд засваруудыг бүү сонго. Хаалга
+мөн түлхүүргүй гарын үсэг зурах тугуудыг шалгадаг (`--identity-token-issuer`, `--identity-token-audience`)
+шаардлагатай тохиолдолд өгсөн; дутуу аргументууд амжилтгүй болно.
 
-## 2. Apply the versioning policy
+## 2. Хувилбарын бодлогыг хэрэгжүүл
 
-All SoraFS CLI/SDK crates use SemVer:
+Бүх SoraFS CLI/SDK хайрцагнууд SemVer ашигладаг:
 
-- `MAJOR`: Introduced for the first 1.0 release. Before 1.0 the `0.y` minor bump
-  **indicates breaking changes** in the CLI surface or Norito schemas.
-  fields gated behind optional policy, telemetry additions).
-- `PATCH`: Bug fixes, documentation-only releases, and dependency updates that
-  do not change observable behaviour.
+- `MAJOR`: Эхний 1.0 хувилбарт зориулж танилцуулсан. 1.0-ээс өмнө `0.y` жижиг овойлт
+  **CLI гадаргуу эсвэл Norito схемийн эвдэрсэн өөрчлөлтийг заана**.
+  нэмэлт бодлого, телеметрийн нэмэлтүүдийн ард хаалттай талбарууд).
+- `PATCH`: Алдаа засвар, зөвхөн баримт бичгийн хувилбарууд болон хараат байдлын шинэчлэлтүүд
+  ажиглагдаж болох зан үйлийг бүү өөрчил.
 
-Always keep `sorafs_car`, `sorafs_manifest`, and `sorafs_chunker` on the same
-version so downstream SDK consumers can depend on a single aligned version
-string. When bumping versions:
+`sorafs_car`, `sorafs_manifest`, `sorafs_chunker`-г үргэлж ижил байлга.
+хувилбарын дагуу SDK-ийн доод хэрэглэгчид нэг зэрэгцүүлсэн хувилбараас хамаарч болно
+мөр. Хувилбаруудыг цохих үед:
 
-1. Update `version =` fields in each crate’s `Cargo.toml`.
-2. Regenerate the `Cargo.lock` via `cargo update -p <crate>@<new-version>` (the
-   workspace enforces explicit versions).
-3. Run the release gate again to ensure no stale artefacts remain.
+1. Хайрцаг бүрийн `Cargo.toml` дахь `version =` талбаруудыг шинэчилнэ үү.
+2. `Cargo.lock`-г `cargo update -p <crate>@<new-version>` (
+   ажлын талбар нь тодорхой хувилбаруудыг хэрэгжүүлдэг).
+3. Хуучирсан олдвор үлдэхгүйн тулд суллах хаалгыг дахин ажиллуул.
 
-## 3. Prepare release notes
+## 3. Хувилбарын тэмдэглэл бэлтгэ
 
-Every release must publish a markdown changelog that highlights CLI, SDK, and
-governance-impacting changes. Use the template in
-`docs/examples/sorafs_release_notes.md` (copy it to your release artifacts
-directory and fill in the sections with concrete details).
+Хувилбар бүр нь CLI, SDK, болон
+засаглалд нөлөөлөх өөрчлөлтүүд. Загварыг ашиглана уу
+`docs/examples/sorafs_release_notes.md` (үүнийг хувилбарынхаа олдвор руу хуулна уу
+лавлах ба хэсгүүдийг тодорхой дэлгэрэнгүйгээр бөглөнө үү).
 
-Minimum content:
+Хамгийн бага агуулга:
 
-- **Highlights**: feature headlines for CLI and SDK consumers.
-  requirements.
-- **Upgrade steps**: TL;DR commands for bumping cargo dependencies and rerunning
-  deterministic fixtures.
-- **Verification**: command output hashes or envelopes and the exact
-  `ci/check_sorafs_cli_release.sh` revision executed.
+- **Онцлох зүйлс**: CLI болон SDK хэрэглэгчдэд зориулсан гарчиг.
+  шаардлага.
+- **Шинэчлэх алхамууд**: Ачааны хамаарлыг арилгах, дахин ажиллуулах TL;DR командууд
+  детерминистик бэхэлгээ.
+- **Баталгаажуулах**: командын гаралтын хэш эсвэл дугтуй болон яг
+  `ci/check_sorafs_cli_release.sh` засварыг гүйцэтгэсэн.
 
-Attach the filled release notes to the tag (e.g., GitHub release body) and store
-them alongside deterministically generated artefacts.
+Дүүргэгдсэн хувилбарын тэмдэглэлийг шошгонд (жишээ нь, GitHub хувилбарын хэсэг) хавсаргаж, хадгална уу
+тэдгээрийг тодорхой аргаар үүсгэсэн олдворуудын хамт.
 
-## 4. Execute release hooks
+## 4. Суллах дэгээг гүйцэтгэнэ
 
-Run `scripts/release_sorafs_cli.sh` to generate the signature bundle and
-verification summary that ship with every release. The wrapper builds the CLI
-when necessary, calls `sorafs_cli manifest sign`, and immediately replays
-`manifest verify-signature` so failures surface before tagging. Example:
+Гарын үсгийн багц үүсгэхийн тулд `scripts/release_sorafs_cli.sh`-г ажиллуулна уу
+хувилбар болгонд нийлүүлдэг баталгаажуулалтын хураангуй. Боодол нь CLI-г бүтээдэг
+шаардлагатай үед `sorafs_cli manifest sign` руу залгаад тэр даруй дахин тоглуулна
+`manifest verify-signature` тул шошго хийхээс өмнө алдаа гардаг. Жишээ:
 
 ```bash
 scripts/release_sorafs_cli.sh \
@@ -112,31 +114,31 @@ scripts/release_sorafs_cli.sh \
   --expect-token-hash "$(cat .release/token.hash)"
 ```
 
-Tips:
+Зөвлөмж:
 
-- Track release inputs (payload, plans, summaries, expected token hash) in your
-  repo or deployment config so the script remains reproducible. The CI fixture
-  bundle under `fixtures/sorafs_manifest/ci_sample/` shows the canonical layout.
-- Base CI automation on `.github/workflows/sorafs-cli-release.yml`; it runs the
-  release gate, invokes the script above, and archives bundles/signatures as
-  workflow artefacts. Mirror the same command order (release gate → sign →
-  verify) in other CI systems so audit logs line up with the generated hashes.
-- Keep the generated `manifest.bundle.json`, `manifest.sig`,
-  `manifest.sign.summary.json`, and `manifest.verify.summary.json` together—they
-  form the packet referenced in the governance notification.
-- When the release updates canonical fixtures, copy the refreshed manifest,
-  chunk plan, and summaries into `fixtures/sorafs_manifest/ci_sample/` (and update
-  `docs/examples/sorafs_ci_sample/manifest.template.json`) before tagging.
-  Downstream operators depend on the committed fixtures to reproduce the release
-  bundle.
-- Capture the run log for `sorafs_cli proof stream` bounded-channel verification and attach it to the
-  release packet to demonstrate proof streaming safeguards remain active.
-- Record the exact `--identity-token-audience` used during signing in the release notes; governance
-  cross-checks the audience against Fulcio policy before approving publication.
+- Хувилбарын оролтыг (ачаалал, төлөвлөгөө, хураангуй, хүлээгдэж буй токен хэш) хянах
+  репо эсвэл байршуулалтын тохиргоог хийснээр скрипт дахин давтагдах боломжтой хэвээр байна. CI бэхэлгээ
+  `fixtures/sorafs_manifest/ci_sample/` доорх багц нь каноник байршлыг харуулж байна.
+- `.github/workflows/sorafs-cli-release.yml` дээр суурь CI автоматжуулалт; -г ажиллуулдаг
+  суллах хаалга, дээрх скриптийг дуудаж, багц/гарын үсэг гэж архивлана
+  ажлын урсгалын олдворууд. Ижил тушаалын дарааллыг толин тусгал (гаргах → тэмдэг →
+  шалгах) бусад CI системд байгаа тул аудитын бүртгэлүүд үүсгэсэн хэштэй нийцдэг.
+- Үүсгэсэн `manifest.bundle.json`, `manifest.sig`,
+  `manifest.sign.summary.json`, `manifest.verify.summary.json` хамтдаа—тэд
+  засаглалын мэдэгдэлд дурдсан багцыг бүрдүүлэх.
+- Хувилбар нь каноник бэхэлгээг шинэчлэх үед шинэчилсэн манифестийг хуулах,
+  хэсэгчилсэн төлөвлөгөө, хураангуйг `fixtures/sorafs_manifest/ci_sample/` (мөн шинэчлэх
+  `docs/examples/sorafs_ci_sample/manifest.template.json`) шошголохоос өмнө.
+  Доод урсгалын операторууд хувилбарыг хуулбарлахын тулд үүрэг хүлээсэн бэхэлгээнээс хамаардаг
+  багц.
+- `sorafs_cli proof stream` хязгаарлагдмал сувгийн баталгаажуулалтын гүйлтийн бүртгэлийг авч, хавсаргана.
+  урсгалын хамгаалалт идэвхтэй хэвээр байгааг нотлохын тулд багцыг гарга.
+- Гарын үсэг зурахдаа ашигласан `--identity-token-audience`-ийг хувилбарын тэмдэглэлд яг таг тэмдэглэнэ үү; засаглал
+  хэвлэхийг зөвшөөрөхөөс өмнө үзэгчдийг Fulcio-ийн бодлоготой харьцуулан шалгадаг.
 
-Use `scripts/sorafs_gateway_self_cert.sh` when the release also carries a
-gateway rollout. Point it at the same manifest bundle to prove the attestation
-matches the candidate artefact:
+Хувилбар нь мөн агуулж байвал `scripts/sorafs_gateway_self_cert.sh`-г ашиглаарай
+гарцыг нэвтрүүлэх. Гэрчилгээг нотлохын тулд үүнийг ижил манифест багц руу чиглүүл
+нэр дэвшигчийн олдвортой таарч байна:
 
 ```bash
 scripts/sorafs_gateway_self_cert.sh --config docs/examples/sorafs_gateway_self_cert.conf \
@@ -144,42 +146,42 @@ scripts/sorafs_gateway_self_cert.sh --config docs/examples/sorafs_gateway_self_c
   --manifest-bundle artifacts/release/manifest.bundle.json
 ```
 
-## 5. Tag and publish
+## 5. Таг хийж нийтлэх
 
-After the checks pass and hooks complete:
+Шалгалтыг давж, дэгээ хийж дууссаны дараа:
 
-1. Run `sorafs_cli --version` and `sorafs_fetch --version` to confirm binaries
-   report the new version.
-2. Prepare the release configuration in a checked-in `sorafs_release.toml`
-   (preferred) or another config file tracked by your deployment repo. Avoid
-   relying on ad-hoc environment variables; pass paths to the CLI with
-   `--config` (or equivalent) so the release inputs are explicit and
-   reproducible.
-3. Create a signed tag (preferred) or annotated tag:
+1. Хоёртын файлыг баталгаажуулахын тулд `sorafs_cli --version` болон `sorafs_fetch --version`-г ажиллуулна уу.
+   шинэ хувилбарыг мэдээлэх.
+2. Бүртгэгдсэн `sorafs_release.toml`-д хувилбарын тохиргоог бэлтгэ.
+   (давуу) эсвэл таны байршуулах репо-оор хянагддаг өөр тохиргооны файл. зайлсхий
+   түр орчны хувьсагчдад найдах; -ээр CLI руу зам дамжуулах
+   `--config` (эсвэл түүнтэй адилтгах) тул хувилбарын оролтууд нь тодорхой бөгөөд
+   дахин үйлдвэрлэх боломжтой.
+3. Гарын үсэг зурсан шошго (давуу) эсвэл тайлбартай шошго үүсгэх:
    ```bash
    git tag -s sorafs-vX.Y.Z -m "SoraFS CLI & SDK vX.Y.Z"
    git push origin sorafs-vX.Y.Z
    ```
-4. Upload artefacts (CAR bundles, manifests, proof summaries, release notes,
-   attestation outputs) to the project registry following the governance
-   checklist in [deployment guide](./developer-deployment.md). If the release
-   minted new fixtures, push them to the shared fixture repo or object store so
-   audit automation can diff the published bundle against source control.
-5. Notify the governance channel with links to the signed tag, release notes,
-   manifest bundle/signature hashes, the archived `manifest.sign/verify` summaries,
-   and any attestation envelopes. Include the CI job URL (or log archive) that
-   ran `ci/check_sorafs_cli_release.sh` and `scripts/release_sorafs_cli.sh`. Update
-   the governance ticket so auditors can trace approvals to artefacts; when the
-   `.github/workflows/sorafs-cli-release.yml` job posts notifications, link the
-   recorded hash outputs rather than pasting ad-hoc summaries.
+4. Олдворуудыг байршуулах (CAR багц, манифест, нотлох хураангуй, хувилбарын тэмдэглэл,
+   баталгаажуулалтын үр дүн) засаглалын дагуу төслийн бүртгэлд
+   [байршуулах гарын авлага](./developer-deployment.md) доторх шалгах хуудас. Хэрэв чөлөөлөгдвөл
+   үйлдвэрлэсэн шинэ эд хогшил, тэдгээрийг хуваалцсан бэхэлгээний репо эсвэл объектын дэлгүүрт түлхэж өгнө үү
+   аудитын автоматжуулалт нь эх сурвалжийн хяналтаас хэвлэгдсэн багцыг ялгаж чаддаг.
+5. Гарын үсэг зурсан шошго, хувилбарын тэмдэглэлийн холбоос бүхий засаглалын сувагт мэдэгдэх,
+   манифест багц/гарын үсгийн хэш, архивлагдсан `manifest.sign/verify` хураангуй,
+   болон аливаа баталгаажуулалтын дугтуй. CI ажлын URL-г (эсвэл бүртгэлийн архив) оруулна уу
+   `ci/check_sorafs_cli_release.sh` болон `scripts/release_sorafs_cli.sh` ажиллуулсан. Шинэчлэх
+   аудиторууд олдворуудын зөвшөөрлийг хянах боломжтой удирдлагын тасалбар; хэзээ
+   `.github/workflows/sorafs-cli-release.yml` ажлын зарын мэдэгдлүүд, холбоос
+   түр хураангуйг буулгахын оронд хэш гаралтыг бүртгэсэн.
 
-## 6. Post-release follow-up
+## 6. Гаргасны дараах хяналт
 
-- Ensure documentation pointing at the new version (quickstarts, CI templates)
-  is updated or confirm no changes are required.
-- File roadmap entries if follow-on work (e.g., migration flags, deprecation of
-- Archive the release gate output logs for auditors—store them beside the signed
-  artefacts.
+- Баримт бичгийг шинэ хувилбар руу чиглүүлэх (хурдан эхлүүлэх, CI загварууд)
+  шинэчлэгдсэн эсвэл өөрчлөлт оруулах шаардлагагүй гэдгийг батлах.
+- Цаашид ажиллах тохиолдолд замын газрын зургийн оруулгуудыг файлаар оруулах (жишээ нь, шилжих туг, хуучирсан
+- Аудиторын гаралтын логуудыг архивлах—тэдгээрийг гарын үсгийн хажууд хадгална
+  олдворууд.
 
-Following this pipeline keeps the CLI, SDK crates, and governance collateral in
-lock-step for each release cycle.
+Энэ шугамыг дагаснаар CLI, SDK crates болон засаглалын барьцааг хадгалдаг
+суллах мөчлөг бүрийн хувьд түгжих алхам.

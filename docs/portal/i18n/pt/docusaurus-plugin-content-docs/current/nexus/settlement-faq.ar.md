@@ -4,35 +4,37 @@ direction: ltr
 source: docs/portal/docs/nexus/settlement-faq.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
 id: nexus-settlement-faq
-title: الأسئلة الشائعة للتسوية
+título: الأسئلة الشائعة للتسوية
 description: إجابات موجهة للمشغلين تغطي توجيه التسوية وتحويل XOR والقياس عن بعد وأدلة التدقيق.
 ---
 
-تعكس هذه الصفحة الأسئلة الشائعة الداخلية للتسوية (`docs/source/nexus_settlement_faq.md`) بحيث يستطيع قراء البوابة مراجعة نفس الإرشادات دون التنقيب في mono-repo. تشرح كيف يعالج Settlement Router المدفوعات، وما المقاييس التي يجب مراقبتها، وكيف ينبغي للـ SDK دمج حمولات Norito.
+Faça o download do cartão de crédito (`docs/source/nexus_settlement_faq.md`) para obter mais informações Você pode fazer isso no mono-repo. Você deve usar o Settlement Router e o SDK do SDK. Norito.
 
 ## أبرز النقاط
 
-1. **تعيين lane** — يعلن كل dataspace عن `settlement_handle` (`xor_global` أو `xor_lane_weighted` أو `xor_hosted_custody` أو `xor_dual_fund`). راجع أحدث كتالوج lane تحت `docs/source/project_tracker/nexus_config_deltas/`.
-2. **تحويل حتمي** — يحول الـ router جميع التسويات إلى XOR عبر مصادر السيولة المعتمدة من الحوكمة. تقوم lanes الخاصة بتمويل مخازن XOR مسبقا؛ ولا تطبق haircuts إلا عندما تنحرف المخازن خارج السياسة.
-3. **القياس عن بعد** — راقب `nexus_settlement_latency_seconds` وعدادات التحويل ومقاييس haircut. توجد لوحات المتابعة في `dashboards/grafana/nexus_settlement.json` والتنبيهات في `dashboards/alerts/nexus_audit_rules.yml`.
-4. **الأدلة** — أرشف الإعدادات وسجلات الـ router وتصديرات القياس عن بعد وتقارير المطابقة لأغراض التدقيق.
-5. **مسؤوليات SDK** — يجب على كل SDK توفير أدوات مساعدة للتسوية ومعرفات lane ومشفري حمولات Norito للحفاظ على التكافؤ مع الـ router.
+1. **lane ** - está no espaço de dados em `settlement_handle` (`xor_global` ou `xor_lane_weighted` ou `xor_hosted_custody` ou `xor_dual_fund`). راجع أحدث كتالوج lane تحت `docs/source/project_tracker/nexus_config_deltas/`.
+2. **تحويل حتمي** — يحول الـ router جميع التسويات إلى XOR عبر مصادر السيولة المعتمدة من الحوكمة. تقوم lanes الخاصة بتمويل مخازن XOR مسبقا؛ E cortar cortes de cabelo é uma boa opção para cortes de cabelo.
+3. **القياس عن بعد** — راقب `nexus_settlement_latency_seconds` e corte de cabelo e corte de cabelo. Você pode usar o `dashboards/grafana/nexus_settlement.json` e o `dashboards/alerts/nexus_audit_rules.yml`.
+4. **الأدلة** — Instale o roteador e o roteador e o roteador sem fio e instale-o التدقيق.
+5. **مسؤوليات SDK** — Você pode usar o SDK para instalar a pista e a pista e a rota Norito está conectado ao roteador.
 
 ## أمثلة على التدفقات
 
-| نوع lane | الأدلة المطلوبة | ماذا يثبت |
+| Nenhuma pista | الأدلة المطلوبة | Máquinas de lavar |
 |-----------|--------------------|----------------|
-| خاصة `xor_hosted_custody` | سجل الـ router + `nexus_settlement_latency_seconds{lane}` + `settlement_router_haircut_total{lane}` | تؤكد أن مخازن CBDC تخصم XOR حتمي وأن haircuts تبقى ضمن السياسة. |
-| عامة `xor_global` | سجل الـ router + مرجع DEX/TWAP + مقاييس زمن الاستجابة/التحويل | يثبت أن مسار السيولة المشترك سعّر التحويل وفق TWAP المنشور دون haircut. |
-| هجينة `xor_dual_fund` | سجل الـ router يظهر تقسيم public مقابل shielded + عدادات القياس عن بعد | يثبت أن المزج بين shielded/public احترم نسب الحوكمة وسجل haircut المطبق على كل جزء. |
+| Modelo `xor_hosted_custody` | Roteador + `nexus_settlement_latency_seconds{lane}` + `settlement_router_haircut_total{lane}` | Você pode usar o CBDC para usar o XOR e cortar cortes de cabelo por conta própria. |
+| Modelo `xor_global` | Roteador de rede + DEX/TWAP + مقاييس زمن الاستجابة/التحويل | يثبت أن مسار السيولة المشترك سعّر التحويل وفق TWAP المنشور دون corte de cabelo. |
+| Cabo `xor_dual_fund` | Roteador sem fio público com blindagem + roteador sem fio | Não há nenhum tipo de corte de cabelo protegido/público. |
 
 ## هل تحتاج مزيدا من التفاصيل؟
 
-- FAQ الكامل: `docs/source/nexus_settlement_faq.md`
-- مواصفة Settlement router: `docs/source/settlement_router.md`
-- دليل سياسات CBDC: `docs/source/cbdc_lane_playbook.md`
-- دليل التشغيل: [عمليات Nexus](./nexus-operations)
+- Perguntas frequentes: `docs/source/nexus_settlement_faq.md`
+- Roteador de liquidação padrão: `docs/source/settlement_router.md`
+- Nome do CBDC: `docs/source/cbdc_lane_playbook.md`
+- Nome de usuário: [Nexus](./nexus-operations)

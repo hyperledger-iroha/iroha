@@ -11,29 +11,30 @@ id: pq-primitives
 title: SoraNet Post-Quantum Primitives
 sidebar_label: PQ Primitives
 description: Overview of the `soranet_pq` crate and how the SoraNet handshake consumes ML-KEM/ML-DSA helpers.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
-:::
+::: ማስታወሻ ቀኖናዊ ምንጭ
+::
 
-The `soranet_pq` crate contains the post-quantum building blocks that every SoraNet
-relay, client, and tooling component relies on. It wraps the PQClean-backed Kyber
-(ML-KEM) and Dilithium (ML-DSA) suites and layers on protocol-friendly HKDF and
-hedged RNG helpers so all surfaces share identical implementations.
+የ `soranet_pq` ሳጥን እያንዳንዱ SoraNet ያለውን የድህረ-ኳንተም ግንባታ ብሎኮች ይዟል።
+ቅብብሎሽ፣ ደንበኛ እና የመሳሪያ አካል የተመካ ነው። በPQClean የተደገፈ Kyber ይጠቀለላል
+(ML-KEM) እና Dilithium (ML-DSA) ስብስቦች እና ንብርብሮች በፕሮቶኮል ተስማሚ ኤች.ዲ.ዲ.ኤፍ እና
+የታጠሩ RNG ረዳቶች ስለዚህ ሁሉም ገጽታዎች ተመሳሳይ አተገባበርን ይጋራሉ።
 
-## What ships in `soranet_pq`
+## በ `soranet_pq` ምን ይላካል
 
-- **ML-KEM-512/768/1024:** deterministic key generation, encapsulation, and
-  decapsulation helpers with constant-time error propagation.
-- **ML-DSA-44/65/87:** detached signing/verification wired for
-  domain-separated transcripts.
-- **Labelled HKDF:** `derive_labeled_hkdf` namespaces every derivation with the
-  handshake stage (`DH/es`, `KEM/1`, …) so hybrid transcripts stay collision-free.
-- **Hedged randomness:** `hedged_chacha20_rng` blends deterministic seeds
-  with live OS entropy and zeroizes intermediate state on drop.
+- **ML-KEM-512/768/1024፡** የሚወስን ቁልፍ ማመንጨት፣ ማሸግ እና
+  የቋሚ ጊዜ ስህተት መስፋፋት ያላቸው ረዳት ረዳቶች.
+- **ML-DSA-44/65/87:** የተነጠለ ፊርማ/ማረጋገጫ ለገመድ
+  በጎራ-የተለያዩ ግልባጮች።
+- ** የተሰየመ ኤች.ዲ.ዲ.ኤፍ:** `derive_labeled_hkdf` የስም ቦታዎች እያንዳንዱ አመጣጥ ከ
+  የመጨባበጥ ደረጃ (`DH/es`፣ `KEM/1`፣ …) ስለዚህ የተዳቀሉ ግልባጮች ከግጭት ነፃ ሆነው ይቆያሉ።
+- ** የታጠረ የዘፈቀደነት:** `hedged_chacha20_rng` የሚወስኑ ዘሮችን ያዋህዳል
+  ከቀጥታ ስርዓተ ክወና ኢንትሮፒ ጋር እና በመውረድ ላይ መካከለኛ ሁኔታን ዜሮ ያደርጋል።
 
-All secrets sit inside `Zeroizing` containers and CI exercises the PQClean
-bindings on every supported platform.
+ሁሉም ሚስጥሮች በ `Zeroizing` ኮንቴይነሮች ውስጥ ይቀመጣሉ እና CI PQCleanን ይለማመዳል
+በእያንዳንዱ የሚደገፍ መድረክ ላይ ማሰር.
 
 ```rust
 use soranet_pq::{
@@ -56,21 +57,21 @@ let okm = derive_labeled_hkdf(
 ).unwrap();
 ```
 
-## How to consume it
+##እንዴት እንጠቀምበታለን።
 
-1. **Add the dependency** to crates that sit outside the workspace root:
+1. ** ጥገኝነቱን ጨምሩ *** ከመሥሪያ ቦታ ስር ውጭ በተቀመጡ ሳጥኖች ውስጥ።
 
    ```toml
    soranet_pq = { path = "../../crates/soranet_pq" }
    ```
 
-2. **Select the correct suite** at call sites. For the initial hybrid handshake
-   work, use `MlKemSuite::MlKem768` and `MlDsaSuite::MlDsa65`.
+2. ** በጥሪ ቦታዎች ላይ ትክክለኛውን ስብስብ ይምረጡ ** ለመጀመሪያው ድብልቅ የእጅ መጨባበጥ
+   ሥራ፣ `MlKemSuite::MlKem768` እና `MlDsaSuite::MlDsa65` ይጠቀሙ።
 
-3. **Derive keys with labels.** Use `HkdfDomain::soranet("KEM/1")` (and siblings)
-   so transcript chaining stays deterministic across nodes.
+3. **ከስያሜዎች ጋር ቁልፎችን አምጡ።** `HkdfDomain::soranet("KEM/1")` (እና እህትማማቾች) ተጠቀም።
+   ስለዚህ የግልባጭ ሰንሰለቱ በመስቀለኛ መንገድ ላይ የሚወሰን ሆኖ ይቆያል።
 
-4. **Use the hedged RNG** when sampling fallback secrets:
+4. **የመውደቅ ሚስጥሮችን ናሙና ሲወስዱ የተከለለ RNG ይጠቀሙ፡-
 
    ```rust
    use soranet_pq::{hedged_chacha20_rng, HedgedRngSeed};
@@ -78,13 +79,13 @@ let okm = derive_labeled_hkdf(
    let mut rng = hedged_chacha20_rng(HedgedRngSeed::new(b"snnet16", [0u8; 32]));
    ```
 
-The core SoraNet handshake and CID blinding helpers (`iroha_crypto::soranet`)
-pull these utilities directly, which means downstream crates inherit the same
-implementations without linking PQClean bindings themselves.
+ዋናው የሶራኔት እጅ መጨባበጥ እና CID ዓይነ ስውር ረዳቶች (`iroha_crypto::soranet`)
+እነዚህን መገልገያዎች በቀጥታ ይጎትቱ, ይህም ማለት የታችኛው ተፋሰስ ሳጥኖች ተመሳሳይ ይወርሳሉ
+የ PQClean ማሰሪያዎችን ሳያገናኙ አተገባበር.
 
-## Validation checklist
+## የማረጋገጫ ዝርዝር
 
 - `cargo test -p soranet_pq --offline`
 - `cargo fmt --package soranet_pq`
-- Audit the README usage samples (`crates/soranet_pq/README.md`)
-- Update the SoraNet handshake design doc once hybrids land
+- የ README አጠቃቀም ናሙናዎችን ኦዲት (`crates/soranet_pq/README.md`)
+- አንድ ጊዜ የተዳቀለ መሬት የሶራኔት የእጅ መጨባበጥ ሰነዱን ያዘምኑ

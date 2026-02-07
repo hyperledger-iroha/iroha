@@ -4,29 +4,31 @@ direction: ltr
 source: docs/portal/docs/sorafs/orchestrator-ops.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: orchestrator-ops
-title: Runbook по эксплуатации оркестратора SoraFS
-sidebar_label: Runbook оркестратора
-description: Пошаговое операционное руководство по развёртыванию, мониторингу и откату мульти-источникового оркестратора.
+id: operaciones de orquestador
+título: Runbook по эксплуатации оркестратора SoraFS
+sidebar_label: Operador de Runbook
+descripción: Posibilidad de funcionamiento de múltiples operadores, monitorización y operación.
 ---
 
-:::note Канонический источник
-Эта страница отражает `docs/source/sorafs/runbooks/sorafs_orchestrator_ops.md`. Держите обе копии синхронизированными, пока набор документации Sphinx не будет полностью мигрирован.
+:::nota Канонический источник
+Esta página está escrita `docs/source/sorafs/runbooks/sorafs_orchestrator_ops.md`. Si necesita copias sincronizadas de los documentos de Sphinx, no necesita ayuda para migratorios.
 :::
 
-Этот runbook проводит SRE через подготовку, развёртывание и эксплуатацию мульти-источникового fetch-оркестратора. Он дополняет руководство разработчика процедурами, рассчитанными на прод-роллауты, включая поэтапное включение и занесение пиров в чёрный список.
+Este runbook proporciona SRE para archivos, configuraciones y extracciones de múltiples operadores de búsqueda. Он дополняет руководство разработчика процедурами, рассчитанными на прод-роллауты, включая потапное включение и занесение пиров в чёрный список.
 
-> **См. также:** [Runbook по мульти-источниковому rollout](./multi-source-rollout.md) посвящён волнам развёртывания на уровне флота и экстренному отклонению провайдеров. Используйте его для координации governance / staging, а этот документ — для повседневной эксплуатации оркестратора.
+> **См. Etiqueta:** [Runbook по мульти-источниковому rollout](./multi-source-rollout.md) посвящён волнам развёртывания на уровне флота и экстренному отклонению провайдеров. Используйте его для координации gobernancia / puesta en escena, а этот документ — для повседневной эксплуатации оркестратора.
 
-## 1. Предстартовый чек-лист
+## 1. Lista de verificación anterior
 
 1. **Собрать входные данные от провайдеров**
-   - Последние анонсы провайдеров (`ProviderAdvertV1`) и снимок телеметрии для целевого флота.
-   - План payload (`plan.json`), полученный из тестируемого манифеста.
-2. **Сформировать детерминированный scoreboard**
+   - Последние анонсы провайдеров (`ProviderAdvertV1`) y снимок телеметрии для целевого флота.
+   - La carga útil del plan (`plan.json`), según el manifiesto del test.
+2. ** Сформировать детерминированный marcador **
 
    ```bash
    sorafs_fetch \
@@ -37,32 +39,28 @@ description: Пошаговое операционное руководство 
      --provider gamma=fixtures/provider-gamma.bin \
      --scoreboard-out artifacts/scoreboard.json \
      --json-out artifacts/session.summary.json
-   ```
+   ```- Tenga en cuenta que `artifacts/scoreboard.json` está conectado al producto del producto como `eligible`.
+   - Архивируйте JSON-сводку вместе со marcador; Los auditores que operan en el sector privado retiran las pruebas de certificación de la empresa.
+3. **Ejecución en seco de accesorios** — Utilice el comando de accesorios públicos `docs/examples/sorafs_ci_sample/`, que esté conectado o que sea un orquestador binario. ожидаемой версии, antes de cargar las cargas útiles del producto.
 
-   - Убедитесь, что `artifacts/scoreboard.json` содержит каждого прод-провайдера как `eligible`.
-   - Архивируйте JSON-сводку вместе со scoreboard; аудиторы опираются на счётчики ретраев чанков при сертификации запроса на изменение.
-3. **Dry-run с fixtures** — Выполните ту же команду на публичных fixtures из `docs/examples/sorafs_ci_sample/`, чтобы убедиться, что бинарник оркестратора соответствует ожидаемой версии, прежде чем трогать прод-пayloads.
-
-## 2. Процедура поэтапного rollout
+## 2. Implementación del proceso de publicación
 
 1. **Канарейка (≤2 провайдера)**
-   - Пересоберите scoreboard и запустите с `--max-peers=2`, чтобы ограничить оркестратор небольшим подмножеством.
-   - Мониторьте:
+   - Mantenga el marcador y desbloquee el `--max-peers=2`, para que el orquestador no pueda funcionar correctamente.
+   - Monitorear:
      - `sorafs_orchestrator_active_fetches`
      - `sorafs_orchestrator_fetch_failures_total{reason!="retry"}`
      - `sorafs_orchestrator_retries_total`
-   - Продолжайте, когда доля ретраев держится ниже 1% для полного fetch манифеста и ни один провайдер не накапливает ошибок.
-2. **Этап разгона (50% провайдеров)**
-   - Увеличьте `--max-peers` и перезапустите со свежим снимком телеметрии.
-   - Сохраняйте каждый запуск с `--provider-metrics-out` и `--chunk-receipts-out`. Храните артефакты ≥7 дней.
-3. **Полный rollout**
-   - Уберите `--max-peers` (или установите его на полный набор eligible).
-   - Включите режим оркестратора в клиентских деплоях: распространяйте сохранённый scoreboard и JSON-конфиг через систему управления конфигурацией.
-   - Обновите дашборды, чтобы показывать `sorafs_orchestrator_fetch_duration_ms` p95/p99 и гистограммы ретраев по регионам.
+   - Prodolжайте, когда доля ретраев держится ниже 1% для полного fetch manifestа and ни один провайдер не накапливает ошибок.
+2. **Этап разгона (50% de descuento)**
+   - Utilice `--max-peers` y conecte los televisores más pequeños.
+   - Coloque el teclado en `--provider-metrics-out` y `--chunk-receipts-out`. Храните артефакты ≥7 días.
+3. **Implementación avanzada**
+   - Уберите `--max-peers` (или установите его на полный набор elegible).
+   - Utilice el operador de la implementación de los clientes: actualice el marcador electrónico y la configuración JSON del sistema de actualización. configuración.
+   - Retire el tablero, coloque `sorafs_orchestrator_fetch_duration_ms` p95/p99 y los registros en la región.## 3. Блокировка и усиление пиров
 
-## 3. Блокировка и усиление пиров
-
-Используйте overrides политики скоринга в CLI, чтобы разбирать проблемных провайдеров без ожидания обновлений governance.
+Si se anula la configuración política en la CLI, se eliminarán los problemas de la gobernanza actual.
 
 ```bash
 sorafs_fetch \
@@ -76,34 +74,32 @@ sorafs_fetch \
   --json-out artifacts/override.summary.json
 ```
 
-- `--deny-provider` исключает указанный alias из рассмотрения в текущей сессии.
-- `--boost-provider=<alias>=<weight>` повышает вес провайдера в планировщике. Значения добавляются к нормализованному весу scoreboard и применяются только к локальному запуску.
-- Зафиксируйте overrides в инцидент-тикете и приложите JSON-выходы, чтобы ответственная команда могла согласовать состояние после устранения первопричины.
+- `--deny-provider` elimina el alias de la unidad en la sesión técnica.
+- `--boost-provider=<alias>=<weight>` повышает вес провайдера в планировщике. Значения добавляются к нормализованному весу marcador и применяются только к локальному запуску.
+- Evite anulaciones de etiquetas accidentales y archivos JSON, para que los comandos no autorizados puedan modificar la configuración. после устранения первопричины.
 
-Для постоянных изменений обновите исходную телеметрию (пометьте нарушителя как penalised) или пересоздайте advert с обновлёнными бюджетами потоков до очистки CLI-override.
+Для постоянных изменений обновите исходную телеметрию (пометьте нарушителя как penalizado) o ли пересоздайте advert с обновлёнными бюджетами потоков до очистки Anulación de CLI.
 
 ## 4. Разбор сбоев
 
-Когда fetch падает:
-
-1. Перед повторным запуском соберите следующие артефакты:
+Когда buscar падает:1. Antes de empezar a usar artefactos de alta calidad:
    - `scoreboard.json`
    - `session.summary.json`
    - `chunk_receipts.json`
    - `provider_metrics.json`
-2. Проверьте `session.summary.json` на человекочитаемую строку ошибки:
+2. Pruebe `session.summary.json` en человекочитаемую строку ошибки:
    - `no providers were supplied` → проверьте пути к провайдерам и объявления.
-   - `retry budget exhausted ...` → увеличьте `--retry-budget` или исключите нестабильных пиров.
+   - `retry budget exhausted ...` → увеличьте `--retry-budget` или сключите нестабильных пиров.
    - `no compatible providers available ...` → проверьте метаданные диапазонных возможностей провайдера-нарушителя.
-3. Сопоставьте имя провайдера с `sorafs_orchestrator_provider_failures_total` и создайте тикет-наблюдение, если метрика резко растёт.
-4. Воспроизведите fetch офлайн с `--scoreboard-json` и захваченной телеметрией, чтобы детерминированно воспроизвести сбой.
+3. Coloque el medidor en `sorafs_orchestrator_provider_failures_total` y coloque el billete en su lugar, o un índice de medición.
+4. Utilice la línea de búsqueda `--scoreboard-json` y un televisor desmontado que esté determinado por el dispositivo.
 
-## 5. Rollback
+## 5. Revertir
 
-Чтобы откатить rollout оркестратора:
+Чтобы откатить оркестратора de implementación:
 
-1. Распространите конфигурацию с `--max-peers=1` (фактически отключает мульти-источниковое планирование) или верните клиентов на устаревший одноисточниковый fetch-путь.
-2. Уберите любые overrides `--boost-provider`, чтобы scoreboard вернулся к нейтральному весу.
-3. Продолжайте собирать метрики оркестратора минимум сутки, чтобы подтвердить отсутствие оставшихся fetch-операций.
+1. Configure la configuración con `--max-peers=1` (funciones de múltiples planes de instalación) o conecte a los clientes a устаревший одноисточниковый buscar-путь.
+2. Уберите любые anula `--boost-provider`, чтобы marcador вернулся к нейтральному весу.
+3. Prodolжайте собирать метрики оркестратора минмимум сутки, чтобы подтвердить отсутствие оставшихся fetch-operaций.
 
-Дисциплинированный сбор артефактов и поэтапные rollouts гарантируют безопасную эксплуатацию мульти-источникового оркестратора на разнородных флотах провайдеров при сохранении требований по наблюдаемости и аудиту.
+Las implementaciones disciplinarias de artefactos y dispositivos garantizan múltiples aplicaciones оркестратора на разнородных флотах провайдеров при сохранении требований по наблюдаемости и аудиту.

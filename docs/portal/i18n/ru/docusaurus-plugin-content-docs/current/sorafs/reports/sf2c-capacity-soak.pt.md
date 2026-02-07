@@ -4,55 +4,57 @@ direction: ltr
 source: docs/portal/docs/sorafs/reports/sf2c-capacity-soak.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Relatorio de soak de acumulacao de capacidade SF-2c
+# Релатор для замачивания накопительной емкости SF-2c
 
-Data: 2026-03-21
+Данные: 21 марта 2026 г.
 
-## Escopo
+## Эскопо
 
-Este relatorio registra os testes deterministicos de soak de acumulacao e pagamento de capacidade SoraFS
-solicitados na trilha SF-2c do roadmap.
+Это отношение регистрации яичек, определяющих впитывание накопления и увеличение емкости SoraFS
+запросили три SF-2c для составления дорожной карты.
 
-- **Soak multi-provider de 30 dias:** Executado por
-  `capacity_fee_ledger_30_day_soak_deterministic` em
+- **Включить поддержку нескольких поставщиков в течение 30 дней:** Выполнить для
+  `capacity_fee_ledger_30_day_soak_deterministic` ем
   `crates/iroha_core/src/smartcontracts/isi/sorafs.rs`.
-  O harness instancia cinco providers, cobre 30 janelas de settlement e
-  valida que os totais do ledger correspondam a uma projecao de referencia
-  calculada de forma independente. O teste emite um digest Blake3
-  (`capacity_soak_digest=...`) para que a CI possa capturar e comparar o snapshot
-  canonico.
-- **Penalidades por subentrega:** Aplicadas por
+  Используйте провайдеров Instancia cinco, начиная с 30 дней поселения и
+  действительность того, что все бухгалтерские книги соответствуют проекту ссылки
+  расчет независимой формы. O тесте излучает эм дайджест Blake3
+  (`capacity_soak_digest=...`), чтобы CI мог сделать снимок и сравнить его
+  канонико.
+- **Наказания за нарушение:** Применение за
   `record_capacity_telemetry_penalises_persistent_under_delivery`
-  (mesmo arquivo). O teste confirma que limiares de strikes, cooldowns, slashes
-  de collateral e contadores do ledger permanecem deterministicos.
+  (месмо архив). Я проверяю, какие ограничения на удары, кулдауны и рубящие удары.
+  залог и контрагенты делают реестр постоянным и детерминированным.
 
-## Execucao
+## Экзекукао
 
-Execute as validacoes de soak localmente com:
+Выполните как валидацию localmente com:
 
 ```bash
 cargo test -p iroha_core -- record_capacity_telemetry_penalises_persistent_under_delivery
 cargo test -p iroha_core -- capacity_fee_ledger_30_day_soak_deterministic
 ```
 
-Os testes completam em menos de um segundo em um laptop padrao e nao exigem
-fixtures externas.
+Наши тесты завершены во второй половине дня на ноутбуке и нао exigem
+внешние светильники.
 
-## Observabilidade
+## Наблюдательность
 
-Torii agora expoe snapshots de credito de providers junto a fee ledgers para que os dashboards
-possam fazer gate em saldos baixos e penalty strikes:
+Torii назад были показаны снимки кредитов поставщиков и реестры комиссий для панелей мониторинга.
+Поссам Фацер Гейт в Сальдос Байшос и пенальти:
 
-- REST: `GET /v1/sorafs/capacity/state` retorna entradas `credit_ledger[*]` que
-  refletem os campos do ledger verificados no teste de soak. Veja
+- ОСТАЛЬНОЕ: `GET /v1/sorafs/capacity/state` возвращает `credit_ledger[*]` que
+  refletem os Campos do Ledger Verificados без проверки. Вежа
   `crates/iroha_torii/src/sorafs/registry.rs`.
-- Importacao Grafana: `dashboards/grafana/sorafs_capacity_penalties.json` plota os
-  contadores de strikes exportados, totais de penalidades e collateral preso para que o
-  time on-call possa comparar os baselines de soak com ambientes em producao.
+- Импортируемая операционная система Grafana: `dashboards/grafana/sorafs_capacity_penalties.json`
+  контрадоры экспортированных забастовок, общее количество штрафов и залога для того, чтобы
+  Время дежурства можно сравнить с базовыми показателями пребывания в окружающей среде на производстве.
 
-## Follow-up
+## Последующие действия
 
-- Agendar execucoes semanais de gate em CI para reexecutar o teste de soak (smoke-tier).
-- Estender o painel Grafana com alvos de scrape de Torii assim que as exportacoes de telemetry de producao entrarem em operacao.
+- Повестка дня выполняется несколько раз в воротах CI для повторного выполнения или проверки замачивания (дымовой уровень).
+- Используйте краску Grafana со всеми инструментами очистки Torii, которые используются для экспорта телеметрических данных для производства и эксплуатации.

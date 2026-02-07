@@ -4,16 +4,18 @@ direction: rtl
 source: docs/portal/docs/soranet/pq-primitives.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
 id: pq-primitives
-title: SoraNet Post-Quantum Primitives
+כותרת: SoraNet Post-Quantum Primitives
 sidebar_label: PQ Primitives
 description: `soranet_pq` crate کا overview اور یہ کہ SoraNet handshake ML-KEM/ML-DSA helpers کو کیسے استعمال کرتا ہے۔
 ---
 
-:::note Canonical Source
+:::הערה מקור קנוני
 یہ صفحہ `docs/source/soranet/pq_primitives.md` کی عکاسی کرتا ہے۔ جب تک پرانا documentation set retire نہ ہو، دونوں کاپیاں sync رکھیں۔
 :::
 
@@ -21,7 +23,7 @@ description: `soranet_pq` crate کا overview اور یہ کہ SoraNet handshake
 
 ## `soranet_pq` میں کیا شامل ہے
 
-- **ML-KEM-512/768/1024:** deterministic key generation، encapsulation اور decapsulation helpers کے ساتھ constant-time error propagation.
+- **ML-KEM-512/768/1024:** יצירת מפתח דטרמיניסטית, אנקפסולציה או עוזרי דה-קפסולציה והפצת שגיאות בזמן קבוע.
 - **ML-DSA-44/65/87:** detached signing/verification جو domain-separated transcripts کے لئے wired ہے.
 - **Labelled HKDF:** `derive_labeled_hkdf` ہر derivation کو handshake stage (`DH/es`, `KEM/1`, ...) کے ساتھ namespace دیتا ہے تاکہ hybrid transcripts collision-free رہیں.
 - **Hedged randomness:** `hedged_chacha20_rng` deterministic seeds کو live OS entropy کے ساتھ blend کرتا ہے اور drop پر intermediate state کو zeroize کرتا ہے.
@@ -71,7 +73,7 @@ let okm = derive_labeled_hkdf(
 
 SoraNet کا core handshake اور CID blinding helpers (`iroha_crypto::soranet`) ان utilities کو براہ راست استعمال کرتے ہیں، جس کا مطلب ہے کہ downstream crates بغیر PQClean bindings link کئے وہی implementations inherit کرتے ہیں۔
 
-## Validation checklist
+## רשימת אימות
 
 - `cargo test -p soranet_pq --offline`
 - `cargo fmt --package soranet_pq`

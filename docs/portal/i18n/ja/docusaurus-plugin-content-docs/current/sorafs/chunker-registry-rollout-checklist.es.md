@@ -4,103 +4,105 @@ direction: ltr
 source: docs/portal/docs/sorafs/chunker-registry-rollout-checklist.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: chunker-registry-rollout-checklist
-title: Checklist de rollout del registro de chunker de SoraFS
-sidebar_label: Checklist de rollout de chunker
-description: Plan de rollout paso a paso para actualizaciones del registro de chunker.
+ID: チャンカーレジストリロールアウトチェックリスト
+タイトル: SoraFS チャンカーのロールアウト登録チェックリスト
+Sidebar_label: チャンカーのロールアウトのチェックリスト
+説明: チャンカーの登録を実際に展開する計画。
 ---
 
-:::note Fuente canónica
-Refleja `docs/source/sorafs/chunker_registry_rollout_checklist.md`. Mantén ambas copias sincronizadas hasta que se retire el conjunto de documentación Sphinx heredado.
+:::メモ フエンテ カノニカ
+リフレジャ`docs/source/sorafs/chunker_registry_rollout_checklist.md`。スフィンクスの記録を保存し、記録を保存する必要があります。
 :::
 
-# Checklist de rollout del registro de SoraFS
+# SoraFS のロールアウト登録チェックリスト
 
-Este checklist captura los pasos necesarios para promover un nuevo perfil de chunker
-o un bundle de admisión de proveedores desde revisión a producción después de que la
-carta de gobernanza haya sido ratificada.
+エステチェックリストは、プロモーターと新しいチャンカーの必要性を把握します
+審査の承認と承認を一括して改訂を行います。
+ハヤ・シド・ラティフィカダ・ゴベルナンザ・カルタ・デ・ゴベルナンザ。
 
-> **Alcance:** Aplica a todas las releases que modifican
-> `sorafs_manifest::chunker_registry`, los sobres de admisión de proveedores o los
-> bundles de fixtures canónicos (`fixtures/sorafs_chunker/*`).
+> **Alcance:** Aplica a todas las release que modifican
+> `sorafs_manifest::chunker_registry`、ロス・ソブレス・デ・アドミシオン・デ・証明オーロス
+> フィクスチャのバンドル CANONICOS (`fixtures/sorafs_chunker/*`)。
 
-## 1. Validación previa
+## 1. 事前の検証
 
-1. Regenera fixtures y verifica el determinismo:
+1. フィクスチャと決定性の検証を再生成する:
    ```bash
    cargo run --locked -p sorafs_chunker --bin export_vectors
    cargo test -p sorafs_chunker --offline vectors
    ci/check_sorafs_fixtures.sh
    ```
-2. Confirma que los hashes de determinismo en
-   `docs/source/sorafs/reports/sf1_determinism.md` (o el reporte de perfil relevante)
-   coinciden con los artefactos regenerados.
-3. Asegura que `sorafs_manifest::chunker_registry` compila con
-   `ensure_charter_compliance()` ejecutando:
+2. 確定性のあるハッシュを確認する
+   `docs/source/sorafs/reports/sf1_determinism.md` (パフォーマンスに関するレポート)
+   偶然、ロス・アーティファクトス・レジェネラドスが発生した。
+3. アセグラクエリ `sorafs_manifest::chunker_registry` コンパイル
+   `ensure_charter_compliance()` 出力:
    ```bash
    cargo test -p sorafs_manifest --lib chunker_registry::tests::ensure_charter_compliance
    ```
-4. Actualiza el dossier de la propuesta:
+4. 申請書類の作成:
    - `docs/source/sorafs/proposals/<profile>.json`
    - Entrada de actas del consejo en `docs/source/sorafs/council_minutes_*.md`
-   - Reporte de determinismo
+   - 決定論報告書
 
-## 2. Aprobación de gobernanza
+## 2. ゴベルナンサの乱用
 
-1. Presenta el informe del Tooling Working Group y el digest de la propuesta al
-   Sora Parliament Infrastructure Panel.
-2. Registra los detalles de aprobación en
-   `docs/source/sorafs/council_minutes_YYYY-MM-DD.md`.
-3. Publica el sobre firmado por el Parlamento junto a los fixtures:
-   `fixtures/sorafs_chunker/manifest_signatures.json`.
-4. Verifica que el sobre sea accesible vía el helper de fetch de gobernanza:
+1. ツーリング ワーキング グループの情報と提案のダイジェスト
+   ソラ議会インフラパネル。
+2. 不正行為登録
+   `docs/source/sorafs/council_minutes_YYYY-MM-DD.md`。
+3. ロスの試合日程を公開する:
+   `fixtures/sorafs_chunker/manifest_signatures.json`。
+4. 取得ヘルパー経由で海にアクセスできるかどうかを確認します。
    ```bash
    cargo xtask sorafs-fetch-fixture \
      --signatures <url-or-path-to-manifest_signatures.json> \
      --out fixtures/sorafs_chunker
    ```
 
-## 3. Rollout en staging
+## 3. ステージングによるロールアウト
 
-Consulta el [playbook de manifest en staging](./staging-manifest-playbook) para un
-recorrido detallado de estos pasos.
+[ステージングのためのマニフェストのプレイブック](./staging-manifest-playbook) を参照してください。
+レコリード・デタラード・デ・エストス・パソス。
 
-1. Despliega Torii con discovery `torii.sorafs` habilitado y la aplicación de
-   admisión activada (`enforce_admission = true`).
-2. Sube los sobres de admisión de proveedores aprobados al directorio de registro
-   de staging referenciado por `torii.sorafs.discovery.admission.envelopes_dir`.
-3. Verifica que los provider adverts se propaguen vía la API de discovery:
+1. Torii 発見 `torii.sorafs` のアプリケーションの実現
+   有効化許可 (`enforce_admission = true`)。
+2. 登録管理者権限を取得する
+   `torii.sorafs.discovery.admission.envelopes_dir` のステージング参照。
+3. API を介してプロバイダーの広告を確認し、発見します。
    ```bash
    curl -sS http://<torii-host>/v1/sorafs/providers | jq .
    ```
-4. Ejecuta los endpoints de manifest/plan con headers de gobernanza:
+4. マニフェスト/プランのヘッダーのエンドポイントの取り出し:
    ```bash
    sorafs-fetch --plan fixtures/chunk_fetch_specs.json \
      --gateway-provider "...staging config..." \
      --gateway-manifest-id <manifest-hex> \
      --gateway-chunker-handle sorafs.sf1@1.0.0
    ```
-5. Confirma que los dashboards de telemetría (`torii_sorafs_*`) y las reglas de
-   alerta reporten el nuevo perfil sin errores.
+5. テレメトリのダッシュボード (`torii_sorafs_*`) と現在の規制を確認します。
+   新しいエラーを報告します。
 
-## 4. Rollout en producción
+## 4. 本番環境でのロールアウト
 
-1. Repite los pasos de staging contra los nodos Torii de producción.
-2. Anuncia la ventana de activación (fecha/hora, periodo de gracia, plan de rollback)
-   a los canales de operadores y SDK.
-3. Fusiona el PR de release que contiene:
-   - Fixtures y sobre actualizados
-   - Cambios de documentación (referencias a la carta, reporte de determinismo)
-   - Refresh de roadmap/status
-4. Etiqueta la release y archiva los artefactos firmados para la procedencia.
+1. ステージング コントラ ロス ノード Torii の製造を繰り返します。
+2. アクティバシオンの通知 (フェチャ/ホーラ、グラシアの期間、ロールバックの計画)
+   ロス・カナレス・デ・オペラドールSDK。
+3. リリース後の PR の融合:
+   - 備品と地味な現実
+   - Cambios de documentación (アラカルタ参照、決定報告書)
+   - ロードマップ/ステータスを更新
+4. 手続きに関する公開およびアーカイブの手順。
 
-## 5. Auditoría post-rollout
+## 5. ロールアウト後のオーディトリア
 
-1. Captura métricas finales (conteos de discovery, tasa de éxito de fetch,
-   histogramas de error) 24 h después del rollout.
-2. Actualiza `status.md` con un resumen corto y un enlace al reporte de determinismo.
-3. Registra cualquier tarea de seguimiento (p. ej., más guía de autoría de perfiles)
-   en `roadmap.md`.
+1. Captura métricas フィナーレ (発見のコンテオ、エキシトのフェッチ、
+   エラーのヒストグラム) 24 時間のロールアウト。
+2. Actualiza `status.md` は、決定性のある完全なレポートを再開します。
+3. Registra cualquier Tarea de seguimiento (p. ej.、más guía de autoría de perfiles)
+   ja `roadmap.md`。

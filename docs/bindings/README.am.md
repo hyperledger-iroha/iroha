@@ -7,82 +7,83 @@ generator: scripts/sync_docs_i18n.py
 source_hash: bf9773ecd75fc31ee89da58a3c5eda846b910eb6e131f1e042b565892e028f16
 source_last_modified: "2025-12-29T18:16:35.062011+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# SDK Binding & Fixture Governance
+# ኤስዲኬ አስገዳጅ እና ቋሚ አስተዳደር
 
-WP1-E on the roadmap calls out “docs/bindings” as the canonical place to keep the
-cross-language binding state. This document records the binding inventory,
-regeneration commands, drift guards, and evidence locations so the GPU parity
-gates (WP1-E/F/G) and the cross-SDK cadence council have a single reference.
+WP1-E በመንገድ ካርታው ላይ "ሰነዶች / ማሰሪያዎችን" እንደ ቀኖናዊ ቦታ ይጠራዋል
+የቋንቋ ትስስር ሁኔታ. ይህ ሰነድ አስገዳጅ ዕቃዎችን ይመዘግባል ፣
+የማደስ ትእዛዞች፣ ተንሳፋፊ ጠባቂዎች እና የማስረጃ ቦታዎች ስለዚህ የጂፒዩ እኩልነት
+በሮች (WP1-E/F/G) እና መስቀል-ኤስዲኬ ካዳንስ ምክር ቤት አንድ ማጣቀሻ አላቸው።
 
-## Shared guardrails
-- **Canonical playbook:** `docs/source/norito_binding_regen_playbook.md` spells out
-  the rotation policy, expected evidence, and the escalation workflow for Android,
-  Swift, Python, and future bindings.
-- **Norito schema parity:** `scripts/check_norito_bindings_sync.py` (invoked via
-  `scripts/check_norito_bindings_sync.sh` and gated in CI by
-  `ci/check_norito_bindings_sync.sh`) blocks builds when the Rust, Java, or Python
-  schema artefacts drift.
-- **Cadence watchdog:** `scripts/check_fixture_cadence.py` reads the
-  `artifacts/*_fixture_regen_state.json` files and enforces the Tue/Fri (Android,
-  Python) and Wed (Swift) windows so roadmap gates have auditable timestamps.
+## የጋራ መከላከያ መንገዶች
+- ** ቀኖናዊ የመጫወቻ መጽሐፍ:** `docs/source/norito_binding_regen_playbook.md` ይጽፋል
+  የማዞሪያ ፖሊሲው፣ የሚጠበቀው ማስረጃ እና የማሳደግ የስራ ሂደት ለአንድሮይድ፣
+  ስዊፍት፣ Python እና የወደፊት ማሰሪያዎች።
+- ** Norito የመርሃግብር እኩልነት፡** `scripts/check_norito_bindings_sync.py` (የተጠራው በ
+  `scripts/check_norito_bindings_sync.sh` እና በ CI የተከለለ በ
+  `ci/check_norito_bindings_sync.sh`) ዝገቱ፣ ጃቫ ወይም ፓይዘን ሲገነቡ ያግዳል።
+  schema artefacts ተንሳፋፊ.
+- ** Cadence ጠባቂ: ** `scripts/check_fixture_cadence.py` ያነባል
+  `artifacts/*_fixture_regen_state.json` ፋይሎች እና ማክሰኞ/አርብ (አንድሮይድ፣
+  ፓይዘን) እና ዊድ (ስዊፍት) መስኮቶች ስለዚህ የመንገድ ካርታ በሮች ሊመረመሩ የሚችሉ የጊዜ ማህተሞች አሏቸው።
 
-## Binding matrix
+## አስገዳጅ ማትሪክስ
 
-| Binding | Entry points | Fixture / regen command | Drift guards | Evidence |
-|---------|--------------|-------------------------|--------------|----------|
-| Android (Java) | `java/iroha_android/` (`java/iroha_android/README.md`) | `scripts/android_fixture_regen.sh` → `artifacts/android_fixture_regen_state.json` | `scripts/check_android_fixtures.py`, `ci/check_android_fixtures.sh`, `java/iroha_android/run_tests.sh` | `artifacts/android/fixture_runs/` |
-| Swift (iOS/macOS) | `IrohaSwift/` (`IrohaSwift/README.md`) | `scripts/swift_fixture_regen.sh` (optionally `SWIFT_FIXTURE_ARCHIVE`) → `artifacts/swift_fixture_regen_state.json` | `scripts/check_swift_fixtures.py`, `ci/check_swift_fixtures.sh`, `scripts/swift_fixture_archive.py` | `docs/source/swift_parity_triage.md`, `docs/source/sdk/swift/ios2_fixture_cadence_brief.md` |
+| ማሰር | የመግቢያ ነጥቦች | ቋሚ / regen ትዕዛዝ | ተንሸራታች ጠባቂዎች | ማስረጃ |
+|--------|-------------|------------|------------|
+| አንድሮይድ (ጃቫ) | `java/iroha_android/` (`java/iroha_android/README.md`) | `scripts/android_fixture_regen.sh` → `artifacts/android_fixture_regen_state.json` | `scripts/check_android_fixtures.py`፣ `ci/check_android_fixtures.sh`፣ `java/iroha_android/run_tests.sh` | `artifacts/android/fixture_runs/` |
+| ስዊፍት (iOS/macOS) | `IrohaSwift/` (`IrohaSwift/README.md`) | `scripts/swift_fixture_regen.sh` (በአማራጭ I18NI0000020X) → I18NI0000021X | `scripts/check_swift_fixtures.py`፣ `ci/check_swift_fixtures.sh`፣ `scripts/swift_fixture_archive.py` | `docs/source/swift_parity_triage.md`, `docs/source/sdk/swift/ios2_fixture_cadence_brief.md` |
 | Python | `python/iroha_python/` (`python/iroha_python/README.md`) | `scripts/python_fixture_regen.sh` → `artifacts/python_fixture_regen_state.json` | `scripts/check_python_fixtures.py`, `python/iroha_python/scripts/run_checks.sh` | `docs/source/norito_binding_regen_playbook.md`, `docs/source/sdk/python/connect_end_to_end.md` |
-| JavaScript | `javascript/iroha_js/` (`docs/source/sdk/js/publishing.md`) | `npm run release:provenance`, `scripts/js_sbom_provenance.sh`, `scripts/js_signed_staging.sh` | `npm run test`, `javascript/iroha_js/scripts/verify-release-tarball.mjs`, `javascript/iroha_js/scripts/record-release-provenance.mjs` | `artifacts/js-sdk-provenance/`, `artifacts/js/npm_staging/`, `artifacts/js/verification/`, `artifacts/js/sbom/` |
+| JavaScript | `javascript/iroha_js/` (`docs/source/sdk/js/publishing.md`) | `npm run release:provenance`፣ `scripts/js_sbom_provenance.sh`፣ `scripts/js_signed_staging.sh` | `npm run test`፣ `javascript/iroha_js/scripts/verify-release-tarball.mjs`፣ `javascript/iroha_js/scripts/record-release-provenance.mjs` | `artifacts/js-sdk-provenance/`፣ `artifacts/js/npm_staging/`፣ `artifacts/js/verification/`፣ `artifacts/js/sbom/` |
 
-## Binding details
+## አስገዳጅ ዝርዝሮች
 
-### Android (Java)
-The Android SDK lives under `java/iroha_android/` and consumes the canonical Norito
-fixtures produced by `scripts/android_fixture_regen.sh`. That helper exports
-Fresh `.norito` blobs from the Rust toolchain, updates
-`artifacts/android_fixture_regen_state.json`, and records cadence metadata that
-`scripts/check_fixture_cadence.py` and governance dashboards consume. Drift is
-detected by `scripts/check_android_fixtures.py` (also wired into
-`ci/check_android_fixtures.sh`) and by `java/iroha_android/run_tests.sh`, which
-exercises the JNI bindings, WorkManager queue replay, and StrongBox fallbacks.
-Rotation evidence, failure notes, and rerun transcripts live under
+### አንድሮይድ (ጃቫ)
+አንድሮይድ ኤስዲኬ በ`java/iroha_android/` ስር ይኖራል እና ቀኖናዊውን Norito ይበላል
+በ I18NI0000048X የተሰሩ እቃዎች. ያ ረዳት ወደ ውጭ ይልካል።
+ትኩስ `.norito` ብሎብስ ከዝገት መሣሪያ ሰንሰለት፣ ዝማኔዎች
+`artifacts/android_fixture_regen_state.json`፣ እና ያንን የcadance ሜታዳታ ይመዘግባል
+`scripts/check_fixture_cadence.py` እና የአስተዳደር ዳሽቦርዶች ይበላሉ. መንሸራተት ነው።
+በ`scripts/check_android_fixtures.py` የተገኘ (በተጨማሪም ወደ ውስጥ ተሽሯል
+`ci/check_android_fixtures.sh`) እና በ `java/iroha_android/run_tests.sh`፣ ይህም
+የJNI ማሰሪያዎችን፣ WorkManager ወረፋ መልሶ ማጫወትን፣ እና StrongBox ውድቀትን ይለማመዳል።
+የማሽከርከር ማስረጃዎች፣ የውድቀት ማስታወሻዎች እና የድጋሚ ግልባጮች በቀጥታ ስርጭት
 `artifacts/android/fixture_runs/`.
 
-### Swift (macOS/iOS)
-`IrohaSwift/` mirrors the same Norito payloads via `scripts/swift_fixture_regen.sh`.
-The script records rotation owner, cadence label, and source (`live` vs `archive`)
-inside `artifacts/swift_fixture_regen_state.json` and feeds the metadata into the
-cadence checker. `scripts/swift_fixture_archive.py` allows maintainers to ingest
-Rust-generated archives; `scripts/check_swift_fixtures.py` and
-`ci/check_swift_fixtures.sh` enforce byte-level parity plus SLA age limits, while
-`scripts/swift_fixture_regen.sh` supports `SWIFT_FIXTURE_EVENT_TRIGGER` for manual
-rotations. The escalation workflow, KPIs, and dashboards are documented in
-`docs/source/swift_parity_triage.md` and the cadence briefs under
+### ስዊፍት (macOS/iOS)
+`IrohaSwift/` በ I18NI0000057X በኩል ተመሳሳይ የ I18NT0000002X መስታወቶች.
+ስክሪፕቱ የማሽከርከር ባለቤትን፣ የድጋፍ መለያን እና ምንጩን (`live` vs I18NI0000059X) ይመዘግባል
+በ `artifacts/swift_fixture_regen_state.json` ውስጥ እና ሜታዳታውን ወደ ውስጥ ይመገባል።
+ግልጽነት ማረጋገጫ. `scripts/swift_fixture_archive.py` ጠባቂዎች ወደ ውስጥ እንዲገቡ ያስችላቸዋል
+ዝገት-የተፈጠሩ ማህደሮች; `scripts/check_swift_fixtures.py` እና
+`ci/check_swift_fixtures.sh` ባይት-ደረጃ እኩልነት እና SLA የዕድሜ ገደቦችን ያስፈጽማል
+`scripts/swift_fixture_regen.sh` ለመመሪያው `SWIFT_FIXTURE_EVENT_TRIGGER` ይደግፋል
+ሽክርክሪቶች. የማደግ የስራ ፍሰቱ፣ KPIs እና ዳሽቦርዶች ተመዝግበዋል።
+`docs/source/swift_parity_triage.md` እና የ cadence አጭር መግለጫዎች ስር
 `docs/source/sdk/swift/`.
 
 ### Python
-The Python client (`python/iroha_python/`) shares the Android fixtures. Running
-`scripts/python_fixture_regen.sh` pulls the latest `.norito` payloads, refreshes
-`python/iroha_python/tests/fixtures/`, and will emit cadence metadata into
-`artifacts/python_fixture_regen_state.json` once the first post-roadmap rotation
-is captured. `scripts/check_python_fixtures.py` and
-`python/iroha_python/scripts/run_checks.sh` gate pytest, mypy, ruff, and fixture
-parity locally and in CI. The end-to-end docs (`docs/source/sdk/python/…`) and
-the binding regen playbook describe how to coordinate rotations with the Android
-owners.
+የፓይዘን ደንበኛ (`python/iroha_python/`) የአንድሮይድ ዕቃዎችን ይጋራል። መሮጥ
+`scripts/python_fixture_regen.sh` የቅርብ ጊዜውን የI18NI0000070X ጭነት ይጎትታል፣ ያድሳል
+`python/iroha_python/tests/fixtures/`፣ እና የcadance ሜታዳታ ወደ ውስጥ ይለቃል
+`artifacts/python_fixture_regen_state.json` አንዴ የመጀመሪያው የድህረ-መንገድ ካርታ መሽከርከር
+ተይዟል። `scripts/check_python_fixtures.py` እና
+`python/iroha_python/scripts/run_checks.sh` በር ፓይትስት፣ ማይፒ፣ ሩፍ እና ቋሚ
+በአካባቢው እና በ CI ውስጥ እኩልነት. ከጫፍ እስከ ጫፍ ሰነዶች (`docs/source/sdk/python/…`) እና
+የ binding regen playbook ከአንድሮይድ ጋር ሽክርክሮችን እንዴት ማቀናጀት እንደሚቻል ይገልጻል
+ባለቤቶች.
 
-### JavaScript
-`javascript/iroha_js/` does not rely on local `.norito` files, but WP1-E tracks
-its release evidence so GPU CI lanes inherit complete provenance. Every release
-captures provenance via `npm run release:provenance` (powered by
-`javascript/iroha_js/scripts/record-release-provenance.mjs`), generates and signs
-SBOM bundles with `scripts/js_sbom_provenance.sh`, runs the signed staging dry-run
-(`scripts/js_signed_staging.sh`), and verifies the registry artefact with
-`javascript/iroha_js/scripts/verify-release-tarball.mjs`. The resulting metadata
-lands under `artifacts/js-sdk-provenance/`, `artifacts/js/npm_staging/`,
-`artifacts/js/sbom/`, and `artifacts/js/verification/`, providing deterministic
-evidence for roadmap JS5/JS6 and WP1-F benchmark runs. The publishing playbook in
-`docs/source/sdk/js/` ties the automation together.
+### ጃቫስክሪፕት
+`javascript/iroha_js/` በአካባቢያዊ I18NI0000077X ፋይሎች ላይ የተመካ አይደለም፣ ነገር ግን WP1-E ይከታተላል
+የተለቀቀው ማስረጃው ስለዚህ የጂፒዩ CI መስመሮች ሙሉ ማረጋገጫን ይወርሳሉ። እያንዳንዱ ልቀት
+በI18NI0000078X (የተጎላበተው በ
+`javascript/iroha_js/scripts/record-release-provenance.mjs`) ያመነጫል እና ይፈርማል
+SBOM ከ`scripts/js_sbom_provenance.sh` ጋር ይጣመራል፣ የተፈረመውን የደረቅ ሩጫ ያካሂዳል
+(`scripts/js_signed_staging.sh`)፣ እና የመመዝገቢያውን አርቲፊኬት ያረጋግጣል
+`javascript/iroha_js/scripts/verify-release-tarball.mjs`. የተገኘው ሜታዳታ
+መሬቶች በ `artifacts/js-sdk-provenance/`፣ `artifacts/js/npm_staging/`፣
+`artifacts/js/sbom/` እና `artifacts/js/verification/`
+የመንገድ ካርታ JS5/JS6 እና WP1-F ቤንችማርክ ሩጫዎች ማስረጃ። የሕትመት መጫወቻ መጽሐፍ በ
+`docs/source/sdk/js/` አውቶማቲክን አንድ ላይ ያጣምራል።

@@ -4,54 +4,56 @@ direction: ltr
 source: docs/portal/docs/sorafs/reports/capacity-marketplace-validation.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: Validacion del mercado de capacidad SoraFS
-tags: [SF-2c, acceptance, checklist]
-summary: Checklist de aceptacion que cubre onboarding de providers, flujos de disputa y conciliacion de tesoreria que habilitan la disponibilidad general del mercado de capacidad SoraFS.
+タイトル: 容量の検証 SoraFS
+タグ: [SF-2c、受け入れ、チェックリスト]
+概要: プロバイダーのオンボーディングを受け入れ、紛争や調停を行うためのチェックリスト。
 ---
 
-# Lista de verificacion de validacion del mercado de capacidad SoraFS
+# 容量の検証リスト SoraFS
 
-**Ventana de revision:** 2026-03-18 -> 2026-03-24  
-**Responsables del programa:** Storage Team (`@storage-wg`), Governance Council (`@council`), Treasury Guild (`@treasury`)  
-**Alcance:** Pipelines de onboarding de providers, flujos de adjudicacion de disputas y procesos de conciliacion de tesoreria requeridos para la GA SF-2c.
+**ベンタナの改訂:** 2026-03-18 -> 2026-03-24  
+**プログラムの責任者:** ストレージ チーム (`@storage-wg`)、ガバナンス評議会 (`@council`)、財務ギルド (`@treasury`)  
+**Alcance:** プロバイダーのオンボーディングのパイプライン、GA SF-2c におけるテゾレリア要求の調停手続きおよび紛争処理のフルホス。
 
-La checklist siguiente debe revisarse antes de habilitar el marketplace para operadores externos. Cada fila enlaza evidencia deterministica (tests, fixtures o documentacion) que los auditores pueden reproducir.
+オペラドールの外部の市場でのハビリタールのチェックリストを見直します。決定的な証拠 (テスト、記録、記録) を参照して、再現性を確認することができます。
 
-## Checklist de aceptacion
+## 受け入れチェックリスト
 
-### Onboarding de providers
+### プロバイダーのオンボーディング
 
-| Chequeo | Validacion | Evidencia |
-|-------|------------|----------|
-| El registry acepta declaraciones canonicas de capacidad | El test de integracion ejercita `/v1/sorafs/capacity/declare` via la app API, verificando el manejo de firmas, la captura de metadata y el handoff al registry del nodo. | `crates/iroha_torii/src/routing.rs:7654` |
-| El smart contract rechaza payloads desalineados | El test unitario asegura que los IDs de provider y los campos de GiB comprometidos coinciden con la declaracion firmada antes de persistir. | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3445` |
-| El CLI emite artefactos canonicos de onboarding | El harness de CLI escribe salidas Norito/JSON/Base64 deterministicas y valida round-trips para que los operadores puedan preparar declaraciones offline. | `crates/sorafs_car/tests/capacity_cli.rs:17` |
-| La guia de operadores captura el flujo de admision y los guardrails de gobernanza | La documentacion enumera el esquema de declaracion, los defaults de policy y los pasos de revision para el council. | `../storage-capacity-marketplace.md` |
+|チェケオ |検証 |証拠 |
+|------|-----------|----------|
+| El レジストリは、capacidad の正規宣言を受け入れます。アプリ API 経由で `/v1/sorafs/capacity/declare` を統合テストし、企業のマネージャを検証し、メタデータをキャプチャし、レジストリからハンドオフします。 | `crates/iroha_torii/src/routing.rs:7654` |
+| El スマート コントラクトの rechaza ペイロードの塩基配列 |プロバイダーの ID をテストし、GIB のコンプロメティドが一致して宣言会社が継続的に保持されます。 | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3445` |
+| El CLI はオンボーディングの正規のアーティファクトを生成します。 CLI のハーネスは、Norito/JSON/Base64 の確定的な検証ラウンドトリップをオフラインでのオペランドの準備宣言として記述します。 | `crates/sorafs_car/tests/capacity_cli.rs:17` |
+|オペラドールの入場とゴベルナンザのガードレールのキャプチャ |宣言の列挙と宣言の文書化、政策のデフォルトと議会の改訂の延期。 | `../storage-capacity-marketplace.md` |
 
-### Resolucion de disputas
+### 紛争解決
 
-| Chequeo | Validacion | Evidencia |
-|-------|------------|----------|
-| Los registros de disputa persisten con digest canonico de payload | El test unitario registra una disputa, decodifica el payload almacenado y afirma el estado pendiente para garantizar determinismo del ledger. | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:1835` |
-| El generador de disputas del CLI coincide con el esquema canonico | El test del CLI cubre salidas Base64/Norito y resumenes JSON para `CapacityDisputeV1`, asegurando que los evidence bundles hashean de forma deterministica. | `crates/sorafs_car/tests/capacity_cli.rs:455` |
-| El test de replay prueba el determinismo de disputa/penalizacion | La telemetry de proof-failure reproducida dos veces produce snapshots identicos de ledger, creditos y disputas para que los slashes sean deterministas entre peers. | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3430` |
-| El runbook documenta el flujo de escalamiento y revocacion | La guia de operaciones captura el flujo del council, requisitos de evidencia y procedimientos de rollback. | `../dispute-revocation-runbook.md` |
+|チェケオ |検証 |証拠 |
+|------|-----------|----------|
+|ペイロードのキャノニコ ダイジェストに関する紛争の記録が持続します。紛争に関する登録のテスト、ペイロードの解読、および台帳の確定を保証するための確定申告を行います。 | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:1835` |
+| CLI の紛争の生成は、カノニコの問題と一致します。 Base64/Norito と履歴書 JSON パラ `CapacityDisputeV1` の CLI テストを実行し、証拠バンドルを形式的に決定します。 | `crates/sorafs_car/tests/capacity_cli.rs:455` |
+|論争/罰則の決定論を再実行するためのテスト |証明失敗再現のテレメトリは、台帳と同一のスナップショットを生成し、ピア間の決定を監視します。 | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3430` |
+|取り消しおよびエスカラミエントに関する運用手順書の文書 |評議会での操作のキャプチャ、証拠の要求、ロールバックの手順。 | `../dispute-revocation-runbook.md` |
 
-### Conciliacion de tesoreria
+### テソレリア会議
 
-| Chequeo | Validacion | Evidencia |
-|-------|------------|----------|
-| La acumulacion del ledger coincide con la proyeccion de soak de 30 dias | El soak test abarca cinco providers en 30 ventanas de settlement, comparando entradas del ledger con la referencia de payout esperada. | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3000` |
-| La conciliacion de exportes del ledger se registra cada noche | `capacity_reconcile.py` compara expectativas del fee ledger con exportes XOR ejecutados, emite metricas Prometheus y gatea la aprobacion de tesoreria via Alertmanager. | `scripts/telemetry/capacity_reconcile.py:1`,`docs/source/sorafs/runbooks/capacity_reconciliation.md:1`,`dashboards/alerts/sorafs_capacity_rules.yml:100` |
-| Los dashboards de billing exponen penalizaciones y telemetry de acumulacion | El import de Grafana grafica acumulacion GiB-hour, contadores de strikes y collateral bonded para visibilidad on-call. | `dashboards/grafana/sorafs_capacity_penalties.json:1` |
-| El reporte publicado archiva la metodologia del soak y comandos de replay | El reporte detalla el alcance del soak, comandos de ejecucion y hooks de observabilidad para auditores. | `./sf2c-capacity-soak.md` |
+|チェケオ |検証 |証拠 |
+|------|-----------|----------|
+| 30 日間の実績と元帳の累積は一致します。プロバイダーは 30 ベンタナ デ 決済、コンパランド エントラダス デル 帳簿と支払いエスペラダの照合テストを行ってください。 | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3000` |
+|輸出登録簿の調停 | `capacity_reconcile.py` は、XOR 出力の料金台帳の期待値を比較し、Alertmanager を介してメトリクス Prometheus を発行します。 | `scripts/telemetry/capacity_reconcile.py:1`、`docs/source/sorafs/runbooks/capacity_reconciliation.md:1`、`dashboards/alerts/sorafs_capacity_rules.yml:100` |
+|請求指数の罰則とテレメトリの蓄積を示すダッシュボード | Grafana グラフィックの蓄積は GiB 時間で行われ、オンコールで担保に保たれたストライキとコンタドールが表示されます。 | `dashboards/grafana/sorafs_capacity_penalties.json:1` |
+|リプレイ手法やコマンドの公開アーカイブを報告します。詳細なレポートや、視聴中の出力コマンド、フックの観察などを行います。 | `./sf2c-capacity-soak.md` |
 
-## Notas de ejecucion
+## 排出に関する注意事項
 
-Reejecuta la suite de validacion antes del sign-off:
+承認前の検証スイートの確認:
 
 ```bash
 cargo test -p iroha_torii --features app_api -- capacity_declaration_handler_accepts_request
@@ -63,20 +65,18 @@ cargo test -p sorafs_car --features cli --test capacity_cli
 python3 scripts/telemetry/capacity_reconcile.py --snapshot <state.json> --ledger <ledger.ndjson> --warn-only
 ```
 
-Los operadores deben regenerar los payloads de solicitud de onboarding/disputa con `sorafs_manifest_stub capacity {declaration,dispute}` y archivar los bytes JSON/Norito resultantes junto al ticket de gobernanza.
+オンボーディング/ディスピュータ コン `sorafs_manifest_stub capacity {declaration,dispute}` およびアーカイブ バイト JSON/Norito の結果は、政府のチケットの取得に役立ちます。
 
-## Artefactos de aprobacion
+## 悪用技術|アーティファクト |ルタ |ブレイク2b-256 |
+|----------|------|---------------|
+|プロバイダーのオンボーディングに関するパッケージ | `docs/examples/sorafs_capacity_marketplace_validation/2026-03-24_onboarding_signoff.md` | `8f41a745d8d94710fe81c07839651520429d4abea5729bc00f8f45bbb11daa4c` |
+|紛争解決の報告書 | `docs/examples/sorafs_capacity_marketplace_validation/2026-03-24_dispute_signoff.md` | `c3ac3999ef52857170fedb83cddbff7733ef5699f8b38aea2e65ae507a6229f7` |
+|テソレリアの調停に関する報告書 | `docs/examples/sorafs_capacity_marketplace_validation/2026-03-24_treasury_signoff.md` | `0511aeed1f5607c329428cd49c94d1af51292c85134c10c3330c172b0140e8c6` |
 
-| Artefacto | Ruta | blake2b-256 |
-|----------|------|-------------|
-| Paquete de aprobacion de onboarding de providers | `docs/examples/sorafs_capacity_marketplace_validation/2026-03-24_onboarding_signoff.md` | `8f41a745d8d94710fe81c07839651520429d4abea5729bc00f8f45bbb11daa4c` |
-| Paquete de aprobacion de resolucion de disputas | `docs/examples/sorafs_capacity_marketplace_validation/2026-03-24_dispute_signoff.md` | `c3ac3999ef52857170fedb83cddbff7733ef5699f8b38aea2e65ae507a6229f7` |
-| Paquete de aprobacion de conciliacion de tesoreria | `docs/examples/sorafs_capacity_marketplace_validation/2026-03-24_treasury_signoff.md` | `0511aeed1f5607c329428cd49c94d1af51292c85134c10c3330c172b0140e8c6` |
+リリースやレジストリの登録など、さまざまなアーティファクトを含む企業のコピーを管理します。
 
-Guarda las copias firmadas de estos artefactos con el bundle de release y enlazalas en el registro de cambios de gobernanza.
+## アロバシオネス
 
-## Aprobaciones
-
-- Lider del equipo de Storage — @storage-tl (2026-03-24)  
-- Secretaria del Governance Council — @council-sec (2026-03-24)  
+- ストレージのライダー — @storage-tl (2026-03-24)  
+- 統治評議会事務局 — @council-sec (2026-03-24)  
 - Lider de Operaciones de Tesoreria — @treasury-ops (2026-03-24)

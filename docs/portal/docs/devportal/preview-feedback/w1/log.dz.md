@@ -11,80 +11,81 @@ id: preview-feedback-w1-log
 title: W1 feedback & telemetry log
 sidebar_label: W1 feedback log
 description: Aggregate roster, telemetry checkpoints, and reviewer notes for the first partner preview wave.
+translator: machine-google-reviewed
 ---
 
-This log keeps the invite roster, telemetry checkpoints, and reviewer feedback for the
-**W1 partner preview** that accompanies the acceptance tasks in
-[`preview-feedback/w1/plan.md`](./plan.md) and the wave tracker entry in
-[`../../preview-invite-tracker.md`](../../preview-invite-tracker.md). Update it whenever an invite
-is sent, telemetry snapshot recorded, or feedback item triaged so governance reviewers can replay
-the evidence without chasing external tickets.
+དྲན་ཐོ་འདི་གིས་ མགྲོན་བརྡ་ཐོ་ཡིག་དང་ ཊེ་ལི་མི་ཊི་ཞིབ་དཔྱད་ས་ཚིགས་ དེ་ལས་ བསྐྱར་ཞིབ་འབད་མི་གིས་ བསམ་འཆར།
+**W1 མཉམ་འབྲེལ་པ་སྔོན་ལྟ་** ནང་ངོས་ལེན་ལས་འགན་ཚུ་མཉམ་སྦྲགས་འབདཝ་ཨིན།
+[`preview-feedback/w1/plan.md`](./plan.md) དང་རླབས་རྗེས་རྟགས་བྱེད་པ་དེ་ནང་དུ་འཛུལ་ཞུགས།
+[I18NI0000014X](../../preview-invite-tracker.md). ག་དུས་འབད་རུང་ མགྲོན་བརྡ་འབད་བའི་སྐབས་ དུས་མཐུན་བཟོ་དགོ།
+འདོན་སྤེལ།: ༢༠༡༠/༠༧/༠༣ རིག་པ།(༠) འདི་ཡང་ གཟའ་ཉི་མའི་ཉིན།
+ཕྱིའི་ཤོག་འཛིན་ཚུ་ བདའ་འཚོལ་མ་འབད་བའི་ སྒྲུབ་བྱེད་ཚུ།
 
-## Cohort roster
+## ཀོ་ཧོར་ཊི་ཐོ་སི་
 
-| Partner ID | Request ticket | NDA received | Invite sent (UTC) | Ack/first login (UTC) | Status | Notes |
+| མཉམ་འབྲེལ་པ་ ID | ཞུ་བ་ཤོག་འཛིན་ | NDA ཐོབ་ཡོདཔ། | མགྲོན་བརྡ་གཏང་ (UTC) | Ack/དང་པ་ ནང་བསྐྱོད་ (UTC) | གནས་ཚད་ | དྲན་ཐོ། |
 | --- | --- | --- | --- | --- | --- | --- |
-| partner-w1-01 | `DOCS-SORA-Preview-REQ-P01` | ✅ 2025-04-03 | 2025-04-12 15:00 | 2025-04-12 15:11 | ✅ Completed 2025-04-26 | sorafs-op-01; focused on orchestrator doc parity evidence. |
-| partner-w1-02 | `DOCS-SORA-Preview-REQ-P02` | ✅ 2025-04-03 | 2025-04-12 15:03 | 2025-04-12 15:15 | ✅ Completed 2025-04-26 | sorafs-op-02; validated Norito/telemetry cross-links. |
-| partner-w1-03 | `DOCS-SORA-Preview-REQ-P03` | ✅ 2025-04-04 | 2025-04-12 15:06 | 2025-04-12 15:18 | ✅ Completed 2025-04-26 | sorafs-op-03; ran multi-source failover drills. |
-| partner-w1-04 | `DOCS-SORA-Preview-REQ-P04` | ✅ 2025-04-04 | 2025-04-12 15:09 | 2025-04-12 15:21 | ✅ Completed 2025-04-26 | torii-int-01; Torii `/v1/pipeline` + Try it cookbook review. |
-| partner-w1-05 | `DOCS-SORA-Preview-REQ-P05` | ✅ 2025-04-05 | 2025-04-12 15:12 | 2025-04-12 15:23 | ✅ Completed 2025-04-26 | torii-int-02; paired on Try it screenshot update (docs-preview/w1 #2). |
-| partner-w1-06 | `DOCS-SORA-Preview-REQ-P06` | ✅ 2025-04-05 | 2025-04-12 15:15 | 2025-04-12 15:26 | ✅ Completed 2025-04-26 | sdk-partner-01; JS/Swift cookbook feedback + ISO bridge sanity checks. |
-| partner-w1-07 | `DOCS-SORA-Preview-REQ-P07` | ✅ 2025-04-11 | 2025-04-12 15:18 | 2025-04-12 15:29 | ✅ Completed 2025-04-26 | sdk-partner-02; compliance cleared 2025-04-11, focused on Connect/telemetry notes. |
-| partner-w1-08 | `DOCS-SORA-Preview-REQ-P08` | ✅ 2025-04-11 | 2025-04-12 15:21 | 2025-04-12 15:33 | ✅ Completed 2025-04-26 | gateway-ops-01; audited gateway ops guide + anonymised Try it proxy flow. |
+| མཉམ་འབྲེལ་-w1-01 | `DOCS-SORA-Preview-REQ-P01` | ✅ ༢༠༢༥-༠༤-༠༣ | ༢༠༢༥-༠༤-༡༢ ༡༥:༠༠ | ༢༠༢༥-༠༤-༡༢ ༡༥:༡༡ | ✅ མཇུག་བསྡུ་ཡོད་པའི་ ༢༠༢༥-༠༤-༢༦ | སོ་རཕ་-ཨོཔ་-༠༡; སྙན་ཆའི་སྡེ་ཚན་ལུ་གཙོ་བོར་བཏོན་ཡོདཔ། |
+| མཉམ་འབྲེལ་-w1-02 | `DOCS-SORA-Preview-REQ-P02` | ✅ ༢༠༢༥-༠༤-༠༣ | ༢༠༢༥-༠༤-༡༢ ༡༥:༠༣ | ༢༠༢༥-༠༤-༡༢ ༡༥:༡༥ | ✅ མཇུག་བསྡུ་ཡོད་པའི་ ༢༠༢༥-༠༤-༢༦ | སོ་རཕ་-ཨོཔ་-༠༢; བདེན་དཔྱད་འབད་ཡོདཔ། Norito/རྒྱང་འཕྲིན་གྱི་ ཕར་ཚུར་འབྲེལ་ལམ་ཚུ། |
+| མཉམ་འབྲེལ་-w1-03 | `DOCS-SORA-Preview-REQ-P03` | ✅ ༢༠༢༥-༠༤-༠༤ | ༢༠༢༥-༠༤-༡༢ ༡༥:༠༦ | ༢༠༢༥-༠༤-༡༢ ༡༥:༡༨ | ✅ མཇུག་བསྡུ་ཡོད་པའི་ ༢༠༢༥-༠༤-༢༦ | སོ་རཕ་-ཨོཔ་-༠༣; ran སྣ་མང་འབྱུང་ཁུངས་འཐུས་ཤོར་གྱི་སྦྱོང་བརྡར་ཚུ། |
+| མཉམ་འབྲེལ་-w1-04 | `DOCS-SORA-Preview-REQ-P04` | ✅ ༢༠༢༥-༠༤-༠༤ | ༢༠༢༥-༠༤-༡༢ ༡༥:༠༩ | ༢༠༢༥-༠༤-༡༢ ༡༥:༢༡ | ✅ མཇུག་བསྡུ་ཡོད་པའི་ ༢༠༢༥-༠༤-༢༦ | torii-int-01; Torii `/v1/pipeline` + ཐབ་མའི་ཀི་དེབ་བསྐྱར་ཞིབ་འབད་རྩོལ་བསྐྱེད། |
+| མཉམ་འབྲེལ་-w1-05 | `DOCS-SORA-Preview-REQ-P05` | ✅ ༢༠༢༥-༠༤-༠༥ | ༢༠༢༥-༠༤-༡༢ ༡༥:༡༢ | ༢༠༢༥-༠༤-༡༢ ༡༥:༢༣ | ✅ མཇུག་བསྡུ་ཡོད་པའི་ ༢༠༢༥-༠༤-༢༦ | torii-int-02; ཆ་སྒྲིག་འབད་ཡོད་མི་གུ་ གསལ་གཞི་པར་རིས་དུས་མཐུན་བཟོ་ནི་འབད་རྩོལ་བསྐྱེད། (docs-preview/w1 #2) |
+| མཉམ་འབྲེལ་-w1-06 | I18NI0000021X | ✅ ༢༠༢༥-༠༤-༠༥ | ༢༠༢༥-༠༤-༡༢ ༡༥:༡༥ | ༢༠༢༥-༠༤-༡༢ ༡༥:༢༦ | ✅ མཇུག་བསྡུ་ཡོད་པའི་ ༢༠༢༥-༠༤-༢༦ | sdk-partner-01; JS/Swift བཞེས་སྒོའི་ཀི་དེབ་བསམ་འཆར་ + ISO ཟམ་པའི་ བགོ་ལ་བརྟག་དཔྱད་ཚུ། |
+| མཉམ་འབྲེལ་-w1-07 | I18NI0000022X | ✅ ༢༠༢༥-༠༤-༡༡ | ༢༠༢༥-༠༤-༡༢ ༡༥:༡༨ | ༢༠༢༥-༠༤-༡༢ ༡༥:༢༩ | ✅ མཇུག་བསྡུ་ཡོད་པའི་ ༢༠༢༥-༠༤-༢༦ | sdk-partner-02; བསྟར་སྤྱོད་འབད་ཡོདཔ། ༢༠༢༥-༠༤-༡༡ མཐུད་/བརྒྱུད་འཕྲིན་དྲན་ཐོ་ཚུ་ལུ་གཙོ་བོར་བཏོན་ཡོདཔ་ཨིན། |
+| མཉམ་འབྲེལ་-w1-08 | I18NI0000023X | ✅ ༢༠༢༥-༠༤-༡༡ | ༢༠༢༥-༠༤-༡༢ ༡༥:༢༡ | ༢༠༢༥-༠༤-༡༢ ༡༥:༣༣ | ✅ མཇུག་བསྡུ་ཡོད་པའི་ ༢༠༢༥-༠༤-༢༦ | འཛུལ་སྒོ་-ཨོཔ་-༠༡; རྩིས་ཞིབ་འབད་མི་ འཛུལ་སྒོ་ཨོཔ་ལམ་སྟོན་ + མིང་མ་བཀོད་པར་ དེ་ ངོ་ཚབ་རྒྱུན་འགྲུལ་འབད་རྩོལ་བསྐྱེད། |
 
-Populate the **Invite sent** and **Ack** timestamps as soon as the outbound email is issued.
-Anchor the times to the UTC schedule defined in the W1 plan.
+ཕྱི་ཁའི་གློག་འཕྲིན་འདི་ བཏོན་ཚརཝ་ཅིག་ **ཝི་ཊི་ བཏང་མི་** དང་ **Ack** གི་དུས་ཚོད་མཚོན་རྟགས་ཚུ་ མི་རློབས་རྐྱབ།
+ཌབ་ལུ་༡འཆར་གཞི་ནང་ངེས་འཛིན་འབད་ཡོད་པའི་ ཡུ་ཊི་སི་ལས་རིམ་ལུ་དུས་ཚོད་ཚུ་ཨེན་ཀོར་འབད།
 
-## Telemetry checkpoints
+## བརྒྱུད་འཕྲིན་ཞིབ་དཔྱད་ས་ཚིགས་ཚུ།
 
-| Timestamp (UTC) | Dashboards / probes | Owner | Result | Artefact |
+| དུས་ཚོད་མཚོན་རྟགས་ (ཡུ་ཊི་སི) | ཌེཤ་བོརཌ་ / འཚོལ་ཞིབ་ཚུ་ | ཇོ་བདག་ | གྲུབ་འབྲས། | ཅ་ཆས། |
 | --- | --- | --- | --- | --- |
-| 2025-04-06 18:05 | `docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals` | Docs/DevRel + Ops | ✅ All green | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250406` |
-| 2025-04-06 18:20 | `npm run manage:tryit-proxy -- --stage preview-w1` transcript | Ops | ✅ Staged | `artifacts/docs_preview/W1/preview-2025-04-12/tryit/OPS-TRYIT-147.log` |
-| 2025-04-12 14:45 | `docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals`, `probe:portal` | Docs/DevRel + Ops | ✅ Pre-invite snapshot, no regressions | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250412` |
-| 2025-04-19 17:55 | Dashboards above + Try it proxy latency diff | Docs/DevRel lead | ✅ Midpoint check passed (0 alerts; Try it latency p95=410 ms) | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250419` |
-| 2025-04-26 16:25 | Dashboards above + exit probe | Docs/DevRel + Governance liaison | ✅ Exit snapshot, zero outstanding alerts | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250426` |
+| ༢༠༢༥-༠༤-༠༦ ༡༨:༠༥ | `docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals` | ཡིག་ཆ་/ཌི་ཝི་རེལ་ + Ops | ✅ ལྗང་ཁུ་ཆ་ཚང་ | I18NI0000027X |
+| ༢༠༢༥-༠༤-༠༦ ༡༨:༢༠ | I18NI0000028X ཡིག་ཆ། | Ops | ✅ གནས་ | I18NI0000029X |
+| ༢༠༢༥-༠༤-༡༢ ༡༤:༤༥ | I18NI00000003030, `TryItProxyErrors`, I18NI000000032X, I18NI000000033X | ཡིག་ཆ་/ཌི་ཝི་རེལ་ + Ops | ✅ མགྲོན་འབོད་སྔོན་འགྲོའི་པར་བཤུས། ཕྱིར་ལོག་མེད། | I18NI0000034X |
+| ༢༠༢༥-༠༤-༡༩ ༡༧:༥༥ | གོང་ལུ་ + ཚོད་བལྟ་འབད་ འདི་ པོརོག་སི་ ལེ་ཊེན་སི་ diff | ཡིག་ཆ་/ཌི་ཝི་རེལ་ལིཌ་ | ✅ བར་མཚམས་ཞིབ་དཔྱད་འབད་ཡོདཔ་ཨིན་ (ཉེན་བརྡ་ ༠; དེ་ འགོར་ཚད་ p95=410ms) | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250419` |
+| ༢༠༢༥-༠༤-༢༦ ༡༦:༢༥ | གོང་ལས་ ཌེཤ་བོརཌ་ཚུ་ འཚོལ་ཞིབ་འཚོལ་ཞིབ་ཕྱིར་འཐོན་འབད། | Docs/DevRel + གཞུང་སྐྱོང་འཐབ་འཛིན། | ✅ ཕྱིར་ཐོན་པར་ལེན་, ཀླད་ཀོར་ལྷག་པའི་ཉེན་བརྡ་ | `artifacts/docs_preview/W1/preview-2025-04-12/grafana/20250426` |
 
-Daily office-hour samples (2025-04-13 → 2025-04-25) are bundled as NDJSON + PNG exports under
-`artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/` with filenames
-`docs-preview-integrity-<date>.json` and corresponding screenshots.
+ཉིན་བསྟར་གྱི་ཡིག་ཚང་ཆུ་ཚོད་ཀྱི་དཔེ་ཚད་ (༢༠༢༥-༠༤-༡༣ → ༢༠༢༥-༠༤-༢༥) འདི་ NDJSON + PNG ཕྱིར་གཏོང་ཚུ་ འོག་ལུ་བཀོད་དེ་ཡོདཔ་ཨིན།
+I18NI000000037X ཡིག་སྣོད་མིང་ཚུ་དང་གཅིག་ཁར་།
+`docs-preview-integrity-<date>.json` དང་དེ་དང་མཐུན་པའི་གསལ་གཞི།
 
-## Feedback & issue log
+## བསམ་འཆར་དང་གནད་དོན་དྲན་ཐོ་།
 
-Use this table to summarise reviewer-submitted findings. Link each entry to the GitHub/discuss
-ticket plus the structured form captured via
-[`docs/examples/docs_preview_feedback_form.md`](../../../../../examples/docs_preview_feedback_form.md).
+བསྐྱར་ཞིབ་འབད་མི་གིས་ བཀང་ཡོད་པའི་གྲུབ་འབྲས་ཚུ་ བཅུད་བསྡུ་ནིའི་དོན་ལུ་ ཐིག་ཁྲམ་འདི་ལག་ལེན་འཐབ། ཐོ་བཀོད་རེ་རེ་བཞིན་དུ་ གིཊི་ཧབ་/གྲོས་སྟོན་ལུ་འབྲེལ་མཐུད།
+ཤོག་འཛིན་དང་ བཀོད་སྒྲིག་འབད་ཡོད་པའི་འབྲི་ཤོག་འདི་ བརྒྱུད་དེ་ བཏོན་ཡོདཔ་ཨིན།
+[I18NI0000039X](../../../../../examples/docs_preview_feedback_form.md).
 
-| Reference | Severity | Owner | Status | Notes |
+| གཞི་བསྟུན་ | ཚབས་ཆེན། | ཇོ་བདག་ | གནས་ཚད་ | དྲན་ཐོ། |
 | --- | --- | --- | --- | --- |
-| `docs-preview/w1 #1` | Low | Docs-core-02 | ✅ Resolved 2025-04-18 | Clarified Try it nav wording + sidebar anchor (`docs/source/sorafs/tryit.md` updated with new label). |
-| `docs-preview/w1 #2` | Low | Docs-core-03 | ✅ Resolved 2025-04-19 | Refreshed Try it screenshot + caption per reviewer request; artefact `artifacts/docs_preview/W1/preview-2025-04-12/feedback/partner-w1-05/screenshot-diff.png`. |
-| — | Info | Docs/DevRel lead | 🟢 Closed | Remaining comments were Q&A-only; captured in each partner’s feedback form under `artifacts/docs_preview/W1/preview-2025-04-12/feedback/`. |
+| I18NI0000040X | དམའ་བ་ | ཡིག་ཆ་-ཀོར་-༠༢ | ✅ སེལ་ཐབས་ ༢༠༢༥-༠༤-༡༨ | གསལ་ཏོག་ཏོ་འབད་ དེ་ nav གི་མིང་ཚིག་ + ཟུར་ཁའི་ཕྲ་རིང་ཨེན་ཀོར་ (`docs/source/sorafs/tryit.md` དུས་མཐུན་བཟོ་ཡོདཔ་ ཁ་ཡིག་གསརཔ་དང་གཅིག་ཁར་དུས་མཐུན་བཟོ་ཡོདཔ།) |
+| I18NI0000042X | དམའ་བ་ | ཡིག་ཆ་-ཀོར་-༠༣ | ✅ སེལ་ཐབས་ ༢༠༢༥-༠༤-༡༩ | གསར་བསྐྲུན་འབད་རྩོལ་བསྐྱེད། བསྐྱར་ཞིབ་པ་ཞུ་བ་རེ་ལུ་ གསལ་གཞི་པར་ + མགོ་ཡིག་། བཅོས་མ་ `artifacts/docs_preview/W1/preview-2025-04-12/feedback/partner-w1-05/screenshot-diff.png`. |
+| — | བརྡ་དོན་ | ཡིག་ཆ་/ཌི་ཝི་རེལ་ལིཌ་ | ཁ་བསྡམས་ཡོདཔ། | ལྷག་ལུས་བསམ་འཆར་ཚུ་ དྲི་བ་དང་རྐྱངམ་ཅིག་ཨིན། I18NI0000044X གི་འོག་ལུ་ མཉམ་འབྲེལ་པ་རེ་རེ་གི་བསམ་འཆར་འབྲི་ཤོག་ནང་ལུ་ བཏོན་ཡོདཔ་ཨིན། |
 
-## Knowledge check & survey tracking
+## ཤེས་བྱ་དཔྱད་ཞིབ་དང་བརྟག་ཞིབ་རྗེས་འདེད་བྱེད་པ།
 
-1. Record quiz scores (target ≥90 %) for every reviewer; attach the exported CSV alongside the
-   invite artefacts.
-2. Collect the qualitative survey answers captured with the feedback form template and mirror them
-   under `artifacts/docs_preview/W1/preview-2025-04-12/surveys/`.
-3. Schedule remediation calls for anyone scoring below threshold and log them in this file.
+༡ བསྐྱར་ཞིབ་པ་རེ་རེ་ལུ་ ཐོ་བཀོད་འབད་ཡོད་པའི་དྲི་བ་ (དམིགས་གཏད་ ≥༩༠%) དང་། ཕྱིར་འདྲེན་འབད་ཡོད་པའི་སི་ཨེསི་ཝི་འདི་ མཉམ་སྦྲགས་འབད།
+   ཅ་རྙིང་ཚུ་ མགྲོན་བརྡ་འབད་ནི།
+༢ བསམ་འཆར་འབྲི་ཤོག་ཊེམ་པེལེཊི་དང་གཅིག་ཁར་ བཟུང་ཡོད་པའི་ སྤུས་ཚད་བརྟག་ཞིབ་ལན་ཚུ་ བསྡུ་སྒྲིག་འབད་དེ་ དེ་ཚུ་ལུ་ མེ་ལོང་བཟོ།
+   འོག་ལུ་ `artifacts/docs_preview/W1/preview-2025-04-12/surveys/`.
+༣ དུས་ཚོད་ཀྱི་འོག་ལུ་ཡོད་མི་ག་ར་ལུ་ ཐོ་གཞུང་འོག་ལུ་ཡོད་མི་ཚུ་གི་དོན་ལུ་ འབོད་བརྡ་འབད་དེ་ ཡིག་སྣོད་འདི་ནང་ ནང་བསྐྱོད་འབདཝ་ཨིན།
 
-All eight reviewers scored ≥94 % on the knowledge check (CSV:
-`artifacts/docs_preview/W1/preview-2025-04-12/feedback/w1-quiz-scores.csv`). No remediation calls
-were required; survey exports for each partner live under
+བསྐྱར་ཞིབ་པ་བརྒྱད་ཆ་ར་ཤེས་ཚད་བརྟག་དཔྱད་ནང་ ≥94% ཐོབ་ཡོད།(CSV:
+I18NI0000046X). བཅོ་ཁ་འབོད་བརྡ་མེད།
+དགོས་མཁོ་ཡོདཔ་ཨིན།; མཉམ་འབྲེལ་རེ་རེ་ལུ་ བརྟག་ཞིབ་ཕྱིར་ཚོང་འདི་ འོག་ལུ་སྡོད་དོ་ཡོདཔ་ཨིན།
 `artifacts/docs_preview/W1/preview-2025-04-12/surveys/<partner-id>/summary.json`.
 
-## Artefact inventory
+## ཅ་རྙིང་ཐོ་ཡིག།
 
-- Preview descriptor/checksum bundle: `artifacts/docs_preview/W1/preview-2025-04-12/descriptor.json`
-- Probe + link-check summary: `artifacts/docs_preview/W1/preview-2025-04-12/preflight-summary.json`
-- Try it proxy change log: `artifacts/docs_preview/W1/preview-2025-04-12/tryit/OPS-TRYIT-147.log`
-- Telemetry exports: `artifacts/docs_preview/W1/preview-2025-04-12/grafana/<date>/`
-- Daily office-hour telemetry bundle: `artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/`
-- Feedback + survey exports: place reviewer-specific folders under
-  `artifacts/docs_preview/W1/preview-2025-04-12/feedback/<partner-id>/`
-- Knowledge check CSV and summary: `artifacts/docs_preview/W1/preview-2025-04-12/feedback/w1-quiz-scores.csv`
+- སྔོན་ལྟའི་འགྲེལ་བཤད་/ཞིབ་དཔྱད་སམ་བཱུནལ: I18NI0000048X
+- ཞིབ་དཔྱད་ + འབྲེལ་ལམ་-ཞིབ་དཔྱད་བཅུད་དོན།: `artifacts/docs_preview/W1/preview-2025-04-12/preflight-summary.json`
+- དེ་པོརོག་སི་བསྒྱུར་བཅོས་དྲན་དེབ་: `artifacts/docs_preview/W1/preview-2025-04-12/tryit/OPS-TRYIT-147.log` འབད་རྩོལ་བསྐྱེད།
+- བརྒྱུད་འཕྲིན་ཕྱིར་འདྲེན་: `artifacts/docs_preview/W1/preview-2025-04-12/grafana/<date>/`
+- ཉིན་བསྟར་ཡིག་ཚང་ཆུ་ཚོད་ཀྱི་བརྒྱུད་འཕྲིན་བང་རིམ།: `artifacts/docs_preview/W1/preview-2025-04-12/grafana/daily/`
+- བསམ་འཆར་ + ཞིབ་འཇུག་ཕྱིར་འདྲེན་: བསྐྱར་ཞིབ་པ་-དམིགས་བསལ་གྱི་སྣོད་འཛིན་ཚུ་ འོག་ལུ་བཙུགས།
+  I18NI0000003X
+- ཤེས་བྱ་དཔྱད་ཞིབ་ CSV དང་བཅུད་དོན།: `artifacts/docs_preview/W1/preview-2025-04-12/feedback/w1-quiz-scores.csv`
 
-Keep the inventory in sync with the tracker issue. Attach hashes when copying artefacts to the
-governance ticket so auditors can verify the files without shell access.
+ཐོ་བཀོད་འདི་ བརྟག་ཞིབ་ཀྱི་གནད་དོན་དང་གཅིག་ཁར་ མཉམ་འབྱུང་སྦེ་བཞག། ཅ་རྙིང་ཚུ་འདྲ་བཤུས་རྐྱབ་པའི་སྐབས་ ཧ་ཤི་ཚུ་མཉམ་སྦྲགས་འབད།
+རྩིས་ཞིབ་པ་ཚུ་གིས་ ཤེལ་གྱི་འཛུལ་སྤྱོད་མེད་པར་ ཡིག་སྣོད་ཚུ་ བདེན་དཔྱད་འབད་ཚུགས།

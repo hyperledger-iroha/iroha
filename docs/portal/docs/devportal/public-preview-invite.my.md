@@ -11,69 +11,70 @@ id: public-preview-invite
 title: Public preview invite playbook
 sidebar_label: Preview invite playbook
 description: Checklist for announcing the docs portal preview to external reviewers.
+translator: machine-google-reviewed
 ---
 
-## Program goals
+## အစီအစဉ်ပန်းတိုင်
 
-This playbook explains how to announce and run the public preview once the
-reviewer onboarding workflow is live. It keeps the DOCS-SORA roadmap honest by
-ensuring every invite ships with verifiable artefacts, security guidance, and a
-clear feedback path.
+ဤပြခန်းစာအုပ်သည် အများသူငှာအကြိုကြည့်ရှုခြင်းအား မည်သို့ကြေငြာပြီး လုပ်ဆောင်ရမည်ကို ရှင်းပြထားသည်။
+သုံးသပ်သူ စတင်လုပ်ဆောင်ခြင်း လုပ်ငန်းအသွားအလာကို တိုက်ရိုက်လွှင့်နေပါသည်။ ၎င်းသည် DOCS-SORA လမ်းပြမြေပုံကို ရိုးသားစွာ ထိန်းသိမ်းထားသည်။
+ဖိတ်ခေါ်ထားသော သင်္ဘောတိုင်းတွင် အတည်ပြုနိုင်သော ပစ္စည်းများ၊ လုံခြုံရေးလမ်းညွှန်ချက်နှင့် a
+ရှင်းလင်းသောတုံ့ပြန်ချက်လမ်းကြောင်း။
 
-- **Audience:** curated list of community members, partners, and maintainers who
-  signed the preview acceptable-use policy.
-- **Ceilings:** default wave size ≤ 25 reviewers, 14-day access window, incident
-  response within 24h.
+- **ပရိသတ်-** အသိုင်းအဝိုင်းအဖွဲ့ဝင်များ၊ လုပ်ဖော်ကိုင်ဖက်များနှင့် ထိန်းသိမ်းသူစာရင်းကို ရွေးချယ်ထားသည်။
+  လက်ခံနိုင်သော အသုံးပြုမှုမူဝါဒကို အကြိုကြည့်ရှုရန် လက်မှတ်ရေးထိုးခဲ့သည်။
+- **မျက်နှာကျက်များ-** မူရင်း လှိုင်းအရွယ်အစား ≤ 25 သုံးသပ်သူများ၊ 14 ရက်ကြာ ဝင်ရောက်ခွင့် ပြတင်းပေါက်၊ အဖြစ်အပျက်
+  24 နာရီအတွင်းတုံ့ပြန်မှု။
 
-## Launch gating checklist
+## ဂိတ်စစ်ဆေးမှုစာရင်းကို ဖွင့်ပါ။
 
-Complete these tasks before sending any invitation:
+ဖိတ်ကြားချက်မပို့မီ ဤအလုပ်များကို အပြီးသတ်ပါ-
 
-1. Latest preview artefacts uploaded in CI (`docs-portal-preview`,
-   checksum manifest, descriptor, SoraFS bundle).
-2. `npm run --prefix docs/portal serve` (checksum-gated) tested on the same tag.
-3. Reviewer onboarding tickets approved and linked to the invite wave.
-4. Security, observability, and incident docs validated
-   ([`security-hardening`](./security-hardening.md),
-   [`observability`](./observability.md),
-   [`incident-runbooks`](./incident-runbooks.md)).
-5. Feedback form or issue template prepared (include fields for severity,
-   reproduction steps, screenshots, and environment info).
-6. Announcement copy reviewed by Docs/DevRel + Governance.
+1. CI (`docs-portal-preview`၊
+   checksum manifest၊ ဖော်ပြချက်၊ SoraFS အတွဲ)။
+2. `npm run --prefix docs/portal serve` (checksum-gated) တူညီသော tag တွင် စမ်းသပ်ထားသည်။
+3. ပြန်လည်သုံးသပ်သူသည် လက်မှတ်များကို အတည်ပြုပြီး ဖိတ်ကြားမှုလှိုင်းသို့ ချိတ်ဆက်ထားသည်။
+4. လုံခြုံရေး၊ စောင့်ကြည့်နိုင်မှုနှင့် အဖြစ်အပျက်စာရွက်စာတမ်းများကို အတည်ပြုထားသည်။
+   ([`security-hardening`](./security-hardening.md)၊
+   [`observability`](./observability.md)၊
+   [`incident-runbooks`](./incident-runbooks.md))။
+5. ပြင်ဆင်ထားသော တုံ့ပြန်ချက်ပုံစံ သို့မဟုတ် ပြဿနာပုံစံပုံစံ (ပြင်းထန်မှုအတွက် အကွက်များပါ၀င်သည်၊
+   မျိုးပွားခြင်းအဆင့်များ၊ ဖန်သားပြင်ဓာတ်ပုံများနှင့် ပတ်ဝန်းကျင်အချက်အလက်)။
+6. Docs/DevRel + အုပ်ချုပ်ရေးမှ ပြန်လည်သုံးသပ်ထားသော ကြေငြာချက် မိတ္တူ။
 
-## Invite package
+## ဖိတ်ကြားခြင်းအထုပ်
 
-Every invite must include:
+ဖိတ်ကြားချက်တိုင်းတွင်-
 
-1. **Verified artefacts** — Provide the SoraFS manifest/plan or GitHub artefact
-   links plus the checksum manifest and descriptor. Reference the verification
-   command explicitly so reviewers can run it before launching the site.
-2. **Serve instructions** — Include the checksum-gated preview command:
+1. **အတည်ပြုထားသော ရှေးဟောင်းပစ္စည်းများ** — SoraFS manifest/plan သို့မဟုတ် GitHub artefact ကို ပေးပါ။
+   လင့်ခ်များအပြင် checksum manifest နှင့် ဖော်ပြချက်။ အတည်ပြုချက်ကို ကိုးကားပါ။
+   ဆိုက်ကိုမဖွင့်မီ ပြန်လည်သုံးသပ်သူများသည် ၎င်းကို လုပ်ဆောင်နိုင်စေရန် တိကျပြတ်သားစွာ အမိန့်ပေးသည်။
+2. **ညွှန်ကြားချက်များကို ဆောင်ရွက်ပေးသည်** — checksum-gated preview command ကို ထည့်သွင်းပါ-
 
    ```bash
    DOCS_RELEASE_TAG=preview-<stamp> npm run --prefix docs/portal serve
    ```
 
-3. **Security reminders** — Call out that tokens expire automatically, links
-   must not be shared, and incidents should be reported immediately.
-4. **Feedback channel** — Link to the issue template/form and clarify response
-   time expectations.
-5. **Program dates** — Provide start/end dates, office hours or sync meetings,
-   and the next refresh window.
+3. **လုံခြုံရေးသတိပေးချက်များ** — တိုကင်များသည် အလိုအလျောက်သက်တမ်းကုန်သွားသော လင့်ခ်များကို ခေါ်ဆိုပါ။
+   မျှဝေခြင်းမပြုရ၊ အဖြစ်အပျက်များကို ချက်ချင်းသတင်းပို့သင့်သည်။
+4. **တုံ့ပြန်ချက်ချန်နယ်** — ပြဿနာပုံစံပုံစံ/ပုံစံသို့ ချိတ်ဆက်ပြီး တုံ့ပြန်မှုကို ရှင်းလင်းပါ။
+   အချိန်မျှော်လင့်ချက်။
+5. **အစီအစဉ်ရက်စွဲများ** — စတင်/ပြီးဆုံးသည့်ရက်စွဲများ၊ ရုံးချိန်များ သို့မဟုတ် စည်းဝေးပွဲများကို ပံ့ပိုးပေးခြင်း၊
+   နှင့် နောက်တစ်ခု refresh window ။
 
-The sample email in
+နမူနာ အီးမေးထဲမှာ
 [`docs/examples/docs_preview_invite_template.md`](../../../examples/docs_preview_invite_template.md)
-covers these requirements. Update the placeholders (dates, URLs, contacts)
-before sending.
+ဤလိုအပ်ချက်များကို အကျုံးဝင်သည်။ နေရာကိုင်ဆောင်ထားသူများကို အပ်ဒိတ်လုပ်ပါ (ရက်စွဲများ၊ URL များ၊ အဆက်အသွယ်များ)
+မပို့မီ။
 
-## Expose the preview host
+## အကြိုကြည့်ရှုမှု လက်ခံအား ဖော်ထုတ်ပါ။
 
-Only promote the preview host once onboarding is complete and the change ticket
-is approved. See the [preview host exposure guide](./preview-host-exposure.md)
-for the end-to-end build/publish/verify steps used in this section.
+စတင်ခြင်း ပြီးသည်နှင့် လက်မှတ် အပြောင်းအလဲ ပြီးသည်နှင့်သာ အစမ်းကြည့်ရှုသည့် အစီအစဉ်ကို မြှင့်တင်ပါ။
+အတည်ပြုသည်။ [အိမ်ရှင် ထိတွေ့မှု အကြိုကြည့်ရှုခြင်းလမ်းညွှန်](./preview-host-exposure.md) ကိုကြည့်ပါ
+အဆုံးမှအဆုံးတည်ဆောက်ခြင်း/ထုတ်ဝေခြင်း/အတည်ပြုခြင်းအတွက် ဤကဏ္ဍတွင်အသုံးပြုသောအဆင့်များ။
 
-1. **Build and package:** Stamp the release tag and produce deterministic
-   artefacts.
+1. **တည်ဆောက်ခြင်းနှင့် ပက်ကေ့ဂျ်-** ထုတ်ဝေမှု tag ကို တံဆိပ်တုံးထုပြီး အဆုံးအဖြတ်ကို ထုတ်လုပ်ပါ။
+   ရှေးဟောင်းပစ္စည်း။
 
    ```bash
    cd docs/portal
@@ -92,18 +93,18 @@ for the end-to-end build/publish/verify steps used in this section.
      --out artifacts/sorafs/preview-descriptor.json
    ```
 
-   The pin script writes `portal.car`, `portal.manifest.*`, `portal.pin.proposal.json`,
-   and `portal.dns-cutover.json` under `artifacts/sorafs/`. Attach those files to the
-   invite wave so every reviewer can verify the same bits.
+   pin script သည် `portal.car`, `portal.manifest.*`, `portal.pin.proposal.json`၊
+   နှင့် `artifacts/sorafs/` အောက်တွင် `portal.dns-cutover.json`။ အဲဒီဖိုင်တွေကို ဖိုင်နဲ့တွဲလိုက်ပါ။
+   ဝေဖန်သုံးသပ်သူတိုင်း တူညီသော bits များကို အတည်ပြုနိုင်စေရန် ဖိတ်ခေါ်လှိုင်း။
 
-2. **Publish the preview alias:** Rerun the command without `--skip-submit`
-   (supply `TORII_URL`, `AUTHORITY`, `PRIVATE_KEY[_FILE]`, and the
-   governance-issued alias proof). The script will bind the manifest to
-   `docs-preview.sora` and emit `portal.manifest.submit.summary.json` plus
-   `portal.pin.report.json` for the evidence bundle.
+2. **အကြိုကြည့်ရှုသည့်အမည်တူကို ထုတ်ဝေပါ-** `--skip-submit` မပါဘဲ ကွန်မန်းကို ပြန်ဖွင့်ပါ
+   (ထောက်ပံ့မှု `TORII_URL`၊ `AUTHORITY`၊ `PRIVATE_KEY[_FILE]`၊ နှင့်
+   အုပ်ချုပ်ရေးမှ ထုတ်ပေးသော အတုအယောင် အထောက်အထား)။ ဇာတ်ညွှန်းသည် မန်နီးဖက်စ်ကို တွဲပေးမည်ဖြစ်သည်။
+   `docs-preview.sora` နှင့် `portal.manifest.submit.summary.json` အပေါင်းကို ထုတ်လွှတ်သည်
+   အထောက်အထားအတွဲအတွက် `portal.pin.report.json`။
 
-3. **Probe the deployment:** Confirm the alias resolves and the checksum matches
-   the tag before sending invites.
+3. ** ဖြန့်ကျက်မှုကို စစ်ဆေးပါ-** alias များ ဖြေရှင်းပြီးကြောင်းနှင့် checksum ကိုက်ညီမှုများကို အတည်ပြုပါ
+   ဖိတ်ကြားချက်များကို မပို့မီ tag ပါ။
 
    ```bash
    npm run probe:portal -- \
@@ -111,26 +112,26 @@ for the end-to-end build/publish/verify steps used in this section.
      --expect-release="$DOCS_RELEASE_TAG"
    ```
 
-   Keep `npm run serve` (`scripts/serve-verified-preview.mjs`) handy as a
-   fallback so reviewers can spin up a local copy if the preview edge blips.
+   `npm run serve` (`scripts/serve-verified-preview.mjs`) အဖြစ် နေရာလေးကို ထားပါ။
+   အကြိုကြည့်ရှုမှု အနားသတ်များ ပျက်သွားပါက သုံးသပ်သူများသည် စက်တွင်းမိတ္တူကို လှည့်ပတ်ကြည့်ရှုနိုင်စေရန်အတွက် ဆုတ်ယုတ်မှုဖြစ်သည်။
 
-## Communications timeline
+## ဆက်သွယ်ရေးအချိန်ဇယား
 
-| Day | Action | Owner |
-| --- | --- | --- |
-| D-3 | Finalise invite copy, refresh artefacts, dry-run verification | Docs/DevRel |
-| D-2 | Governance sign-off + change ticket | Docs/DevRel + Governance |
-| D-1 | Send invites using the template, update tracker with recipient list | Docs/DevRel |
-| D | Kickoff call / office hours, monitor telemetry dashboards | Docs/DevRel + On-call |
-| D+7 | Midpoint feedback digest, triage blocking issues | Docs/DevRel |
-| D+14 | Close wave, revoke temporary access, publish summary in `status.md` | Docs/DevRel |
+| နေ့ | အက် | ပိုင်ရှင် |
+| ---| ---| ---|
+| D-3 | ဖိတ်ကြားချက်မိတ္တူကို အပြီးသတ်ပါ Docs/DevRel |
+| D-2 | အုပ်ချုပ်မှုဆိုင်းဘုတ် + လက်မှတ် အပြောင်းအလဲ | Docs/DevRel + အုပ်ချုပ်မှု |
+| D-1 | နမူနာပုံစံကို အသုံးပြု၍ ဖိတ်ကြားချက်များကို ပေးပို့ပါ၊ လက်ခံသူစာရင်း | ဖြင့် ခြေရာခံကို အပ်ဒိတ်လုပ်ပါ။ Docs/DevRel |
+| ဃ| ခေါ်ဆိုမှု/ရုံးချိန်၊ တယ်လီမီတာ ဒက်ရှ်ဘုတ်များ စောင့်ကြည့်ခြင်း | Docs/DevRel + ဖုန်းခေါ်ဆိုမှု |
+| D+7 | အလယ်အလတ်မှတ်တိုင် တုံ့ပြန်ချက် မှတ်တမ်း၊ triage ပိတ်ဆို့ခြင်း ပြဿနာများ | Docs/DevRel |
+| D+14 | လှိုင်းပိတ်၊ ယာယီအသုံးပြုခွင့်ကို ရုပ်သိမ်းပါ၊ `status.md` တွင် အကျဉ်းချုပ်ထုတ်ဝေရန် Docs/DevRel |
 
-## Access tracking & telemetry
+## ခြေရာခံခြင်း & တယ်လီမီတာသို့ ဝင်ရောက်ခြင်း။
 
-1. Record every recipient, invite timestamp, and revocation date with the
-   preview feedback logger (see
-   [`preview-feedback-log`](./preview-feedback-log)) so every wave shares the
-   same evidence trail:
+1. လက်ခံသူတိုင်း၊ ဖိတ်ခေါ်မှုအချိန်တံဆိပ်နှင့် ပြန်လည်ရုပ်သိမ်းသည့်ရက်စွဲတို့ကို မှတ်တမ်းတင်ပါ။
+   အကြံပြုချက် မှတ်တမ်းကို အစမ်းကြည့်ရှုပါ (ကြည့်ပါ။
+   [`preview-feedback-log`](./preview-feedback-log)) ထို့ကြောင့် လှိုင်းတိုင်းသည် မျှဝေသည်
+   တူညီသောအထောက်အထားလမ်းကြောင်း
 
    ```bash
    # Append a new invite event to artifacts/docs_portal_preview/feedback_log.json
@@ -141,41 +142,41 @@ for the end-to-end build/publish/verify steps used in this section.
      --notes "wave-01 seed"
    ```
 
-   Supported events are `invite-sent`, `acknowledged`,
-   `feedback-submitted`, `issue-opened`, and `access-revoked`. The log lives at
-   `artifacts/docs_portal_preview/feedback_log.json` by default; attach it to
-   the invite wave ticket together with consent forms. Use the summary helper
-   to produce an auditable roll-up before the close-out note:
+   ပံ့ပိုးထားသော ပွဲများမှာ `invite-sent`၊ `acknowledged`၊
+   `feedback-submitted`၊ `issue-opened` နှင့် `access-revoked`။ သစ်လုံးမှာ နေထိုင်သည်။
+   ပုံသေအားဖြင့် `artifacts/docs_portal_preview/feedback_log.json`၊ အဲဒါကို တွဲလိုက်ပါ။
+   သဘောတူညီချက်ပုံစံများနှင့်အတူ ဖိတ်ကြားမှုလှိုင်းလက်မှတ်။ အကျဉ်းချုပ်အကူအညီကိုသုံးပါ။
+   အနီးစပ်ဆုံးမှတ်စုမတိုင်မီ စာရင်းစစ်အကျဉ်းချုပ်ကို ထုတ်ရန်-
 
    ```bash
    npm run --prefix docs/portal preview:summary -- --summary-json \
      > artifacts/docs_portal_preview/preview-20250303-summary.json
    ```
 
-   The JSON summary enumerates invites per wave, open recipients, feedback
-   counts, and the timestamp of the most recent event. The helper is backed by
-   [`scripts/preview-feedback-log.mjs`](../../scripts/preview-feedback-log.mjs),
-   so the same workflow can run locally or in CI. Use the digest template in
+   JSON အနှစ်ချုပ်သည် လှိုင်းအလိုက် ဖိတ်ကြားမှုများ၊ လက်ခံရရှိသူများ၊ တုံ့ပြန်ချက်တို့ကို စာရင်းကောက်သည်။
+   ရေတွက်ခြင်းနှင့် လတ်တလောဖြစ်ရပ်၏ အချိန်တံဆိပ်။ အကူအညီပေးသူက ကျောထောက်နောက်ခံ
+   [`scripts/preview-feedback-log.mjs`](../../scripts/preview-feedback-log.mjs)၊
+   ထို့ကြောင့် တူညီသော အလုပ်အသွားအလာကို စက်တွင်း သို့မဟုတ် CI တွင် လုပ်ဆောင်နိုင်သည်။ Digest Template ကိုသုံးပါ။
    [`docs/examples/docs_preview_feedback_digest.md`](../../../examples/docs_preview_feedback_digest.md)
-   when publishing the wave recap.
-2. Tag telemetry dashboards with the `DOCS_RELEASE_TAG` used for the wave so
-   spikes can be correlated with invite cohorts.
-3. Run `npm run probe:portal -- --expect-release=<tag>` after the deploy to
-   confirm the preview environment advertises the correct release metadata.
-4. Capture any incidents in the runbook template and link them to the cohort.
+   wave recap ကိုထုတ်ဝေသောအခါ။
+2. လှိုင်းအတွက်သုံးသော `DOCS_RELEASE_TAG` ဖြင့် တယ်လီမီတာ ဒက်ရှ်ဘုတ်များကို Tag လုပ်ပါ။
+   spikes များကို ဖိတ်ကြားထားသော အုပ်စုများနှင့် ဆက်စပ်နိုင်ပါသည်။
+3. Deploy ပြီးနောက် `npm run probe:portal -- --expect-release=<tag>` ကို Run ပါ။
+   အစမ်းကြည့်ရှုသည့် ပတ်ဝန်းကျင်တွင် မှန်ကန်သော မက်တာဒေတာကို ကြော်ငြာကြောင်း အတည်ပြုသည်။
+4. runbook နမူနာပုံစံရှိ မည်သည့်အဖြစ်အပျက်များကိုမဆို ဖမ်းယူပြီး ၎င်းတို့ကို အစုအဝေးသို့ ချိတ်ဆက်ပါ။
 
-## Feedback & close-out
+## တုံ့ပြန်ချက်
 
-1. Aggregate feedback in a shared doc or issue board. Label items with
-   `docs-preview/<wave>` so roadmap owners can query them easily.
-2. Use the preview logger’s summary output to populate the wave report, then
-   summarise the cohort in `status.md` (participants, major findings, planned
-   fixes) and update `roadmap.md` if the DOCS-SORA milestone changed.
-3. Follow the offboarding steps from
-   [`reviewer-onboarding`](./reviewer-onboarding.md): revoke access, archive
-   requests, and thank participants.
-4. Prepare the next wave by refreshing artefacts, re-running the checksum gates,
-   and updating the invite template with new dates.
+1. မျှဝေထားသော doc သို့မဟုတ် ပြဿနာဘုတ်တွင် စုစည်းထားသော တုံ့ပြန်ချက်။ ပစ္စည်းများကို တံဆိပ်တပ်ပါ။
+   `docs-preview/<wave>` ဖြစ်သောကြောင့် လမ်းပြမြေပုံပိုင်ရှင်များသည် ၎င်းတို့ကို အလွယ်တကူ မေးမြန်းနိုင်ပါသည်။
+2. ထို့နောက် လှိုင်းအစီရင်ခံစာကို ဖြည့်သွင်းရန် အကြိုကြည့်ရှုသည့် လော့ဂ်ဂါ၏ အနှစ်ချုပ်အထွက်ကို အသုံးပြုပါ။
+   `status.md` တွင် အစုအဝေးကို အကျဉ်းချုပ် (ပါဝင်သူများ၊ အဓိက တွေ့ရှိချက်များ၊ စီစဉ်ထားသည်
+   ပြင်ဆင်မှုများ) နှင့် DOCS-SORA မှတ်တိုင်ပြောင်းပါက `roadmap.md` ကို အပ်ဒိတ်လုပ်ပါ။
+3. မှ offboarding အဆင့်များကိုလိုက်နာပါ။
+   [`reviewer-onboarding`](./reviewer-onboarding.md): အသုံးပြုခွင့်ကို ရုပ်သိမ်း၊ မှတ်တမ်း
+   တောင်းဆိုချက်များနှင့် ပါဝင်သူများကို ကျေးဇူးတင်ပါသည်။
+4. ပစ္စည်းများကို ပြန်လည်ဆန်းသစ်ပြီး checksum ဂိတ်များကို ပြန်လည်လုပ်ဆောင်ခြင်းဖြင့် နောက်လှိုင်းကို ပြင်ဆင်ပါ၊
+   ရက်စွဲအသစ်များဖြင့် ဖိတ်ကြားချက်ပုံစံပုံစံကို အပ်ဒိတ်လုပ်ခြင်း။
 
-Consistently applying this playbook keeps the preview program auditable and
-gives Docs/DevRel a repeatable way to scale invites as the portal approaches GA.
+ဤပြခန်းစာအုပ်ကို အဆက်မပြတ်အသုံးပြုခြင်းသည် အကြိုကြည့်ရှုခြင်းပရိုဂရမ်ကို စာရင်းစစ်နိုင်စေပါသည်။
+Docs/DevRel သည် GA အနီးသို့ ချဉ်းကပ်လာသည်နှင့်အမျှ ဖိတ်ကြားချက်များကို အတိုင်းအတာတစ်ခုအထိ ထပ်ခါတလဲလဲ ပြုလုပ်နိုင်သည့် နည်းလမ်းကို ပေးသည်။

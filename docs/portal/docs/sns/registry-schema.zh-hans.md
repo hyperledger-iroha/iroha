@@ -11,65 +11,66 @@ id: registry-schema
 title: Sora Name Service Registry Schema
 sidebar_label: Registry schema
 description: Norito data structures, lifecycle rules, and event contracts for SNS registry smart contracts (SN-2a).
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
-This page mirrors `docs/source/sns/registry_schema.md` and now serves as the
-canonical portal copy. The source file remains for translation updates.
+:::注意规范来源
+此页面镜像 `docs/source/sns/registry_schema.md`，现在用作
+规范门户副本。保留源文件以供翻译更新。
 :::
 
-# Sora Name Service Registry Schema (SN-2a)
+# Sora 名称服务注册表架构 (SN-2a)
 
-**Status:** Drafted 2026-03-24 -- submitted for SNS program review  
-**Roadmap link:** SN-2a “Registry schema & storage layout”  
-**Scope:** Define the canonical Norito structures, lifecycle states, and emitted events for the Sora Name Service (SNS) so registry and registrar implementations stay deterministic across contracts, SDKs, and gateways.
+**状态：** 起草于 2026 年 3 月 24 日 -- 已提交 SNS 计划审核  
+**路线图链接：** SN-2a“注册表架构和存储布局”  
+**范围：** 定义 Sora 名称服务 (SNS) 的规范 Norito 结构、生命周期状态和发出的事件，以便注册中心和注册商实现在合约、SDK 和网关之间保持确定性。
 
-This document completes the schema deliverable for SN-2a by specifying:
+本文档通过指定以下内容完成了 SN-2a 的架构可交付成果：
 
-1. Identifiers and hashing rules (`SuffixId`, `NameHash`, selector derivation).
-2. Norito structs/enums for name records, suffix policies, pricing tiers, revenue splits, and registry events.
-3. Storage layout and index prefixes for deterministic replay.
-4. A state machine covering registration, renewal, grace/redemption, freezes, and tombstones.
-5. Canonical events consumed by DNS/gateway automation.
+1. 标识符和哈希规则（`SuffixId`、`NameHash`、选择器推导）。
+2. Norito 名称记录、后缀策略、定价层、收入分成和注册表事件的结构/枚举。
+3. 用于确定性重放的存储布局和索引前缀。
+4. 状态机，涵盖注册、续订、宽限/赎回、冻结和墓碑。
+5. DNS/网关自动化消耗的规范事件。
 
-## 1. Identifiers & Hashing
+## 1. 标识符和哈希
 
-| Identifier | Description | Derivation |
+|标识符 |描述 |推导|
 |------------|-------------|------------|
-| `SuffixId` (`u16`) | Registry-wide identifier for top-level suffixes (`.sora`, `.nexus`, `.dao`). Aligned with the suffix catalog in [`sns_suffix_governance_charter.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sns_suffix_governance_charter.md). | Assigned by governance vote; stored in `SuffixPolicyV1`. |
-| `SuffixSelector` | Canonical string form of the suffix (ASCII, lower-case). | Example: `.sora` → `sora`. |
-| `NameSelectorV1` | Binary selector for the registered label. | `struct NameSelectorV1 { version:u8 (=1); suffix_id:u16; label_len:u16; label_bytes:Vec<u8> }`. Label is NFC + lower-case per Norm v1. |
-| `NameHash` (`[u8;32]`) | Primary lookup key used by contracts, events, and caches. | `blake3(NameSelectorV1_bytes)`. |
+| `SuffixId` (`u16`) |顶级后缀的注册表范围标识符（`.sora`、`.nexus`、`.dao`）。与 [`sns_suffix_governance_charter.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sns_suffix_governance_charter.md) 中的后缀目录对齐。 |由治理投票分配；存储在 `SuffixPolicyV1` 中。 |
+| `SuffixSelector` |后缀的规范字符串形式（ASCII，小写）。 |示例：`.sora` → `sora`。 |
+| `NameSelectorV1` |已注册标签的二进制选择器。 | `struct NameSelectorV1 { version:u8 (=1); suffix_id:u16; label_len:u16; label_bytes:Vec<u8> }`。标签为 NFC + 小写字母（符合 Normv1）。 |
+| `NameHash` (`[u8;32]`) |合约、事件和缓存使用的主查找键。 | `blake3(NameSelectorV1_bytes)`。 |
 
-Determinism requirements:
+确定性要求：
 
-- Labels are normalised via Norm v1 (UTS-46 strict, STD3 ASCII, NFC). Incoming user strings MUST be normalised before hashing.
-- Reserved labels (from `SuffixPolicyV1.reserved_labels`) never enter the registry; governance-only overrides emit `ReservedNameAssigned` events.
+- 标签通过Normv1（严格UTS-46、STD3 ASCII、NFC）进行标准化。传入的用户字符串必须在散列之前进行标准化。
+- 保留标签（来自 `SuffixPolicyV1.reserved_labels`）永远不会进入注册表；仅治理覆盖会发出 `ReservedNameAssigned` 事件。
 
-## 2. Norito Structures
+## 2. Norito 结构
 
-### 2.1 NameRecordV1
+### 2.1 名称记录V1
 
-| Field | Type | Notes |
-|-------|------|-------|
-| `suffix_id` | `u16` | References `SuffixPolicyV1`. |
-| `selector` | `NameSelectorV1` | Raw selector bytes for audit/debug. |
-| `name_hash` | `[u8; 32]` | Key for maps/events. |
-| `normalized_label` | `AsciiString` | Human-readable label (post Norm v1). |
-| `display_label` | `AsciiString` | Steward-provided casing; optional cosmetics. |
-| `owner` | `AccountId` | Controls renewals/transfers. |
-| `controllers` | `Vec<NameControllerV1>` | References target account addresses, resolvers, or application metadata. |
-| `status` | `NameStatus` | Lifecycle flag (see Section 4). |
-| `pricing_class` | `u8` | Index into suffix pricing tiers (standard, premium, reserved). |
-| `registered_at` | `Timestamp` | Block timestamp of the initial activation. |
-| `expires_at` | `Timestamp` | End of paid term. |
-| `grace_expires_at` | `Timestamp` | End of auto-renew grace (default +30 days). |
-| `redemption_expires_at` | `Timestamp` | End of redemption window (default +60 days). |
-| `auction` | `Option<NameAuctionStateV1>` | Present when Dutch reopen or premium auctions are active. |
-| `last_tx_hash` | `Hash` | Deterministic pointer to the transaction that produced this version. |
-| `metadata` | `Metadata` | Arbitrary registrar metadata (text records, proofs). |
+|领域|类型 |笔记|
+|--------|------|--------|
+| `suffix_id` | `u16` |参考文献 `SuffixPolicyV1`。 |
+| `selector` | `NameSelectorV1` |用于审核/调试的原始选择器字节。 |
+| `name_hash` | `[u8; 32]` |地图/事件的关键。 |
+| `normalized_label` | `AsciiString` |人类可读的标签（Normv1 后）。 |
+| `display_label` | `AsciiString` |管家提供的外壳；可选化妆品。 |
+| `owner` | `AccountId` |控制续订/转让。 |
+| `controllers` | `Vec<NameControllerV1>` |引用目标帐户地址、解析器或应用程序元数据。 |
+| `status` | `NameStatus` |生命周期标志（参见第 4 节）。 |
+| `pricing_class` | `u8` |后缀定价等级的索引（标准、高级、保留）。 |
+| `registered_at` | `Timestamp` |初始激活的区块时间戳。 |
+| `expires_at` | `Timestamp` |付费期限结束。 |
+| `grace_expires_at` | `Timestamp` |自动续订宽限期结束（默认+30 天）。 |
+| `redemption_expires_at` | `Timestamp` |兑换窗口结束（默认+60 天）。 |
+| `auction` | `Option<NameAuctionStateV1>` |当荷兰重新开放或高级拍卖活动时出现。 |
+| `last_tx_hash` | `Hash` |指向生成此版本的事务的确定性指针。 |
+| `metadata` | `Metadata` |任意注册商元数据（文本记录、证明）。 |
 
-Supporting structs:
+支持结构：
 
 ```text
 Enum NameStatus {
@@ -125,26 +126,26 @@ Enum AuctionKind {
 }
 ```
 
-### 2.2 SuffixPolicyV1
+### 2.2 后缀策略V1
 
-| Field | Type | Notes |
-|-------|------|-------|
-| `suffix_id` | `u16` | Primary key; stable across policy versions. |
-| `suffix` | `AsciiString` | e.g., `sora`. |
-| `steward` | `AccountId` | Steward defined in the governance charter. |
-| `status` | `SuffixStatus` | `Active`, `Paused`, `Revoked`. |
-| `payment_asset_id` | `AsciiString` | Default settlement asset identifier (for example `xor#sora`). |
-| `pricing` | `Vec<PriceTierV1>` | Tiered pricing coefficients and duration rules. |
-| `min_term_years` | `u8` | Floor for purchased term regardless of tier overrides. |
-| `grace_period_days` | `u16` | Default 30. |
-| `redemption_period_days` | `u16` | Default 60. |
-| `max_term_years` | `u8` | Maximum upfront renewal length. |
-| `referral_cap_bps` | `u16` | <=1000 (10%) per charter. |
-| `reserved_labels` | `Vec<ReservedNameV1>` | Governance supplied list with assignment instructions. |
-| `fee_split` | `SuffixFeeSplitV1` | Treasury / steward / referral shares (basis points). |
-| `fund_splitter_account` | `AccountId` | Account that holds escrow + distributes funds. |
-| `policy_version` | `u16` | Incremented on every change. |
-| `metadata` | `Metadata` | Extended notes (KPI covenant, compliance doc hashes). |
+|领域|类型 |笔记|
+|--------|------|--------|
+| `suffix_id` | `u16` |主键；跨策略版本稳定。 |
+| `suffix` | `AsciiString` |例如，`sora`。 |
+| `steward` | `AccountId` |管家在治理章程中定义。 |
+| `status` | `SuffixStatus` | `Active`、`Paused`、`Revoked`。 |
+| `payment_asset_id` | `AsciiString` |默认结算资产标识符（例如`xor#sora`）。 |
+| `pricing` | `Vec<PriceTierV1>` |分级定价系数和期限规则。 |
+| `min_term_years` | `u8` |购买期限的下限，无论层级覆盖如何。 |
+| `grace_period_days` | `u16` |默认 30。
+| `redemption_period_days` | `u16` |默认 60。
+| `max_term_years` | `u8` |最大预续订期限。 |
+| `referral_cap_bps` | `u16` |每包机 <=1000 (10%)。 |
+| `reserved_labels` | `Vec<ReservedNameV1>` |治理提供带有分配说明的列表。 |
+| `fee_split` | `SuffixFeeSplitV1` |财务/管理/推荐股票（基点）。 |
+| `fund_splitter_account` | `AccountId` |持有托管+分配资金的账户。 |
+| `policy_version` | `u16` |每次更改都会增加。 |
+| `metadata` | `Metadata` |扩展注释（KPI 契约、合规文档哈希）。 |
 
 ```text
 Struct PriceTierV1 {
@@ -172,18 +173,18 @@ Struct SuffixFeeSplitV1 {
 }
 ```
 
-### 2.3 Revenue & Settlement Records
+### 2.3 收入及结算记录
 
-| Struct | Fields | Purpose |
+|结构|领域 |目的|
 |--------|--------|---------|
-| `RevenueShareRecordV1` | `suffix_id`, `epoch_id`, `treasury_amount`, `steward_amount`, `referral_amount`, `escrow_amount`, `settled_at`, `tx_hash`. | Deterministic record of routed payments per settlement epoch (weekly). |
-| `RevenueAccrualEventV1` | `name_hash`, `suffix_id`, `event`, `gross_amount`, `net_amount`, `referral_account`. | Emitted each time a payment posts (registration, renewal, auction). |
+| `RevenueShareRecordV1` | `suffix_id`、`epoch_id`、`treasury_amount`、`steward_amount`、`referral_amount`、`escrow_amount`、`settled_at`、`tx_hash`。 |每个结算周期（每周）的路由付款的确定性记录。 |
+| `RevenueAccrualEventV1` | `name_hash`、`suffix_id`、`event`、`gross_amount`、`net_amount`、`referral_account`。 |每次付款（注册、续订、拍卖）时发出。 |
 
-All `TokenValue` fields use Norito’s canonical fixed-point encoding with the currency code declared in the associated `SuffixPolicyV1`.
+所有 `TokenValue` 字段都使用 Norito 的规范定点编码以及关联的 `SuffixPolicyV1` 中声明的货币代码。
 
-### 2.4 Registry Events
+### 2.4 注册表事件
 
-Canonical events provide a replay log for DNS/gateway automation and analytics.
+规范事件为 DNS/网关自动化和分析提供重播日志。
 
 ```text
 Struct RegistryEventV1 {
@@ -212,52 +213,52 @@ Enum RegistryEventKind {
 }
 ```
 
-Events must be appended to a replayable log (e.g., `RegistryEvents` domain) and mirrored to gateway feeds so DNS caches invalidate within SLA.
+事件必须附加到可重播日志（例如，`RegistryEvents` 域）并镜像到网关源，以便 DNS 缓存在 SLA 内失效。
 
-## 3. Storage Layout & Indexes
+## 3. 存储布局和索引
 
-| Key | Description |
+|关键|描述 |
 |-----|-------------|
-| `Names::<name_hash>` | Primary map from `name_hash` to `NameRecordV1`. |
-| `NamesByOwner::<AccountId, suffix_id>` | Secondary index for wallet UI (pagination friendly). |
-| `NamesByLabel::<suffix_id, normalized_label>` | Detect conflicts, power deterministic search. |
-| `SuffixPolicies::<suffix_id>` | Latest `SuffixPolicyV1`. |
-| `RevenueShare::<suffix_id, epoch_id>` | `RevenueShareRecordV1` history. |
-| `RegistryEvents::<u64>` | Append-only log keyed by monotonically increasing sequence. |
+| `Names::<name_hash>` |主映射从 `name_hash` 到 `NameRecordV1`。 |
+| `NamesByOwner::<AccountId, suffix_id>` |钱包 UI 的二级索引（分页友好）。 |
+| `NamesByLabel::<suffix_id, normalized_label>` |检测冲突，增强确定性搜索能力。 |
+| `SuffixPolicies::<suffix_id>` |最新的 `SuffixPolicyV1`。 |
+| `RevenueShare::<suffix_id, epoch_id>` | `RevenueShareRecordV1` 历史记录。 |
+| `RegistryEvents::<u64>` |仅附加日志由单调递增序列键入。 |
 
-All keys serialise using Norito tuples to keep hashing deterministic across hosts. Index updates occur atomically alongside the primary record.
+所有密钥均使用 Norito 元组进行序列化，以保持跨主机的哈希确定性。索引更新与主记录一起自动发生。
 
-## 4. Lifecycle State Machine
+## 4. 生命周期状态机
 
-| State | Entry Conditions | Allowed Transitions | Notes |
-|-------|-----------------|---------------------|-------|
-| Available | Derived when `NameRecord` absent. | `PendingAuction` (premium), `Active` (standard register). | Availability search reads indexes only. |
-| PendingAuction | Created when `PriceTierV1.auction_kind` ≠ none. | `Active` (auction settles), `Tombstoned` (no bids). | Auctions emit `AuctionOpened` and `AuctionSettled`. |
-| Active | Registration or renewal succeeded. | `GracePeriod`, `Frozen`, `Tombstoned`. | `expires_at` drives transition. |
-| GracePeriod | Automatically when `now > expires_at`. | `Active` (on-time renewal), `Redemption`, `Tombstoned`. | Default +30 days; still resolves but flagged. |
-| Redemption | `now > grace_expires_at` but `< redemption_expires_at`. | `Active` (late renewal), `Tombstoned`. | Commands require penalty fee. |
-| Frozen | Governance or guardian freeze. | `Active` (after remediation), `Tombstoned`. | Cannot transfer or update controllers. |
-| Tombstoned | Voluntary surrender, permanent dispute outcome, or expired redemption. | `PendingAuction` (Dutch reopen) or remains tombstoned. | Event `NameTombstoned` must include reason. |
+|状态|入学条件 |允许的转换 |笔记|
+|--------|-----------------|---------------------|--------|
+|可用 |当 `NameRecord` 不存在时派生。 | `PendingAuction`（高级）、`Active`（标准寄存器）。 |可用性搜索仅读取索引。 |
+|待拍卖 |当 `PriceTierV1.auction_kind` ≠ 无时创建。 | `Active`（拍卖结算），`Tombstoned`（无人出价）。 |拍卖发出 `AuctionOpened` 和 `AuctionSettled`。 |
+|活跃|注册或续订成功。 | `GracePeriod`、`Frozen`、`Tombstoned`。 | `expires_at` 驱动转换。 |
+|宽限期 |当 `now > expires_at` 时自动。 | `Active`（按时更新）、`Redemption`、`Tombstoned`。 |默认+30天；仍然解决但被标记。 |
+|赎回 | `now > grace_expires_at` 但 `< redemption_expires_at`。 | `Active`（延迟更新）、`Tombstoned`。 |命令需要罚款。 |
+|冷冻|治理或守护冻结。 | `Active`（修复后）、`Tombstoned`。 |无法传输或更新控制器。 |
+|墓碑|自愿退保、永久争议结果或过期赎回。 | `PendingAuction`（荷兰重新开放）或仍处于墓碑状态。 |事件 `NameTombstoned` 必须包含原因。 |
 
-State transitions MUST emit the corresponding `RegistryEventKind` so downstream caches stay coherent. Tombstoned names entering Dutch reopen auctions attach an `AuctionKind::DutchReopen` payload.
+状态转换必须发出相应的 `RegistryEventKind`，以便下游缓存保持一致。进入荷兰重新拍卖的墓碑名称会附加 `AuctionKind::DutchReopen` 有效负载。
 
-## 5. Canonical Events & Gateway Sync
+## 5. 规范事件和网关同步
 
-Gateways subscribe to `RegistryEventV1` and synchronise to DNS/SoraFS by:
+网关通过以下方式订阅 `RegistryEventV1` 并同步到 DNS/SoraFS：
 
-1. Fetching the latest `NameRecordV1` referenced by the event sequence.
-2. Regenerating resolver templates (preferred IH58 + second-best compressed (`sora`) addresses, text records).
-3. Pinning updated zone data via the SoraDNS workflow described in [`soradns_registry_rfc.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/soradns/soradns_registry_rfc.md).
+1. 获取事件序列引用的最新 `NameRecordV1`。
+2.重新生成解析器模板（首选IH58 +次优压缩（`sora`）地址、文本记录）。
+3. 通过 [`soradns_registry_rfc.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/soradns/soradns_registry_rfc.md) 中描述的 SoraDNS 工作流程固定更新的区域数据。
 
-Event delivery guarantees:
+活动交付保证：
 
-- Every transaction affecting a `NameRecordV1` *must* append exactly one event with a strictly increasing `version`.
-- `RevenueSharePosted` events reference settlements emitted by `RevenueShareRecordV1`.
-- Freeze/unfreeze/tombstone events include governance artefact hashes inside `metadata` for audit replay.
+- 影响 `NameRecordV1` 的每笔交易*必须*附加一个严格递增的 `version` 事件。
+- `RevenueSharePosted` 事件参考 `RevenueShareRecordV1` 发出的和解。
+- 冻结/解冻/逻辑删除事件包括 `metadata` 内的治理工件哈希，用于审核重放。
 
-## 6. Example Norito Payloads
+## 6. Norito 有效负载示例
 
-### 6.1 NameRecord Example
+### 6.1 名称记录示例
 
 ```text
 NameRecordV1 {
@@ -287,7 +288,7 @@ NameRecordV1 {
 }
 ```
 
-### 6.2 SuffixPolicy Example
+### 6.2 后缀策略示例
 
 ```text
 SuffixPolicyV1 {
@@ -315,10 +316,8 @@ SuffixPolicyV1 {
 }
 ```
 
-## 7. Next Steps
+## 7. 后续步骤- **SN-2b（注册器 API 和治理挂钩）：** 通过 Torii（Norito 和 JSON 绑定）公开这些结构，并将准入检查连接到治理工件。
+- **SN-3（拍卖和注册引擎）：** 重用 `NameAuctionStateV1` 来实现提交/显示和荷兰语重新打开逻辑。
+- **SN-5（支付和结算）：** 利用 `RevenueShareRecordV1` 实现财务对账和报告自动化。
 
-- **SN-2b (Registrar API & governance hooks):** expose these structs via Torii (Norito and JSON bindings) and wire admission checks to governance artefacts.
-- **SN-3 (Auction & registration engine):** reuse `NameAuctionStateV1` to implement commit/reveal and Dutch reopen logic.
-- **SN-5 (Payment & settlement):** leverage `RevenueShareRecordV1` for finance reconciliation and reporting automation.
-
-Questions or change requests should be filed alongside the SNS roadmap updates in `roadmap.md` and mirrored in `status.md` when merged.
+问题或更改请求应与 `roadmap.md` 中的 SNS 路线图更新一起提交，并在合并时反映在 `status.md` 中。

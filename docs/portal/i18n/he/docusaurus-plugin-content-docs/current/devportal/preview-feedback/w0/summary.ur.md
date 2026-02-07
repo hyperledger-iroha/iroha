@@ -4,6 +4,8 @@ direction: rtl
 source: docs/portal/docs/devportal/preview-feedback/w0/summary.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
@@ -15,8 +17,8 @@ description: core maintainers کے preview wave کے لئے وسطی چیک پو
 
 | آئٹم | تفصیل |
 | --- | --- |
-| لہر | W0 - core maintainers |
-| خلاصہ تاریخ | 2025-03-27 |
+| לרי | W0 - מתחזקי ליבה |
+| خلاصہ تاریخ | 27-03-2025 |
 | ریویو ونڈو | 2025-03-25 -> 2025-04-08 |
 | شرکا | docs-core-01, sdk-rust-01, sdk-js-01, sorafs-ops-01, observability-01 |
 | آرٹیفیکٹ ٹیگ | `preview-2025-03-24` |
@@ -37,11 +39,11 @@ description: core maintainers کے preview wave کے لئے وسطی چیک پو
 
 ## ایکشن آئٹمز
 
-| ID | وضاحت | مالک | اسٹیٹس |
+| תעודת זהות | وضاحت | مالک | اسٹیٹس |
 | --- | --- | --- | --- |
 | W0-A1 | devportal sidebar entries کو دوبارہ ترتیب دینا تاکہ reviewers والے docs نمایاں ہوں (`preview-invite-*` کو ایک ساتھ رکھیں). | Docs-core-01 | مکمل - sidebar اب reviewers docs کو مسلسل دکھاتا ہے (`docs/portal/sidebars.js`). |
 | W0-A2 | `sorafs/orchestrator-ops` اور `sorafs/multi-source-rollout` کے درمیان واضح cross-link شامل کرنا۔ | Sorafs-ops-01 | مکمل - ہر runbook اب دوسرے کی طرف لنک کرتا ہے تاکہ rollout کے دوران دونوں گائیڈ نظر آئیں۔ |
-| W0-A3 | governance tracker کے ساتھ telemetry snapshots + query bundle شیئر کرنا۔ | Observability-01 | مکمل - bundle `DOCS-SORA-Preview-W0` کے ساتھ منسلک ہے۔ |
+| W0-A3 | governance tracker کے ساتھ telemetry snapshots + query bundle شیئر کرنا۔ | צפיות-01 | مکمل - bundle `DOCS-SORA-Preview-W0` کے ساتھ منسلک ہے۔ |
 
 ## اختتامی خلاصہ (2025-04-08)
 

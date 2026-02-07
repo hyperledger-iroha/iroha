@@ -4,28 +4,30 @@ direction: ltr
 source: docs/portal/docs/norito/examples/register-and-mint.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-slug: /norito/examples/register-and-mint
+слизень: /norito/examples/register-and-mint
 title: Зарегистрировать домен и выпустить активы
-description: Показывает создание доменов с разрешениями, регистрацию активов и детерминированный выпуск.
-source: crates/ivm/docs/examples/13_register_and_mint.ko
+описание: Показывает создание доменов с разрешениями, регистрацию активов и определённый выпуск.
+источник: crates/ivm/docs/examples/13_register_and_mint.ko
 ---
 
-Показывает создание доменов с разрешениями, регистрацию активов и детерминированный выпуск.
+Показывает создание доменов с разрешениями, регистрацию файлов и определённый выпуск.
 
 ## Пошаговый обход реестра
 
-- Убедитесь, что аккаунт назначения (например `ih58...`) существует, повторяя фазу подготовки в каждом quickstart SDK.
-- Вызовите точку входа `register_and_mint`, чтобы создать определение актива ROSE и выпустить 250 единиц для Alice в одной транзакции.
-- Проверьте балансы через `client.request(FindAccountAssets)` или `iroha_cli ledger assets list --account ih58...`, чтобы подтвердить успешный выпуск.
+- Убедитесь, что назначение учетной записи (например, `ih58...`) существует, повторите этап подготовки в каждом SDK быстрого запуска.
+- Вызовите точку входа `register_and_mint`, чтобы создать определение активации ROSE и выпустить 250 единиц для Алисы в одной передаче.
+- Проверьте балансы через `client.request(FindAccountAssets)` или `iroha_cli ledger assets list --account ih58...`, чтобы обеспечить успешный выпуск.
 
-## Связанные руководства SDK
+## Связанные управления SDK
 
-- [Quickstart Rust SDK](/sdks/rust)
+- [Быстрый запуск Rust SDK](/sdks/rust)
 - [Quickstart Python SDK](/sdks/python)
-- [Quickstart JavaScript SDK](/sdks/javascript)
+- [Быстрый запуск JavaScript SDK](/sdks/javascript)
 
 [Скачать исходник Kotodama](/norito-snippets/register-and-mint.ko)
 

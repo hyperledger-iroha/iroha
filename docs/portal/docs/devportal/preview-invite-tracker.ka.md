@@ -11,131 +11,130 @@ id: preview-invite-tracker
 title: Preview invite tracker
 sidebar_label: Preview tracker
 description: Wave-by-wave status log for the checksum-gated docs portal preview program.
+translator: machine-google-reviewed
 ---
 
-This tracker records every docs portal preview wave so DOCS-SORA owners and
-governance reviewers can see which cohort is active, who approved the invites,
-and which artefacts still need attention. Update it whenever invites are sent,
-revoked, or deferred so the audit trail stays inside the repository.
+ეს ტრეკერი ჩაწერს დოკუმენტების პორტალის გადახედვის ყველა ტალღას, რათა DOCS-SORA მფლობელები და
+მმართველობის მიმომხილველებს შეუძლიათ ნახონ რომელი კოჰორტა არის აქტიური, ვინ დაამტკიცა მოწვევები,
+და რომელ არტეფაქტებს ჯერ კიდევ სჭირდება ყურადღება. განაახლეთ ის, როცა მოწვევები იგზავნება,
+გაუქმდა ან გადაიდო ისე, რომ აუდიტის ბილიკი დარჩეს საცავში.
 
-## Wave status
+## ტალღის სტატუსი
 
-| Wave | Cohort | Tracker issue | Approver(s) | Status | Target window | Notes |
+| ტალღა | კოჰორტა | ტრეკერის საკითხი | დამამტკიცებელი (ები) | სტატუსი | სამიზნე ფანჯარა | შენიშვნები |
 | --- | --- | --- | --- | --- | --- | --- |
-| **W0 – Core maintainers** | Docs + SDK maintainers validating checksum flow | `DOCS-SORA-Preview-W0` (GitHub/ops tracker) | Docs/DevRel lead + Portal TL | 🈴 Completed | Q2 2025 weeks 1–2 | Invites sent 2025‑03‑25, telemetry stayed green, exit summary published 2025‑04‑08. |
-| **W1 – Partners** | SoraFS operators, Torii integrators under NDA | `DOCS-SORA-Preview-W1` | Docs/DevRel lead + Governance liaison | 🈴 Completed | Q2 2025 week 3 | Invites ran 2025‑04‑12 → 2025‑04‑26 with all eight partners acked; evidence captured in [`preview-feedback/w1/log.md`](./preview-feedback/w1/log.md) and the exit digest in [`preview-feedback/w1/summary.md`](./preview-feedback/w1/summary.md). |
-| **W2 – Community** | Curated community waitlist (≤25 at a time) | `DOCS-SORA-Preview-W2` | Docs/DevRel lead + Community manager | 🈴 Completed | Q3 2025 week 1 (tentative) | Invites ran 2025‑06‑15 → 2025‑06‑29 with telemetry green throughout; evidence + findings captured in [`preview-feedback/w2/summary.md`](./preview-feedback/w2/summary.md). |
-| **W3 – Beta cohorts** | Finance/observability beta + SDK partner + ecosystem advocate | `DOCS-SORA-Preview-W3` | Docs/DevRel lead + Governance liaison | 🈴 Completed | Q1 2026 week 8 | Invites ran 2026‑02‑18 → 2026‑02‑28; digest + portal data generated via `preview-20260218` wave (see [`preview-feedback/w3/summary.md`](./preview-feedback/w3/summary.md)). |
+| **W0 – ძირითადი შემნარჩუნებელი ** | Docs + SDK დამხმარეები, რომლებიც ამოწმებენ საკონტროლო ჯამის ნაკადს | `DOCS-SORA-Preview-W0` (GitHub/ops ტრეკერი) | Docs/DevRel წამყვანი + პორტალი TL | 🈴 დასრულებული | Q2 2025 კვირა 1–2 | მოსაწვევები გაიგზავნა 2025-03-25, ტელემეტრია დარჩა მწვანე, გამოსვლის რეზიუმე გამოქვეყნდა 2025-04-08. |
+| **W1 – პარტნიორები** | SoraFS ოპერატორები, Torii ინტეგრატორები NDA-ში | `DOCS-SORA-Preview-W1` | Docs/DevRel წამყვანი + მმართველობის მეკავშირე | 🈴 დასრულებული | Q2 2025 კვირა 3 | მოსაწვევები გაშვებული იყო 2025-04-12 → 2025-04-26 რვავე პარტნიორთან ერთად; მტკიცებულება აღბეჭდილი [`preview-feedback/w1/log.md`](./preview-feedback/w1/log.md) და გასასვლელი დაიჯესტი [`preview-feedback/w1/summary.md`] (./preview-feedback/w1/summary.md). |
+| **W2 – საზოგადოება ** | კურირებული საზოგადოების მომლოდინე სია (≤25 ერთდროულად) | `DOCS-SORA-Preview-W2` | Docs/DevRel წამყვანი + საზოგადოების მენეჯერი | 🈴 დასრულებული | Q3 2025 კვირა 1 (სავარაუდო) | მოწვევები გავიდა 2025-06-15 → 2025-06-29 ტელემეტრიული მწვანე ფერის მთელ სიგრძეზე; მტკიცებულება + დასკვნები აღბეჭდილი [`preview-feedback/w2/summary.md`] (./preview-feedback/w2/summary.md). |
+| **W3 – ბეტა კოჰორტები** | ფინანსები/დაკვირვებადობა ბეტა + SDK პარტნიორი + ეკოსისტემის ადვოკატი | `DOCS-SORA-Preview-W3` | Docs/DevRel წამყვანი + მმართველობის მეკავშირე | 🈴 დასრულებული | Q1 2026 კვირა 8 | მოსაწვევები გავიდა 2026-02-18 → 2026-02-28; დაიჯესტი + `preview-20260218` ტალღის მეშვეობით გენერირებული პორტალური მონაცემები (იხ. [`preview-feedback/w3/summary.md`](./preview-feedback/w3/summary.md)). |
 
-> Note: link each tracker issue to the corresponding preview request tickets and
-> archive them under the `docs-portal-preview` project so approvals remain
-> discoverable.
+> შენიშვნა: დააკავშირეთ თითოეული ტრეკერის საკითხი შესაბამისი გადახედვის მოთხოვნის ბილეთებთან და
+> დაარქივეთ ისინი `docs-portal-preview` პროექტის ფარგლებში, რათა დამტკიცებები დარჩეს
+> აღმოჩენადი.
 
-## Active tasks (W0)
+## აქტიური ამოცანები (W0)
 
-- ✅ Preflight artefacts refreshed (GitHub Actions `docs-portal-preview` run 2025‑03‑24, descriptor verified via `scripts/preview_verify.sh` using tag `preview-2025-03-24`).
-- ✅ Telemetry baselines captured (`docs.preview.integrity`, `TryItProxyErrors` dashboards snapshot saved to the W0 tracker issue).
-- ✅ Outreach copy locked using [`docs/examples/docs_preview_invite_template.md`](../../../examples/docs_preview_invite_template.md) with preview tag `preview-2025-03-24`.
-- ✅ Intake requests logged for the first five maintainers (tickets `DOCS-SORA-Preview-REQ-01` … `-05`).
-- ✅ First five invites sent 2025‑03‑25 10:00–10:20 UTC after seven consecutive green telemetry days; acknowledgements stored in `DOCS-SORA-Preview-W0`.
-- ✅ Monitor telemetry + host office hours (daily check-ins through 2025‑03‑31; checkpoint log below).
-- ✅ Collect midpoint feedback / issues and tag them `docs-preview/w0` (see [W0 digest](./preview-feedback/w0/summary.md)).
-- ✅ Publish wave summary + invite exit confirmations (exit bundle dated 2025‑04‑08; see [W0 digest](./preview-feedback/w0/summary.md)).
-- ✅ W3 beta wave tracked; future waves scheduled as needed after governance review.
+- ✅ განახლებულია ფრენამდე არტეფაქტები (GitHub Actions `docs-portal-preview` გაშვებული 2025-03-24, დესკრიპტორი დამოწმებულია `scripts/preview_verify.sh`-ით `preview-2025-03-24` ტეგის გამოყენებით).
+- ✅ ტელემეტრიის საბაზისო ხაზები აღბეჭდილია (`docs.preview.integrity`, `TryItProxyErrors` დაფის სნეპშოტი შენახული W0 ტრეკერის საკითხში).
+- ✅ Outreach ასლი დაბლოკილია [`docs/examples/docs_preview_invite_template.md`](../../../examples/docs_preview_invite_template.md) გამოყენებით `preview-2025-03-24` წინასწარი გადახედვის ტეგით.
+- ✅ შეყვანის მოთხოვნები დარეგისტრირებულია პირველი ხუთი შემსრულებლისთვის (ბილეთები `DOCS-SORA-Preview-REQ-01` … `-05`).
+- ✅ პირველი ხუთი მოწვევა გაიგზავნა 2025-03-25 10:00-10:20 UTC ზედიზედ შვიდი მწვანე ტელემეტრიული დღის შემდეგ; აღიარება ინახება `DOCS-SORA-Preview-W0`-ში.
+- ✅ თვალყური ადევნეთ ტელემეტრიას + მასპინძლის ოფისის საათებს (ყოველდღიური შემოწმებები 2025-03-31 წლამდე; საგუშაგოს ჟურნალი ქვემოთ).
+- ✅ შეაგროვეთ შუა წერტილის გამოხმაურება / საკითხები და მონიშნეთ ისინი `docs-preview/w0` (იხ. [W0 დაიჯესტი](./preview-feedback/w0/summary.md)).
+- ✅ გამოაქვეყნეთ ტალღის შეჯამება + მოწვევის გასვლის დადასტურებები (გასასვლელი ნაკრები დათარიღებული 2025-04-08; იხილეთ [W0 დაიჯესტი](./preview-feedback/w0/summary.md)).
+- ✅ W3 ბეტა ტალღის თვალყურის დევნება; მომავალი ტალღები დაგეგმილია საჭიროებისამებრ მმართველობის განხილვის შემდეგ.
 
-## W1 partner wave summary
+## W1 პარტნიორის ტალღის შეჯამება
 
-- ✅ **Legal & governance approvals.** Partner addendum signed 2025‑04‑05; approvals uploaded to `DOCS-SORA-Preview-W1`.
-- ✅ **Telemetry + Try it staging.** Change ticket `OPS-TRYIT-147` executed 2025‑04‑06 with Grafana snapshots for `docs.preview.integrity`, `TryItProxyErrors`, and `DocsPortal/GatewayRefusals` archived.
-- ✅ **Artefact + checksum prep.** `preview-2025-04-12` bundle verified; descriptor/checksum/probe logs stored under `artifacts/docs_preview/W1/preview-2025-04-12/`.
-- ✅ **Invite roster + dispatch.** All eight partner requests (`DOCS-SORA-Preview-REQ-P01…P08`) approved; invites sent 2025‑04‑12 15:00–15:21 UTC with acknowledgements logged per reviewer.
-- ✅ **Feedback instrumentation.** Daily office hours + telemetry checkpoints recorded; see [`preview-feedback/w1/summary.md`](./preview-feedback/w1/summary.md) for the digest.
-- ✅ **Final roster/exit log.** [`preview-feedback/w1/log.md`](./preview-feedback/w1/log.md) now records invite/ack timestamps, telemetry evidence, quiz exports, and artefact pointers as of 2025‑04‑26 so governance can replay the wave.
+- ✅ **სამართლებრივი და მმართველობითი დამტკიცებები.** პარტნიორის დამატება ხელმოწერილია 2025-04-05; დამტკიცებები აიტვირთა `DOCS-SORA-Preview-W1`-ზე.
+- ✅ ** ტელემეტრია + სცადეთ დადგმა.** შეცვალეთ ბილეთი `OPS-TRYIT-147` შესრულებული 2025-04-06 Grafana სნეპშოტებით `docs.preview.integrity`, I18NI00000007-ისთვის, I18NI00000007-ისთვის, I18NI00000007-ისთვის. დაარქივებული.
+- ✅ **Artefact + checksum prep.** `preview-2025-04-12` პაკეტი დამოწმებულია; `artifacts/docs_preview/W1/preview-2025-04-12/`-ში შენახული აღწერის/შემოწმების ჯამის/ზონდის ჟურნალები.
+- ✅ **მოწვევის სია + გაგზავნა.** პარტნიორის რვავე მოთხოვნა (`DOCS-SORA-Preview-REQ-P01…P08`) დამტკიცდა; მოსაწვევები გაიგზავნა 2025-04-12 15:00-15:21UTC მადლიერებებით დარეგისტრირებული თითო მიმომხილველი.
+- ✅ **გამოხმაურების ინსტრუმენტაცია.** ყოველდღიური სამუშაო საათები + ტელემეტრიული გამშვები პუნქტები ჩაწერილი; დაიჯესტისთვის იხილეთ [`preview-feedback/w1/summary.md`](./preview-feedback/w1/summary.md).
+- ✅ ** საბოლოო სია/გასასვლელი ჟურნალი.** [`preview-feedback/w1/log.md`](./preview-feedback/w1/log.md) ახლა აღრიცხავს მოწვევის/დათანხმების დროის ანაბეჭდებს, ტელემეტრიის მტკიცებულებებს, ვიქტორინის ექსპორტს და არტეფაქტის მაჩვენებლებს 2025-04-26-დან, რათა მმართველობამ შეძლოს ხელახლა თამაში.
 
-## Invite log — W0 core maintainers
+## მოწვევის ჟურნალი — W0 ძირითადი შემსრულებლები
 
-| Reviewer ID | Role | Request ticket | Invite sent (UTC) | Expected exit (UTC) | Status | Notes |
+| მიმომხილველი ID | როლი | ბილეთის მოთხოვნა | მოწვევა გაგზავნილია (UTC) | მოსალოდნელი გასვლა (UTC) | სტატუსი | შენიშვნები |
 | --- | --- | --- | --- | --- | --- | --- |
-| docs-core-01 | Portal maintainer | `DOCS-SORA-Preview-REQ-01` | 2025‑03‑25 10:05 | 2025‑04‑08 10:00 | Active | Acked checksum verification; focusing on nav/sidebar review. |
-| sdk-rust-01 | Rust SDK lead | `DOCS-SORA-Preview-REQ-02` | 2025‑03‑25 10:08 | 2025‑04‑08 10:00 | Active | Testing SDK recipes + Norito quickstarts. |
-| sdk-js-01 | JS SDK maintainer | `DOCS-SORA-Preview-REQ-03` | 2025‑03‑25 10:12 | 2025‑04‑08 10:00 | Active | Validating Try it console + ISO flows. |
-| sorafs-ops-01 | SoraFS operator liaison | `DOCS-SORA-Preview-REQ-04` | 2025‑03‑25 10:15 | 2025‑04‑08 10:00 | Active | Auditing SoraFS runbooks + orchestration docs. |
-| observability-01 | Observability TL | `DOCS-SORA-Preview-REQ-05` | 2025‑03‑25 10:18 | 2025‑04‑08 10:00 | Active | Reviewing telemetry/incident appendices; owns Alertmanager coverage. |
+| docs-core-01 | პორტალის შემსრულებელი | `DOCS-SORA-Preview-REQ-01` | 2025-03-25 10:05 | 2025-04-08 10:00 | აქტიური | დადასტურებული საკონტროლო ჯამის გადამოწმება; ფოკუსირება ნავი/გვერდითი ზოლის მიმოხილვაზე. |
+| sdk-rust-01 | Rust SDK ტყვია | `DOCS-SORA-Preview-REQ-02` | 2025-03-25 10:08 | 2025-04-08 10:00 | აქტიური | SDK რეცეპტების ტესტირება + Norito სწრაფი დაწყება. |
+| sdk-js-01 | JS SDK შემნარჩუნებელი | `DOCS-SORA-Preview-REQ-03` | 2025-03-25 10:12 | 2025-04-08 10:00 | აქტიური | მიმდინარეობს სცადეთ კონსოლი + ISO ნაკადების ვალიდაცია. |
+| sorafs-ops-01 | SoraFS ოპერატორის მეკავშირე | `DOCS-SORA-Preview-REQ-04` | 2025-03-25 10:15 | 2025-04-08 10:00 | აქტიური | აუდიტი SoraFS runbooks + ორკესტრირების დოკუმენტები. |
+| დაკვირვებადობა-01 | დაკვირვებადობა TL | `DOCS-SORA-Preview-REQ-05` | 2025-03-25 10:18 | 2025-04-08 10:00 | აქტიური | ტელემეტრიის/ინციდენტის დანართების განხილვა; ფლობს Alertmanager დაფარვას. |
 
-All invites reference the same `docs-portal-preview` artefact (run 2025‑03‑24,
-tag `preview-2025-03-24`) and the verification transcript captured in
-`DOCS-SORA-Preview-W0`. Any additions/pauses must be logged in both the table
-above and the tracker issue before proceeding to the next wave.
+ყველა მოსაწვევი მიუთითებს იგივე `docs-portal-preview` არტეფაქტზე (გაშვება 2025‑03‑24,
+ტეგი `preview-2025-03-24`) და გადამოწმების ჩანაწერი აღბეჭდილი
+`DOCS-SORA-Preview-W0`. ნებისმიერი დამატება/პაუზა უნდა იყოს შესული ორივე ცხრილში
+ზემოთ და ტრეკერის პრობლემა შემდეგ ტალღაზე გადასვლამდე.
 
-## Checkpoint log — W0
+## საკონტროლო პუნქტის ჟურნალი — W0
 
-| Date (UTC) | Activity | Notes |
+| თარიღი (UTC) | აქტივობა | შენიშვნები |
 | --- | --- | --- |
-| 2025‑03‑26 | Telemetry baseline review + office hours | `docs.preview.integrity` + `TryItProxyErrors` remained green; office hours confirmed all reviewers completed checksum verification. |
-| 2025‑03‑27 | Midpoint feedback digest posted | Summary captured in [`preview-feedback/w0/summary.md`](./preview-feedback/w0/summary.md); two minor nav issues logged as `docs-preview/w0` labels, no incidents reported. |
-| 2025‑03‑31 | Final week telemetry spot check | Last pre-exit office hours; reviewers confirmed remaining docs tasks on track, no alerts fired. |
-| 2025‑04‑08 | Exit summary + invite closures | Acknowledged completed reviews, revoked temporary access, archived findings in [`preview-feedback/w0/summary.md`](./preview-feedback/w0/summary.md#exit-summary-2025-04-08); tracker updated before prepping W1. |
+| 2025-03-26 | ტელემეტრიის საბაზისო მიმოხილვა + სამუშაო საათები | `docs.preview.integrity` + `TryItProxyErrors` დარჩა მწვანე; სამუშაო საათებმა დაადასტურა, რომ ყველა მიმომხილველმა დაასრულა საკონტროლო ჯამის გადამოწმება. |
+| 2025-03-27 | შუა წერტილის გამოხმაურება დაიჯესტი გამოქვეყნებულია | რეზიუმე გადაღებული [`preview-feedback/w0/summary.md`](./preview-feedback/w0/summary.md); ნავიგაციის ორი უმნიშვნელო პრობლემა დარეგისტრირებულია `docs-preview/w0` ლეიბლით, არანაირი ინციდენტი არ არის მოხსენებული. |
+| 2025-03-31 | ბოლო კვირის ტელემეტრიის ადგილზე შემოწმება | ბოლო გასვლის სამუშაო საათები; მიმომხილველებმა დაადასტურეს დარჩენილი დოკუმენტების ამოცანები გზაზე, გაფრთხილებები არ არის გაშვებული. |
+| 2025-04-08 | გასვლის შეჯამება + მოწვევის დახურვა | აღიარებული დასრულებული მიმოხილვები, გაუქმებული დროებითი წვდომა, დაარქივებული დასკვნები [`preview-feedback/w0/summary.md`]-ში (./preview-feedback/w0/summary.md#exit-summary-2025-04-08); ტრეკერი განახლებულია W1-ის მომზადებამდე. |
 
-## Invite log — W1 partners
+## მოწვევის ჟურნალი — W1 პარტნიორები
 
-| Reviewer ID | Role | Request ticket | Invite sent (UTC) | Expected exit (UTC) | Status | Notes |
+| მიმომხილველი ID | როლი | ბილეთის მოთხოვნა | მოწვევა გაგზავნილია (UTC) | მოსალოდნელი გასვლა (UTC) | სტატუსი | შენიშვნები |
 | --- | --- | --- | --- | --- | --- | --- |
-| sorafs-op-01 | SoraFS operator (EU) | `DOCS-SORA-Preview-REQ-P01` | 2025‑04‑12 15:00 | 2025‑04‑26 15:00 | Completed | Delivered orchestrator ops feedback 2025‑04‑20; exit ack 15:05 UTC. |
-| sorafs-op-02 | SoraFS operator (JP) | `DOCS-SORA-Preview-REQ-P02` | 2025‑04‑12 15:03 | 2025‑04‑26 15:00 | Completed | Logged rollout guidance comments in `docs-preview/w1`; exit ack 15:10 UTC. |
-| sorafs-op-03 | SoraFS operator (US) | `DOCS-SORA-Preview-REQ-P03` | 2025‑04‑12 15:06 | 2025‑04‑26 15:00 | Completed | Dispute/blacklist edits filed; exit ack 15:12 UTC. |
-| torii-int-01 | Torii integrator | `DOCS-SORA-Preview-REQ-P04` | 2025‑04‑12 15:09 | 2025‑04‑26 15:00 | Completed | Try it auth walkthrough accepted; exit ack 15:14 UTC. |
-| torii-int-02 | Torii integrator | `DOCS-SORA-Preview-REQ-P05` | 2025‑04‑12 15:12 | 2025‑04‑26 15:00 | Completed | RPC/OAuth doc comments logged; exit ack 15:16 UTC. |
-| sdk-partner-01 | SDK partner (Swift) | `DOCS-SORA-Preview-REQ-P06` | 2025‑04‑12 15:15 | 2025‑04‑26 15:00 | Completed | Preview integrity feedback merged; exit ack 15:18 UTC. |
-| sdk-partner-02 | SDK partner (Android) | `DOCS-SORA-Preview-REQ-P07` | 2025‑04‑12 15:18 | 2025‑04‑26 15:00 | Completed | Telemetry/redaction review done; exit ack 15:22 UTC. |
-| gateway-ops-01 | Gateway operator | `DOCS-SORA-Preview-REQ-P08` | 2025‑04‑12 15:21 | 2025‑04‑26 15:00 | Completed | Gateway DNS runbook comments filed; exit ack 15:24 UTC. |
+| sorafs-op-01 | SoraFS ოპერატორი (EU) | `DOCS-SORA-Preview-REQ-P01` | 2025-04-12 15:00 | 2025-04-26 15:00 | დასრულებული | მიწოდებული ორკესტრის ოპერაციების გამოხმაურება 2025-04-20; გასვლა 15:05UTC. |
+| sorafs-op-02 | SoraFS ოპერატორი (JP) | `DOCS-SORA-Preview-REQ-P02` | 2025-04-12 15:03 | 2025-04-26 15:00 | დასრულებული | შესული ინსტრუქციის სახელმძღვანელო კომენტარები `docs-preview/w1`-ში; გასვლა 15:10UTC. |
+| sorafs-op-03 | SoraFS ოპერატორი (აშშ) | `DOCS-SORA-Preview-REQ-P03` | 2025-04-12 15:06 | 2025-04-26 15:00 | დასრულებული | დავის/შავ სიაში შეტანილი რედაქტირება; exit ack 15:12UTC. |
+| torii-int-01 | Torii ინტეგრატორი | `DOCS-SORA-Preview-REQ-P04` | 2025-04-12 15:09 | 2025-04-26 15:00 | დასრულებული | სცადეთ auth walkthrough მიღებულია; exit ack 15:14UTC. |
+| torii-int-02 | Torii ინტეგრატორი | `DOCS-SORA-Preview-REQ-P05` | 2025-04-12 15:12 | 2025-04-26 15:00 | დასრულებული | RPC/OAuth doc კომენტარები შესულია; exit ack 15:16UTC. |
+| sdk-partner-01 | SDK პარტნიორი (Swift) | `DOCS-SORA-Preview-REQ-P06` | 2025-04-12 15:15 | 2025-04-26 15:00 | დასრულებული | გადახედვის მთლიანობის გამოხმაურება გაერთიანდა; გასვლა 15:18UTC. |
+| sdk-partner-02 | SDK პარტნიორი (Android) | `DOCS-SORA-Preview-REQ-P07` | 2025-04-12 15:18 | 2025-04-26 15:00 | დასრულებული | შესრულებულია ტელემეტრია/რედაქციის მიმოხილვა; exit ack 15:22UTC. |
+| gateway-ops-01 | კარიბჭის ოპერატორი | `DOCS-SORA-Preview-REQ-P08` | 2025-04-12 15:21 | 2025-04-26 15:00 | დასრულებული | Gateway DNS runbook კომენტარები შეტანილია; exit ack 15:24UTC. |
 
-## Checkpoint log — W1
+## საკონტროლო პუნქტის ჟურნალი — W1
 
-| Date (UTC) | Activity | Notes |
+| თარიღი (UTC) | აქტივობა | შენიშვნები |
 | --- | --- | --- |
-| 2025‑04‑12 | Invite dispatch + artefact verification | All eight partners emailed with `preview-2025-04-12` descriptor/archive; acknowledgements stored in tracker. |
-| 2025‑04‑13 | Telemetry baseline review | `docs.preview.integrity`, `TryItProxyErrors`, and `DocsPortal/GatewayRefusals` dashboards reviewed — green across the board; office hours confirmed checksum verification completed. |
-| 2025‑04‑18 | Mid-wave office hours | `docs.preview.integrity` remained green; two doc nits logged under `docs-preview/w1` (nav wording + Try it screenshot). |
-| 2025‑04‑22 | Final telemetry spot check | Proxy + dashboards still healthy; no new issues raised, noted in tracker ahead of exit. |
-| 2025‑04‑26 | Exit summary + invite closures | All partners confirmed review completion, invites revoked, evidence archived in [`preview-feedback/w1/summary.md`](./preview-feedback/w1/summary.md#exit-summary-2025-04-26). |
+| 2025-04-12 | მოწვევის გაგზავნა + არტეფაქტის დადასტურება | რვავე პარტნიორმა ელფოსტით გაიგზავნა `preview-2025-04-12` აღმწერი/არქივი; ტრეკერში შენახული აღიარებები. |
+| 2025-04-13 | ტელემეტრიის საბაზისო მიმოხილვა | `docs.preview.integrity`, `TryItProxyErrors`, და `DocsPortal/GatewayRefusals` დაფები განიხილება — დაფაზე მწვანე; სამუშაო საათების დადასტურებული საკონტროლო ჯამის გადამოწმება დასრულდა. |
+| 2025-04-18 | საშუალო ტალღის სამუშაო საათები | `docs.preview.integrity` დარჩა მწვანე; ორი დოკუმენტი, რომელიც შესულია `docs-preview/w1`-ში (nav ფორმულირება + სცადეთ ეკრანის სურათი). |
+| 2025-04-22 | საბოლოო ტელემეტრიული ადგილზე შემოწმება | პროქსი + დაფები ჯერ კიდევ ჯანმრთელია; არ არის წამოჭრილი ახალი საკითხები, აღნიშნულია ტრეკერში გასვლის წინ. |
+| 2025-04-26 | გასვლის შეჯამება + მოწვევის დახურვა | ყველა პარტნიორმა დაადასტურა განხილვის დასრულება, მოწვევები გაუქმდა, მტკიცებულებები დაარქივდა [`preview-feedback/w1/summary.md`]-ში (./preview-feedback/w1/summary.md#exit-summary-2025-04-26). |
 
-## W3 beta cohort recap
+## W3 ბეტა კოჰორტის მიმოხილვა
 
-- ✅ Invites sent 2026‑02‑18 with checksum verification + acknowledgements logged the same day.
-- ✅ Feedback collected under `docs-preview/20260218` with governance issue `DOCS-SORA-Preview-20260218`; digest + summary generated via `npm run --prefix docs/portal preview:wave -- --wave preview-20260218`.
-- ✅ Access revoked 2026‑02‑28 after the final telemetry check; tracker + portal tables updated to show W3 as completed.
+- ✅ მოსაწვევები გაიგზავნა 2026-02-18 საკონტროლო ჯამის გადამოწმებით + აღიარება, რომელიც დარეგისტრირებულია იმავე დღეს.
+- ✅ გამოხმაურება შეგროვდა `docs-preview/20260218`-ის ფარგლებში მმართველობის საკითხით `DOCS-SORA-Preview-20260218`; დაიჯესტი + შეჯამება გენერირებულია `npm run --prefix docs/portal preview:wave -- --wave preview-20260218`-ის მეშვეობით.
+- ✅ წვდომა გაუქმდა 2026-02-28 საბოლოო ტელემეტრიული შემოწმების შემდეგ; ტრეკერი + პორტალის ცხრილები განახლებულია W3-ის დასრულებულად ჩვენების მიზნით.
 
-## Invite log — W2 community
-
-| Reviewer ID | Role | Request ticket | Invite sent (UTC) | Expected exit (UTC) | Status | Notes |
+## მოწვევის ჟურნალი — W2 საზოგადოება| მიმომხილველი ID | როლი | ბილეთის მოთხოვნა | მოწვევა გაგზავნილია (UTC) | მოსალოდნელი გასვლა (UTC) | სტატუსი | შენიშვნები |
 | --- | --- | --- | --- | --- | --- | --- |
-| comm-vol-01 | Community reviewer (SDK) | `DOCS-SORA-Preview-REQ-C01` | 2025‑06‑15 16:00 | 2025‑06‑29 16:00 | Completed | Ack 16:06 UTC; focusing on SDK quickstarts; exit confirmed 2025‑06‑29. |
-| comm-vol-02 | Community reviewer (Governance) | `REQ-C02` | 2025‑06‑15 16:03 | 2025‑06‑29 16:00 | Completed | Governance/SNS review done; exit confirmed 2025‑06‑29. |
-| comm-vol-03 | Community reviewer (Norito) | `REQ-C03` | 2025‑06‑15 16:06 | 2025‑06‑29 16:00 | Completed | Norito walkthrough feedback logged; exit ack 2025‑06‑29. |
-| comm-vol-04 | Community reviewer (SoraFS) | `REQ-C04` | 2025‑06‑15 16:09 | 2025‑06‑29 16:00 | Completed | SoraFS runbook review done; exit ack 2025‑06‑29. |
-| comm-vol-05 | Community reviewer (Accessibility) | `REQ-C05` | 2025‑06‑15 16:12 | 2025‑06‑29 16:00 | Completed | Accessibility/UX notes shared; exit ack 2025‑06‑29. |
-| comm-vol-06 | Community reviewer (Localization) | `REQ-C06` | 2025‑06‑15 16:15 | 2025‑06‑29 16:00 | Completed | Localization feedback logged; exit ack 2025‑06‑29. |
-| comm-vol-07 | Community reviewer (Mobile) | `REQ-C07` | 2025‑06‑15 16:18 | 2025‑06‑29 16:00 | Completed | Mobile SDK doc checks delivered; exit ack 2025‑06‑29. |
-| comm-vol-08 | Community reviewer (Observability) | `REQ-C08` | 2025‑06‑15 16:21 | 2025‑06‑29 16:00 | Completed | Observability appendix review done; exit ack 2025‑06‑29. |
+| comm-vol-01 | საზოგადოების მიმომხილველი (SDK) | `DOCS-SORA-Preview-REQ-C01` | 2025-06-15 16:00 | 2025-06-29 16:00 | დასრულებული | Ack 16:06UTC; ფოკუსირება SDK სწრაფი სტარტებზე; გასვლა დადასტურებულია 2025-06-29. |
+| comm-vol-02 | საზოგადოების მიმომხილველი (მმართველობა) | `REQ-C02` | 2025-06-15 16:03 | 2025-06-29 16:00 | დასრულებული | შესრულებულია მმართველობა/SNS მიმოხილვა; გასვლა დადასტურებულია 2025-06-29. |
+| comm-vol-03 | საზოგადოების მიმომხილველი (Norito) | `REQ-C03` | 2025-06-15 16:06 | 2025-06-29 16:00 | დასრულებული | Norito მიმოხილვის გამოხმაურება შესულია; გასვლა 2025-06-29. |
+| comm-vol-04 | საზოგადოების მიმომხილველი (SoraFS) | `REQ-C04` | 2025-06-15 16:09 | 2025-06-29 16:00 | დასრულებული | SoraFS runbook მიმოხილვა შესრულებულია; გასვლა 2025-06-29. |
+| comm-vol-05 | საზოგადოების მიმომხილველი (ხელმისაწვდომობა) | `REQ-C05` | 2025-06-15 16:12 | 2025-06-29 16:00 | დასრულებული | ხელმისაწვდომობა/UX შენიშვნები გაზიარებულია; გასვლა 2025-06-29. |
+| comm-vol-06 | საზოგადოების მიმომხილველი (ლოკალიზაცია) | `REQ-C06` | 2025-06-15 16:15 | 2025-06-29 16:00 | დასრულებული | ლოკალიზაციის გამოხმაურება შესულია; გასვლა 2025-06-29. |
+| comm-vol-07 | საზოგადოების მიმომხილველი (მობილური) | `REQ-C07` | 2025-06-15 16:18 | 2025-06-29 16:00 | დასრულებული | მობილური SDK დოკუმენტის შემოწმებები მიწოდებულია; გასვლა 2025-06-29. |
+| comm-vol-08 | საზოგადოების მიმომხილველი (დაკვირვებადობა) | `REQ-C08` | 2025-06-15 16:21 | 2025-06-29 16:00 | დასრულებული | შესრულებულია დაკვირვებადობის დანართის მიმოხილვა; გასვლა 2025-06-29. |
 
-## Checkpoint log — W2
+## საკონტროლო პუნქტის ჟურნალი — W2
 
-| Date (UTC) | Activity | Notes |
+| თარიღი (UTC) | აქტივობა | შენიშვნები |
 | --- | --- | --- |
-| 2025‑06‑15 | Invite dispatch + artefact verification | `preview-2025-06-15` descriptor/archive shared with 8 community reviewers; acknowledgements stored in tracker. |
-| 2025‑06‑16 | Telemetry baseline review | `docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals` dashboards green; Try it proxy logs show community tokens active. |
-| 2025‑06‑18 | Office hours & issue triage | Collected two suggestions (`docs-preview/w2 #1` tooltip wording, `#2` localization sidebar) — both routed to Docs. |
-| 2025‑06‑21 | Telemetry check + doc fixes | Docs addressed `docs-preview/w2 #1/#2`; dashboards still green, no incidents. |
-| 2025‑06‑24 | Final week office hours | Reviewers confirmed remaining feedback submissions; no alert fire. |
-| 2025‑06‑29 | Exit summary + invite closures | Acks recorded, preview access revoked, telemetry snapshots + artefacts archived (see [`preview-feedback/w2/summary.md`](./preview-feedback/w2/summary.md#exit-summary-2025-06-29)). |
-| 2025‑04‑15 | Office hours & issue triage | Two documentation suggestions logged under `docs-preview/w1`; no incidents or alerts triggered. |
+| 2025-06-15 | მოწვევის გაგზავნა + არტეფაქტის დადასტურება | `preview-2025-06-15` აღმწერი/არქივი გაზიარებულია 8 საზოგადოების მიმომხილველთან; ტრეკერში შენახული აღიარებები. |
+| 2025-06-16 | ტელემეტრიის საბაზისო მიმოხილვა | `docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals` დაფები მწვანე; სცადეთ პროქსის ჟურნალები აჩვენებენ საზოგადოების ტოკენების აქტიურობას. |
+| 2025-06-18 | ოფისის საათები და საკითხის ტრიაჟი | შეაგროვა ორი შემოთავაზება (`docs-preview/w2 #1` ინსტრუმენტების ფორმულირება, `#2` ლოკალიზაციის გვერდითი ზოლი) — ორივე გადატანილია Docs-ში. |
+| 2025-06-21 | ტელემეტრიის შემოწმება + დოკუმენტის შესწორებები | `docs-preview/w2 #1/#2` მისამართით Docs; დაფები ისევ მწვანეა, არანაირი ინციდენტი. |
+| 2025-06-24 | ბოლო კვირის სამუშაო საათები | მიმომხილველებმა დაადასტურეს დარჩენილი გამოხმაურება; არ არის გაფრთხილებული ცეცხლი. |
+| 2025-06-29 | გასვლის შეჯამება + მოწვევის დახურვა | ჩაწერილი ჩანაწერები, გადახედვის წვდომა გაუქმებულია, ტელემეტრიული კადრები + არტეფაქტები დაარქივებულია (იხ. [`preview-feedback/w2/summary.md`](./preview-feedback/w2/summary.md#exit-summary-2025-06-29)). |
+| 2025-04-15 | ოფისის საათები და საკითხის ტრიაჟი | ორი დოკუმენტაციის შემოთავაზება შესულია `docs-preview/w1`-ში; არანაირი ინციდენტი ან გაფრთხილება არ გააქტიურებულა. |
 
-## Reporting hooks
+## საანგარიშო კაკვები
 
-- Each Wednesday, update the tracker table above plus the active invite issue
-  with a short status note (invites sent, active reviewers, incidents).
-- When a wave closes, append the feedback summary path (for example,
-  `docs/portal/docs/devportal/preview-feedback/w0/summary.md`) and link it from
+- ყოველ ოთხშაბათს, განაახლეთ ზემოთ მოყვანილი ტრეკერის ცხრილი, პლუს აქტიური მოწვევის საკითხი
+  მოკლე სტატუსის ჩანაწერით (გაგზავნილი მოსაწვევები, აქტიური მიმომხილველები, ინციდენტები).
+- როდესაც ტალღა იხურება, დაამატეთ უკუკავშირის შემაჯამებელი გზა (მაგალითად,
+  `docs/portal/docs/devportal/preview-feedback/w0/summary.md`) და დააკავშირეთ იგი
   `status.md`.
-- If any pause criteria from the [preview invite flow](./preview-invite-flow.md)
-  trigger, add the remediation steps here before resuming invites.
+- თუ რაიმე პაუზის კრიტერიუმი [მოწვევის ნაკადის გადახედვისას] (./preview-invite-flow.md)
+  გამორთეთ, დაამატეთ გამოსწორების ნაბიჯები აქ მოწვევის განახლებამდე.

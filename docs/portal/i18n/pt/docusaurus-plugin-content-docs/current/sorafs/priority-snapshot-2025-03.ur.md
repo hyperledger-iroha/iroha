@@ -4,35 +4,37 @@ direction: ltr
 source: docs/portal/docs/sorafs/priority-snapshot-2025-03.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: priority-snapshot-2025-03
-title: ترجیحات اسنیپ شاٹ — مارچ 2025 (بیٹا)
-description: Nexus 2025-03 steering snapshot کا عکس؛ عوامی rollout سے پہلے ACKs کا انتظار۔
+id: snapshot-prioritário-2025-03
+título: ترجیحات اسنیپ شاٹ — março de 2025 (بیٹا)
+descrição: Nexus 2025-03 instantâneo de direção O lançamento de ACKs e a implementação de ACKs
 ---
 
-> مستند ماخذ: `docs/source/sorafs/priority_snapshot_2025-03.md`
+> Nome da fonte: `docs/source/sorafs/priority_snapshot_2025-03.md`
 >
-> اسٹیٹس: **بیٹا / steering ACKs کا انتظار** (Networking, Storage, Docs leads).
+> اسٹیٹس: **بیٹا / ACKs de direção کا انتظار** (redes, armazenamento, leads de documentos).
 
 ## جائزہ
 
-مارچ اسنیپ شاٹ docs/content-network کی initiatives کو SoraFS delivery tracks
-(SF-3, SF-6b, SF-9) کے ساتھ aligned رکھتا ہے۔ جیسے ہی تمام leads Nexus steering
-چینل میں snapshot کی تصدیق کر دیں، اوپر والی “Beta” نوٹ ہٹا دیں۔
+مارچ اسنیپ شاٹ docs/content-network کی iniciativas کو SoraFS faixas de entrega
+(SF-3, SF-6b, SF-9) کے ساتھ alinhado رکھتا ہے۔ جیسے ہی تمام leva direção Nexus
+O snapshot mais recente é o mais recente e o “Beta” não é compatível
 
 ### فوکس تھریڈز
 
-1. **ترجیحات اسنیپ شاٹ circulate کریں** — acknowledgements جمع کریں اور انہیں
-   2025-03-05 council minutes میں لاگ کریں۔
-2. **Gateway/DNS kickoff close-out** — 2025-03-03 workshop سے پہلے نیا facilitation
-   kit (runbook کا Section 6) rehearse کریں۔
-3. **Operator runbook migration** — portal `Runbook Index` live ہے؛ reviewer
-   onboarding sign-off کے بعد beta preview URL ظاہر کریں۔
-4. **SoraFS delivery threads** — SF-3/6b/9 کا باقی کام plan/roadmap کے ساتھ align کریں:
-   - `sorafs-node` میں PoR ingestion worker + status endpoint۔
-   - Rust/JS/Swift orchestrator integrations میں CLI/SDK bindings کا polish۔
-   - PoR coordinator runtime wiring اور GovernanceLog events۔
+1. **ترجیحات اسنیپ شاٹ circular کریں** — agradecimentos جمع کریں اور انہیں
+   2025-03-05 ata do conselho میں لاگ کریں۔
+2. **Encerramento inicial do gateway/DNS** — Workshop de 03/03/2025 سے پہلے نیا facilitação
+   kit (runbook کا Seção 6) ensaio کریں۔
+3. **Migração de runbook do operador** — portal `Runbook Index` ao vivo ہے؛ revisor
+   assinatura de integração para o URL de visualização beta
+4. **SoraFS threads de entrega** — SF-3/6b/9 کا باقی کام plano/roadmap کے ساتھ alinhar کریں:
+   - `sorafs-node` میں Trabalhador de ingestão PoR + endpoint de status۔
+   - Integrações de orquestrador Rust/JS/Swift com ligações CLI/SDK e polimento
+   - Fiação de tempo de execução do coordenador PoR e eventos GovernanceLog۔
 
-مکمل جدول، distribution checklist اور log entries کے لیے source فائل دیکھیں۔
+Lista de verificação de distribuição e entradas de log کے لیے fonte فائل دیکھیں۔

@@ -9,32 +9,33 @@ source_last_modified: "2025-12-29T18:16:35.067551+00:00"
 translation_last_reviewed: 2026-02-07
 title: Try It Sandbox Guide
 summary: How to run the Torii staging proxy and developer portal sandbox.
+translator: machine-google-reviewed
 ---
 
-The developer portal ships a “Try it” console for the Torii REST API. This guide
-explains how to launch the supporting proxy and connect the console to a staging
-gateway without exposing credentials.
+Төҙөүсе порталы “Уны һынап ҡарағыҙ” консоль өсөн I18NT0000000005X REST API. Был ҡулланма
+аңлата, нисек эшләтеп ебәрергә терәк прокси һәм консоль тоташтырыу өсөн сәхнәләштереү
+шлюз ышаныс ҡағыҙҙарын фашламай.
 
-## Prerequisites
+## Алдан шарттар
 
-- Iroha repository checkout (workspace root).
-- Node.js 18.18+ (matches the portal baseline).
-- Torii endpoint reachable from your workstation (staging or local).
+- I18NT000000004X һаҡлағыс касса (эш урыны тамыры).
+- Node.js 18.18+ (порталь база һыҙығына тап килә).
+- I18NT000000006X осона тиклем һеҙҙең эш станцияһынан (стужнеция йәки урындағы) етергә мөмкин.
 
-## 1. Generate the OpenAPI snapshot (optional)
+## 1. I18NT000000002X снимок генерациялау (теләк)
 
-The console reuses the same OpenAPI payload as the portal reference pages. If
-you have changed Torii routes, regenerate the snapshot:
+Консоль порталь белешмә биттәре кеүек үк I18NT0000000003X файҙалы йөктө ҡабаттан ҡуллана. Әгәр
+һеҙ үҙгәрткән I18NT0000000007X маршруттар, регенерация снимок:
 
 ```bash
 cargo xtask openapi
 ```
 
-The task writes `docs/portal/static/openapi/torii.json`.
+Бурыс `docs/portal/static/openapi/torii.json` яҙа.
 
-## 2. Start the Try It proxy
+## 2. Башлағыҙ, уны һынап ҡарағыҙ прокси
 
-From the repository root:
+Репозиторий тамырынан:
 
 ```bash
 cd docs/portal
@@ -48,26 +49,26 @@ export TRYIT_PROXY_LISTEN="127.0.0.1:8787"
 npm run tryit-proxy
 ```
 
-### Environment variables
+### Тирә-яҡ мөхит үҙгәртеүселәре
 
-| Variable | Description |
-|----------|-------------|
-| `TRYIT_PROXY_TARGET` | Torii base URL (required). |
-| `TRYIT_PROXY_ALLOWED_ORIGINS` | Comma-separated list of origins allowed to use the proxy (defaults to `http://localhost:3000`). |
-| `TRYIT_PROXY_BEARER` | Optional default bearer token applied to all proxied requests. |
-| `TRYIT_PROXY_ALLOW_CLIENT_AUTH` | Set to `1` to forward the caller’s `Authorization` header verbatim. |
-| `TRYIT_PROXY_RATE_LIMIT` / `TRYIT_PROXY_RATE_WINDOW_MS` | In-memory rate limiter settings (defaults: 60 requests per 60 s). |
-| `TRYIT_PROXY_MAX_BODY` | Maximum request payload accepted (bytes, default 1 MiB). |
-| `TRYIT_PROXY_TIMEOUT_MS` | Upstream timeout for Torii requests (default 10 000 ms). |
+| Үҙгәртеүсән | Тасуирлама |
+|---------|--------------|
+| `TRYIT_PROXY_TARGET` | Torii база URL (кәрәкле). |
+| `TRYIT_PROXY_ALLOWED_ORIGINS` | Комма менән айырылған сығыш исемлеге прокси ҡулланырға мөмкинлек бирҙе (поктиллиҙар `http://localhost:3000` тиклем). |
+| `TRYIT_PROXY_BEARER` | Ҡулланылған бөтә прокси-проксилы үтенестәргә ҡағылышлы несущий токен. |
+| `TRYIT_PROXY_ALLOW_CLIENT_AUTH` | `1`-ҡа тиклем йыйылмаһы шылтыратыусы I18NI000000027X баш һүҙмә-һүҙен тапшырыу өсөн. |
+| `TRYIT_PROXY_RATE_LIMIT` / I18NI000000029X X | Хәтерҙәге ставкаларҙы сикләүсе параметрҙар (поктынь: 60-сы 60-сыға запрос). |
+| I18NI000000030X | Максималь запрос файҙалы йөк ҡабул ителә (байттар, ғәҙәттәгесә 1МиБ). |
+| `TRYIT_PROXY_TIMEOUT_MS` | Өҫкө ағым тайм-аут өсөн I18NT0000000009X үтенестәр (дефолт 10000мс). |
 
-The proxy exposes:
+Прокси фашлай:
 
-- `GET /healthz` — readiness check.
-- `/proxy/*` — proxied requests, preserving the path and query string.
+- `GET /healthz` — әҙерлек тикшерелеүе.
+- `/proxy/*` — прокси-запростар, юлды һәм эҙләү ептәрен һаҡлау.
 
-## 3. Launch the portal
+## 3. Порталды эшләтеп ебәрегеҙ
 
-In a separate terminal:
+Айырым терминалда:
 
 ```bash
 cd docs/portal
@@ -75,23 +76,23 @@ export TRYIT_PROXY_PUBLIC_URL="http://localhost:8787"
 npm run start
 ```
 
-Visit `http://localhost:3000/api/overview` and use the Try It console. The same
-environment variables configure the Swagger UI and RapiDoc embeds.
+`http://localhost:3000/api/overview`-ҡа инергә һәм Try It консоль ҡулланыу. Шул уҡ .
+тирә-яҡ мөхит үҙгәртеүселәре конфигурациялау Swagger UI һәм RapiDoc встраиваемый.
 
-## 4. Running unit tests
+## 4. Йүгереп берәмеге һынауҙары
 
-The proxy exposes a fast Node-based test suite:
+Прокси тиҙ Node-нигеҙендә һынау люкс фашлай:
 
 ```bash
 npm run test:tryit-proxy
 ```
 
-The tests cover address parsing, origin handling, rate limiting, and bearer
-injection.
+Һынауҙар ҡаплай адресы анализлау, сығыштар менән эш итеү, ставка сикләү, һәм йөрөтөүсе .
+инъекция.
 
-## 5. Probe automation & metrics
+## 5. Зонд автоматлаштырыу & метрика
 
-Use the bundled probe to verify `/healthz` and a sample endpoint:
+Ҡулланыу зонд раҫлау өсөн I18NI0000000035X һәм өлгө ос нөктәһе:
 
 ```bash
 TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" \
@@ -99,18 +100,18 @@ TRYIT_PROXY_SAMPLE_PATH="/v1/status" \
 npm run probe:tryit-proxy
 ```
 
-Environment knobs:
+Тирә-яҡ мөхит ручкалары:
 
-- `TRYIT_PROXY_SAMPLE_PATH` — optional Torii route (without `/proxy`) to exercise.
-- `TRYIT_PROXY_SAMPLE_METHOD` — defaults to `GET`; set to `POST` for write routes.
-- `TRYIT_PROXY_PROBE_TOKEN` — injects a temporary bearer token for the sample call.
-- `TRYIT_PROXY_PROBE_TIMEOUT_MS` — overrides the default 5 s timeout.
-- `TRYIT_PROXY_PROBE_METRICS_FILE` — Prometheus textfile destination for `probe_success`/`probe_duration_seconds`.
-- `TRYIT_PROXY_PROBE_LABELS` — comma-separated `key=value` pairs appended to the metrics (defaults to `job=tryit-proxy` and `instance=<proxy URL>`).
+- I18NI000000036X — опциональ I18NT0000000010X маршруты (I18NI000000037X булмаһа) күнекмәләр өсөн.
+- I18NI000000038X — I18NI000000039X тиклем ғәҙәттәгесә; яҙыу маршруттары өсөн I18NI000000040Хҡа ҡуйылған.
+- `TRYIT_PROXY_PROBE_TOKEN` — өлгө шылтыратыу өсөн ваҡытлыса йөрөтөүсе токен индерә.
+- `TRYIT_PROXY_PROBE_TIMEOUT_MS` — 5s тайм-аут ғәҙәттәгесә өҫтөнлөк итә.
+- I18NI000000043X — I18NI000000000044X/`probe_duration_seconds` өсөн Prometheus.
+- I18NI000000046X — воезнака I18NI0000000047X парҙары метрикаға ҡушылған (I18NI000000048X һәм I18NI000000049X X).
 
-When `TRYIT_PROXY_PROBE_METRICS_FILE` is set, the script rewrites the file
-atomically so your node_exporter/textfile collector always sees a complete
-payload. Example:
+Ҡасан I18NI000000050X ҡуйылған, сценарий файлды яңынан яҙа .
+атомлы шулай һеҙҙең node_exporter/текстфайл коллекционер һәр ваҡыт тулы күрә
+файҙалы йөк. Миҫал:
 
 ```bash
 TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" \
@@ -119,16 +120,16 @@ TRYIT_PROXY_PROBE_LABELS="job=tryit-proxy,cluster=staging" \
 npm run probe:tryit-proxy
 ```
 
-Forward the resulting metrics to Prometheus and reuse the sample alert in the
-developer-portal docs to page when `probe_success` drops to `0`.
+Һөҙөмтәлә барлыҡҡа килгән метрикаларҙы I18NT0000000001X тиклем алға һәм өлгө иҫкәртмәһен ҡабаттан ҡулланыу.
+портал docs биткә ҡасан I18NI000000051X төшөп I18NI000000052X.
 
-## 6. Production hardening checklist
+## 6. Производство ҡатыу тикшерелгән исемлек
 
-Before publishing the proxy beyond local development:
+Урындағы үҫештән тыш проксины баҫтырыр алдынан:
 
-- Terminate TLS ahead of the proxy (reverse proxy or managed gateway).
-- Configure structured logging and forward to observability pipelines.
-- Rotate bearer tokens and store them in your secrets manager.
-- Monitor the proxy’s `/healthz` endpoint and aggregate latency metrics.
-- Align rate limits with your Torii staging quotas; adjust the `Retry-After`
-  behaviour to communicate throttling to clients.
+- ТЛС-ты прокси-серь алдынан туҡтатығыҙ (кире прокси йәки идара итеү шлюз).
+- Конфигурациялау структуралы логин һәм алға күҙәтеүсәнлек торбалары.
+- ротаж йөрөтөүсе жетон һәм уларҙы һаҡлау һеҙҙең серҙәр менеджеры.
+- Монитор прокси’s `/healthz` ос нөктәһе һәм агрегат латентлыҡ метрикаһы.
+- Һеҙҙең Torii стадияһында квоталар менән ставка сикләүҙәре; I18NI000000054X көйләү
+  тәртибе клиенттарға дроссель менән аралашыу өсөн.

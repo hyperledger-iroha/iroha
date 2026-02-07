@@ -4,61 +4,63 @@ direction: ltr
 source: docs/portal/docs/da/replication-policy.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 :::note Канонический источник
-Эта страница отражает `docs/source/da/replication_policy.md`. Держите обе версии
+Эта страница отражает `docs/source/da/replication_policy.md`. жержите обе версии
 :::
 
-# Политика репликации Data Availability (DA-4)
+# データの可用性 (DA-4)
 
-_Статус: В работе — Владельцы: Core Protocol WG / Storage Team / SRE_
+_Статус: Вработе — Владельцы: コア プロトコル WG / ストレージ チーム / SRE_
 
-DA ingest pipeline теперь применяет детерминированные цели retention для каждого
-класса blob, описанного в `roadmap.md` (workstream DA-4). Torii отказывается
-сохранять retention envelopes, предоставленные caller, если они не совпадают с
+DA の取り込みパイプラインの取得と保持の維持
+класса blob、описанного в `roadmap.md` (ワークストリーム DA-4)。 Torii отказывается
+保存エンベロープ、発信者、メッセージの保存
 настроенной политикой, гарантируя, что каждый валидатор/узел хранения удерживает
 необходимое число эпох и реплик без опоры на намерения отправителя.
 
 ## Политика по умолчанию
 
-| Класс blob | Hot retention | Cold retention | Требуемые реплики | Класс хранения | Governance tag |
-|------------|---------------|----------------|-------------------|----------------|----------------|
-| `taikai_segment` | 24 hours | 14 days | 5 | `hot` | `da.taikai.live` |
-| `nexus_lane_sidecar` | 6 hours | 7 days | 4 | `warm` | `da.sidecar` |
-| `governance_artifact` | 12 hours | 180 days | 3 | `cold` | `da.governance` |
-| _Default (все остальные классы)_ | 6 hours | 30 days | 3 | `warm` | `da.default` |
+| Класс ブロブ |保温性 |保冷力 | Требуемые реплики | Класс хранения |ガバナンスタグ |
+|-----------|---------------|----------------|---------------------|----------------|--------------|
+| `taikai_segment` | 24時間 | 14日 | 5 | `hot` | `da.taikai.live` |
+| `nexus_lane_sidecar` | 6時間 | 7日間 | 4 | `warm` | `da.sidecar` |
+| `governance_artifact` | 12時間 | 180日 | 3 | `cold` | `da.governance` |
+| _デフォルト (デフォルト)_ | 6時間 | 30日 | 3 | `warm` | `da.default` |
 
 Эти значения встроены в `torii.da_ingest.replication_policy` и применяются ко
-всем `/v1/da/ingest` отправкам. Torii переписывает manifests с примененным
-профилем retention и выдает предупреждение, если callers передают несоответствующие
-значения, чтобы операторы могли выявлять устаревшие SDK.
+`/v1/da/ingest` です。 Torii マニフェストの確認
+保持期間と発信者数を確認する
+SDK を使用すると、SDK が更新されます。
 
 ### Классы доступности Taikai
 
-Taikai routing manifests (`taikai.trm`) объявляют `availability_class`
-(`hot`, `warm`, или `cold`). Torii применяет соответствующую политику до chunking,
-чтобы операторы могли масштабировать число реплик по stream без редактирования
-глобальной таблицы. Defaults:
+Taikai ルーティング マニフェスト (`taikai.trm`) объявляют `availability_class`
+(`hot`、`warm`、`cold`)。 Torii チャンク処理で、
+чтобы операторы могли масbolо реплик по stream без редактирования
+глобальной таблицы。デフォルト:
 
-| Класс доступности | Hot retention | Cold retention | Требуемые реплики | Класс хранения | Governance tag |
-|-------------------|---------------|----------------|-------------------|----------------|----------------|
-| `hot` | 24 hours | 14 days | 5 | `hot` | `da.taikai.live` |
-| `warm` | 6 hours | 30 days | 4 | `warm` | `da.taikai.warm` |
-| `cold` | 1 hour | 180 days | 3 | `cold` | `da.taikai.archive` |
+| Класс доступности |保温性 |保冷力 | Требуемые реплики | Класс хранения |ガバナンスタグ |
+|-------------------|-----------------|----------------|-------------------|----------------|----------------|
+| `hot` | 24時間 | 14日 | 5 | `hot` | `da.taikai.live` |
+| `warm` | 6時間 | 30日 | 4 | `warm` | `da.taikai.warm` |
+| `cold` | 1時間 | 180日 | 3 | `cold` | `da.taikai.archive` |
 
-Если подсказок нет, используется `hot`, чтобы live broadcast удерживали самый
-строгий профиль. Переопределяйте defaults через
-`torii.da_ingest.replication_policy.taikai_availability`, если сеть использует
-другие цели.
+Если подсказок нет, используется `hot`, чтобы 生放送 удерживали самый
+必要があります。デフォルト設定です
+`torii.da_ingest.replication_policy.taikai_availability`、最高です
+другие цели。
 
 ## Конфигурация
 
-Политика находится под `torii.da_ingest.replication_policy` и предоставляет
-*default* шаблон плюс массив override для каждого класса. Идентификаторы классов
-регистронезависимы и принимают `taikai_segment`, `nexus_lane_sidecar`,
-`governance_artifact`, либо `custom:<u16>` для расширений, одобренных управлением.
-Классы хранения принимают `hot`, `warm`, или `cold`.
+Политика находится под `torii.da_ingest.replication_policy` と предоставляет
+*デフォルト* ваблон плюс массив は、для каждого класса をオーバーライドします。 Идентификаторы классов
+регистронезависимы и принимают `taikai_segment`、`nexus_lane_sidecar`、
+`governance_artifact`、`custom:<u16>` は、 одобренных управлением です。
+`hot`、`warm`、`cold` を参照してください。
 
 ```toml
 [torii.da_ingest.replication_policy.default_retention]
@@ -78,11 +80,9 @@ storage_class = "hot"
 governance_tag = "da.taikai.live"
 ```
 
-Оставьте блок без изменений, чтобы использовать defaults выше. Чтобы ужесточить
-класс, обновите соответствующий override; чтобы изменить базу для новых классов,
-отредактируйте `default_retention`.
-
-Taikai availability classes можно переопределять отдельно через
+デフォルトでは、デフォルトが表示されます。 Чтобы ужесточить
+класс、обновите соответствующий オーバーライド。 Їтобы изменить базу для новых классов,
+отредактируйте `default_retention`。Taikai の利用可能クラス можно переопределять отдельно через
 `torii.da_ingest.replication_policy.taikai_availability`:
 
 ```toml
@@ -96,31 +96,31 @@ storage_class = "cold"
 governance_tag = "da.taikai.archive"
 ```
 
-## Семантика enforcement
+## Семантика の施行
 
 - Torii заменяет пользовательский `RetentionPolicy` на принудительный профиль
-  перед chunking или выпуском manifest.
-- Предсобранные manifests, которые декларируют несовпадающий retention профиль,
-  отклоняются с `400 schema mismatch`, чтобы устаревшие клиенты не могли ослабить
-  контракт.
-- Каждое событие override логируется (`blob_class`, отправленная политика vs
-  ожидаемая), чтобы выявлять non-compliant callers во время rollout.
+  チャンク化とマニフェスト。
+- マニフェストのマニフェスト、保持期間の確認、
+  отклоняются с `400 schema mismatch`, чтобы устаревлие клиенты не могли ослабить
+  контракт。
+- オーバーライド логируется (`blob_class`、отправленная политика vs
+  ожидаемая)、非準拠の呼び出し元をロールアウトします。
 
-Смотрите [Data Availability Ingest Plan](ingest-plan.md) (Validation checklist) для
-обновленного gate, покрывающего enforcement retention.
+[データ可用性取り込み計画](ingest-plan.md) (検証チェックリスト) の日付
+обновленного ゲート、покрывающего 執行保持。
 
-## Workflow повторной репликации (follow-up DA-4)
+## ワークフロー (フォローアップ DA-4)
 
-Enforcement retention — лишь первый шаг. Операторы также должны доказать, что live
-manifests и replication orders остаются согласованными с настроенной политикой,
-чтобы SoraFS мог автоматически re-replicate несоответствующие blobs.
+執行保持 — лизь первый заг. Операторы также должны доказать, что ライブ
+マニフェストとレプリケーションの順序 остаются согласованными с настроенной политикой,
+SoraFS ブロブを再レプリケートします。
 
-1. **Следите за drift.** Torii пишет
-   `overriding DA retention policy to match configured network baseline` когда
-   caller отправляет устаревшие retention значения. Сопоставляйте этот лог с
-   телеметрией `torii_sorafs_replication_*`, чтобы обнаружить shortfalls реплик
-   или задержанные redeployments.
-2. **Сравните intent и live replicas.** Используйте новый audit helper:
+1. **ドリフトと同じです。** Torii です。
+   `overriding DA retention policy to match configured network baseline` ビデオ
+   発信者は保持期間を延長します。 Сопоставляйте этот лог с
+   телеметрией `torii_sorafs_replication_*`, 不足分 реплик
+   再配置。
+2. **インテントとライブ レプリカを使用します。** 監査ヘルパーの機能:
 
    ```bash
    cargo xtask da-replication-audit \
@@ -131,24 +131,24 @@ manifests и replication orders остаются согласованными с
    ```
 
    Команда загружает `torii.da_ingest.replication_policy` из конфигурации,
-   декодирует каждый manifest (JSON или Norito), и опционально сопоставляет
-   payloads `ReplicationOrderV1` по digest manifest. Итог помечает две ситуации:
+   декодирует каждый マニフェスト (JSON または Norito)、и опционально сопоставляет
+   ペイロード `ReplicationOrderV1` はダイジェスト マニフェストです。必要な日付:
 
-   - `policy_mismatch` - retention профиль manifest расходится с принудительным
-     профилем (такого не должно быть, если Torii настроен корректно).
-   - `replica_shortfall` - live replication order запрашивает меньше реплик, чем
-     `RetentionPolicy.required_replicas`, или выдает меньше назначений, чем цель.
+   - `policy_mismatch` - 保持マニフェストの保持
+     профилем (такого не должно быть, если Torii настроен корректно)。
+   - `replica_shortfall` - ライブ レプリケーションの順序、чем
+     `RetentionPolicy.required_replicas`, или выдает меньзе назначений, чем цель.
 
-   Ненулевой код выхода означает активный shortfall, чтобы CI/on-call автоматизация
-   могла немедленно пейджить. Приложите JSON отчет к пакету
-   `docs/examples/da_manifest_review_template.md` для голосований парламента.
-3. **Запустите re-replication.** Если аудит сообщает о shortfall, выпустите
+   Ненулевой код выхода означает активный 不足、чтобы CI/オンコール автоматизация
+   могла немедленно пейджить。 Приложите JSON отчет к пакету
+   `docs/examples/da_manifest_review_template.md` 日です。
+3. **再レプリケーションを実行します。** 不足がある場合は再レプリケーションを実行します。
    новый `ReplicationOrderV1` через инструменты управления, описанные в
-   [SoraFS storage capacity marketplace](../sorafs/storage-capacity-marketplace.md),
-   и повторяйте аудит, пока набор реплик не сойдется. Для emergency overrides
-   сопоставьте CLI вывод с `iroha app da prove-availability`, чтобы SRE могли ссылаться
-   на тот же digest и PDP evidence.
+   [SoraFS ストレージ容量マーケットプレイス](../sorafs/storage-capacity-marketplace.md)、
+   и повторяйте аудит, пока набор реплик не сойдется.緊急オーバーライド
+   CLI を使用して `iroha app da prove-availability`、SRE を実行します。
+   ダイジェストと PDP 証拠。
 
-Regression coverage находится в `integration_tests/tests/da/replication_policy.rs`;
-suite отправляет несовпадающую политику retention в `/v1/da/ingest` и проверяет,
-что полученный manifest показывает принудительный профиль, а не intent caller.
+回帰カバレッジ - `integration_tests/tests/da/replication_policy.rs`;
+スイート отправляет несовпадающую политику 保持期間 в `/v1/da/ingest` および проверяет,
+マニフェストのマニフェスト、インテントの呼び出し元。

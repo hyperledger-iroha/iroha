@@ -11,108 +11,109 @@ id: node-plan
 title: SoraFS Node Implementation Plan
 sidebar_label: Node Implementation Plan
 description: Translate the SF-3 storage roadmap into actionable engineering work with milestones, tasks, and test coverage.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
+:::Qeyd Kanonik Mənbə
 :::
 
-SF-3 delivers the first runnable `sorafs-node` crate that turns an Iroha/Torii process into a SoraFS storage provider. Use this plan alongside the [node storage guide](node-storage.md), [provider admission policy](provider-admission-policy.md), and [storage capacity marketplace roadmap](storage-capacity-marketplace.md) when sequencing deliverables.
+SF-3, Iroha/Torii prosesini SoraFS yaddaş provayderinə çevirən ilk işlək `sorafs-node` qutusunu təqdim edir. Çatdırılmaları ardıcıllaşdırarkən bu planı [node storage guide](node-storage.md), [provayderin qəbul siyasəti](provider-admission-policy.md) və [saxlama tutumu bazarının yol xəritəsi](storage-capacity-marketplace.md) ilə birlikdə istifadə edin.
 
-## Target Scope (Milestone M1)
+## Hədəf Sahəsi (Milestone M1)
 
-1. **Chunk store integration.** Wrap `sorafs_car::ChunkStore` with a persistent backend that stores chunk bytes, manifests, and PoR trees in the configured data directory.
-2. **Gateway endpoints.** Expose Norito HTTP endpoints for pin submission, chunk fetch, PoR sampling, and storage telemetry within the Torii process.
-3. **Configuration plumbing.** Add a `SoraFsStorage` config struct (enabled flag, capacity, directories, concurrency limits) wired through `iroha_config`, `iroha_core`, and `iroha_torii`.
-4. **Quota/scheduling.** Enforce operator-defined disk/parallelism limits and queue requests with back-pressure.
-5. **Telemetry.** Emit metrics/logs for pin success, chunk fetch latency, capacity utilisation, and PoR sampling results.
+1. **Yüksək mağaza inteqrasiyası.** `sorafs_car::ChunkStore`-ni konfiqurasiya edilmiş məlumat kataloqunda yığın baytları, manifestlər və PoR ağaclarını saxlayan davamlı arxa hissə ilə sarın.
+2. **Gateway son nöqtələri.** Torii prosesi çərçivəsində pin təqdimi, yığın gətirmə, PoR seçmə və yaddaş telemetriyası üçün Norito HTTP son nöqtələrini ifşa edin.
+3. **Konfiqurasiya santexnika.** `SoraFsStorage` konfiqurasiya strukturunu əlavə edin (aktiv bayraq, tutum, kataloqlar, paralellik limitləri) `iroha_config`, `iroha_core` və I18NI000003X.
+4. **Kvota/planlaşdırma.** Operator tərəfindən müəyyən edilmiş disk/paralellik məhdudiyyətlərini və arxa təzyiqlə növbə sorğularını tətbiq edin.
+5. **Telemetriya.** Uğurlu pin, yığın gətirmə gecikməsi, tutumdan istifadə və PoR seçmə nəticələri üçün ölçülər/loqlar buraxın.
 
-## Work Breakdown
+## İş Dağılımı
 
-### A. Crate & Module Structure
+### A. Sandıq və Modul Strukturu
 
-| Task | Owner(s) | Notes |
+| Tapşırıq | Sahib(lər) | Qeydlər |
 |------|----------|-------|
-| Create `crates/sorafs_node` with modules: `config`, `store`, `gateway`, `scheduler`, `telemetry`. | Storage Team | Re-export reusable types for Torii integration. |
-| Implement `StorageConfig` mapped from `SoraFsStorage` (user → actual → defaults). | Storage Team / Config WG | Ensure the Norito/`iroha_config` layers remain deterministic. |
-| Provide a `NodeHandle` facade Torii uses to submit pins/fetches. | Storage Team | Encapsulate storage internals and async plumbing. |
+| Modullarla `crates/sorafs_node` yaradın: `config`, `store`, `gateway`, `scheduler`, `telemetry`. | Saxlama Komandası | Torii inteqrasiyası üçün təkrar istifadə edilə bilən növlərin təkrar ixracı. |
+| `SoraFsStorage`-dən xəritələnmiş `StorageConfig` tətbiq edin (istifadəçi → faktiki → defolt). | Storage Team / Config WG | Norito/`iroha_config` qatlarının deterministik qaldığından əmin olun. |
+| Sancaqlar/gətirmələr təqdim etmək üçün Torii istifadə etdiyi `NodeHandle` fasadını təmin edin. | Saxlama Komandası | Saxlama daxili hissələrini və async santexnikasını əhatə edin. |
 
-### B. Persistent Chunk Store
+### B. Davamlı yığın mağazası
 
-| Task | Owner(s) | Notes |
+| Tapşırıq | Sahib(lər) | Qeydlər |
 |------|----------|-------|
-| Build a disk backend wrapping `sorafs_car::ChunkStore` with an on-disk manifest index (`sled`/`sqlite`). | Storage Team | Deterministic layout: `<data_dir>/<manifest_cid>/chunk_{idx}.bin`. |
-| Maintain PoR metadata (64 KiB/4 KiB trees) using `ChunkStore::sample_leaves`. | Storage Team | Support replay after restart; fail fast on corruption. |
-| Implement integrity replay on startup (rehash manifests, prune incomplete pins). | Storage Team | Block Torii start until replay completes. |
+| Diskdəki manifest indeksi (`sled`/`sqlite`) ilə `sorafs_car::ChunkStore` diskin arxa ucunu yaradın. | Saxlama Komandası | Deterministik tərtibat: `<data_dir>/<manifest_cid>/chunk_{idx}.bin`. |
+| `ChunkStore::sample_leaves` istifadə edərək PoR metadatasını (64KiB/4KiB ağacları) qoruyun. | Saxlama Komandası | Yenidən başladıqdan sonra təkrarı dəstəkləyin; korrupsiyaya qarşı tez uğursuzluq. |
+| Başlanğıcda bütövlük təkrarını həyata keçirin (rehash manifestləri, natamam sancaqları kəsin). | Saxlama Komandası | Təkrar oynatma tamamlanana qədər Torii blokunu işə salın. |
 
-### C. Gateway Endpoints
+### C. Gateway Son Nöqtələri
 
-| Endpoint | Behaviour | Tasks |
+| Son nöqtə | Davranış | Tapşırıqlar |
 |----------|-----------|-------|
-| `POST /sorafs/pin` | Accept `PinProposalV1`, validate manifests, queue ingestion, respond with manifest CID. | Validate chunk profile, enforce quotas, stream data via chunk store. |
-| `GET /sorafs/chunks/{cid}` + range query | Serve chunk bytes with `Content-Chunker` headers; respect range capability spec. | Use scheduler + stream budgets (tie into SF-2d range capability). |
-| `POST /sorafs/por/sample` | Run PoR sampling for a manifest and return proof bundle. | Reuse chunk store sampling, respond with Norito JSON payloads. |
-| `GET /sorafs/telemetry` | Summaries: capacity, PoR success, fetch error counts. | Provide data for dashboards/operators. |
+| `POST /sorafs/pin` | `PinProposalV1` qəbul edin, manifestləri təsdiqləyin, qəbulu növbəyə qoyun, manifest CID ilə cavab verin. | Yığma profilini təsdiqləyin, kvotaları tətbiq edin, yığın mağazası vasitəsilə məlumat yayımlayın. |
+| `GET /sorafs/chunks/{cid}` + diapazon sorğusu | `Content-Chunker` başlıqları ilə yığın baytlara xidmət edin; diapazon qabiliyyəti spesifikasiyasına hörmət edin. | Planlayıcı + axın büdcələrindən istifadə edin (SF-2d diapazonu qabiliyyətinə bağlayın). |
+| `POST /sorafs/por/sample` | Manifest və geriyə sübut paketi üçün PoR nümunəsini işə salın. | Dükan nümunəsini təkrar istifadə edin, Norito JSON yükləri ilə cavab verin. |
+| `GET /sorafs/telemetry` | Xülasə: tutum, PoR müvəffəqiyyəti, əldə etmə xətası sayları. | Panellər/operatorlar üçün məlumat təmin edin. |
 
-Runtime plumbing threads PoR interactions through `sorafs_node::por`: the tracker records every `PorChallengeV1`, `PorProofV1`, and `AuditVerdictV1` so the `CapacityMeter` metrics reflect governance verdicts without bespoke Torii logic.【crates/sorafs_node/src/scheduler.rs#L147】
+`sorafs_node::por` vasitəsilə iş vaxtı santexnika mövzuları PoR qarşılıqlı əlaqəsini təmin edir: izləyici hər bir `PorChallengeV1`, `PorProofV1` və `AuditVerdictV1`-ni qeyd edir, beləliklə `CapacityMeter` qiymətləndirmə göstəricilərini əks etdirmir. Torii məntiqi.【crates/sorafs_node/src/scheduler.rs#L147】
 
-Implementation notes:
+İcra qeydləri:
 
-- Use Torii’s Axum stack with `norito::json` payloads.
-- Add Norito schemas for responses (`PinResultV1`, `FetchErrorV1`, telemetry structs).
+- `norito::json` faydalı yükləri ilə Torii-in Axum yığınından istifadə edin.
+- Cavablar üçün Norito sxemləri əlavə edin (`PinResultV1`, `FetchErrorV1`, telemetriya strukturları).
 
-- ✅ `/v1/sorafs/por/ingestion/{manifest_digest_hex}` now exposes backlog depth plus the oldest epoch/deadline and
-  the most recent success/failure timestamps for each provider, powered by
-  `sorafs_node::NodeHandle::por_ingestion_status`, and Torii records the
-  `torii_sorafs_por_ingest_backlog`/`torii_sorafs_por_ingest_failures_total` gauges for dashboards.【crates/sorafs_node/src/lib.rs:510】【crates/iroha_torii/src/sorafs/api.rs:1883】【crates/iroha_torii/src/routing.rs:7244】【crates/iroha_telemetry/src/metrics.rs:5390】
+- ✅ `/v1/sorafs/por/ingestion/{manifest_digest_hex}` indi geriləmə dərinliyini və ən qədim dövrü/son tarixi və
+  tərəfindən dəstəklənən hər bir provayder üçün ən son uğur/uğursuzluq zaman damğaları
+  `sorafs_node::NodeHandle::por_ingestion_status` və Torii qeyd edir
+  `torii_sorafs_por_ingest_backlog`/`torii_sorafs_por_ingest_failures_total` üçün ölçü cihazları tablosuna.【crates/sorafs_node/src/lib.rs:510】【crates/iroha_torii/src/sorafs/api.rs:18 83】【crates/iroha_torii/src/routing.rs:7244】【crates/iroha_telemetry/src/metrics.rs:5390】
 
-### D. Scheduler & Quota Enforcement
+### D. Planlaşdırıcı və Kvota İcrası
 
-| Task | Details |
+| Tapşırıq | Təfərrüatlar |
 |------|---------|
-| Disk quota | Track bytes on disk; reject new pins when exceeding `max_capacity_bytes`. Provide eviction hooks for future policies. |
-| Fetch concurrency | Global semaphore (`max_parallel_fetches`) plus per-provider budgets sourced from SF-2d range caps. |
-| Pin queue | Limit outstanding ingestion jobs; expose Norito status endpoints for queue depth. |
-| PoR cadence | Background worker driven by `por_sample_interval_secs`. |
+| Disk kvotası | Diskdəki baytları izləmək; `max_capacity_bytes`-dən çox olduqda yeni sancaqları rədd edin. Gələcək siyasətlər üçün boşaltma qarmaqlarını təmin edin. |
+| Paralelliyi gətir | Qlobal semafor (`max_parallel_fetches`) üstəgəl SF-2d diapazonundan alınan hər provayder büdcəsi. |
+| Pin növbəsi | Görkəmli qəbul işlərini məhdudlaşdırın; növbə dərinliyi üçün Norito status son nöqtələrini ifşa edin. |
+| PoR kadans | `por_sample_interval_secs` tərəfindən idarə olunan fon işçisi. |
 
-### E. Telemetry & Logging
+### E. Telemetriya və Logging
 
-Metrics (Prometheus):
+Metriklər (Prometheus):
 
 - `sorafs_pin_success_total`, `sorafs_pin_failure_total`
-- `sorafs_chunk_fetch_duration_seconds` (histogram with `result` labels)
+- `sorafs_chunk_fetch_duration_seconds` (`result` etiketli histoqram)
 - `torii_sorafs_storage_bytes_used`, `torii_sorafs_storage_bytes_capacity`
 - `torii_sorafs_storage_pin_queue_depth`, `torii_sorafs_storage_fetch_inflight`
 - `torii_sorafs_storage_fetch_bytes_per_sec`
 - `torii_sorafs_storage_por_inflight`
 - `torii_sorafs_storage_por_samples_success_total`, `torii_sorafs_storage_por_samples_failed_total`
 
-Logs / events:
+Qeydlər / hadisələr:
 
-- Structured Norito telemetry for governance ingestion (`StorageTelemetryV1`).
-- Alerts when utilisation > 90% or PoR failure streak exceeds threshold.
+- İdarəetmə qəbulu üçün strukturlaşdırılmış Norito telemetriyası (`StorageTelemetryV1`).
+- İstifadə > 90% və ya PoR uğursuzluq zolağı həddi aşdıqda xəbərdarlıqlar.
 
-### F. Testing Strategy
+### F. Sınaq Strategiyası
 
-1. **Unit tests.** Chunk store persistence, quota calculations, scheduler invariants (see `crates/sorafs_node/src/scheduler.rs`).  
-2. **Integration tests** (`crates/sorafs_node/tests`). Pin → fetch round trip, restart recovery, quota rejection, PoR sampling proof verification.  
-3. **Torii integration tests.** Run Torii with storage enabled, exercise HTTP endpoints via `assert_cmd`.  
-4. **Chaos roadmap.** Future drills simulate disk exhaustion, slow IO, provider removal.
+1. **Vahid testləri.** Yığın saxlama davamlılığı, kvota hesablamaları, planlaşdırıcı dəyişkənlikləri (bax: `crates/sorafs_node/src/scheduler.rs`).  
+2. **İnteqrasiya testləri** (`crates/sorafs_node/tests`). Pin → gediş-dönüş gətirin, bərpanı yenidən başladın, kvotadan imtina, PoR seçmə sübutunun yoxlanılması.  
+3. **Torii inteqrasiya testləri.** Yaddaş aktivləşdirilməklə Torii-i işə salın, `assert_cmd` vasitəsilə HTTP son nöqtələrini həyata keçirin.  
+4. **Xaos yol xəritəsi.** Gələcək təlimlər diskin tükənməsini, yavaş IO-nu, provayderin çıxarılmasını simulyasiya edir.
 
-## Dependencies
+## Asılılıqlar
 
-- SF-2b admission policy — ensure nodes verify admission envelopes before advertising.  
-- SF-2c capacity marketplace — tie telemetry back into capacity declarations.  
-- SF-2d advert extensions — consume range capability + stream budgets once available.
+- SF-2b qəbul siyasəti — reklamdan əvvəl qovşaqların qəbul zərflərini yoxlamasını təmin edin.  
+- SF-2c tutum bazarı — telemetriyanı tutum bəyannamələrinə birləşdirin.  
+- SF-2d reklam uzantıları — mövcud olduqda diapazon qabiliyyətini + axın büdcələrini istehlak edin.
 
-## Milestone Exit Criteria
+## Mərhələ Çıxış Meyarları
 
-- `cargo run -p sorafs_node --example pin_fetch` works against local fixtures.  
-- Torii builds with `--features sorafs-storage` and passes integration tests.  
-- Documentation ([node storage guide](node-storage.md)) updated with configuration defaults + CLI examples; operator runbook available.  
-- Telemetry visible in staging dashboards; alerts configured for capacity saturation and PoR failures.
+- `cargo run -p sorafs_node --example pin_fetch` yerli qurğulara qarşı işləyir.  
+- Torii `--features sorafs-storage` ilə qurur və inteqrasiya testlərindən keçir.  
+- Sənədləşdirmə ([node storage guide](node-storage.md)) konfiqurasiya defoltları + CLI nümunələri ilə yeniləndi; operator runbook mövcuddur.  
+- Səhnələşdirmə panellərində görünən telemetriya; tutumun doyması və PoR uğursuzluqları üçün konfiqurasiya edilmiş xəbərdarlıqlar.
 
-## Documentation & Ops Deliverables
+## Sənədləşdirmə və Əməliyyat Təslim Edilənlər
 
-- Update the [node storage reference](node-storage.md) with configuration defaults, CLI usage, and troubleshooting steps.  
-- Keep the [node operations runbook](node-operations.md) aligned with the implementation as SF-3 evolves.  
-- Publish API references for `/sorafs/*` endpoints inside the developer portal and wire them into the OpenAPI manifest once Torii handlers land.
+- Konfiqurasiya defoltları, CLI istifadəsi və problemlərin aradan qaldırılması addımları ilə [node storage arayışını](node-storage.md) yeniləyin.  
+- SF-3 inkişaf etdikcə [node əməliyyatları runbook](node-operations.md) tətbiqi ilə uyğunlaşdırılsın.  
+- Tərtibatçı portalında `/sorafs/*` son nöqtələri üçün API arayışlarını dərc edin və Torii işləyiciləri yerləşdikdən sonra onları OpenAPI manifestinə köçürün.

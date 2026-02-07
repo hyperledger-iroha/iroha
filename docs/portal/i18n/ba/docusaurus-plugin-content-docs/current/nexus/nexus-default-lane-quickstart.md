@@ -8,34 +8,36 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: Default lane quickstart (NX-5)
 sidebar_label: Default Lane Quickstart
 description: Configure and verify the Nexus default lane fallback so Torii and SDKs can omit lane_id in public lanes.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
-This page mirrors `docs/source/quickstart/default_lane.md`. Keep both copies
-aligned until the localization sweep lands in the portal.
-:::
+:::иҫкәртергә канонлы сығанаҡ
+Был биттә `docs/source/quickstart/default_lane.md` көҙгөһө. Ике күсермәһен дә һаҡлағыҙ
+локализация локализацияһы порталында ерҙәрҙе һуҡҡанға тиклем тура килә.
+::: 1990 й.
 
-# Default Lane Quickstart (NX-5)
+# Ғәҙәттәгесә Лейн Quickstart (NX-5)
 
-> **Roadmap context:** NX-5 — default public lane integration. The runtime now
-> exposes a `nexus.routing_policy.default_lane` fallback so Torii REST/gRPC
-> endpoints and every SDK can safely omit a `lane_id` when the traffic belongs
-> on the canonical public lane. This guide walks operators through configuring
-> the catalog, verifying the fallback in `/status`, and exercising the client
-> behaviour end to end.
+> **Рад картаһы контексы:** NX-5 — йәмәғәт һыҙаты интеграцияһы ғәҙәттәгесә. Хәҙер эшләү ваҡыты
+> фашлай I18NI000000015X fallback шулай I18NT000000002X REST/gRPC
+> ос нөктәләре һәм һәр SDK хәүефһеҙ ҡалдыра ала I18NI000000016X ҡасан трафик ҡарай
+> канон йәмәғәт һыҙатында. Был ҡулланма операторҙар аша йөрөп конфигурациялау
+> каталог, тикшерергә fallback I18NI0000000017X, һәм клиент күнекмәләр
+> тәртибе тамамлана.
 
-## Prerequisites
+## Алдан шарттар
 
-- A Sora/Nexus build of `irohad` (run with `irohad --sora --config ...`).
-- Access to the configuration repository so you can edit `nexus.*` sections.
-- `iroha_cli` configured to talk to the target cluster.
-- `curl`/`jq` (or equivalent) to inspect the Torii `/status` payload.
+- I18NI000000018X бинаһының Сора/Nexus бинаһы (I18NI000000019X менән эшләй).
+- Конфигурация һаҡлағысына инеү, шулай итеп, һеҙ I18NI000000020X бүлектәрен мөхәррирләй алаһығыҙ.
+- `iroha_cli` маҡсатлы кластер менән һөйләшергә конфигурацияланған.
+- I18NI0000022223Х (йәки эквивалент) I18NT0000000003X `/status` файҙалы йөкләмәһен тикшерергә.
 
-## 1. Describe the lane and dataspace catalog
+## 1. Һылтанма һәм мәғлүмәт киңлеге каталогын һүрәтләгеҙ
 
-Declare the lanes and dataspaces that should exist on the network. The snippet
-below (trimmed from `defaults/nexus/config.toml`) registers three public lanes
-plus matching dataspace aliases:
+Селтәрҙә булырға тейешле һыҙаттарҙы һәм мәғлүмәт киңлектәрен иғлан итегеҙ. Фрагмент
+аҫта (I18NI000000025X-тан ҡырҡылған) өс йәмәғәт һыҙаты теркәй
+плюс тап килгән мәғлүмәттәр киңлеге псевдонимы:
 
 ```toml
 [nexus]
@@ -78,17 +80,17 @@ description = "Zero-knowledge proofs and attachments"
 fault_tolerance = 1
 ```
 
-Each `index` must be unique and contiguous. Dataspace ids are 64-bit values;
-the examples above use the same numeric values as the lane indexes for clarity.
+Һәр `index` уникаль һәм йәнәш булырға тейеш. Dataspace ids 64-битлы ҡиммәттәр;
+өҫтәге миҫалдар асыҡлыҡ өсөн һыҙат индекстары менән бер үк һанлы ҡиммәттәрҙе ҡуллана.
 
-## 2. Set routing defaults and optional overrides
+## 2. Маршрутлаштырыу ғәҙәттәгесә һәм өҫтәмә өҫтөнлөктәр ҡуйыу
 
-The `nexus.routing_policy` section controls the fallback lane and lets you
-override routing for specific instructions or account prefixes. If no rule
-matches, the scheduler routes the transaction to the configured `default_lane`
-and `default_dataspace`. The router logic lives in
-`crates/iroha_core/src/queue/router.rs` and applies the policy transparently to
-Torii REST/gRPC surfaces.
+I18NI000000027X бүлеге fallback һыҙаты менән идара итә һәм һеҙгә мөмкинлек бирә
+өҫтөнлөк маршрутлаштырыу өсөн аныҡ күрһәтмәләр йәки иҫәп префикстары. Әгәр ҡағиҙәһе юҡ.
+матчтар, планлаштырыусы маршруттар транзакция конфигурацияланған I18NI000000028X
+һәм `default_dataspace`. Маршрутизатор логикаһы 2018 йылда йәшәй.
+I18NI000000030X һәм сәйәсәтте асыҡтан-асыҡ ҡуллана.
+Torii REST/gRPC өҫтө.
 
 ```toml
 [nexus.routing_policy]
@@ -110,31 +112,31 @@ instruction = "smartcontract::deploy"
 description = "Route contract deployments to the zk lane for proof tracking"
 ```
 
-When you later add new lanes, update the catalog first, then extend the routing
-rules. The fallback lane should continue to point at the public lane that holds
+Һуңыраҡ яңы һыҙаттар өҫтәгәндә, каталогты тәүҙә яңыртыу, һуңынан маршрутлаштырыуҙы оҙайтығыҙ .
+ҡағиҙәләр. Йыйыулы һыҙат йәмәғәт һыҙатына күрһәтелергә тейеш, тип тота
 
-## 3. Boot a node with the policy applied
+## 3. Сәйәсәт менән төйөн загрузка
 
 ```bash
 IROHA_CONFIG=/path/to/nexus/config.toml
 irohad --sora --config "${IROHA_CONFIG}"
 ```
 
-The node logs the derived routing policy during startup. Any validation errors
-(missing indexes, duplicated aliases, invalid dataspace ids) are surfaced before
-gossip begins.
+Төйөн стартап ваҡытында алынған маршрутлаштырыу сәйәсәтен теркәй. Теләһә ниндәй раҫлау хаталары
+(индекстар, дубликаты псевдоним, дөрөҫ булмаған мәғлүмәттәр киңлеге ids) тиклем .
+ғәйбәт башлана.
 
-## 4. Confirm lane governance state
+## 4. Раҫлау һыҙаты менән идара итеү дәүләте
 
-Once the node is online, use the CLI helper to verify that the default lane is
-sealed (manifest loaded) and ready for traffic. The summary view prints one row
-per lane:
+Бер тапҡыр төйөн онлайн, ҡулланыу CLI ярҙамсыһы раҫлау өсөн, тип стандарт һыҙаты .
+герметизацияланған (төшөү тейәлгән) һәм трафикҡа әҙер. Йыйынтыҡлы ҡараш бер рәт баҫтыра.
+һыҙатҡа:
 
 ```bash
 iroha_cli app nexus lane-report --summary
-```
+``` X
 
-Example output:
+Миҫал сығарыу:
 
 ```
 Lane  Alias            Module           Status  Quorum  Validators  Detail
@@ -143,20 +145,20 @@ Lane  Alias            Module           Status  Quorum  Validators  Detail
    2  zk               parliament       sealed     03           05  manifest required
 ```
 
-If the default lane shows `sealed`, follow the lane governance runbook before
-allowing external traffic. The `--fail-on-sealed` flag is handy for CI.
+Әгәр ҙә стандарт һыҙат I18NI000000031X күрһәтһә, 2012 йылға тиклем һыҙат идара итеү лауреаты үтә.
+тышҡы трафик рөхсәт итеү. I18NI000000032X флагы CI өсөн ҡулайлы.
 
-## 5. Inspect Torii status payloads
+## 5. I18NT0000000005X статус файҙалы йөкләмәләрен тикшерергә
 
-The `/status` response exposes both the routing policy and the per-lane scheduler
-snapshot. Use `curl`/`jq` to confirm the configured defaults and to check that
-the fallback lane is producing telemetry:
+I18NI000000033X яуап маршрутлаштырыу сәйәсәтен дә, һыҙат буйынса планлаштырыусы ла фашлай.
+снимок. Ҡулланыу I18NI0000000034X/I18NI00000000035X раҫлау өсөн конфигурацияланған ғәҙәттәгесә һәм тикшерергә, тип.
+fallback һыҙаты телеметрия етештерә:
 
 ```bash
 curl -s http://127.0.0.1:8080/status | jq '.nexus.routing_policy'
 ```
 
-Sample output:
+Өлгө сығыш:
 
 ```json
 {
@@ -169,7 +171,7 @@ Sample output:
 }
 ```
 
-To inspect the live scheduler counters for lane `0`:
+18NI0000000036X һыҙаты өсөн йәшәү планлаштырыусы иҫәпләүсеһен тикшерергә:
 
 ```bash
 curl -s http://127.0.0.1:8080/status \
@@ -177,37 +179,37 @@ curl -s http://127.0.0.1:8080/status \
         | {lane_id, alias, dataspace_alias, committed, manifest_ready, scheduler_utilization_pct}'
 ```
 
-This confirms that the TEU snapshot, alias metadata, and manifest flags align
-with the configuration. The same payload is what Grafana panels use for the
-lane-ingest dashboard.
+Был раҫлай, тип ТЭУ снимок, псевдоним метамағлүмәт, һәм асыҡ флагтар тура килә
+конфигурация менән. Шул уҡ файҙалы йөк нимә I18NT000000000000Х панелдәре өсөн ҡулланыу өсөн
+һыҙат-инергән приборҙар таҡтаһы.
 
-## 6. Exercise client defaults
+## 6. Клиенттарҙы күнегеү ғәҙәттәгесә
 
-- **Rust/CLI.** `iroha_cli` and the Rust client crate omit the `lane_id` field
-  when you do not pass `--lane-id` / `LaneSelector`. The queue router therefore
-  falls back to `default_lane`. Use explicit `--lane-id`/`--dataspace-id` flags
-  only when targeting a non-default lane.
-- **JS/Swift/Android.** Latest SDK releases treat `laneId`/`lane_id` as optional
-  and fall back to the value advertised by `/status`. Keep the routing policy in
-  sync across staging and production so mobile apps do not need emergency
-  reconfigurations.
-- **Pipeline/SSE tests.** The transaction event filters accept
-  `tx_lane_id == <u32>` predicates (see `docs/source/pipeline.md`). Subscribe to
-  `/v1/pipeline/events/transactions` with that filter to prove that writes sent
-  without an explicit lane arrive under the fallback lane id.
+- **Раст/CLI.** I18NI0000000037X һәм Rust клиент йәшник I18NI0000000038X яланын үткәрмәй
+  ҡасан һеҙ үтмәй I18NI000000039X / I18NI000000040X. Шуға күрә сират маршрутизаторы
+  кире I18NI000000041X-ҡа инә. Ҡулланыу асыҡ I18NI000000042X/`--dataspace-id` флагтары
+  тик ғәҙәттән тыш булмаған һыҙатҡа йүнәлтелгәндә генә.
+- **JS/Swift/Android.** Һуңғы SDK релиздары `laneId`/I18NI0000000045X опциональ булараҡ дауалана.
+  һәм I18NI000000046X XX тарафынан рекламаланған ҡиммәткә кире төшә. Маршрутлаштырыу сәйәсәтен 1990 йылда һаҡлағыҙ.
+  синхронлаштырыу буйынса сәхнәләштереү һәм етештереү
+  үҙгәртеп ҡороуҙар.
+- **Пипелин/SSE һынауҙары.** Транзакция ваҡиғаһы фильтрҙары ҡабул итә
+  I18NI000000047X предикаттары (ҡара: I18NI000000048X). Яҙылыу өсөн
+  I18NI0000000049X менән шул фильтр менән иҫбатлау өсөн, тип яҙа ебәрелгән
+  асыҡ һыҙатһыҙ fallback һыҙаты аҫтында килә id.
 
-## 7. Observability and governance hooks
+## 7. Күҙәтеүсәнлек һәм идара итеү ҡармаҡтары
 
-- `/status` also publishes `nexus_lane_governance_sealed_total` and
-  `nexus_lane_governance_sealed_aliases` so Alertmanager can warn whenever a
-  lane loses its manifest. Keep those alerts enabled even for devnets.
-- The scheduler telemetry map and the lane governance dashboard
-  (`dashboards/grafana/nexus_lanes.json`) expect the alias/slug fields from the
-  catalog. If you rename an alias, relabel the corresponding Kura directories so
-  auditors keep deterministic paths (tracked under NX-1).
-- Parliament approvals for default lanes should include a rollback plan. Record
-  the manifest hash and governance evidence alongside this quickstart in your
-  operator runbook so future rotations do not guess the required state.
+- `/status` шулай уҡ I18NI000000051X һәм
+  I18NI000000052X шулай иҫкәртмә ағзаһы иҫкәртә ала, ҡасан да булһа
+  һыҙат үҙенең асыҡлығын юғалта. Шул иҫкәртмәләрҙе хатта diventes өсөн мөмкинлек бирҙе.
+- Плацер телеметрия картаһы һәм һыҙат идара итеү приборҙар таҡтаһы
+  (`dashboards/grafana/nexus_lanes.json`) көтә, псевдоним/слама баҫыуҙары .
+  каталог. Әгәр һеҙ псевдоним тип үҙгәртергә, relabel relabel Kura каталогтары шулай
+  аудиторҙар детерминистик юлдарҙы һаҡлай (NX-1 аҫтында күҙәтелә).
+- Парламент раҫлауҙары өсөн ғәҙәттәгесә һыҙаттар үҙ эсенә алырға тейеш кире ҡайтарыу планы. Яҙымта
+  асыҡ хеш һәм идара итеү дәлилдәре менән бер рәттән был тиҙ старт һеҙҙең
+  оператор runbook шулай киләсәктә әйләнештәр кәрәкле дәүләтте фаразламай.
 
-Once these checks pass you can treat `nexus.routing_policy.default_lane` as the
-code paths on the network.
+Бер тапҡыр был чектар үткән һеҙ дауалай ала I18NI0000000054X тип,
+селтәрҙәге юлдарҙы кодлай.

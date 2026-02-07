@@ -11,65 +11,66 @@ id: registry-schema
 title: Sora Name Service Registry Schema
 sidebar_label: Registry schema
 description: Norito data structures, lifecycle rules, and event contracts for SNS registry smart contracts (SN-2a).
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
-This page mirrors `docs/source/sns/registry_schema.md` and now serves as the
-canonical portal copy. The source file remains for translation updates.
+:::ескерту Канондық дереккөз
+Бұл бет `docs/source/sns/registry_schema.md` бейнесін көрсетеді және қазір ол ретінде қызмет етеді
+канондық портал көшірмесі. Бастапқы файл аударма жаңартулары үшін қалады.
 :::
 
-# Sora Name Service Registry Schema (SN-2a)
+# Sora Name қызмет тізілімінің схемасы (SN-2a)
 
-**Status:** Drafted 2026-03-24 -- submitted for SNS program review  
-**Roadmap link:** SN-2a “Registry schema & storage layout”  
-**Scope:** Define the canonical Norito structures, lifecycle states, and emitted events for the Sora Name Service (SNS) so registry and registrar implementations stay deterministic across contracts, SDKs, and gateways.
+**Күйі:** Жоба 2026-03-24 жасалды -- SNS бағдарламасын қарауға жіберілді  
+**Жол картасы сілтемесі:** SN-2a «Тіркеу схемасы және сақтау схемасы»  
+**Қолдану аясы:** Sora Name Service (SNS) үшін канондық Norito құрылымдарын, өмірлік цикл күйлерін және шығарылған оқиғаларды анықтаңыз, осылайша тізілім мен тіркеушіні іске асыру келісім-шарттар, SDK және шлюздерде детерминистік болып қалады.
 
-This document completes the schema deliverable for SN-2a by specifying:
+Бұл құжат SN-2a үшін жеткізілетін схеманы келесілерді көрсету арқылы аяқтайды:
 
-1. Identifiers and hashing rules (`SuffixId`, `NameHash`, selector derivation).
-2. Norito structs/enums for name records, suffix policies, pricing tiers, revenue splits, and registry events.
-3. Storage layout and index prefixes for deterministic replay.
-4. A state machine covering registration, renewal, grace/redemption, freezes, and tombstones.
-5. Canonical events consumed by DNS/gateway automation.
+1. Идентификаторлар және хэштеу ережелері (`SuffixId`, `NameHash`, селектордың туындысы).
+2. Norito атау жазбаларына, суффикс саясаттарына, баға деңгейлеріне, кірістерді бөлуге және тізбе оқиғаларына арналған құрылымдар/сандар.
+3. Детерминирленген қайталау үшін сақтау орны және индекс префикстері.
+4. Тіркеуді, жаңартуды, жеңілдікті/өтеуді, қатуды және құлпытастарды қамтитын мемлекеттік машина.
+5. DNS/шлюз автоматтандыруы тұтынатын канондық оқиғалар.
 
-## 1. Identifiers & Hashing
+## 1. Идентификаторлар және хэштеу
 
-| Identifier | Description | Derivation |
+| Идентификатор | Сипаттама | Туынды |
 |------------|-------------|------------|
-| `SuffixId` (`u16`) | Registry-wide identifier for top-level suffixes (`.sora`, `.nexus`, `.dao`). Aligned with the suffix catalog in [`sns_suffix_governance_charter.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sns_suffix_governance_charter.md). | Assigned by governance vote; stored in `SuffixPolicyV1`. |
-| `SuffixSelector` | Canonical string form of the suffix (ASCII, lower-case). | Example: `.sora` → `sora`. |
-| `NameSelectorV1` | Binary selector for the registered label. | `struct NameSelectorV1 { version:u8 (=1); suffix_id:u16; label_len:u16; label_bytes:Vec<u8> }`. Label is NFC + lower-case per Norm v1. |
-| `NameHash` (`[u8;32]`) | Primary lookup key used by contracts, events, and caches. | `blake3(NameSelectorV1_bytes)`. |
+| `SuffixId` (`u16`) | Жоғарғы деңгейлі жұрнақтар үшін тізілімнің кең идентификаторы (`.sora`, `.nexus`, `.dao`). [`sns_suffix_governance_charter.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sns_suffix_governance_charter.md) ішіндегі жұрнақ каталогымен тураланған. | Басқару мүшелерінің дауыс беруімен тағайындалады; `SuffixPolicyV1` ішінде сақталады. |
+| `SuffixSelector` | Жұрнақтың канондық жолдық түрі (ASCII, кіші әріп). | Мысал: `.sora` → `sora`. |
+| `NameSelectorV1` | Тіркелген белгі үшін екілік селектор. | `struct NameSelectorV1 { version:u8 (=1); suffix_id:u16; label_len:u16; label_bytes:Vec<u8> }`. Белгі NFC + Normv1 үшін кіші әріп. |
+| `NameHash` (`[u8;32]`) | Келісімшарттар, оқиғалар және кэштер пайдаланатын негізгі іздеу кілті. | `blake3(NameSelectorV1_bytes)`. |
 
-Determinism requirements:
+Детерминизмге қойылатын талаптар:
 
-- Labels are normalised via Norm v1 (UTS-46 strict, STD3 ASCII, NFC). Incoming user strings MUST be normalised before hashing.
-- Reserved labels (from `SuffixPolicyV1.reserved_labels`) never enter the registry; governance-only overrides emit `ReservedNameAssigned` events.
+- Белгілер Normv1 (UTS-46 қатаң, STD3 ASCII, NFC) арқылы қалыпқа келтіріледі. Кіріс пайдаланушы жолдарын хэштеу алдында қалыпқа келтіру керек.
+- Сақталған белгілер (`SuffixPolicyV1.reserved_labels` бастап) ешқашан тізілімге кірмейді; тек басқаруды қайта анықтау `ReservedNameAssigned` оқиғаларын шығарады.
 
-## 2. Norito Structures
+## 2. Norito құрылымдары
 
 ### 2.1 NameRecordV1
 
-| Field | Type | Notes |
+| Өріс | |түрі Ескертпелер |
 |-------|------|-------|
-| `suffix_id` | `u16` | References `SuffixPolicyV1`. |
-| `selector` | `NameSelectorV1` | Raw selector bytes for audit/debug. |
-| `name_hash` | `[u8; 32]` | Key for maps/events. |
-| `normalized_label` | `AsciiString` | Human-readable label (post Norm v1). |
-| `display_label` | `AsciiString` | Steward-provided casing; optional cosmetics. |
-| `owner` | `AccountId` | Controls renewals/transfers. |
-| `controllers` | `Vec<NameControllerV1>` | References target account addresses, resolvers, or application metadata. |
-| `status` | `NameStatus` | Lifecycle flag (see Section 4). |
-| `pricing_class` | `u8` | Index into suffix pricing tiers (standard, premium, reserved). |
-| `registered_at` | `Timestamp` | Block timestamp of the initial activation. |
-| `expires_at` | `Timestamp` | End of paid term. |
-| `grace_expires_at` | `Timestamp` | End of auto-renew grace (default +30 days). |
-| `redemption_expires_at` | `Timestamp` | End of redemption window (default +60 days). |
-| `auction` | `Option<NameAuctionStateV1>` | Present when Dutch reopen or premium auctions are active. |
-| `last_tx_hash` | `Hash` | Deterministic pointer to the transaction that produced this version. |
-| `metadata` | `Metadata` | Arbitrary registrar metadata (text records, proofs). |
+| `suffix_id` | `u16` | Анықтамалар `SuffixPolicyV1`. |
+| `selector` | `NameSelectorV1` | Аудит/отлад үшін өңделмеген селекторлық байттар. |
+| `name_hash` | `[u8; 32]` | Карталар/оқиғалар кілті. |
+| `normalized_label` | `AsciiString` | Адам оқи алатын жапсырма (Normv1 посты). |
+| `display_label` | `AsciiString` | Басқарушы қамтамасыз ететін корпус; қосымша косметика. |
+| `owner` | `AccountId` | Жаңартуларды/аударуды бақылайды. |
+| `controllers` | `Vec<NameControllerV1>` | Мақсатты тіркелгі мекенжайларына, шешушілерге немесе қолданба метадеректеріне сілтеме жасайды. |
+| `status` | `NameStatus` | Өмірлік цикл жалаушасы (4-бөлімді қараңыз). |
+| `pricing_class` | `u8` | Жұрнақ баға деңгейлеріне индекс (стандартты, премиум, резервтелген). |
+| `registered_at` | `Timestamp` | Бастапқы белсендірудің уақыт белгісін блоктау. |
+| `expires_at` | `Timestamp` | Төлем мерзімінің аяқталуы. |
+| `grace_expires_at` | `Timestamp` | Автоматты түрде ұзарту мүмкіндігінің аяқталуы (әдепкі +30 күн). |
+| `redemption_expires_at` | `Timestamp` | Өтеу терезесінің аяқталуы (әдепкі +60 күн). |
+| `auction` | `Option<NameAuctionStateV1>` | Голландиялық қайта ашылғанда немесе премиум аукциондар белсенді болғанда. |
+| `last_tx_hash` | `Hash` | Осы нұсқаны жасаған транзакцияға детерминистік көрсеткіш. |
+| `metadata` | `Metadata` | Тіркеушінің ерікті метадеректері (мәтіндік жазбалар, дәлелдер). |
 
-Supporting structs:
+Қолдау құрылымдары:
 
 ```text
 Enum NameStatus {
@@ -127,24 +128,24 @@ Enum AuctionKind {
 
 ### 2.2 SuffixPolicyV1
 
-| Field | Type | Notes |
+| Өріс | |түрі Ескертпелер |
 |-------|------|-------|
-| `suffix_id` | `u16` | Primary key; stable across policy versions. |
-| `suffix` | `AsciiString` | e.g., `sora`. |
-| `steward` | `AccountId` | Steward defined in the governance charter. |
+| `suffix_id` | `u16` | Бастапқы кілт; саясат нұсқаларында тұрақты. |
+| `suffix` | `AsciiString` | мысалы, `sora`. |
+| `steward` | `AccountId` | Стюард басқару жарғысында анықталған. |
 | `status` | `SuffixStatus` | `Active`, `Paused`, `Revoked`. |
-| `payment_asset_id` | `AsciiString` | Default settlement asset identifier (for example `xor#sora`). |
-| `pricing` | `Vec<PriceTierV1>` | Tiered pricing coefficients and duration rules. |
-| `min_term_years` | `u8` | Floor for purchased term regardless of tier overrides. |
-| `grace_period_days` | `u16` | Default 30. |
-| `redemption_period_days` | `u16` | Default 60. |
-| `max_term_years` | `u8` | Maximum upfront renewal length. |
-| `referral_cap_bps` | `u16` | <=1000 (10%) per charter. |
-| `reserved_labels` | `Vec<ReservedNameV1>` | Governance supplied list with assignment instructions. |
-| `fee_split` | `SuffixFeeSplitV1` | Treasury / steward / referral shares (basis points). |
-| `fund_splitter_account` | `AccountId` | Account that holds escrow + distributes funds. |
-| `policy_version` | `u16` | Incremented on every change. |
-| `metadata` | `Metadata` | Extended notes (KPI covenant, compliance doc hashes). |
+| `payment_asset_id` | `AsciiString` | Әдепкі есеп айырысу активінің идентификаторы (мысалы, `xor#sora`). |
+| `pricing` | `Vec<PriceTierV1>` | Деңгейлі баға коэффиценттері және ұзақтық ережелері. |
+| `min_term_years` | `u8` | Деңгейді қайта анықтауға қарамастан сатып алынған мерзімге арналған еден. |
+| `grace_period_days` | `u16` | Әдепкі 30. |
+| `redemption_period_days` | `u16` | Әдепкі 60. |
+| `max_term_years` | `u8` | Алдын ала жаңартудың максималды ұзақтығы. |
+| `referral_cap_bps` | `u16` | <=1000 (10%) әр чартер. |
+| `reserved_labels` | `Vec<ReservedNameV1>` | Тапсырма нұсқаулары бар басқару тізімі. |
+| `fee_split` | `SuffixFeeSplitV1` | Қазынашылық / стюард / реферал акциялары (базалық ұпайлар). |
+| `fund_splitter_account` | `AccountId` | Эскроу + қаражатты тарататын шот. |
+| `policy_version` | `u16` | Әр өзгеріс сайын ұлғаяды. |
+| `metadata` | `Metadata` | Кеңейтілген ескертпелер (KPI келісімі, сәйкестік құжатының хэштері). |
 
 ```text
 Struct PriceTierV1 {
@@ -172,18 +173,18 @@ Struct SuffixFeeSplitV1 {
 }
 ```
 
-### 2.3 Revenue & Settlement Records
+### 2.3 Табыс және есеп айырысу жазбалары
 
-| Struct | Fields | Purpose |
+| Құрылым | Өрістер | Мақсаты |
 |--------|--------|---------|
-| `RevenueShareRecordV1` | `suffix_id`, `epoch_id`, `treasury_amount`, `steward_amount`, `referral_amount`, `escrow_amount`, `settled_at`, `tx_hash`. | Deterministic record of routed payments per settlement epoch (weekly). |
-| `RevenueAccrualEventV1` | `name_hash`, `suffix_id`, `event`, `gross_amount`, `net_amount`, `referral_account`. | Emitted each time a payment posts (registration, renewal, auction). |
+| `RevenueShareRecordV1` | `suffix_id`, `epoch_id`, `treasury_amount`, `steward_amount`, `referral_amount`, `escrow_amount`, I18NI0000011300, I18NI0000011310. | Есеп айырысу дәуірі бойынша бағдарланған төлемдердің детерминативті жазбасы (апта сайын). |
+| `RevenueAccrualEventV1` | `name_hash`, `suffix_id`, `event`, `gross_amount`, `net_amount`, `referral_account`. | Төлем жарияланған сайын шығарылады (тіркеу, жаңарту, аукцион). |
 
-All `TokenValue` fields use Norito’s canonical fixed-point encoding with the currency code declared in the associated `SuffixPolicyV1`.
+Барлық `TokenValue` өрістері байланысты `SuffixPolicyV1`-те жарияланған валюта коды бар Norito канондық тіркелген нүктелік кодтауын пайдаланады.
 
-### 2.4 Registry Events
+### 2.4 Тіркеу оқиғалары
 
-Canonical events provide a replay log for DNS/gateway automation and analytics.
+Канондық оқиғалар DNS/шлюзді автоматтандыру және аналитика үшін қайталау журналын қамтамасыз етеді.
 
 ```text
 Struct RegistryEventV1 {
@@ -212,52 +213,52 @@ Enum RegistryEventKind {
 }
 ```
 
-Events must be appended to a replayable log (e.g., `RegistryEvents` domain) and mirrored to gateway feeds so DNS caches invalidate within SLA.
+Оқиғалар қайта ойнатылатын журналға қосылуы керек (мысалы, `RegistryEvents` домені) және DNS кэштері SLA ішінде жарамсыз болуы үшін шлюз арналарына көшіру керек.
 
-## 3. Storage Layout & Indexes
+## 3. Сақтау орны және индекстері
 
-| Key | Description |
+| Негізгі | Сипаттама |
 |-----|-------------|
-| `Names::<name_hash>` | Primary map from `name_hash` to `NameRecordV1`. |
-| `NamesByOwner::<AccountId, suffix_id>` | Secondary index for wallet UI (pagination friendly). |
-| `NamesByLabel::<suffix_id, normalized_label>` | Detect conflicts, power deterministic search. |
-| `SuffixPolicies::<suffix_id>` | Latest `SuffixPolicyV1`. |
-| `RevenueShare::<suffix_id, epoch_id>` | `RevenueShareRecordV1` history. |
-| `RegistryEvents::<u64>` | Append-only log keyed by monotonically increasing sequence. |
+| `Names::<name_hash>` | `name_hash` бастап `NameRecordV1` дейінгі негізгі карта. |
+| `NamesByOwner::<AccountId, suffix_id>` | Әмиянның пайдаланушы интерфейсіне арналған қосымша индекс (беттеу ыңғайлы). |
+| `NamesByLabel::<suffix_id, normalized_label>` | Қақтығыстарды анықтау, қуатты анықтау. |
+| `SuffixPolicies::<suffix_id>` | Соңғы `SuffixPolicyV1`. |
+| `RevenueShare::<suffix_id, epoch_id>` | `RevenueShareRecordV1` тарихы. |
+| `RegistryEvents::<u64>` | Бірыңғай ұлғайту ретімен кілттелген тек қосу журналы. |
 
-All keys serialise using Norito tuples to keep hashing deterministic across hosts. Index updates occur atomically alongside the primary record.
+Барлық кілттер хосттар бойынша детерминистикалық хэштеуді сақтау үшін Norito кортеждері арқылы серияланады. Индекс жаңартулары бастапқы жазбамен қатар атомдық түрде орын алады.
 
-## 4. Lifecycle State Machine
+## 4. Өмірлік цикл күйінің машинасы
 
-| State | Entry Conditions | Allowed Transitions | Notes |
-|-------|-----------------|---------------------|-------|
-| Available | Derived when `NameRecord` absent. | `PendingAuction` (premium), `Active` (standard register). | Availability search reads indexes only. |
-| PendingAuction | Created when `PriceTierV1.auction_kind` ≠ none. | `Active` (auction settles), `Tombstoned` (no bids). | Auctions emit `AuctionOpened` and `AuctionSettled`. |
-| Active | Registration or renewal succeeded. | `GracePeriod`, `Frozen`, `Tombstoned`. | `expires_at` drives transition. |
-| GracePeriod | Automatically when `now > expires_at`. | `Active` (on-time renewal), `Redemption`, `Tombstoned`. | Default +30 days; still resolves but flagged. |
-| Redemption | `now > grace_expires_at` but `< redemption_expires_at`. | `Active` (late renewal), `Tombstoned`. | Commands require penalty fee. |
-| Frozen | Governance or guardian freeze. | `Active` (after remediation), `Tombstoned`. | Cannot transfer or update controllers. |
-| Tombstoned | Voluntary surrender, permanent dispute outcome, or expired redemption. | `PendingAuction` (Dutch reopen) or remains tombstoned. | Event `NameTombstoned` must include reason. |
+| Мемлекет | Кіру шарттары | Рұқсат етілген ауысулар | Ескертпелер |
+|-------|-----------------|--------------------|-------|
+| Қол жетімді | `NameRecord` болмаған кезде алынған. | `PendingAuction` (премиум), `Active` (стандартты регистр). | Қолжетімділікті іздеу тек индекстерді оқиды. |
+| Аукционды күтуде | `PriceTierV1.auction_kind` ≠ жоқ болғанда жасалған. | `Active` (аукцион аяқталды), `Tombstoned` (өтінімдер жоқ). | Аукциондар `AuctionOpened` және `AuctionSettled` шығарады. |
+| Белсенді | Тіркеу немесе жаңарту сәтті аяқталды. | `GracePeriod`, `Frozen`, `Tombstoned`. | `expires_at` ауысуды басқарады. |
+| Жеңілдік кезеңі | `now > expires_at` кезінде автоматты түрде. | `Active` (уақытында жаңарту), `Redemption`, `Tombstoned`. | Әдепкі +30 күн; әлі де шешіледі, бірақ белгіленеді. |
+| Өтеу | `now > grace_expires_at`, бірақ `< redemption_expires_at`. | `Active` (кеш жаңарту), `Tombstoned`. | Командалар айыппұлды талап етеді. |
+| Мұздатылған | Басқару немесе қамқоршы қатып қалады. | `Active` (жөндеуден кейін), `Tombstoned`. | Контроллерлерді тасымалдау немесе жаңарту мүмкін емес. |
+| Құлпытасқа қойылған | Өз еркімен тапсыру, тұрақты дау нәтижесі немесе мерзімі өтіп кеткен өтеу. | `PendingAuction` (голландиялық қайта ашылады) немесе құлпытас күйінде қалады. | `NameTombstoned` оқиғасында себеп болуы керек. |
 
-State transitions MUST emit the corresponding `RegistryEventKind` so downstream caches stay coherent. Tombstoned names entering Dutch reopen auctions attach an `AuctionKind::DutchReopen` payload.
+Күйлік ауысулар сәйкес `RegistryEventKind` шығаруы КЕРЕК, сондықтан төменгі ағындағы кэштер когерентті болып қалады. Голландиялық қайта ашылған аукциондарға кіретін құлпытас атаулары `AuctionKind::DutchReopen` пайдалы жүктемесін қосады.
 
 ## 5. Canonical Events & Gateway Sync
 
-Gateways subscribe to `RegistryEventV1` and synchronise to DNS/SoraFS by:
+Шлюздер `RegistryEventV1` жазылады және DNS/SoraFS арқылы синхрондалады:
 
-1. Fetching the latest `NameRecordV1` referenced by the event sequence.
-2. Regenerating resolver templates (preferred IH58 + second-best compressed (`sora`) addresses, text records).
-3. Pinning updated zone data via the SoraDNS workflow described in [`soradns_registry_rfc.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/soradns/soradns_registry_rfc.md).
+1. Оқиғалар реті арқылы сілтеме жасалған ең соңғы `NameRecordV1` алынуда.
+2. Қалпына келтіруші шешуші үлгілер (таңдаулы IH58 + екінші ең жақсы қысылған (`sora`) мекенжайлар, мәтіндік жазбалар).
+3. Жаңартылған аймақ деректерін [`soradns_registry_rfc.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/soradns/soradns_registry_rfc.md) бөлімінде сипатталған SoraDNS жұмыс процесі арқылы бекіту.
 
-Event delivery guarantees:
+Оқиғаны жеткізу кепілдіктері:
 
-- Every transaction affecting a `NameRecordV1` *must* append exactly one event with a strictly increasing `version`.
-- `RevenueSharePosted` events reference settlements emitted by `RevenueShareRecordV1`.
-- Freeze/unfreeze/tombstone events include governance artefact hashes inside `metadata` for audit replay.
+- `NameRecordV1` әсерін тигізетін әрбір транзакцияға `version` қатаң ұлғаюымен бір оқиғаны *қосу керек*.
+- `RevenueSharePosted` оқиғалары `RevenueShareRecordV1` шығарған есеп айырысуларға сілтеме жасайды.
+- Мұздату/ашу/құлпытас оқиғалары аудитті қайталау үшін `metadata` ішіндегі басқару артефакті хэштерін қамтиды.
 
-## 6. Example Norito Payloads
+## 6. Norito Пайдалы жүктемелер мысалы
 
-### 6.1 NameRecord Example
+### 6.1 Атау жазбасының мысалы
 
 ```text
 NameRecordV1 {
@@ -287,7 +288,7 @@ NameRecordV1 {
 }
 ```
 
-### 6.2 SuffixPolicy Example
+### 6.2 SuffixPolicy мысалы
 
 ```text
 SuffixPolicyV1 {
@@ -315,10 +316,8 @@ SuffixPolicyV1 {
 }
 ```
 
-## 7. Next Steps
+## 7. Келесі қадамдар- **SN-2b (Registrar API және басқару ілгектері):** бұл құрылымдарды Torii (Norito және JSON байланыстырулары) және басқару артефактілеріне сымды қабылдау тексерулері арқылы көрсетіңіз.
+- **SN-3 (Аукцион және тіркеу механизмі):** орындау/анықтау және голландиялық қайта ашу логикасын жүзеге асыру үшін `NameAuctionStateV1` қайта пайдаланыңыз.
+- **SN-5 (Төлем және есеп айырысу):** қаржыны салыстыру және есеп беруді автоматтандыру үшін `RevenueShareRecordV1` левереджі.
 
-- **SN-2b (Registrar API & governance hooks):** expose these structs via Torii (Norito and JSON bindings) and wire admission checks to governance artefacts.
-- **SN-3 (Auction & registration engine):** reuse `NameAuctionStateV1` to implement commit/reveal and Dutch reopen logic.
-- **SN-5 (Payment & settlement):** leverage `RevenueShareRecordV1` for finance reconciliation and reporting automation.
-
-Questions or change requests should be filed alongside the SNS roadmap updates in `roadmap.md` and mirrored in `status.md` when merged.
+Сұрақтар немесе өзгерту сұраулары `roadmap.md` жүйесінде SNS жол картасы жаңартуларымен бірге берілуі және біріктірілген кезде `status.md` ішінде көшірілуі керек.

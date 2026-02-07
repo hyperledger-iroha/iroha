@@ -4,102 +4,100 @@ direction: ltr
 source: docs/portal/docs/sorafs/orchestrator-tuning.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: orchestrator-tuning
-title: Despliegue y ajuste del orquestador
-sidebar_label: Ajuste del orquestador
-description: Valores predeterminados prácticos, guía de ajuste y puntos de auditoría para llevar el orquestador multi-origen a GA.
+identifiant : réglage de l'orchestrateur
+titre : Despliegue y ajuste del orquestador
+sidebar_label : Ajuster l'orchestre
+description : Valeurs pratiques prédéfinies, guide de réglage et points d'auditoire pour amener l'orquestador multi-origen à GA.
 ---
 
-:::note Fuente canónica
-Refleja `docs/source/sorafs/developer/orchestrator_tuning.md`. Mantén ambas copias alineadas hasta que se retire el conjunto de documentación heredado.
+:::note Source canonique
+Refleja `docs/source/sorafs/developer/orchestrator_tuning.md`. Assurez-vous d'avoir des copies alignées jusqu'à ce que le ensemble de documents héréditaires soit retiré.
 :::
 
-# Guía de despliegue y ajuste del orquestador
+# Guide de déroulement et d'ajustement de l'orchestre
 
-Esta guía se basa en la [referencia de configuración](orchestrator-config.md) y el
-[runbook de despliegue multi-origen](multi-source-rollout.md). Explica
-cómo ajustar el orquestador para cada fase de despliegue, cómo interpretar los
-artefactos del scoreboard y qué señales de telemetría deben estar listas antes
-de ampliar el tráfico. Aplica las recomendaciones de forma consistente en la
-CLI, los SDK y la automatización para que cada nodo siga la misma política de
-fetch determinista.
+Ce guide est basé sur la [référence de configuration](orchestrator-config.md) et le
+[runbook de despliegue multi-origen](multi-source-rollout.md). Expliquer
+comment ajuster l'orchestre pour chaque phase de déroulement, comment interpréter les
+les artefacts du tableau de bord et les signaux de télémétrie doivent être répertoriés avant
+pour amplifier le trafic. Appliquer les recommandations de forme cohérentes en la
+CLI, le SDK et l'automatisation pour que chaque fois que vous suivez la même politique
+récupérer déterministe.
 
-## 1. Conjuntos de parámetros base
+## 1. Base de paramètres
 
-Parte de una plantilla de configuración compartida y ajusta un conjunto pequeño
-de perillas a medida que progresa el despliegue. La tabla siguiente recoge los
-valores recomendados para las fases más comunes; los valores no listados vuelven
-a los predeterminados en `OrchestratorConfig::default()` y `FetchOptions::default()`.
+Partie d'une plante de configuration séparée et réglage d'un petit ensemble
+de périllas a medida que progresa el despliegue. La tabla suivante reconnaît les
+valeurs recommandées pour les phases les plus communes ; les valeurs ne sont pas répertoriées vuelven
+aux prédéfinis en `OrchestratorConfig::default()` et `FetchOptions::default()`.
 
-| Fase | `max_providers` | `fetch.per_chunk_retry_limit` | `fetch.provider_failure_threshold` | `scoreboard.latency_cap_ms` | `scoreboard.telemetry_grace_secs` | Notas |
-|------|-----------------|-------------------------------|------------------------------------|-----------------------------|------------------------------------|-------|
-| **Lab / CI** | `3` | `2` | `2` | `2500` | `300` | Un límite de latencia y una ventana de gracia estrictos exponen telemetría ruidosa rápidamente. Mantén los reintentos bajos para descubrir manifiestos inválidos antes. |
-| **Staging** | `4` | `3` | `3` | `4000` | `600` | Refleja los valores de producción dejando margen para peers exploratorios. |
-| **Canary** | `6` | `3` | `3` | `5000` | `900` | Igual a los valores por defecto; configura `telemetry_region` para que los dashboards puedan segmentar el tráfico canario. |
-| **Disponibilidad general** | `None` (usar todos los elegibles) | `4` | `4` | `5000` | `900` | Incrementa los umbrales de reintentos y fallos para absorber fallos transitorios mientras las auditorías siguen reforzando el determinismo. |
+| Phase | `max_providers` | `fetch.per_chunk_retry_limit` | `fetch.provider_failure_threshold` | `scoreboard.latency_cap_ms` | `scoreboard.telemetry_grace_secs` | Notes |
+|------|-----------------|-------------------------------|------------------------------------|-----------------------------|-----------------------------------------|-------|
+| **Laboratoire / CI** | `3` | `2` | `2` | `2500` | `300` | Une limite de latence et une fenêtre de grâce restreinte exposent la télémétrie rapidement et rapidement. Gardez les reintentos bas pour découvrir les manifestes invalides avant. |
+| **Mise en scène** | `4` | `3` | `3` | `4000` | `600` | Réfléchissez aux valeurs de production en laissant une marge aux pairs explorateurs. |
+| **Canari** | `6` | `3` | `3` | `5000` | `900` | Igual a los valores por defecto ; configurez `telemetry_region` pour que les tableaux de bord puissent segmenter le trafic canari. |
+| **Disponibilité générale** | `None` (utiliser tous les éligibles) | `4` | `4` | `5000` | `900` | Augmentez les parapluies de réintention et les chutes pour absorber les chutes transitoires pendant les auditoires en renforçant le déterminisme. |
 
-- `scoreboard.weight_scale` se mantiene en el valor predeterminado `10_000` salvo que un sistema aguas abajo requiera otra resolución entera. Aumentar la escala no cambia el orden de los proveedores; solo emite una distribución de créditos más densa.
-- Al migrar entre fases, persiste el paquete JSON y usa `--scoreboard-out` para que el rastro de auditoría registre el conjunto exacto de parámetros.
+- `scoreboard.weight_scale` se maintient dans la valeur prédéterminée `10_000` alors qu'un système d'eau abajo nécessite une autre résolution. Augmenter l'escalade en ne changeant pas l'ordre des fournisseurs ; seul émettre une distribution de crédits plus dense.
+- Lors de la migration entre les étapes, conservez le paquet JSON et utilisez `--scoreboard-out` pour que le rastro d'auditoire enregistre l'ensemble exact des paramètres.
 
-## 2. Higiene del scoreboard
+## 2. Hygiène du tableau de bord
 
-El scoreboard combina requisitos del manifiesto, anuncios de proveedores y telemetría.
-Antes de avanzar:
-
-1. **Valida la frescura de la telemetría.** Asegúrate de que los snapshots referenciados por
-   `--telemetry-json` fueron capturados dentro de la ventana de gracia configurada. Las entradas
-   más antiguas que `telemetry_grace_secs` fallan con `TelemetryStale { last_updated }`.
-   Trátalo como un bloqueo duro y actualiza la exportación de telemetría antes de continuar.
+Le tableau de bord combine les exigences du manifeste, les annonces des fournisseurs et la télémétrie.
+Avant d'avancer :1. **Valider la fréquence de la télémétrie.** Assurez-vous que les instantanés référencés par
+   `--telemetry-json` sera capturé à l'intérieur de la fenêtre de grâce configurée. Les entrées
+   plus antiguas que `telemetry_grace_secs` tombe avec `TelemetryStale { last_updated }`.
+   Traite comme un blocage dur et actualise l'exportation de télémétrie avant de continuer.
 2. **Inspecciona los motivos de elegibilidad.** Persiste los artefactos con
-   `--scoreboard-out=/var/lib/sorafs/scoreboards/preflight.json`. Cada entrada
-   incluye un bloque `eligibility` con la causa exacta del fallo. No sobreescribas
-   desajustes de capacidades o anuncios expirados; corrige el payload upstream.
-3. **Revisa los cambios de peso.** Compara el campo `normalised_weight` con el
-   release anterior. Desplazamientos de peso >10 % deben correlacionarse con cambios
-   deliberados en anuncios o telemetría y registrarse en el log de despliegue.
-4. **Archiva los artefactos.** Configura `scoreboard.persist_path` para que cada
-   ejecución emita el snapshot final del scoreboard. Adjunta el artefacto al registro
-   de release junto al manifiesto y el paquete de telemetría.
-5. **Registra la evidencia de la mezcla de proveedores.** La metadata de `scoreboard.json`
+   `--scoreboard-out=/var/lib/sorafs/scoreboards/preflight.json`. Chaque entrée
+   inclut un bloc `eligibility` pour la cause exacte de la chute. Pas de description
+   désajustes de capacidades o anuncios expirados ; Corriger la charge utile en amont.
+3. **Réviser les changements de peso.** Comparer le champ `normalised_weight` avec le
+   libération antérieure. Desplazamientos de peso >10% doivent correspondre à des changements
+   délibérés en annonçant la télémétrie et en s'enregistrant dans le journal des déplies.
+4. **Archiva los artefactos.** Configurer `scoreboard.persist_path` pour chaque
+   l'exécution émet l'instantané final du tableau de bord. Ajouter l'artefact au registre
+   de release conjointement avec le manifeste et le paquet de télémétrie.
+5. **Enregistrer la preuve de la mezcla des fournisseurs.** Les métadonnées de `scoreboard.json`
    y el `summary.json` correspondiente deben exponer `provider_count`,
-   `gateway_provider_count` y la etiqueta derivada `provider_mix` para que los revisores
-   prueben si la ejecución fue `direct-only`, `gateway-only` o `mixed`. Las capturas de
-   gateway reportan `provider_count=0` y `provider_mix="gateway-only"`, mientras que las
-   ejecuciones mixtas requieren conteos no cero para ambos orígenes. `cargo xtask sorafs-adoption-check`
-   impone estos campos (y falla si los conteos/etiquetas no coinciden), así que ejecútalo
-   siempre junto con `ci/check_sorafs_orchestrator_adoption.sh` o tu script de captura para
-   producir el bundle de evidencia `adoption_report.json`. Cuando haya gateways Torii,
-   conserva `gateway_manifest_id`/`gateway_manifest_cid` en la metadata del scoreboard
-   para que el gate de adopción pueda correlacionar el sobre del manifiesto con la
-   mezcla de proveedores capturada.
+   `gateway_provider_count` et l'étiquette dérivée `provider_mix` pour les réviseurs
+   Vérifiez si l'éjection fue `direct-only`, `gateway-only` ou `mixed`. Les captures de
+   la passerelle signale `provider_count=0` et `provider_mix="gateway-only"`, entre les deux
+   les exécutions mixtes nécessitent des conteos sans zéro pour les ambos d'origine. `cargo xtask sorafs-adoption-check`
+   impone estos campos (y falla si los conteos/etiquetas no coïnciden), así que ejecútalo
+   toujours avec `ci/check_sorafs_orchestrator_adoption.sh` ou votre script de capture pour
+   produire le bundle de preuves `adoption_report.json`. Cuando haya passerelles Torii,
+   conserve `gateway_manifest_id`/`gateway_manifest_cid` dans les métadonnées du tableau de bord
+   pour que la porte d'adoption puisse corréler le contenu du manifeste avec la
+   mezcla de provenedores capturada.
 
-Para definiciones detalladas de campos, consulta
-`crates/sorafs_car/src/scoreboard.rs` y la estructura de resumen de CLI expuesta por
+Pour les définitions détaillées des champs, consultez
+`crates/sorafs_car/src/scoreboard.rs` et la structure du CV CLI affichée par
 `sorafs_cli fetch --json-out`.
 
-## Referencia de flags de CLI y SDK
+## Référence des drapeaux de la CLI et du SDK
 
-`sorafs_cli fetch` (ver `crates/sorafs_car/src/bin/sorafs_cli.rs`) y el wrapper
-`iroha_cli app sorafs fetch` (`crates/iroha_cli/src/commands/sorafs.rs`) comparten la
-misma superficie de configuración del orquestador. Usa los siguientes flags al
-capturar evidencia de despliegue o al reproducir los fixtures canónicos:
+`sorafs_cli fetch` (ver `crates/sorafs_car/src/bin/sorafs_cli.rs`) et le wrapper
+`iroha_cli app sorafs fetch` (`crates/iroha_cli/src/commands/sorafs.rs`) partage le
+même superficie de configuration de l'orchestre. Usa los siguientes drapeaux al
+capturer les preuves du déroulement ou de la reproduction des matchs canoniques :
 
-Referencia compartida de flags multi-origen (mantén la ayuda de CLI y los docs en
-sincronía editando solo este archivo):
+Référence compartimentée des drapeaux multi-origines (avec l'aide de CLI et les documents en
+la synchronisation édite seul ce fichier) :- `--max-peers=<count>` limite les fournisseurs éligibles au filtre du tableau de bord. Il ne faut pas configurer l'émetteur pour transmettre tous les fournisseurs éligibles et le transférer sur `1` uniquement lorsque vous utilisez intentionnellement le secours d'une seule source. Réfléchissez au risque `maxPeers` dans le SDK (`SorafsGatewayFetchOptions.maxPeers`, `SorafsGatewayFetchOptions.max_peers`).
+- `--retry-budget=<count>` revient à la limite de reintentos por chunk qui applique `FetchOptions`. Utilisez le tableau de déploiement et le guide d'ajustement des valeurs recommandées ; les exécutions de CLI qui recopilan les preuves doivent coïncider avec les valeurs par défaut du SDK pour maintenir la parité.
+- `--telemetry-region=<label>` étiquette de la série Prometheus `sorafs_orchestrator_*` (et les relais OTLP) avec une étiquette de région/entrée pour que les tableaux de bord séparent le trafic du laboratoire, de la mise en scène, de Canary et de GA.
+- `--telemetry-json=<path>` injecte l'instantané référencé par le tableau de bord. Conservez le JSON conjointement avec le tableau de bord pour que les auditeurs puissent reproduire l'exécution (et pour que `cargo xtask sorafs-adoption-check --require-telemetry` vérifie que le flux OTLP alimente la capture).
+- `--local-proxy-*` (`--local-proxy-mode`, `--local-proxy-norito-spool`, `--local-proxy-kaigi-spool`, `--local-proxy-kaigi-policy`) permet les crochets du pont de l'observateur. Une fois configuré, l'explorateur transmet des morceaux via le proxy local Norito/Kaigi pour que les clients du navigateur, les caches de garde et la salle Kaigi reçoivent les mêmes recettes émises par Rust.
+- `--scoreboard-out=<path>` (en option avec `--scoreboard-now=<unix_secs>`) conserve l'instantané d'éligibilité pour les auditeurs. Gardez toujours le JSON persistant avec les artefacts de télémétrie et les références manifestes sur le ticket de sortie.
+- `--deny-provider name=ALIAS` / `--boost-provider name=ALIAS:delta` application ajuste les déterministes sur les métadonnées d'annonces. Usa estas flags solo para ensayos ; Les dégradations de la production doivent être effectuées par des artefacts de gouvernement pour que chaque fois qu'ils appliquent le même paquet politique.
+- `--provider-metrics-out` / `--chunk-receipts-out` conserve les paramètres de santé du fournisseur et les recibos de morceaux référencés dans la liste de contrôle de déploiement ; ajouter d'autres objets pour présenter la preuve d'adoption.
 
-- `--max-peers=<count>` limita cuántos proveedores elegibles sobreviven al filtro del scoreboard. Déjalo sin configurar para transmitir desde todos los proveedores elegibles y ponlo en `1` solo cuando se ejerza intencionalmente el fallback de una sola fuente. Refleja la perilla `maxPeers` en los SDK (`SorafsGatewayFetchOptions.maxPeers`, `SorafsGatewayFetchOptions.max_peers`).
-- `--retry-budget=<count>` reenvía al límite de reintentos por chunk que aplica `FetchOptions`. Usa la tabla de rollout en la guía de ajuste para valores recomendados; las ejecuciones de CLI que recopilan evidencia deben coincidir con los valores por defecto de los SDK para mantener la paridad.
-- `--telemetry-region=<label>` etiqueta las series Prometheus `sorafs_orchestrator_*` (y los relés OTLP) con una etiqueta de región/entorno para que los dashboards separen tráfico de lab, staging, canary y GA.
-- `--telemetry-json=<path>` inyecta el snapshot referenciado por el scoreboard. Persiste el JSON junto al scoreboard para que los auditores puedan reproducir la ejecución (y para que `cargo xtask sorafs-adoption-check --require-telemetry` pruebe qué stream OTLP alimentó la captura).
-- `--local-proxy-*` (`--local-proxy-mode`, `--local-proxy-norito-spool`, `--local-proxy-kaigi-spool`, `--local-proxy-kaigi-policy`) habilitan los hooks del observador bridge. Cuando se configuran, el orquestador transmite chunks a través del proxy local Norito/Kaigi para que los clientes de navegador, guard caches y salas Kaigi reciban los mismos recibos emitidos por Rust.
-- `--scoreboard-out=<path>` (opcionalmente con `--scoreboard-now=<unix_secs>`) persiste el snapshot de elegibilidad para los auditores. Empareja siempre el JSON persistido con los artefactos de telemetría y manifiesto referenciados en el ticket de release.
-- `--deny-provider name=ALIAS` / `--boost-provider name=ALIAS:delta` aplican ajustes deterministas sobre la metadata de anuncios. Usa estas flags solo para ensayos; las degradaciones en producción deben pasar por artefactos de gobernanza para que cada nodo aplique el mismo paquete de políticas.
-- `--provider-metrics-out` / `--chunk-receipts-out` conservan los métricas de salud por proveedor y los recibos de chunks referenciados por la checklist de rollout; adjunta ambos artefactos al presentar la evidencia de adopción.
-
-Ejemplo (usando el fixture publicado):
+Exemple (utiliser le luminaire publié):
 
 ```bash
 sorafs_cli fetch \
@@ -116,116 +114,112 @@ cargo xtask sorafs-adoption-check \
   --summary artifacts/sorafs_orchestrator/latest/summary.json
 ```
 
-Los SDK consumen la misma configuración mediante `SorafsGatewayFetchOptions` en
-el cliente Rust (`crates/iroha/src/client.rs`), las bindings JS
-(`javascript/iroha_js/src/sorafs.js`) y el SDK Swift
-(`IrohaSwift/Sources/IrohaSwift/SorafsOptions.swift`). Mantén esas ayudas en
-sincronía con los valores por defecto de la CLI para que los operadores puedan
-copiar políticas entre automatización sin capas de traducción a medida.
+Le SDK utilise la même configuration intermédiaire `SorafsGatewayFetchOptions` fr
+le client Rust (`crates/iroha/src/client.rs`), les liaisons JS
+(`javascript/iroha_js/src/sorafs.js`) et le SDK Swift
+(`IrohaSwift/Sources/IrohaSwift/SorafsOptions.swift`). Mantén ces aides en
+synchronisation des valeurs par défaut de la CLI pour que les opérateurs puissent le faire
+copier la politique entre l'automatisation sans capacité de traduction à moyen terme.
 
-## 3. Ajuste de la política de fetch
+## 3. Ajuster la politique de récupération
 
-`FetchOptions` controla el comportamiento de reintentos, concurrencia y verificación.
-Al ajustar:
-
-- **Reintentos:** Elevar `per_chunk_retry_limit` por encima de `4` aumenta el tiempo
-  de recuperación pero puede ocultar fallos de proveedores. Prefiere mantener `4`
-  como techo y confiar en la rotación de proveedores para detectar a los de bajo rendimiento.
-- **Umbral de fallos:** `provider_failure_threshold` determina cuándo un proveedor
-  se deshabilita para el resto de la sesión. Alinea este valor con la política de
-  reintentos: un umbral menor que el presupuesto de reintentos obliga al orquestador
+`FetchOptions` contrôle le comportement de réintention, la simultanéité et la vérification.
+À ajuster :- **Rétentions :** Elevar `per_chunk_retry_limit` par encima de `4` augmente le temps
+  de récupération mais peut occulter les pertes des fournisseurs. Support préféré `4`
+  como techo y confiar en la rotation des fournisseurs pour détecter le bas rendu.
+- **Umbral de fallos:** `provider_failure_threshold` détermine par un fournisseur
+  se déshabilite pour le reste de la séance. Alinea est sa valeur avec la politique de
+  reintentos : un umbral mineur que le présupposé des reintentos oblige l'orquestador
   a expulsar un peer antes de agotar todos los reintentos.
-- **Concurrencia:** Deja `global_parallel_limit` sin configurar (`None`) a menos
-  que un entorno específico no pueda saturar los rangos anunciados. Cuando se
-  configure, asegúrate de que el valor sea ≤ a la suma de los presupuestos de
-  streams de los proveedores para evitar inanición.
-- **Toggles de verificación:** `verify_lengths` y `verify_digests` deben permanecer
-  habilitados en producción. Garantizan el determinismo cuando hay flotas mixtas
-  de proveedores; solo desactívalos en entornos de fuzzing aislados.
+- **Concurrencia :** Déjà `global_parallel_limit` sans configurer (`None`) à moins
+  qu'un organisme spécifique ne peut pas saturer les rangs annoncés. Quand je me sens
+  configurer, assurer que la valeur de la mer ≤ à la somme des présupposés de
+  flux des fournisseurs pour éviter toute erreur.
+- **Toggles de vérification :** `verify_lengths` et `verify_digests` doivent être permanents
+  habilités en production. Garantizan el determinismo cuando hay flotas mixtas
+  de fournisseurs; seulement desactívalos en entornos de fuzzing aislados.
 
-## 4. Etapas de transporte y anonimato
+## 4. Étapes de transport et anonymisées
 
-Usa los campos `rollout_phase`, `anonymity_policy` y `transport_policy` para
-representar la postura de privacidad:
+Utilisez les champs `rollout_phase`, `anonymity_policy` et `transport_policy` pour
+représenter la position de confidentialité :
 
-- Prefiere `rollout_phase="snnet-5"` y permite que la política de anonimato por
-  defecto siga los hitos de SNNet-5. Sobrescribe con `anonymity_policy_override`
-  solo cuando la gobernanza emita una directiva firmada.
-- Mantén `transport_policy="soranet-first"` como base mientras SNNet-4/5/5a/5b/6a/7/8/12/13 estén 🈺
-  (ver `roadmap.md`). Usa `transport_policy="direct-only"` solo para degradaciones
-  documentadas o simulacros de cumplimiento, y espera la revisión de cobertura PQ
-  antes de promover `transport_policy="soranet-strict"`—ese nivel fallará rápido si
-  solo quedan relés clásicos.
-- `write_mode="pq-only"` solo debe imponerse cuando cada ruta de escritura (SDK,
-  orquestador, tooling de gobernanza) pueda satisfacer los requisitos PQ. Durante
-  los rollouts mantén `write_mode="allow-downgrade"` para que las respuestas de
-  emergencia puedan apoyarse en rutas directas mientras la telemetría marca la
-  degradación.
-- La selección de guardias y la preparación de circuitos dependen del directorio
-  de SoraNet. Proporciona el snapshot firmado de `relay_directory` y persiste la
-  cache de `guard_set` para que el churn de guardias se mantenga dentro de la
+- Préférer `rollout_phase="snnet-5"` et permettre que la politique d'anonimato por
+  défaut de signature des hits de SNNet-5. Sobrescribe avec `anonymity_policy_override`
+  seul lorsque la gouvernance émet une directive ferme.
+- Mantén `transport_policy="soranet-first"` comme base pour SNNet-4/5/5a/5b/6a/7/8/12/13 estén 🈺
+  (version `roadmap.md`). Usa `transport_policy="direct-only"` seul pour les dégradations
+  documentées ou simulacros de cumplimiento, et espérons la révision de la couverture PQ
+  avant le promoteur `transport_policy="soranet-strict"`—ce niveau tombera rapidement si
+  solo quedan relés classiques.
+- `write_mode="pq-only"` ne doit être imposé que lorsque chaque itinéraire d'écriture (SDK,
+  orquestador, outillage de gobernanza) peut satisfaire les exigences PQ. Durante
+  les déploiements portent `write_mode="allow-downgrade"` pour les réponses de
+  L'émergence peut être utile dans les itinéraires directs au milieu de la marque de télémétrie
+  dégradation.
+- La sélection des gardes et la préparation des circuits dépendent du directeur
+  de SoraNet. Proporciona el snapshot firmado de `relay_directory` et persiste la
+  cache de `guard_set` pour que le taux de désabonnement des gardes soit conservé à l'intérieur du
   ventana de retención acordada. La huella del cache registrada por
-  `sorafs_cli fetch` forma parte de la evidencia de rollout.
+  `sorafs_cli fetch` fait partie des preuves de déploiement.
 
-## 5. Ganchos de degradación y cumplimiento
+## 5. Ganchos de dégradation et cumplimiento
 
-Dos subsistemas del orquestador ayudan a imponer la política sin intervención manual:
+Les subsistances de l’orquesteur aident à imposer la politique sans manuel d’intervention :- **Remediación de degradaciones** (`downgrade_remediation`) : surveillance des événements
+  `handshake_downgrade_total` et, après que le `threshold` soit configuré
+  dépasser dentro de `window_secs`, pour le proxy local al `target_mode` (por
+  métadonnées défectueuses uniquement). Mantén los valores predeterminados (`threshold=3`,
+  `window=300`, `cooldown=900`) salvo que les post-mortems indiquent un patron
+  distinct. Documentez tout remplacement dans le journal de déploiement et assurez-vous que
+  les tableaux de bord signalent `sorafs_proxy_downgrade_state`.
+- **Política de cumplimiento** (`compliance`) : les exclusions par juridiction et
+  manifeste à suivre les listes d'exclusions administrées par la gouvernance.
+  Nunca insère des remplacements ad hoc dans le bundle de configuration ; et sur ton lieu,
+  solliciter une mise à jour entreprise de
+  `governance/compliance/soranet_opt_outs.json` et vuelve pour supprimer le JSON généré.
 
-- **Remediación de degradaciones** (`downgrade_remediation`): monitorea eventos
-  `handshake_downgrade_total` y, después de que el `threshold` configurado se
-  excede dentro de `window_secs`, fuerza el proxy local al `target_mode` (por
-  defecto metadata-only). Mantén los valores predeterminados (`threshold=3`,
-  `window=300`, `cooldown=900`) salvo que los postmortems indiquen un patrón
-  distinto. Documenta cualquier override en el log de rollout y asegúrate de que
-  los dashboards sigan `sorafs_proxy_downgrade_state`.
-- **Política de cumplimiento** (`compliance`): los carve-outs por jurisdicción y
-  manifiesto fluyen a través de listas de exclusión administradas por gobernanza.
-  Nunca insertes overrides ad hoc en el bundle de configuración; en su lugar,
-  solicita una actualización firmada de
-  `governance/compliance/soranet_opt_outs.json` y vuelve a desplegar el JSON generado.
+Pour d'autres systèmes, conservez le paquet de configuration résultant et inclus
+en les preuves de libération pour que les auditeurs puissent se rastrear comme
+activer les réductions.
 
-Para ambos sistemas, persiste el bundle de configuración resultante e inclúyelo
-en las evidencias de release para que los auditores puedan rastrear cómo se
-activaron las reducciones.
+## 6. Télémétrie et tableaux de bord
 
-## 6. Telemetría y dashboards
-
-Antes de ampliar el despliegue, confirma que las siguientes señales estén activas
-en el entorno objetivo:
+Avant d'élargir le programme, confirmez que les signaux suivants sont activés
+dans l'objet de l'événement :
 
 - `sorafs_orchestrator_fetch_failures_total{reason="no_healthy_providers"}` —
-  debe ser cero después de que complete el canary.
-- `sorafs_orchestrator_retries_total` y
-  `sorafs_orchestrator_retry_ratio` — deben estabilizarse por debajo del 10 %
-  durante el canary y mantenerse por debajo del 5 % tras GA.
-- `sorafs_orchestrator_policy_events_total` — valida que la etapa de rollout
-  esperada está activa (label `stage`) y registra brownouts vía `outcome`.
-- `sorafs_orchestrator_pq_candidate_ratio` /
+  debe sera zéro après avoir terminé le canari.
+- `sorafs_orchestrator_retries_total` et
+  `sorafs_orchestrator_retry_ratio` — deben stabilisare por debajo del 10%
+  pendante el canary y mantenerse por debajo del 5% tras GA.
+- `sorafs_orchestrator_policy_events_total` — valide l'étape de déploiement
+  J'espère que cela sera activé (étiquette `stage`) et que les baisses de tension seront enregistrées via `outcome`.
+-`sorafs_orchestrator_pq_candidate_ratio`/
   `sorafs_orchestrator_pq_deficit_ratio` — rastrean el suministro de relés PQ
-  frente a las expectativas de la política.
+  face aux attentes de la politique.
 - Objetivos de log `telemetry::sorafs.fetch.*` — deben fluir al agregador de logs
-  compartido con búsquedas guardadas para `status=failed`.
+  compartimenté avec des sacs de protection pour `status=failed`.
 
-Carga el dashboard canónico de Grafana desde
-`dashboards/grafana/sorafs_fetch_observability.json` (exportado en el portal
-bajo **SoraFS → Fetch Observability**) para que los selectores de región/manifest,
-el heatmap de reintentos por proveedor, los histogramas de latencia de chunks y
-los contadores de atascos coincidan con lo que revisa SRE durante los burn-ins.
-Conecta las reglas de Alertmanager en `dashboards/alerts/sorafs_fetch_rules.yml`
-y valida la sintaxis de Prometheus con `scripts/telemetry/test_sorafs_fetch_alerts.sh`
-(el helper ejecuta automáticamente `promtool test rules` localmente o en Docker).
-Las transferencias de alertas requieren el mismo bloque de routing que imprime
-el script para que los operadores puedan adjuntar la evidencia al ticket de rollout.
+Chargez le tableau de bord canonique de Grafana depuis
+`dashboards/grafana/sorafs_fetch_observability.json` (exporté vers le portail
+bas **SoraFS → Fetch Observability**) pour les sélecteurs de région/manifeste,
+la carte thermique des intentions du fournisseur, les histogrammes de latence des morceaux et
+les contadores de atascos coïncident avec celui qui révise SRE pendant les burn-ins.
+Connectez les règles d'Alertmanager à `dashboards/alerts/sorafs_fetch_rules.yml`
+et valide la syntaxe de Prometheus avec `scripts/telemetry/test_sorafs_fetch_alerts.sh`
+(l'assistant est automatiquement exécuté localement `promtool test rules` ou Docker).
+Les transferts d'alertes nécessitent que le même bloc de routage soit imprimé
+le script pour que les opérateurs puissent ajouter la preuve au ticket de déploiement.
 
-### Flujo de burn-in de telemetría
+### Flux de burn-in de télémétrie
 
-El ítem de roadmap **SF-6e** requiere un burn-in de telemetría de 30 días antes
-de cambiar el orquestador multi-origen a sus valores GA. Usa los scripts del
-repositorio para capturar un bundle de artefactos reproducible cada día en la
-ventana:
+L'élément de la feuille de route **SF-6e** nécessite un burn-in de télémétrie de 30 jours avant
+de changer l'orchestre multi-origine à ses valeurs GA. Utiliser les scripts du
+dépôt pour capturer un ensemble d'objets reproductibles chaque jour
+fenêtre :
 
-1. Ejecuta `ci/check_sorafs_orchestrator_adoption.sh` con las variables de
-   entorno de burn-in configuradas. Ejemplo:
+1. Exécution `ci/check_sorafs_orchestrator_adoption.sh` avec les variables de
+   entorno de burn-in configuré. Exemple :
 
    ```bash
    SORAFS_BURN_IN_LABEL=canary-week-1 \
@@ -234,44 +228,42 @@ ventana:
    SORAFS_BURN_IN_DAY=7 \
    SORAFS_BURN_IN_WINDOW_DAYS=30 \
    ci/check_sorafs_orchestrator_adoption.sh
-   ```
+   ```El assistant reproduit `fixtures/sorafs_orchestrator/multi_peer_parity_v1`,
+   écrire `scoreboard.json`, `summary.json`, `provider_metrics.json`,
+   `chunk_receipts.json` et `adoption_report.json` bas
+   `artifacts/sorafs_orchestrator/<timestamp>/`, et impose un numéro minimum de
+   fournisseurs éligibles médiante `cargo xtask sorafs-adoption-check`.
+2. Lorsque les variables de burn-in sont présentées, le script est également émis
+   `burn_in_note.json`, capture l'étiquette, l'indice du jour, l'identifiant du
+   manifeste, la source de télémétrie et les résumés des artefacts. Adjoint
+   est ce JSON dans le journal de déploiement pour qu'il soit évident qu'il capture chaque jour
+   de la fenêtre de 30 jours.
+3. Importer le tableau de Grafana actualisé (`dashboards/grafana/sorafs_fetch_observability.json`)
+   dans l'espace de travail de staging/production, étiquette avec l'étiquette de burn-in
+   et confirma que chaque panneau doit être affiché pour le manifeste/la région en test.
+4. Projet `scripts/telemetry/test_sorafs_fetch_alerts.sh` (ou `promtool test rules …`)
+   lorsque vous changez `dashboards/alerts/sorafs_fetch_rules.yml` pour documenter que
+   Le routage des alertes coïncide avec les valeurs exportées pendant le rodage.
+5. Archiver l'instantané du tableau de bord, la sortie de la vérification des alertes et le
+   queue de bûches de las búsquedas `telemetry::sorafs.fetch.*` junto a los
+   artefactos del orquestador para que la gobernanza pueda reproduire la
+   preuve sans extraer métriques de systèmes en vivo.
 
-   El helper reproduce `fixtures/sorafs_orchestrator/multi_peer_parity_v1`,
-   escribe `scoreboard.json`, `summary.json`, `provider_metrics.json`,
-   `chunk_receipts.json` y `adoption_report.json` bajo
-   `artifacts/sorafs_orchestrator/<timestamp>/`, e impone un número mínimo de
-   proveedores elegibles mediante `cargo xtask sorafs-adoption-check`.
-2. Cuando las variables de burn-in están presentes, el script también emite
-   `burn_in_note.json`, capturando la etiqueta, el índice de día, el id del
-   manifiesto, la fuente de telemetría y los digests de los artefactos. Adjunta
-   este JSON al log de rollout para que sea evidente qué captura cubrió cada día
-   de la ventana de 30 días.
-3. Importa el tablero de Grafana actualizado (`dashboards/grafana/sorafs_fetch_observability.json`)
-   en el workspace de staging/producción, etiquétalo con la etiqueta de burn-in
-   y confirma que cada panel muestra muestras para el manifiesto/región en prueba.
-4. Ejecuta `scripts/telemetry/test_sorafs_fetch_alerts.sh` (o `promtool test rules …`)
-   cuando cambie `dashboards/alerts/sorafs_fetch_rules.yml` para documentar que
-   el routing de alertas coincide con las métricas exportadas durante el burn-in.
-5. Archiva el snapshot del dashboard, la salida de la prueba de alertas y el
-   tail de logs de las búsquedas `telemetry::sorafs.fetch.*` junto a los
-   artefactos del orquestador para que la gobernanza pueda reproducir la
-   evidencia sin extraer métricas de sistemas en vivo.
+## 7. Liste de vérification du déploiement
 
-## 7. Lista de verificación de rollout
-
-1. Regenera los scoreboards en CI usando la configuración candidata y captura
-   los artefactos bajo control de versiones.
-2. Ejecuta el fetch determinista de fixtures en cada entorno (lab, staging,
-   canary, producción) y adjunta los artefactos `--scoreboard-out` y `--json-out`
-   al registro de rollout.
-3. Revisa los dashboards de telemetría con el ingeniero on-call, asegurando que
-   todas las métricas anteriores tengan muestras en vivo.
-4. Registra la ruta de configuración final (normalmente vía `iroha_config`) y el
-   commit git del registro de gobernanza usado para anuncios y cumplimiento.
-5. Actualiza el tracker de rollout y notifica a los equipos de SDK sobre los
-   nuevos valores por defecto para que las integraciones de clientes se mantengan
+1. Régénérer les tableaux de bord en CI en utilisant la configuration candidate et la capture
+   les artefacts ont un contrôle de versions.
+2. Exécutez la recherche déterminante des luminaires à chaque événement (laboratoire, mise en scène,
+   canary, production) et en complément des artefacts `--scoreboard-out` et `--json-out`
+   au registre de déploiement.
+3. Révisez les tableaux de bord de télémétrie avec l'ingénieur de garde, en vous assurant que
+   toutes les mesures antérieures peuvent être réalisées en vivo.
+4. Enregistrez l'itinéraire de configuration final (normalement via `iroha_config`) et le
+   commit git del registro de gobernanza utilisé pour les annonces et les cumuls.
+5. Actualisez le tracker de déploiement et notifiez les équipes du SDK sur les
+   nouvelles valeurs par défaut pour que les intégrations de clients soient maintenues
    alineadas.
 
-Seguir esta guía mantiene los despliegues del orquestador deterministas y
-auditables, mientras aporta ciclos de retroalimentación claros para ajustar
-presupuestos de reintentos, capacidad de proveedores y postura de privacidad.
+Suivez ce guide pour suivre les missions de l'orchestre déterministe et
+auditables, mientras aporta cycles de retroalimentación claros para ajustar
+présupposés de réintention, capacité des fournisseurs et posture de confidentialité.

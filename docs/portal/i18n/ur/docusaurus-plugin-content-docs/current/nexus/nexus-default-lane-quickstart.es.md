@@ -4,33 +4,35 @@ direction: rtl
 source: docs/portal/docs/nexus/nexus-default-lane-quickstart.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: nexus-default-lane-quickstart
-title: Guia rapida del lane predeterminado (NX-5)
-sidebar_label: Guia rapida del lane predeterminado
-description: Configura y verifica el fallback del lane predeterminado de Nexus para que Torii y los SDK puedan omitir lane_id en lanes publicas.
+ID: گٹھ جوڑ-ڈیفالٹ-لین کوک اسٹارٹ
+عنوان: پہلے سے طے شدہ لین کے لئے فوری رہنما (NX-5)
+سائڈبار_لیبل: پہلے سے طے شدہ لین کے لئے فوری رہنما
+تفصیل: Nexus کے پہلے سے طے شدہ لین فال بیک کو تشکیل اور تصدیق کریں تاکہ Torii اور SDKs عوامی لینوں میں LANE_ID کو نظرانداز کرسکیں۔
 ---
 
-:::note Fuente canonica
-Esta pagina refleja `docs/source/quickstart/default_lane.md`. Manten ambas copias alineadas hasta que el barrido de localizacion llegue al portal.
+::: نوٹ کینونیکل ماخذ
+یہ صفحہ `docs/source/quickstart/default_lane.md` کی عکاسی کرتا ہے۔ دونوں کاپیاں سیدھے رکھیں جب تک کہ مقام کا سویپ پورٹل تک نہ پہنچے۔
 :::
 
-# Guia rapida del lane predeterminado (NX-5)
+# ڈیفالٹ لین کے لئے فوری رہنما (NX-5)
 
-> **Contexto del roadmap:** NX-5 - integracion del lane publico predeterminado. El runtime ahora expone un fallback `nexus.routing_policy.default_lane` para que los endpoints REST/gRPC de Torii y cada SDK puedan omitir con seguridad un `lane_id` cuando el trafico pertenece al lane publico canonico. Esta guia lleva a los operadores a configurar el catalogo, verificar el fallback en `/status` y ejercitar el comportamiento del cliente de extremo a extremo.
+> ** روڈ میپ سیاق و سباق: ** NX -5 - پہلے سے طے شدہ عوامی لین کا انضمام۔ رن ٹائم اب ایک `nexus.routing_policy.default_lane` فال بیک کو بے نقاب کرتا ہے تاکہ Torii REST/GRPC اختتامی نکات اور ہر SDK جب ٹریفک کا تعلق کیننیکل پبلک لین سے تعلق رکھتا ہو تو `lane_id` کو بحفاظت چھوڑ سکتا ہے۔ یہ گائیڈ آپریٹرز کو کیٹلاگ کی تشکیل ، `/status` پر فال بیک کی تصدیق کرنے اور آخر سے آخر تک کلائنٹ کے طرز عمل کو استعمال کرنے میں لیتا ہے۔
 
-## Prerrequisitos
+## شرائط
 
-- Un build de Sora/Nexus de `irohad` (ejecuta `irohad --sora --config ...`).
-- Acceso al repositorio de configuracion para poder editar secciones `nexus.*`.
-- `iroha_cli` configurado para hablar con el cluster objetivo.
-- `curl`/`jq` (o equivalente) para inspeccionar el payload `/status` de Torii.
+- `irohad` (`irohad --sora --config ...` چلتا ہے) کی ایک SORA/Nexus بلڈ۔
+- سیکشن `nexus.*` میں ترمیم کرنے کے لئے کنفیگریشن ریپوزٹری تک رسائی۔
+- `iroha_cli` ہدف کلسٹر سے بات کرنے کے لئے تشکیل دیا گیا ہے۔
+- `curl`/`jq` (یا مساوی) Torii کے پے لوڈ `/status` کا معائنہ کرنے کے لئے۔
 
-## 1. Describe el catalogo de lanes y dataspaces
+## 1. گلیوں اور ڈیٹا اسپیس کے کیٹلاگ کی وضاحت کریں
 
-Declara los lanes y dataspaces que deben existir en la red. El fragmento siguiente (recortado de `defaults/nexus/config.toml`) registra tres lanes publicas mas los alias de dataspace correspondientes:
+لینوں اور ڈیٹا اسپیسوں کا اعلان کریں جو نیٹ ورک پر موجود ہیں۔ مندرجہ ذیل ٹکڑے (`defaults/nexus/config.toml` سے تیار شدہ) میں تین عوامی لینوں کے علاوہ متعلقہ ڈیٹا اسپیس عرفی ناموں کو ریکارڈ کیا گیا ہے:
 
 ```toml
 [nexus]
@@ -73,11 +75,11 @@ description = "Zero-knowledge proofs and attachments"
 fault_tolerance = 1
 ```
 
-Cada `index` debe ser unico y contiguo. Los ids de dataspace son valores de 64 bits; los ejemplos anteriores usan los mismos valores numericos que los indices de lane para mayor claridad.
+ہر `index` منفرد اور متضاد ہونا چاہئے۔ ڈیٹا اسپیس آئی ڈی 64 بٹ اقدار ہیں۔ مذکورہ بالا مثالیں وہی عددی اقدار کا استعمال کرتی ہیں جیسے واضح طور پر لین کے اشارے۔
 
-## 2. Configura los valores predeterminados de enrutamiento y las sobreescrituras opcionales
+## 2۔ روٹنگ ڈیفالٹس اور اختیاری اوور رائڈس کی تشکیل کریں
 
-La seccion `nexus.routing_policy` controla el lane de fallback y te permite sobrescribir el enrutamiento para instrucciones especificas o prefijos de cuenta. Si ninguna regla coincide, el scheduler enruta la transaccion al `default_lane` y `default_dataspace` configurados. La logica del router vive en `crates/iroha_core/src/queue/router.rs` y aplica la politica de forma transparente a las superficies REST/gRPC de Torii.
+`nexus.routing_policy` سیکشن فال بیک لین کو کنٹرول کرتا ہے اور آپ کو مخصوص ہدایات یا اکاؤنٹ کے سابقہ ​​کے لئے روٹنگ کو اوور رائڈ کرنے کی اجازت دیتا ہے۔ اگر کوئی قواعد مماثل نہیں ہیں تو ، شیڈولر ٹرانزیکشن کو تشکیل شدہ `default_lane` اور `default_dataspace` پر لے جاتا ہے۔ راؤٹر منطق `crates/iroha_core/src/queue/router.rs` پر رہتا ہے اور Torii کے باقی/GRPC سطحوں پر شفاف طور پر پالیسی کا اطلاق کرتا ہے۔
 
 ```toml
 [nexus.routing_policy]
@@ -99,26 +101,24 @@ instruction = "smartcontract::deploy"
 description = "Route contract deployments to the zk lane for proof tracking"
 ```
 
-Cuando mas adelante agregues nuevas lanes, actualiza primero el catalogo y luego extiende las reglas de enrutamiento. El lane de fallback debe seguir apuntando al lane publico que concentra la mayor parte del trafico de usuarios para que los SDKs heredados sigan funcionando.
+جب آپ بعد میں نئی ​​لینیں شامل کریں تو پہلے کیٹلاگ کو اپ ڈیٹ کریں اور پھر روٹنگ کے قواعد کو بڑھا دیں۔ فال بیک لین کو عوامی لین کی طرف اشارہ کرنا جاری رکھنا چاہئے جو زیادہ تر صارف ٹریفک کو مرکوز کرتا ہے تاکہ لیگیسی ایس ڈی کے کام جاری رکھیں۔
 
-## 3. Arranca un nodo con la politica aplicada
+## 3. لاگو پالیسی کے ساتھ ایک نوڈ شروع کریں
 
 ```bash
 IROHA_CONFIG=/path/to/nexus/config.toml
 irohad --sora --config "${IROHA_CONFIG}"
 ```
 
-El nodo registra la politica de enrutamiento derivada durante el arranque. Cualquier error de validacion (indices faltantes, alias duplicados, ids de dataspace invalidos) se muestra antes de que comience el gossip.
+نوڈ اسٹارٹ اپ کے دوران اخذ کردہ روٹنگ پالیسی کو ریکارڈ کرتا ہے۔ کسی بھی توثیق کی غلطیاں (گمشدہ اشاریہ جات ، ڈپلیکیٹ عرفی نام ، غلط ڈیٹا اسپیس آئی ڈی) گپ شپ شروع ہونے سے پہلے ہی دکھائے جاتے ہیں۔
 
-## 4. Confirma el estado de gobernanza del lane
-
-Una vez que el nodo este en linea, usa el helper del CLI para verificar que el lane predeterminado este sellado (manifest cargado) y listo para trafico. La vista de resumen imprime una fila por lane:
+## 4. لین کی حکمرانی کی حیثیت کی تصدیق کریںایک بار نوڈ آن لائن ہونے کے بعد ، یہ تصدیق کرنے کے لئے سی ایل آئی ہیلپر کا استعمال کریں کہ پہلے سے طے شدہ لین سیل (مینی فیسٹ بھری ہوئی) اور ٹریفک کے لئے تیار ہے۔ خلاصہ نظارہ فی لین میں ایک قطار پرنٹ کرتا ہے:
 
 ```bash
 iroha_cli app nexus lane-report --summary
 ```
 
-Example output:
+مثال کے طور پر آؤٹ پٹ:
 
 ```
 Lane  Alias            Module           Status  Quorum  Validators  Detail
@@ -127,17 +127,17 @@ Lane  Alias            Module           Status  Quorum  Validators  Detail
    2  zk               parliament       sealed     03           05  manifest required
 ```
 
-Si el lane predeterminado muestra `sealed`, sigue el runbook de gobernanza de lanes antes de permitir trafico externo. El flag `--fail-on-sealed` es util para CI.
+اگر پہلے سے طے شدہ لین `sealed` کو ظاہر کرتی ہے تو ، بیرونی ٹریفک کی اجازت دینے سے پہلے لین گورننس رن بک پر عمل کریں۔ `--fail-on-sealed` پرچم CI کے لئے مفید ہے۔
 
-## 5. Inspecciona los payloads de estado de Torii
+## 5. Torii کے اسٹیٹس پے لوڈ کا معائنہ کریں
 
-La respuesta `/status` expone tanto la politica de enrutamiento como la instantanea del scheduler por lane. Usa `curl`/`jq` para confirmar los valores predeterminados configurados y comprobar que el lane de fallback esta produciendo telemetria:
+`/status` ردعمل روٹنگ پالیسی اور شیڈیولر سنیپ شاٹ دونوں لین کو بے نقاب کرتا ہے۔ تشکیل شدہ ڈیفالٹ اقدار کی تصدیق کے لئے `curl`/`jq` استعمال کریں اور اس بات کی تصدیق کریں کہ فال بیک لین ٹیلی میٹری تیار کررہی ہے:
 
 ```bash
 curl -s http://127.0.0.1:8080/status | jq '.nexus.routing_policy'
 ```
 
-Sample output:
+نمونہ آؤٹ پٹ:
 
 ```json
 {
@@ -150,7 +150,7 @@ Sample output:
 }
 ```
 
-Para inspeccionar los contadores en vivo del scheduler para el lane `0`:
+لین `0` کے لئے شیڈیولر کے براہ راست کاؤنٹرز کا معائنہ کرنے کے لئے:
 
 ```bash
 curl -s http://127.0.0.1:8080/status \
@@ -158,18 +158,16 @@ curl -s http://127.0.0.1:8080/status \
         | {lane_id, alias, dataspace_alias, committed, manifest_ready, scheduler_utilization_pct}'
 ```
 
-Esto confirma que la instantanea de TEU, los metadatos de alias y los flags de manifest se alinean con la configuracion. El mismo payload es el que usan los paneles de Grafana para el dashboard de lane-ingest.
+اس سے تصدیق ہوتی ہے کہ ٹی ای یو اسنیپ شاٹ ، عرف میٹا ڈیٹا ، اور منشور کے جھنڈے ترتیب کے ساتھ ہم آہنگ ہیں۔ وہی پے لوڈ وہی ہے جو لین-ایجسٹ ڈیش بورڈ کے لئے Grafana پینلز کے ذریعہ استعمال ہوتا ہے۔
 
-## 6. Ejercita los valores predeterminados del cliente
+## 6. ورزش کلائنٹ کے پہلے سے طے شدہ
 
-- **Rust/CLI.** `iroha_cli` y el crate cliente de Rust omiten el campo `lane_id` cuando no pasas `--lane-id` / `LaneSelector`. El router de colas por lo tanto recurre a `default_lane`. Usa los flags explicitos `--lane-id`/`--dataspace-id` solo cuando apuntes a una lane no predeterminada.
-- **JS/Swift/Android.** Las ultimas versiones de los SDK tratan `laneId`/`lane_id` como opcionales y hacen fallback al valor anunciado por `/status`. Manten la politica de enrutamiento sincronizada entre staging y produccion para que las apps moviles no necesiten reconfiguraciones de emergencia.
-- **Pipeline/SSE tests.** Los filtros de eventos de transacciones aceptan predicados `tx_lane_id == <u32>` (ver `docs/source/pipeline.md`). Suscribete a `/v1/pipeline/events/transactions` con ese filtro para demostrar que las escrituras enviadas sin un lane explicito llegan bajo el id de lane de fallback.
+- ** زنگ / سی ایل آئی۔ قطار میں قطار لگانے والا روٹر `default_lane` پر واپس آتا ہے۔ واضح جھنڈے `--lane-id`/`--dataspace-id` صرف غیر ڈیفالٹ لین کی طرف اشارہ کرتے وقت استعمال کریں۔
+- ** جے ایس/سوئفٹ/اینڈروئیڈ۔ اسٹیجنگ اور پروڈکشن کے مابین روٹنگ پالیسی کو ہم آہنگ رکھیں تاکہ موبائل ایپس کو ہنگامی تشکیل نو کی ضرورت نہ ہو۔
+- ** پائپ لائن/ایس ایس ای ٹیسٹ۔ اس فلٹر کے ساتھ `/v1/pipeline/events/transactions` کو سبسکرائب کریں تاکہ یہ ظاہر کیا جاسکے کہ بغیر کسی واضح لین کے فال بیک لین ID کے تحت بھیجے گئے لکھتے ہیں۔
 
-## 7. Observabilidad y ganchos de gobernanza
+## 7. مشاہدہ اور گورننس ہکس
 
-- `/status` tambien publica `nexus_lane_governance_sealed_total` y `nexus_lane_governance_sealed_aliases` para que Alertmanager pueda avisar cuando una lane pierde su manifest. Manten esas alertas habilitadas incluso en devnets.
-- El mapa de telemetria del scheduler y el dashboard de gobernanza de lanes (`dashboards/grafana/nexus_lanes.json`) esperan los campos alias/slug del catalogo. Si renombras un alias, vuelve a etiquetar los directorios Kura correspondientes para que los auditores mantengan rutas deterministas (seguido bajo NX-1).
-- Las aprobaciones parlamentarias para lanes predeterminadas deben incluir un plan de rollback. Registra el hash del manifest y la evidencia de gobernanza junto con este quickstart en tu runbook de operador para que las rotaciones futuras no tengan que adivinar el estado requerido.
-
-Una vez que estas comprobaciones pasen puedes tratar `nexus.routing_policy.default_lane` como la fuente de verdad para la configuracion de los SDK y empezar a deshabilitar las rutas de codigo heredadas de lane unico en la red.
+- `/status` `nexus_lane_governance_sealed_total` اور `nexus_lane_governance_sealed_aliases` بھی شائع کرتا ہے تاکہ جب کوئی لین اپنا مظہر کھو دیتی ہے تو الرٹ مینجر مطلع کرسکتا ہے۔ ان انتباہات کو بھی ڈیونیٹس پر فعال رکھیں۔
+- شیڈیولر ٹیلی میٹری کا نقشہ اور لین گورننس ڈیش بورڈ (`dashboards/grafana/nexus_lanes.json`) کیٹلاگ سے عرف/سلگ فیلڈز کی توقع کرتا ہے۔ اگر آپ کسی عرف کا نام تبدیل کرتے ہیں تو ، اس سے متعلقہ کورا ڈائریکٹریوں کو دوبارہ شامل کریں تاکہ آڈیٹرز عصبی راستے برقرار رکھیں (NX-1 کے تحت پیروی کریں)۔
+- پہلے سے طے شدہ لینوں کے لئے پارلیمانی منظوریوں میں رول بیک پلان شامل ہونا ضروری ہے۔ اپنے آپریٹر رن بک میں اس کوئیک اسٹارٹ کے ساتھ منشور ہیش اور گورننس شواہد کو ریکارڈ کریں تاکہ آئندہ کی گردشوں کو مطلوبہ حالت کا اندازہ لگانے کی ضرورت نہ ہو۔ایک بار جب یہ چیک گزر جاتے ہیں تو آپ `nexus.routing_policy.default_lane` کا علاج SDK کنفیگریشن کے لئے سچائی کے ذریعہ کے طور پر کرسکتے ہیں اور نیٹ ورک پر لیگیسی سنگل لین کوڈ کے راستوں کو غیر فعال کرنا شروع کر سکتے ہیں۔

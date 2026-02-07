@@ -10,65 +10,66 @@ translation_last_reviewed: 2026-02-07
 id: nexus-overview
 title: Sora Nexus overview
 description: High-level summary of the Iroha 3 (Sora Nexus) architecture with pointers to the canonical mono-repo docs.
+translator: machine-google-reviewed
 ---
 
-Nexus (Iroha 3) extends Iroha 2 with multi-lane execution, governance-scoped
-data spaces, and shared tooling across every SDK. This page mirrors the new
-`docs/source/nexus_overview.md` brief in the mono-repo so portal readers can
-quickly understand how the architecture pieces fit together.
+Nexus (Iroha 3) აფართოებს Iroha 2 მრავალ ზოლიან შესრულებას, მმართველობის ფარგლებში
+მონაცემთა სივრცეები და გაზიარებული ხელსაწყოები ყველა SDK-ში. ეს გვერდი ასახავს ახალს
+`docs/source/nexus_overview.md` მოკლედ მონო-რეპოში, რათა პორტალის მკითხველებმა შეძლონ
+სწრაფად გააცნობიერე, როგორ ჯდება არქიტექტურის ნაწილები ერთმანეთთან.
 
-## Release lines
+## გამოშვების ხაზები
 
-- **Iroha 2** – self-hosted deployments for consortium or private networks.
-- **Iroha 3 / Sora Nexus** – the multi-lane public network where operators
-  register data spaces (DS) and inherit shared governance, settlement, and
-  observability tooling.
-- Both lines compile from the same workspace (IVM + Kotodama toolchain), so SDK
-  fixes, ABI updates, and Norito fixtures remain portable. Operators download
-  the `iroha3-<version>-<os>.tar.zst` bundle to join Nexus; refer to
-  `docs/source/sora_nexus_operator_onboarding.md` for the fullscreen checklist.
+- **Iroha 2** – თვითმმართველობის განლაგება კონსორციუმის ან კერძო ქსელებისთვის.
+- **Iroha 3 / Sora Nexus** – მრავალ ზოლიანი საჯარო ქსელი, სადაც ოპერატორები
+  დაარეგისტრირეთ მონაცემთა სივრცეები (DS) და მემკვიდრეობით მიიღება საერთო მმართველობა, დასახლება და
+  დაკვირვებადობის ხელსაწყოები.
+- ორივე ხაზი შედგენილია ერთი და იგივე სამუშაო სივრციდან (IVM + Kotodama ინსტრუმენტთა ჯაჭვი), ასე რომ SDK
+  შესწორებები, ABI განახლებები და Norito მოწყობილობები რჩება პორტატული. ოპერატორების ჩამოტვირთვა
+  `iroha3-<version>-<os>.tar.zst` პაკეტი Nexus-თან შესაერთებლად; მიმართეთ
+  `docs/source/sora_nexus_operator_onboarding.md` სრულეკრანიანი საკონტროლო სიისთვის.
 
-## Building blocks
+## სამშენებლო ბლოკები
 
-| Component | Summary | Portal hooks |
+| კომპონენტი | რეზიუმე | პორტალის კაკვები |
 |-----------|---------|--------------|
-| Data Space (DS) | Governance-defined execution/storages domain that owns one or more lanes, declares validator sets, privacy class, fee + DA policy. | See [Nexus spec](./nexus-spec) for the manifest schema. |
-| Lane | Deterministic shard of execution; emits commitments that the global NPoS ring orders. Lane classes include `default_public`, `public_custom`, `private_permissioned`, and `hybrid_confidential`. | [Lane model](./nexus-lane-model) captures geometry, storage prefixes, and retention. |
-| Transition plan | Placeholder identifiers, routing phases, and dual-profile packaging track how single-lane deployments evolve into Nexus. | [Transition notes](./nexus-transition-notes) document each migration phase. |
-| Space Directory | Registry contract that stores DS manifests + versions. Operators reconcile catalog entries against this directory before joining. | Manifest diff tracker lives under `docs/source/project_tracker/nexus_config_deltas/`. |
-| Lane catalog | `[nexus]` config section that maps lane IDs to aliases, routing policies, and DA thresholds. `irohad --sora --config … --trace-config` prints the resolved catalog for audits. | Use `docs/source/sora_nexus_operator_onboarding.md` for the CLI walk-through. |
-| Settlement router | XOR transfer orchestrator that connects private CBDC lanes with public liquidity lanes. | `docs/source/cbdc_lane_playbook.md` spells out policy knobs and telemetry gates. |
-| Telemetry/SLOs | Dashboards + alerts under `dashboards/grafana/nexus_*.json` capture lane height, DA backlog, settlement latency, and governance queue depth. | [Telemetry remediation plan](./nexus-telemetry-remediation) spells out the dashboards, alerts, and audit evidence. |
+| მონაცემთა სივრცე (DS) | მმართველობით განსაზღვრული შესრულების/შენახვის დომენი, რომელიც ფლობს ერთ ან მეტ ხაზს, აცხადებს ვალიდატორის კომპლექტებს, კონფიდენციალურობის კლასს, საფასურს + DA პოლიტიკას. | მანიფესტის სქემისთვის იხილეთ [Nexus სპეციფიკაცია](./nexus-spec). |
+| შესახვევი | აღსრულების დეტერმინისტული ნატეხი; ასხივებს ვალდებულებებს, რომლებსაც გლობალური NPoS ბეჭედი უბრძანებს. ზოლის კლასებში შედის `default_public`, `public_custom`, `private_permissioned` და `hybrid_confidential`. | [ზოლის მოდელი](./nexus-lane-model) აღბეჭდავს გეომეტრიას, შენახვის პრეფიქსებს და შენახვას. |
+| გარდამავალი გეგმა | ადგილის იდენტიფიკატორები, მარშრუტიზაციის ფაზები და ორპროფილიანი შეფუთვა თვალყურს ადევნებს, თუ როგორ ვითარდება ერთი ზოლის განლაგება Nexus-ში. | [გარდამავალი შენიშვნები] (./nexus-transition-notes) თითოეული მიგრაციის ფაზის დოკუმენტირება. |
+| კოსმოსური დირექტორია | რეესტრის კონტრაქტი, რომელიც ინახავს DS მანიფესტებს + ვერსიებს. ოპერატორები შეაერთებენ კატალოგის ჩანაწერებს ამ დირექტორიასთან შეერთებამდე. | Manifest diff tracker მუშაობს `docs/source/project_tracker/nexus_config_deltas/` ქვეშ. |
+| ზოლის კატალოგი | `[nexus]` კონფიგურაციის განყოფილება, რომელიც ასახავს ზოლის ID-ებს მეტსახელებს, მარშრუტიზაციის პოლიტიკას და DA ზღურბლებს. `irohad --sora --config … --trace-config` ბეჭდავს გადაწყვეტილ კატალოგს აუდიტისთვის. | გამოიყენეთ `docs/source/sora_nexus_operator_onboarding.md` CLI გასავლელად. |
+| ანგარიშსწორების როუტერი | XOR გადაცემის ორკესტრი, რომელიც აკავშირებს კერძო CBDC ხაზებს საჯარო ლიკვიდურობის ხაზებთან. | `docs/source/cbdc_lane_playbook.md` ასახავს პოლიტიკის სახელურებს და ტელემეტრიის ჭიშკრებს. |
+| ტელემეტრია/SLOs | საინფორმაციო დაფები + გაფრთხილებები `dashboards/grafana/nexus_*.json`-ის მიხედვით, აღბეჭდავს ზოლის სიმაღლეს, DA ჩამორჩენილს, ანგარიშსწორების შეყოვნებას და მართვის რიგის სიღრმეს. | [ტელემეტრიის გამოსწორების გეგმა] (./nexus-telemetry-remediation) ასახავს საინფორმაციო დაფებს, გაფრთხილებებს და აუდიტის მტკიცებულებებს. |
 
-## Rollout snapshot
+## გამოქვეყნების სნეპშოტი
 
-| Phase | Focus | Exit criteria |
+| ფაზა | ფოკუსირება | გასვლის კრიტერიუმები |
 |-------|-------|---------------|
-| N0 – Closed beta | Council-managed registrar (`.sora`), manual operator onboarding, static lane catalog. | Signed DS manifests + rehearsed governance hand-offs. |
-| N1 – Public launch | Adds `.nexus` suffixes, auctions, self-service registrar, XOR settlement wiring. | Resolver/gateway sync tests, billing reconciliation dashboards, dispute tabletop drills. |
-| N2 – Expansion | Introduces `.dao`, reseller APIs, analytics, dispute portal, steward scorecards. | Compliance artefacts versioned, policy-jury toolkit online, treasury transparency reports. |
-| NX-12/13/14 gate | Compliance engine, telemetry dashboards, and documentation must ship together before partner pilots. | [Nexus overview](./nexus-overview) + [Nexus operations](./nexus-operations) published, dashboards wired, policy engine merged. |
+| N0 – დახურული ბეტა | საბჭოს მიერ მართული რეგისტრატორი (`.sora`), მექანიკური ოპერატორის ჩასვლა, სტატიკური ზოლის კატალოგი. | ხელმოწერილი DS მანიფესტები + რეპეტიციური მმართველობის ხელმოწერები. |
+| N1 – საჯარო გაშვება | ამატებს `.nexus` სუფიქსებს, აუქციონებს, თვითმომსახურების რეგისტრატორს, XOR ანგარიშსწორების გაყვანილობას. | Resolver/Gateway-ის სინქრონიზაციის ტესტები, ბილინგის შეჯერების დაფები, დავის მაგიდის სავარჯიშოები. |
+| N2 – გაფართოება | წარმოგიდგენთ `.dao`, გადამყიდველის API-ებს, ანალიტიკას, დავის პორტალს, სტიუარდის ქულების ბარათებს. | შესაბამისობის არტეფაქტების ვერსიები, პოლიტიკის ჟიურის ინსტრუმენტარიუმი ონლაინ, ხაზინის გამჭვირვალობის ანგარიშები. |
+| NX-12/13/14 კარიბჭე | შესაბამისობის ძრავა, ტელემეტრიის დაფები და დოკუმენტაცია ერთად უნდა გაიგზავნოს პარტნიორ პილოტებამდე. | [Nexus მიმოხილვა](./nexus-overview) + [Nexus ოპერაციები](./nexus-operations) გამოქვეყნებულია, დაფები გაყვანილია, პოლიტიკის ძრავა გაერთიანებულია. |
 
-## Operator responsibilities
+## ოპერატორის პასუხისმგებლობა
 
-1. **Config hygiene** – keep `config/config.toml` synced with the published lane &
-   dataspace catalog; archive `--trace-config` output with every release ticket.
-2. **Manifest tracking** – reconcile catalog entries with the latest Space
-   Directory bundle before joining or upgrading nodes.
-3. **Telemetry coverage** – expose the `nexus_lanes.json`, `nexus_settlement.json`,
-   and related SDK dashboards; wire alerts to PagerDuty and run quarterly reviews per the telemetry remediation plan.
-4. **Incident reporting** – follow the severity matrix in
-   [Nexus operations](./nexus-operations) and file RCAs within five business days.
-5. **Governance readiness** – attend Nexus council votes impacting your lanes and
-   rehearse rollback instructions quarterly (tracked via
+1. **კონფიგურაციის ჰიგიენა** – შეინახეთ `config/config.toml` სინქრონიზებული გამოქვეყნებულ შესახვევთან და
+   მონაცემთა სივრცის კატალოგი; არქივი `--trace-config` გამომავალი ყოველი გამოშვების ბილეთით.
+2. **მანიფესტური თვალთვალი ** – კატალოგში ჩანაწერების შეჯერება უახლეს Space-თან
+   დირექტორიას ნაკრები კვანძების შეერთებამდე ან განახლებამდე.
+3. **ტელემეტრიის დაფარვა** – გამოავლინეთ `nexus_lanes.json`, `nexus_settlement.json`,
+   და დაკავშირებული SDK დაფები; მავთულის შეტყობინებები PagerDuty-ს და განახორციელეთ ყოველკვარტალური მიმოხილვები ტელემეტრიის გამოსწორების გეგმის მიხედვით.
+4. **ინციდენტის მოხსენება** – მიჰყევით სიმძიმის მატრიცას
+   [Nexus ოპერაციები](./nexus-operations) და შეიტანეთ RCA-ები ხუთი სამუშაო დღის განმავლობაში.
+5. **მმართველობის მზადყოფნა ** - დაესწრეთ Nexus საბჭოს კენჭისყრებს, რომლებიც გავლენას მოახდენს თქვენს ზოლებზე და
+   კვარტალურად გაიმეორეთ უკან დაბრუნება ინსტრუქციები (მიმდინარეობს
    `docs/source/project_tracker/nexus_config_deltas/`).
 
-## See also
+## აგრეთვე იხილეთ
 
-- Canonical overview: `docs/source/nexus_overview.md`
-- Detailed spec: [./nexus-spec](./nexus-spec)
-- Lane geometry: [./nexus-lane-model](./nexus-lane-model)
-- Transition plan: [./nexus-transition-notes](./nexus-transition-notes)
-- Telemetry remediation plan: [./nexus-telemetry-remediation](./nexus-telemetry-remediation)
-- Operations runbook: [./nexus-operations](./nexus-operations)
-- Operator onboarding guide: `docs/source/sora_nexus_operator_onboarding.md`
+- კანონიკური მიმოხილვა: `docs/source/nexus_overview.md`
+- დეტალური სპეციფიკაცია: [./nexus-spec](./nexus-spec)
+- ზოლის გეომეტრია: [./nexus-lane-model](./nexus-lane-model)
+- გარდამავალი გეგმა: [./nexus-transition-notes](./nexus-transition-notes)
+- ტელემეტრიის გამოსწორების გეგმა: [./nexus-telemetry-remediation](./nexus-telemetry-remediation)
+- ოპერაციების სახელმძღვანელო: [./nexus-operations](./nexus-operations)
+- ოპერატორის ჩასვლის სახელმძღვანელო: `docs/source/sora_nexus_operator_onboarding.md`

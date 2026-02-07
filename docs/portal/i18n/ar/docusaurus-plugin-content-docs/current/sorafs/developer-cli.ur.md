@@ -4,23 +4,25 @@ direction: rtl
 source: docs/portal/docs/sorafs/developer-cli.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: developer-cli
-title: SoraFS CLI cookbook
-sidebar_label: CLI cookbook
-description: Consolidated `sorafs_cli` surface کا task-focused walkthrough۔
+المعرف: المطور cli
+العنوان: كتاب الطبخ SoraFS CLI
+Sidebar_label: كتاب الطبخ CLI
+الوصف: سطح `sorafs_cli` الموحد عبارة عن إرشادات تركز على المهام.
 ---
 
-:::note مستند ماخذ
+:::ملاحظة مستند ماخذ
 :::
 
-Consolidated `sorafs_cli` surface (جو `sorafs_car` crate کے ذریعے `cli` feature کے ساتھ فراہم ہوتا ہے) SoraFS artifacts تیار کرنے کے لیے درکار ہر قدم expose کرتا ہے۔ اس cookbook کو عام workflows پر سیدھا جانے کے لیے استعمال کریں؛ operational context کے لیے اسے manifest pipeline اور orchestrator runbooks کے ساتھ pair کریں۔
+سطح `sorafs_cli` الموحد (صندوق `sorafs_car` الموجود في الصندوق `cli` يتميز بميزات رائعة) SoraFS المصنوعات اليدوية المزيد من المعلومات عن فضح الكرتا. يستخدم كتاب الطبخ هذا سير العمل بشكل عام؛ السياق التشغيلي هو عبارة عن خطوط أنابيب واضحة وكتيبات تشغيل منسقة متزامنة.
 
-## Package payloads
+## حمولات الحزمة
 
-Deterministic CAR archives اور chunk plans بنانے کے لیے `car pack` استعمال کریں۔ اگر handle فراہم نہ ہو تو command خودکار طور پر SF-1 chunker منتخب کرتا ہے۔
+يتم استخدام أرشيفات CAR الحتمية وخطط القطع لـ `car pack`. إذا لم يكن هناك مقبض، يمكنك تشغيل الأمر الخاص بـ SF-1 Chunker اختيار الكرتا.
 
 ```bash
 sorafs_cli car pack \
@@ -30,11 +32,11 @@ sorafs_cli car pack \
   --summary-out artifacts/video.car.json
 ```
 
-- Default chunker handle: `sorafs.sf1@1.0.0`.
-- Directory inputs lexicographic order میں walk ہوتے ہیں تاکہ checksums مختلف پلیٹ فارمز پر بھی stable رہیں۔
-- JSON summary میں payload digests، فی chunk metadata، اور registry/orchestrator کے ذریعے پہچانا گیا root CID شامل ہوتا ہے۔
+- مقبض القطع الافتراضي: `sorafs.sf1@1.0.0`.
+- يمكن لترتيب مدخلات الدليل المعجمي أن يسير ويأخذ مجاميع اختبارية مختلفة من خلال رمز ثابت ومستقر.
+- يحتوي ملخص JSON على ملخصات الحمولة النافعة، بما في ذلك البيانات الوصفية المقطوعة، وبيانات التسجيل/المنسق التي تتضمن جذر CID.
 
-## Construct manifests
+## بناء البيانات
 
 ```bash
 sorafs_cli manifest build \
@@ -46,11 +48,9 @@ sorafs_cli manifest build \
   --manifest-json-out artifacts/video.manifest.json
 ```
 
-- `--pin-*` options براہ راست `sorafs_manifest::ManifestBuilder` میں `PinPolicy` fields سے map ہوتے ہیں۔
-- `--chunk-plan` تب دیں جب آپ چاہتے ہوں کہ CLI submission سے پہلے SHA3 chunk digest دوبارہ compute کرے؛ ورنہ وہ summary میں embed شدہ digest reuse کرتا ہے۔
-- JSON output Norito payload کی عکاسی کرتا ہے تاکہ reviews کے دوران diffs سیدھے ہوں۔
-
-## Sign manifests without long-lived keys
+- خيارات `--pin-*` لعرض حقول `sorafs_manifest::ManifestBuilder` في `PinPolicy` في الخريطة.
+- `--chunk-plan` انقر فوق "إرسال CLI" إلى SHA3 Chunk Digest مرة أخرى لحساب الحساب؛ يتضمن الدرس والملخص تضمين إعادة استخدام الملخص.
+- إخراج JSON Norito الحمولة النافعة تحتوي على مراجعات ومراجعات أثناء الاختلافات.## تظهر الإشارة بدون مفاتيح طويلة الأمد
 
 ```bash
 sorafs_cli manifest sign \
@@ -60,11 +60,11 @@ sorafs_cli manifest sign \
   --identity-token-env SIGSTORE_ID_TOKEN
 ```
 
-- Inline tokens، environment variables یا file-based sources قبول کرتا ہے۔
-- Provenance metadata (`token_source`, `token_hash_hex`, chunk digest) شامل کرتا ہے اور raw JWT کو محفوظ نہیں کرتا، جب تک `--include-token=true` نہ ہو۔
-- CI میں بہتر کام کرتا ہے: GitHub Actions OIDC کے ساتھ `--identity-token-provider=github-actions` استعمال کریں۔
+- الرموز المضمنة، متغيرات البيئة أو المصادر المستندة إلى الملفات قبول کرتا ہے۔
+- البيانات التعريفية للمصدر (`token_source`، `token_hash_hex`، ملخص القطعة) تتضمن نصوصًا وJWT خامًا لمحفوظات نصوص، لكن `--include-token=true` لا تحتوي على نصوص.
+- مزيد من المعلومات حول CI: استخدام GitHub Actions OIDC الذي تم استخدامه في `--identity-token-provider=github-actions`.
 
-## Submit manifests to Torii
+## إرسال البيانات إلى Torii
 
 ```bash
 sorafs_cli manifest submit \
@@ -79,11 +79,11 @@ sorafs_cli manifest submit \
   --summary-out artifacts/video.submit.json
 ```
 
-- Alias proofs کے لیے Norito decoding کرتا ہے اور Torii کو POST کرنے سے پہلے انہیں manifest digest سے match کرتا ہے۔
-- Plan سے chunk SHA3 digest دوبارہ compute کرتا ہے تاکہ mismatch attacks روکے جا سکیں۔
-- Response summaries بعد کی auditing کے لیے HTTP status، headers، اور registry payloads محفوظ کرتی ہیں۔
+- البراهين الاسمية لـ Norito فك تشفير الكرتا و Torii التي تتطابق مع ملخص البيان.
+- خطة قطع SHA3 هضم مرة أخرى لحساب هجمات عدم التطابق والهجمات غير المتطابقة.
+- ملخصات الاستجابة بعد تدقيق حالة HTTP والرؤوس وحمولات التسجيل.
 
-## Verify CAR contents and proofs
+## التحقق من محتويات السيارة والبراهين
 
 ```bash
 sorafs_cli proof verify \
@@ -92,10 +92,10 @@ sorafs_cli proof verify \
   --summary-out artifacts/video.verify.json
 ```
 
-- PoR tree دوبارہ بناتا ہے اور payload digests کو manifest summary کے ساتھ compare کرتا ہے۔
-- Replication proofs کو governance میں submit کرتے وقت مطلوبہ counts اور identifiers capture کرتا ہے۔
+- شجرة PoR تقوم بمقارنة البيانات وملخصات الحمولة النافعة وملخص البيان ومقارنة البيانات.
+- يمكن لإثباتات النسخ المتماثل للحوكمة إرسال البطاقة في الوقت المطلوب والتقاط المعرفات لها.
 
-## Stream proof telemetry
+## القياس عن بعد لدليل الدفق
 
 ```bash
 sorafs_cli proof stream \
@@ -106,16 +106,14 @@ sorafs_cli proof stream \
   --stream-token "$(cat stream.token)" \
   --summary-out artifacts/video.proof_stream.json \
   --governance-evidence-dir artifacts/video.proof_stream_evidence
-```
+```- هناك دليل متدفق لعناصر NDJSON تنبعث منها كرتا (`--emit-events=false` يتم إعادة تشغيلها بيند كریں).
+- أعداد النجاح/الفشل، والمخططات البيانية لوقت الاستجابة، وعينات من حالات الفشل، والتي تلخص JSON إجمالي عدد مرات الوصول إلى سجلات لوحات المعلومات، وتتخلص من النتائج المتراكمة.
+- تقرير فشل بوابة جب أو التحقق من PoR المحلي (`--por-root-hex` ذریعے) ترفض البراهين الخروج غير الصفري. يتم ضبط عتبات البروفة على `--max-failures` و`--max-verification-failures`.
+- آج بور کو دعم کرتا ہے؛ PDP وPoTR SF-13/SF-14 هما مظروفان يمكن إعادة استخدامهما.
+- تم تقديم `--governance-evidence-dir` ملخصًا وبيانات التعريف (الطابع الزمني وإصدار CLI وعنوان URL للبوابة وملخص البيان) والبيان لنسخة واحدة من دليل الدليل لكل حزم الحوكمة وأدلة تدفق الأدلة التي يتم تشغيلها مرة أخرى من أرشيف السجل.
 
-- ہر streamed proof کے لیے NDJSON items emit کرتا ہے (`--emit-events=false` سے replay بند کریں)۔
-- Success/failure counts، latency histograms، اور sampled failures کو summary JSON میں aggregate کرتا ہے تاکہ dashboards logs scrape کیے بغیر نتائج دکھا سکیں۔
-- جب gateway failures report کرے یا local PoR verification (`--por-root-hex` کے ذریعے) proofs reject کرے تو non-zero exit دیتا ہے۔ rehearsal runs کے لیے `--max-failures` اور `--max-verification-failures` سے thresholds adjust کریں۔
-- آج PoR کو support کرتا ہے؛ PDP اور PoTR SF-13/SF-14 آنے پر اسی envelope کو reuse کریں گے۔
-- `--governance-evidence-dir` rendered summary، metadata (timestamp, CLI version, gateway URL, manifest digest)، اور manifest کی ایک copy فراہم کردہ directory میں لکھتا ہے تاکہ governance packets proof-stream evidence کو run دوبارہ کیے بغیر archive کر سکیں۔
+## مراجع إضافية
 
-## Additional references
-
-- `docs/source/sorafs_cli.md` — تمام flags کی جامع دستاویزات۔
-- `docs/source/sorafs_proof_streaming.md` — proof telemetry schema اور Grafana dashboard template۔
-- `docs/source/sorafs/manifest_pipeline.md` — chunking، manifest composition، اور CAR handling پر تفصیلی جائزہ۔
+- `docs/source/sorafs_cli.md` — أعلام تمام کی جامع دستاویزات۔
+- `docs/source/sorafs_proof_streaming.md` - مخطط إثبات القياس عن بعد وقالب لوحة المعلومات Grafana ۔
+- `docs/source/sorafs/manifest_pipeline.md` - التقطيع، والتكوين الواضح، والتعامل مع CAR

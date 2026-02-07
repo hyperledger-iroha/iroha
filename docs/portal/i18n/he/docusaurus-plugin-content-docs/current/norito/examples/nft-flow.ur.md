@@ -4,28 +4,30 @@ direction: rtl
 source: docs/portal/docs/norito/examples/nft-flow.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
 slug: /norito/examples/nft-flow
 title: NFT کو منٹ، منتقل اور برن کریں
-description: NFT کے لائف سائیکل کو ابتدا سے انتہا تک دکھاتا ہے: مالک کو منٹ کرنا، منتقل کرنا، میٹا ڈیٹا ٹیگ کرنا، اور برن کرنا۔
-source: crates/ivm/docs/examples/12_nft_flow.ko
+תיאור: NFT מכשירי רשת: תקליטורים תקינים میٹا ڈیٹا ٹیگ کرنا، اور برن کرنا۔
+מקור: crates/ivm/docs/examples/12_nft_flow.ko
 ---
 
-NFT کے لائف سائیکل کو ابتدا سے انتہا تک دکھاتا ہے: مالک کو منٹ کرنا، منتقل کرنا، میٹا ڈیٹا ٹیگ کرنا، اور برن کرنا۔
+NFT מכשירי רשת: תקליטורים תקינים ‏ ‏
 
 ## لیجر واک تھرو
 
 - یقینی بنائیں کہ NFT ڈیفینیشن (مثلا `n0#wonderland`) موجود ہو اور اسنیپٹ میں استعمال ہونے والے مالک/موصول کنندہ اکاؤنٹس (`ih58...`, `ih58...`) بھی موجود ہوں۔
 - `nft_issue_and_transfer` انٹری پوائنٹ کال کریں تاکہ NFT منٹ ہو، Alice سے Bob کو منتقل ہو، اور اجرا کی وضاحت کرنے والا میٹا ڈیٹا فلیگ منسلک ہو۔
-- `iroha_cli ledger nfts list --account <id>` یا SDK کے متبادل استعمال کر کے NFT لیجر اسٹیٹ دیکھیں تاکہ ٹرانسفر کی تصدیق ہو، پھر تصدیق کریں کہ برن انسٹرکشن چلنے کے بعد اثاثہ حذف ہو جاتا ہے۔
+- `iroha_cli ledger nfts list --account <id>` ערכת פיתוח התוכנה (SDK) היא מערכת הפעלה של NFT (NFT). تصدیق ہو، پھر تصدیق کریں کہ برن انسٹرکشن چلنے کے بعد اثاثہ حذف ہو جاتا ہے۔
 
-## متعلقہ SDK گائیڈز
+## תוכנות SDK
 
-- [Rust SDK quickstart](/sdks/rust)
-- [Python SDK quickstart](/sdks/python)
-- [JavaScript SDK quickstart](/sdks/javascript)
+- [התחלה מהירה של Rust SDK](/sdks/rust)
+- [התחלה מהירה של Python SDK](/sdks/python)
+- [התחלה מהירה של JavaScript SDK](/sdks/javascript)
 
 [Kotodama سورس ڈاؤن لوڈ کریں](/norito-snippets/nft-flow.ko)
 

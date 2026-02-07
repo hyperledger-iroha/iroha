@@ -7,40 +7,41 @@ generator: scripts/sync_docs_i18n.py
 source_hash: b9dc9862d4806d355fd83c885de92775712a7b32c68c010d29f4fc74229d054b
 source_last_modified: "2026-01-06T05:24:53.995808+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# NoritoBridge Release Packaging
+# NoritoBridge 发布包装
 
-This guide outlines the steps required to publish the `NoritoBridge` Swift bindings as
-an XCFramework that can be consumed from Swift Package Manager and CocoaPods. The
-workflow keeps the Swift artifacts in lock-step with the Rust crate releases that ship
-Iroha's Norito codec. For end-to-end instructions on consuming the published
-artifacts inside an app (Xcode project wiring, ChaChaPoly usage, etc.), see
-`docs/connect_swift_integration.md`.
+本指南概述了将 `NoritoBridge` Swift 绑定发布为
+可以从 Swift Package Manager 和 CocoaPods 使用的 XCFramework。的
+工作流程使 Swift 工件与发布的 Rust 包版本保持同步
+Iroha 的 Norito 编解码器。有关使用已发布的内容的端到端说明
+应用程序内的工件（Xcode 项目接线、ChaChaPoly 用法等），请参阅
+`docs/connect_swift_integration.md`。
 
-> **Note:** CI automation for this flow will land once macOS builders with the required
-> Apple tooling come online (tracked in the Release Engineering macOS builder backlog).
-> Until then the steps below must be executed manually on a development Mac.
+> **注意：** 一旦 macOS 构建者具备所需的能力，此流程的 CI 自动化就会落地
+> Apple 工具上线（在发布工程 macOS 构建器待办事项中进行跟踪）。
+> 在此之前，必须在开发 Mac 上手动执行以下步骤。
 
-## Prerequisites
+## 先决条件
 
-- A macOS host with the latest stable Xcode command line tools installed.
-- Rust toolchain that matches the workspace `rust-toolchain.toml`.
-- Swift toolchain 5.7 or newer.
-- CocoaPods (via Ruby gems) if publishing to the central specs repository.
-- Access to the Hyperledger Iroha release signing keys for tagging Swift artifacts.
+- 安装了最新稳定的 Xcode 命令行工具的 macOS 主机。
+- 与工作区 `rust-toolchain.toml` 匹配的 Rust 工具链。
+- Swift 工具链 5.7 或更高版本。
+- CocoaPods（通过 Ruby gems）如果发布到中央规格存储库。
+- 访问 Hyperledger Iroha 版本签名密钥以标记 Swift 工件。
 
-## Versioning model
+## 版本控制模型
 
-1. Determine the Rust crate version for the Norito codec (`crates/norito/Cargo.toml`).
-2. Tag the workspace with the release identifier (e.g. `v2.1.0`).
-3. Use the same semantic version for the Swift package and the CocoaPods podspec.
-4. When the Rust crate increments its version, repeat the process and publish a matching
-   Swift artifact. Versions may include metadata suffixes (e.g. `-alpha.1`) while testing.
+1. 确定 Norito 编解码器 (`crates/norito/Cargo.toml`) 的 Rust 箱版本。
+2. 使用版本标识符标记工作区（例如 `v2.1.0`）。
+3. 对 Swift 包和 CocoaPods podspec 使用相同的语义版本。
+4. 当 Rust 箱增加其版本时，重复该过程并发布匹配的版本
+   迅捷神器。测试时版本可能包含元数据后缀（例如 `-alpha.1`）。
 
-## Build steps
+## 构建步骤
 
-1. From the repository root, invoke the helper script to assemble the XCFramework:
+1. 从存储库根目录调用帮助程序脚本来组装 XCFramework：
 
    ```bash
    ./scripts/build_norito_xcframework.sh --workspace-root "$(pwd)" \
@@ -48,13 +49,13 @@ artifacts inside an app (Xcode project wiring, ChaChaPoly usage, etc.), see
        --profile release
    ```
 
-   The script compiles the Rust bridge library for iOS and macOS targets and bundles the
-   resulting static libraries under a single XCFramework directory.
-   It also emits `dist/NoritoBridge.artifacts.json`, capturing the bridge version and
-   per-platform SHA-256 hashes (override the version with `NORITO_BRIDGE_VERSION` if
-   needed).
+   该脚本为 iOS 和 macOS 目标编译 Rust 桥接库并捆绑
+   在单个 XCFramework 目录下生成静态库。
+   它还发出 `dist/NoritoBridge.artifacts.json`，捕获桥接版本并
+   每个平台的 SHA-256 哈希值（如果存在，则使用 `NORITO_BRIDGE_VERSION` 覆盖版本
+   需要）。
 
-2. Zip the XCFramework for distribution:
+2. 压缩 XCFramework 进行分发：
 
    ```bash
    ditto -c -k --sequesterRsrc --keepParent \
@@ -62,71 +63,71 @@ artifacts inside an app (Xcode project wiring, ChaChaPoly usage, etc.), see
      artifacts/NoritoBridge.xcframework.zip
    ```
 
-3. Update the Swift package manifest (`IrohaSwift/Package.swift`) to point to the new
-   version and checksum:
+3. 更新 Swift 包清单 (`IrohaSwift/Package.swift`) 以指向新的
+   版本和校验和：
 
    ```bash
    swift package compute-checksum artifacts/NoritoBridge.xcframework.zip
    ```
 
-   Record the checksum in `Package.swift` when defining the binary target.
+   定义二进制目标时，将校验和记录在 `Package.swift` 中。
 
-4. Update `IrohaSwift/IrohaSwift.podspec` with the new version, checksum, and archive
-   URL.
+4. 使用新版本、校验和和存档更新 `IrohaSwift/IrohaSwift.podspec`
+   网址。
 
-5. **Regenerate headers if the bridge gained new exports.** The Swift bridge now exposes
-   `connect_norito_set_acceleration_config` so `AccelerationSettings` can toggle Metal /
-   GPU backends. Ensure `NoritoBridge.xcframework/**/Headers/connect_norito_bridge.h`
-   matches `crates/connect_norito_bridge/include/connect_norito_bridge.h` before zipping.
+5. **如果桥获得新的导出，则重新生成标头。** Swift 桥现在公开
+   `connect_norito_set_acceleration_config` 所以 `AccelerationSettings` 可以切换金属/
+   GPU 后端。确保 `NoritoBridge.xcframework/**/Headers/connect_norito_bridge.h`
+   压缩前匹配 `crates/connect_norito_bridge/include/connect_norito_bridge.h`。
 
-6. Run the Swift validation suite before tagging:
+6. 在标记之前运行 Swift 验证套件：
 
    ```bash
    swift test --package-path IrohaSwift
    make swift-ci
    ```
 
-   The first command ensures the Swift package (including `AccelerationSettings`) stays
-   green; the second validates fixture parity, renders the parity/CI dashboards, and
-   exercises the same telemetry checks enforced in Buildkite (including the
-   `ci/xcframework-smoke:<lane>:device_tag` metadata requirement).
+   第一个命令确保 Swift 包（包括 `AccelerationSettings`）保持不变
+   绿色；第二个验证夹具奇偶校验，呈现奇偶校验/CI 仪表板，以及
+   执行与 Buildkite 中强制执行的相同遥测检查（包括
+   `ci/xcframework-smoke:<lane>:device_tag` 元数据要求）。
 
-7. Commit the generated artifacts in a release branch and tag the commit.
+7. 在发布分支中提交生成的工件并标记提交。
 
-## Publishing
+## 出版
 
-### Swift Package Manager
+### Swift 包管理器
 
-- Push the tag to the public Git repository.
-- Ensure the tag is reachable by the package index (Apple or the community mirror).
-- Consumers can now depend on `.package(url: "https://github.com/hyperledger/iroha", from: "<version>")`.
+- 将标签推送到公共 Git 存储库。
+- 确保标签可通过包索引（Apple 或社区镜像）访问。
+- 消费者现在可以信赖 `.package(url: "https://github.com/hyperledger/iroha", from: "<version>")`。
 
 ### CocoaPods
 
-1. Validate the pod locally:
+1. 在本地验证 pod：
 
    ```bash
    pod lib lint IrohaSwift.podspec --allow-warnings
    ```
 
-2. Push the updated podspec:
+2. 推送更新后的 podspec：
 
    ```bash
    pod trunk push IrohaSwift.podspec
    ```
 
-3. Confirm the new version appears in the CocoaPods index.
+3. 确认新版本出现在 CocoaPods 索引中。
 
-## CI considerations
+## CI注意事项
 
-- Create a macOS job that runs the packaging script, archives artifacts, and uploads the
-  generated checksum as a workflow output.
-- Gate releases on the Swift demo app building against the freshly produced framework.
-- Store build logs to assist in diagnosing failures.
+- 创建一个运行打包脚本、归档工件并上传的 macOS 作业
+  生成的校验和作为工作流程输出。
+- Gate 在针对新生成的框架构建的 Swift 演示应用程序上发布。
+- 存储构建日志以帮助诊断故障。
 
-## Additional automation ideas
+## 其他自动化想法
 
-- Use `xcodebuild -create-xcframework` directly once all required targets are exposed.
-- Integrate signing/notarisation for distribution outside developer machines.
-- Keep integration tests in lock-step with the packaged version by pinning the SPM
-  dependency to the release tag.
+- 一旦所有需要的目标都暴露出来，就直接使用 `xcodebuild -create-xcframework`。
+- 集成签名/公证以在开发人员机器之外分发。
+- 通过固定 SPM 使集成测试与打包版本保持同步
+  对发布标签的依赖。

@@ -7,20 +7,21 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 727a648141405b0c8f12a131ff903d3e7ce5b74a7f899dd99fe9aa6490b55ef2
 source_last_modified: "2025-12-29T18:16:35.080764+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# SoraFS Capacity Simulation Toolkit
+# SoraFS Կարողությունների մոդելավորման գործիքակազմ
 
-This directory ships the reproducible artefacts for the SF-2c capacity marketplace
-simulation. The toolkit exercises quota negotiation, failover handling, and slashing
-remediation using the production CLI helpers and a lightweight analysis script.
+Այս գրացուցակը առաքում է վերարտադրվող արտեֆակտները SF-2c հզորությունների շուկայի համար
+սիմուլյացիա։ Գործիքների հավաքածուն իրականացնում է քվոտաների բանակցություններ, ձախողման հետ կապված կառավարում և կրճատում
+վերականգնում` օգտագործելով արտադրական CLI օգնականները և թեթև վերլուծության սցենարը:
 
-## Prerequisites
+## Նախադրյալներ
 
-- Rust toolchain capable of running `cargo run` for workspace members.
-- Python 3.10+ (standard library only).
+- Rust գործիքների շղթա, որը կարող է աշխատել `cargo run` աշխատանքային տարածքի անդամների համար:
+- Python 3.10+ (միայն ստանդարտ գրադարան):
 
-## Quickstart
+## Արագ մեկնարկ
 
 ```bash
 # 1. Generate canonical CLI artefacts
@@ -30,39 +31,39 @@ remediation using the production CLI helpers and a lightweight analysis script.
 ./analyze.py --artifacts ./artifacts
 ```
 
-The `run_cli.sh` script invokes `sorafs_manifest_stub capacity` to build:
+`run_cli.sh` սկրիպտը կանչում է `sorafs_manifest_stub capacity`՝ կառուցելու համար.
 
-- Deterministic provider declarations for the quota negotiation fixture set.
-- A replication order matching the negotiation scenario.
-- Telemetry snapshots for the failover window.
-- A dispute payload capturing the slashing request.
+- Քվոտայի բանակցային փաթեթի որոշիչ մատակարարի հայտարարություններ:
+- Բանակցային սցենարին համապատասխանող կրկնօրինակման կարգ:
+- Հեռուստաչափական պատկերներ ձախողման պատուհանի համար:
+- Վեճերի ծանրաբեռնվածություն, որը գրավում է կտրման հարցումը:
 
-The script writes Norito bytes (`*.to`), base64 payloads (`*.b64`), Torii request
-bodies, and human-readable summaries (`*_summary.json`) under the chosen artifact
-directory.
+Սցենարը գրում է Norito բայթ (`*.to`), base64 օգտակար բեռներ (`*.b64`), Torii հարցում
+մարմիններ և մարդու կողմից ընթեռնելի ամփոփագրեր (`*_summary.json`) ընտրված արտեֆակտի տակ
+գրացուցակ.
 
-`analyze.py` consumes the generated summaries, produces an aggregated report
-(`capacity_simulation_report.json`), and emits a Prometheus textfile
-(`capacity_simulation.prom`) carrying:
+`analyze.py`-ը սպառում է ստեղծված ամփոփագրերը, կազմում է համախառն հաշվետվություն
+(`capacity_simulation_report.json`) և թողարկում է Prometheus տեքստային ֆայլ
+(`capacity_simulation.prom`) կրող.
 
-- `sorafs_simulation_quota_*` gauges describing negotiated capacity and allocation
-  share per provider.
-- `sorafs_simulation_failover_*` gauges highlighting downtime deltas and the selected
-  replacement provider.
-- `sorafs_simulation_slash_requested` recording the remediation percentage extracted
-  from the dispute payload.
+- `sorafs_simulation_quota_*` չափիչներ, որոնք նկարագրում են բանակցային հզորությունը և տեղաբաշխումը
+  բաժնետոմս մեկ մատակարարի համար:
+- `sorafs_simulation_failover_*` չափիչներ, որոնք ընդգծում են խափանումների դելտաները և ընտրվածը
+  փոխարինող մատակարար:
+- `sorafs_simulation_slash_requested` արձանագրելով արդյունահանված վերականգնման տոկոսը
+  վեճի ծանրաբեռնվածությունից.
 
-Import the Grafana bundle in `dashboards/grafana/sorafs_capacity_simulation.json`
-and point it at a Prometheus datasource that scrapes the generated textfile (for
-example via the node-exporter textfile collector). The runbook at
-`docs/source/sorafs/runbooks/sorafs_capacity_simulation.md` walks through the full
-workflow, including Prometheus configuration tips.
+Ներմուծեք Grafana փաթեթը `dashboards/grafana/sorafs_capacity_simulation.json`-ում
+և ուղղեք այն Prometheus տվյալների աղբյուրի վրա, որը քերծում է ստեղծված տեքստային ֆայլը (համար
+օրինակ՝ հանգույց-արտահանող տեքստային ֆայլերի կոլեկցիոների միջոցով): The runbook at
+`docs/source/sorafs/runbooks/sorafs_capacity_simulation.md`-ն անցնում է ամբողջությամբ
+աշխատանքային հոսքը, ներառյալ Prometheus կոնֆիգուրացիայի խորհուրդները:
 
-## Fixtures
+## Հարմարանքներ
 
-- `scenarios/quota_negotiation/` — Provider declaration specs and replication order.
-- `scenarios/failover/` — Telemetry windows for the primary outage and failover lift.
-- `scenarios/slashing/` — Dispute spec referencing the same replication order.
+- `scenarios/quota_negotiation/` — Մատակարարի հայտարարագրի բնութագրերը և կրկնօրինակման կարգը:
+- `scenarios/failover/` — Հեռաչափական պատուհաններ առաջնային անջատման և խափանման վերելակի համար:
+- `scenarios/slashing/` — Վեճերի սպեկտրը վկայակոչում է նույն կրկնօրինակման կարգը:
 
-These fixtures are validated in `crates/sorafs_car/tests/capacity_simulation_toolkit.rs`
-to guarantee they remain in sync with the CLI schema.
+Այս հարմարանքները վավերացված են `crates/sorafs_car/tests/capacity_simulation_toolkit.rs`-ում
+երաշխավորելու համար, որ դրանք համաժամանակյա են մնում CLI սխեմայի հետ:

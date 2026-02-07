@@ -7,70 +7,71 @@ generator: scripts/sync_docs_i18n.py
 source_hash: c52d7f2c5ec9dc4cda81895561bc1261659935c94bf3f7febb0867f4981fe616
 source_last_modified: "2026-01-22T16:26:46.472177+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Repo Custodian Acknowledgement Template
+# რეპო მეურვის აღიარების შაბლონი
 
-Use this template when a repo (bilateral or tri-party) references a custodian
-via `RepoAgreement::custodian`. The goal is to record the custody SLA, routing
-accounts, and drill contacts before assets move. Copy the template into your
-evidence directory (for example
-`artifacts/finance/repo/<slug>/custodian_ack_<custodian>.md`), fill the
-placeholders, and hash the file as part of the governance packet described in
+გამოიყენეთ ეს შაბლონი, როდესაც რეპო (ორმხრივი ან სამმხრივი) მიუთითებს მეურვეზე
+`RepoAgreement::custodian`-ის საშუალებით. მიზანია ჩაწეროთ პატიმრობის SLA, მარშრუტიზაცია
+ანგარიშები და გაბურღეთ კონტაქტები აქტივების გადაადგილებამდე. დააკოპირეთ შაბლონი თქვენს
+მტკიცებულებების დირექტორია (მაგალითად
+`artifacts/finance/repo/<slug>/custodian_ack_<custodian>.md`), შეავსეთ
+ჩანაცვლების დამფუძნებლები და ჰაშიშ ფაილი, როგორც მმართველი პაკეტის ნაწილი, რომელიც აღწერილია აქ
 `docs/source/finance/repo_ops.md` §2.8.
 
-## 1. Metadata
+## 1. მეტამონაცემები
 
-| Field | Value |
+| ველი | ღირებულება |
 |-------|-------|
-| Agreement identifier | `<repo-yyMMdd-XX>` |
-| Custodian account id | `<ih58...>` |
-| Prepared by / date | `<custodian ops lead>` |
-| Desk contacts acknowledged | `<desk lead + counterparty>` |
-| Evidence directory | ``artifacts/finance/repo/<slug>/`` |
+| ხელშეკრულების იდენტიფიკატორი | `<repo-yyMMdd-XX>` |
+| მეურვის ანგარიშის ID | `<ih58...>` |
+| მომზადებულია / თარიღი | `<custodian ops lead>` |
+| სამაგიდო კონტაქტები აღიარებულია | `<desk lead + counterparty>` |
+| მტკიცებულებათა დირექტორია | ``artifacts/finance/repo/<slug>/`` |
 
-## 2. Custody Scope
+## 2. პატიმრობის ფარგლები
 
-- **Collateral definitions received:** `<list of asset definition ids>`
-- **Cash leg currency / settlement rail:** `<xor#sora / other>`
-- **Custody window:** `<start/end timestamps or SLA summary>`
-- **Standing instructions:** `<hash + path to standing instruction document>`
-- **Automation prerequisites:** `<scripts, configs, or runbooks custodian will invoke>`
+- **მიღებული გირაოს განმარტებები:** `<list of asset definition ids>`
+- **ნაღდი ფულის ვალუტა / ანგარიშსწორების ლიანდაგი:** `<xor#sora / other>`
+- **მზრუნველობის ფანჯარა:** `<start/end timestamps or SLA summary>`
+- **მდგარი ინსტრუქცია:** `<hash + path to standing instruction document>`
+- **ავტომატიზაციის წინაპირობები:** `<scripts, configs, or runbooks custodian will invoke>`
 
-## 3. Routing & Monitoring
+## 3. მარშრუტიზაცია და მონიტორინგი
 
-| Item | Value |
+| ნივთი | ღირებულება |
 |------|-------|
-| Custody wallet / ledger account | `<asset ids or ledger path>` |
-| Monitoring channel | `<Slack/phone/on-call rotation>` |
-| Drill contact | `<primary + backup>` |
-| Required alerts | `<PagerDuty service, Grafana board, etc.>` |
+| მეურვეობის საფულე / წიგნის ანგარიში | `<asset ids or ledger path>` |
+| მონიტორინგის არხი | `<Slack/phone/on-call rotation>` |
+| საბურღი კონტაქტი | `<primary + backup>` |
+| საჭირო გაფრთხილებები | `<PagerDuty service, Grafana board, etc.>` |
 
-## 4. Statements
+## 4. განცხადებები
 
-1. *Custody readiness:* “We reviewed the staged `repo initiate` payload with the
-   identifiers above and are prepared to accept collateral under the SLA listed
-   in §2.”
-2. *Rollback commitment:* “We will execute the rollback playbook named above if
-   directed by the incident commander, and will provide CLI logs plus hashes in
-   `governance/drills/<timestamp>.log`.”
-3. *Evidence retention:* “We will keep the acknowledgement, standing
-   instructions, and CLI logs for at least `<duration>` and provide them to the
-   finance council upon request.”
+1. *მზრუნველობის მზადყოფნა:* „ჩვენ განვიხილეთ დადგმული `repo initiate` დატვირთვა
+   ზემოთ მოყვანილი იდენტიფიკატორები და მზად არიან მიიღონ გირაო ჩამოთვლილი SLA-ის მიხედვით
+   §2-ში.”
+2. *დაბრუნების ვალდებულება:* „ჩვენ შევასრულებთ ზემოთ დასახელებულ დაბრუნების წიგნს, თუ
+   მიმართულია ინციდენტის მეთაურის მიერ და უზრუნველყოფს CLI ჟურნალებს პლუს ჰეშებს
+   `governance/drills/<timestamp>.log`.
+3. *მტკიცებულებების შენახვა:* „ჩვენ შევინარჩუნებთ აღიარებას, ფეხზე
+   ინსტრუქციები და CLI ჩაწერს მინიმუმ `<duration>`-ს და მიაწოდოს ისინი
+   საფინანსო საბჭო მოთხოვნის საფუძველზე“.
 
-Sign below (electronic signatures acceptable when routed through the governance
-tracker).
+ხელმოწერა ქვემოთ (ელექტრონული ხელმოწერები მისაღებია მმართველობის მეშვეობით
+ტრეკერი).
 
-| Name | Role | Signature / date |
+| სახელი | როლი | ხელმოწერა / თარიღი |
 |------|------|------------------|
-| `<custodian ops lead>` | Custodian operator | `<signature>` |
-| `<desk lead>` | Desk | `<signature>` |
-| `<counterparty>` | Counterparty | `<signature>` |
+| `<custodian ops lead>` | მეურვე ოპერატორი | `<signature>` |
+| `<desk lead>` | მაგიდა | `<signature>` |
+| `<counterparty>` | კონტრაპარტიული | `<signature>` |
 
-> Once signed, hash the file (example: `sha256sum custodian_ack_<cust>.md`) and
-> record the digest in the governance packet table so reviewers can verify the
-> acknowledgement bytes referenced during the vote.
+> ხელმოწერის შემდეგ, გახეხეთ ფაილი (მაგალითი: `sha256sum custodian_ack_<cust>.md`) და
+> ჩაიწერეთ დაიჯესტი მმართველობის პაკეტების ცხრილში, რათა მიმომხილველებმა შეძლონ ამის გადამოწმება
+> კენჭისყრის დროს მითითებული დადასტურების ბაიტები.

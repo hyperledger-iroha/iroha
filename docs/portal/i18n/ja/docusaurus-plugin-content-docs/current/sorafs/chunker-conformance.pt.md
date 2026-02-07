@@ -4,61 +4,63 @@ direction: ltr
 source: docs/portal/docs/sorafs/chunker-conformance.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: chunker-conformance
-title: Guia de conformidade do chunker da SoraFS
-sidebar_label: Conformidade de chunker
-description: Requisitos e fluxos para preservar o perfil deterministico de chunker SF1 em fixtures e SDKs.
+id: チャンカー準拠
+タイトル: コンフォーミダード ドゥ チャンカー SoraFS
+Sidebar_label: チャンカーの適合性
+説明: チャンカー SF1 em フィクスチャと SDK の保存、パーフィル決定の要件。
 ---
 
-:::note Fonte canonica
-Esta pagina espelha `docs/source/sorafs/chunker_conformance.md`. Mantenha ambas as copias sincronizadas.
+:::note フォンテ カノニカ
+エスタ・ページナ・エスペルハ`docs/source/sorafs/chunker_conformance.md`。マンテンハ・アンバスはコピア・シンクロニザダスとして。
 :::
 
-Este guia codifica os requisitos que toda implementacao deve seguir para permanecer
-compativel com o perfil deterministico de chunker da SoraFS (SF1). Ele tambem
-documenta o fluxo de regeneracao, a politica de assinaturas e os passos de verificacao para que
-os consumidores de fixtures nos SDKs fiquem sincronizados.
+永続的に実装するために必要なコードを作成する必要があります
+SoraFS (SF1) のチャンカーの確定性の比較。エレ・タンベム
+再生のための記録、検証のための政治的活動
+フィクスチャの管理OS、SDK のフィケム シンク。
 
-## Perfil canonico
+## カノニコをパーフィルします
 
-- Handle do perfil: `sorafs.sf1@1.0.0`
-- Seed de entrada (hex): `0000000000dec0ded`
-- Tamanho alvo: 262144 bytes (256 KiB)
-- Tamanho minimo: 65536 bytes (64 KiB)
-- Tamanho maximo: 524288 bytes (512 KiB)
-- Polinomio de rolling: `0x3DA3358B4DC173`
-- Seed da tabela gear: `sorafs-v1-gear`
-- Break mask: `0x0000FFFF`
+- ハンドル実行: `sorafs.sf1@1.0.0`
+- シード デ エントラーダ (16 進数): `0000000000dec0ded`
+- タマンホ アルボ: 262144 バイト (256 KiB)
+- タマンホ ミニモ: 65536 バイト (64 KiB)
+- タマンホ最大値: 524288 バイト (512 KiB)
+- ローリングポリノミオ: `0x3DA3358B4DC173`
+- シード・ダ・タベラギア：`sorafs-v1-gear`
+- ブレークマスク：`0x0000FFFF`
 
-Implementacao de referencia: `sorafs_chunker::chunk_bytes_with_digests_profile`.
-Qualquer aceleracao SIMD deve produzir limites e digests identicos.
+参照の実装: `sorafs_chunker::chunk_bytes_with_digests_profile`。
+Qualquer aceleracao SIMD は、製品の限界とダイジェストを同一に開発します。
 
-## Bundle de fixtures
+## フィクスチャのバンドル
 
-`cargo run --locked -p sorafs_chunker --bin export_vectors` regenera as
-fixtures e emite os seguintes arquivos em `fixtures/sorafs_chunker/`:
+`cargo run --locked -p sorafs_chunker --bin export_vectors` として再生成
+フィクスチャは、`fixtures/sorafs_chunker/` の OS セギンテス arquivos を出力します:
 
-- `sf1_profile_v1.{json,rs,ts,go}` - limites canonicos de chunk para consumidores
-  Rust, TypeScript e Go. Cada arquivo anuncia o handle canonico como a primeira
-  entrada em `profile_aliases`, seguido de quaisquer aliases alternativos (ex.,
-  `sorafs.sf1@1.0.0`, depois `sorafs.sf1@1.0.0`). A ordem e imposta por
-  `ensure_charter_compliance` e NAO DEVE ser alterada.
-- `manifest_blake3.json` - manifest verificado por BLAKE3 cobrindo cada arquivo de fixtures.
-- `manifest_signatures.json` - assinaturas do conselho (Ed25519) sobre o digest do manifest.
-- `sf1_profile_v1_backpressure.json` e corpora brutos dentro de `fuzz/` -
-  cenarios deterministicos de streaming usados por testes de back-pressure do chunker.
+- `sf1_profile_v1.{json,rs,ts,go}` - コンスミドールのチャンクの制限
+  Rust、TypeScript、Go。プライメイラでのカノニコ操作をサポート
+  entrada em `profile_aliases`、seguido de quaisquer エイリアス alternativos (例:
+  `sorafs.sf1@1.0.0`、デポジット `sorafs.sf1@1.0.0`)。命令的な詐欺行為
+  `ensure_charter_compliance` NAO DEVE ser alterada。
+- `manifest_blake3.json` - BLAKE3 コブリンドのフィクスチャのマニフェスト検証。
+- `manifest_signatures.json` - assinaaturas do conselho (Ed25519) ソブレまたはダイジェストが明示されています。
+- `sf1_profile_v1_backpressure.json` コーポラ ブルートス デントロ デ `fuzz/` -
+  チャンカーのバックプレッシャーのテストにおけるストリーミングのシナリオは決定的です。
 
-### Politica de assinaturas
+### 政治の政治
 
-A regeneracao de fixtures **deve** incluir uma assinatura valida do conselho. O gerador
-rejeita saida sem assinatura a menos que `--allow-unsigned` seja passado explicitamente (destinado
-apenas para experimentacao local). Os envelopes de assinatura sao append-only e
-sao deduplicados por signatario.
+備品の再生成には、コンセルホの検証が含まれます。おお、ジェラドール
+Rejeita は、sem assinatura a menos que `--allow-unsigned` seja passado明示的 (目的地)
+apenas para Experimentacao local)。追加のみの拡張機能のエンベロープ
+サン・デデュプリカドス・ポー・シグナタリオ。
 
-Para adicionar uma assinatura do conselho:
+コンセーリョを最大限に活用してください:
 
 ```bash
 cargo run --locked -p sorafs_chunker --bin export_vectors \
@@ -66,33 +68,33 @@ cargo run --locked -p sorafs_chunker --bin export_vectors \
   --signature-out=fixtures/sorafs_chunker/manifest_signatures.json
 ```
 
-## Verificacao
+## ベリフィカオ
 
 O helper de CI `ci/check_sorafs_fixtures.sh` reexecuta o gerador com
-`--locked`. Se fixtures divergirem ou assinaturas faltarem, o job falha. Use
-este script em workflows noturnos e antes de enviar mudancas de fixtures.
+`--locked`。試合はディベルギレムかアッシナチュラス・ファルタレム、仕事はファルハ。使用する
+ワークフローのスクリプトは、フィクスチャの環境に合わせて実行できます。
 
-Passos de verificacao manual:
+検証手順マニュアル:
 
-1. Execute `cargo test -p sorafs_chunker`.
-2. Execute `ci/check_sorafs_fixtures.sh` localmente.
-3. Confirme que `git status -- fixtures/sorafs_chunker` esta limpo.
+1. `cargo test -p sorafs_chunker` を実行します。
+2. `ci/check_sorafs_fixtures.sh` ローカルメンテを実行します。
+3. que `git status -- fixtures/sorafs_chunker` esta limpo を確認します。
 
-## Playbook de upgrade
+## アップグレードのプレイブック
 
-Ao propor um novo perfil de chunker ou atualizar o SF1:
+SF1 の最新のチャンカー情報に応じて:
 
-Veja tambem: [`docs/source/sorafs/chunker_profile_authoring.md`](./chunker-profile-authoring.md) para
-requisitos de metadados, templates de proposta e checklists de validacao.
+ヴェジャ タンベム: [`docs/source/sorafs/chunker_profile_authoring.md`](./chunker-profile-authoring.md) パラ
+メタデータの要件、提案書のテンプレート、検証のチェックリスト。
 
-1. Redija um `ChunkProfileUpgradeProposalV1` (veja RFC SF-1) com novos parametros.
-2. Regenere fixtures via `export_vectors` e registre o novo digest do manifest.
-3. Assine o manifest com o quorum do conselho exigido. Todas as assinaturas devem ser
-   anexadas a `manifest_signatures.json`.
-4. Atualize as fixtures de SDK afetadas (Rust/Go/TS) e garanta paridade cross-runtime.
-5. Regenere corpora fuzz se os parametros mudarem.
-6. Atualize este guia com o novo handle de perfil, seeds e digest.
-7. Envie a mudanca junto com testes atualizados e atualizacoes do roadmap.
+1. Redija um `ChunkProfileUpgradeProposalV1` (veja RFC SF-1) の新しいパラメーター。
+2. `export_vectors` レジストリまたはノボ ダイジェスト ドゥ マニフェストを介してフィクスチャを再生成します。
+3. 定足数を明示し、コンセルホ エクスギドを割り当てます。 Todas として assinaaturas devem ser
+   anexadas `manifest_signatures.json`。
+4. SDK 機能 (Rust/Go/TS) のフィクスチャとして、ランタイムを超えて実現します。
+5. コーパスファズを再生成して、パラメトロスムダレムを再生成します。
+6. エステ ギア コンポーネント、パーフィル、シード、ダイジェストを新しいハンドルで実現します。
+7. ロードマップを実行するためのテストと実際のテストが必要な状況をうらやましく思います。
 
-Mudancas que afetem limites de chunk ou digests sem seguir este processo
-sao invalidas e nao devem ser mergeadas.
+大量のフェテムの限界を超え、安全なプロセスを消化する必要があります
+SAO は無効であり、開発者はマージアダを開発します。

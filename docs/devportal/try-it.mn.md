@@ -9,32 +9,33 @@ source_last_modified: "2025-12-29T18:16:35.067551+00:00"
 translation_last_reviewed: 2026-02-07
 title: Try It Sandbox Guide
 summary: How to run the Torii staging proxy and developer portal sandbox.
+translator: machine-google-reviewed
 ---
 
-The developer portal ships a “Try it” console for the Torii REST API. This guide
-explains how to launch the supporting proxy and connect the console to a staging
-gateway without exposing credentials.
+Хөгжүүлэгчийн портал нь Torii REST API-д зориулсан "Оролдоод үзээрэй" консолыг илгээдэг. Энэхүү гарын авлага
+Дэмжих проксиг хэрхэн ажиллуулж, консолыг үе шаттай холбох талаар тайлбарладаг
+итгэмжлэлийг ил гаргахгүйгээр гарц.
 
-## Prerequisites
+## Урьдчилсан нөхцөл
 
-- Iroha repository checkout (workspace root).
-- Node.js 18.18+ (matches the portal baseline).
-- Torii endpoint reachable from your workstation (staging or local).
+- Iroha репозиторыг шалгах (ажлын талбарын үндэс).
+- Node.js 18.18+ (порталын суурьтай таарч байна).
+- Torii эцсийн цэгийг таны ажлын станцаас авах боломжтой (үе шатлал эсвэл орон нутгийн).
 
-## 1. Generate the OpenAPI snapshot (optional)
+## 1. OpenAPI агшин зуурын зургийг үүсгэх (заавал биш)
 
-The console reuses the same OpenAPI payload as the portal reference pages. If
-you have changed Torii routes, regenerate the snapshot:
+Консол нь порталын лавлах хуудсуудтай ижил OpenAPI ачааллыг дахин ашигладаг. Хэрэв
+та Torii маршрутуудыг өөрчилсөн тул агшин зуурын зургийг дахин үүсгэнэ үү:
 
 ```bash
 cargo xtask openapi
 ```
 
-The task writes `docs/portal/static/openapi/torii.json`.
+Даалгавар нь `docs/portal/static/openapi/torii.json` гэж бичдэг.
 
-## 2. Start the Try It proxy
+## 2. Try It прокси-г эхлүүлнэ үү
 
-From the repository root:
+Хадгалах сангийн үндэсээс:
 
 ```bash
 cd docs/portal
@@ -48,26 +49,26 @@ export TRYIT_PROXY_LISTEN="127.0.0.1:8787"
 npm run tryit-proxy
 ```
 
-### Environment variables
+### Хүрээлэн буй орчны хувьсагчид
 
-| Variable | Description |
+| Хувьсагч | Тодорхойлолт |
 |----------|-------------|
-| `TRYIT_PROXY_TARGET` | Torii base URL (required). |
-| `TRYIT_PROXY_ALLOWED_ORIGINS` | Comma-separated list of origins allowed to use the proxy (defaults to `http://localhost:3000`). |
-| `TRYIT_PROXY_BEARER` | Optional default bearer token applied to all proxied requests. |
-| `TRYIT_PROXY_ALLOW_CLIENT_AUTH` | Set to `1` to forward the caller’s `Authorization` header verbatim. |
-| `TRYIT_PROXY_RATE_LIMIT` / `TRYIT_PROXY_RATE_WINDOW_MS` | In-memory rate limiter settings (defaults: 60 requests per 60 s). |
-| `TRYIT_PROXY_MAX_BODY` | Maximum request payload accepted (bytes, default 1 MiB). |
-| `TRYIT_PROXY_TIMEOUT_MS` | Upstream timeout for Torii requests (default 10 000 ms). |
+| `TRYIT_PROXY_TARGET` | Torii үндсэн URL (шаардлагатай). |
+| `TRYIT_PROXY_ALLOWED_ORIGINS` | Прокси ашиглахыг зөвшөөрсөн гарал үүслийн жагсаалтыг таслалаар тусгаарласан (өгөгдмөл нь `http://localhost:3000`). |
+| `TRYIT_PROXY_BEARER` | Нэмэлт өгөгдмөл эзэмшигчийн токеныг бүх прокси хүсэлтэд ашигласан. |
+| `TRYIT_PROXY_ALLOW_CLIENT_AUTH` | Дуудлага хийгчийн `Authorization` толгой хэсгийг үгчлэн дамжуулахын тулд `1` гэж тохируулна уу. |
+| `TRYIT_PROXY_RATE_LIMIT` / `TRYIT_PROXY_RATE_WINDOW_MS` | Санах ойн хурд хязгаарлагчийн тохиргоо (өгөгдмөл: 60 секунд тутамд 60 хүсэлт). |
+| `TRYIT_PROXY_MAX_BODY` | Хүсэлтийн хамгийн их ачааллыг хүлээн зөвшөөрсөн (байт, анхдагч 1МиБ). |
+| `TRYIT_PROXY_TIMEOUT_MS` | Torii хүсэлтийн дээд урсгалын завсарлага (өгөгдмөл 10000 мс). |
 
-The proxy exposes:
+Прокси нь:
 
-- `GET /healthz` — readiness check.
-- `/proxy/*` — proxied requests, preserving the path and query string.
+- `GET /healthz` - бэлэн байдлыг шалгах.
+- `/proxy/*` - зам болон асуулгын мөрийг хадгалсан прокси хүсэлтүүд.
 
-## 3. Launch the portal
+## 3. Порталыг ажиллуул
 
-In a separate terminal:
+Тусдаа терминал дээр:
 
 ```bash
 cd docs/portal
@@ -75,23 +76,23 @@ export TRYIT_PROXY_PUBLIC_URL="http://localhost:8787"
 npm run start
 ```
 
-Visit `http://localhost:3000/api/overview` and use the Try It console. The same
-environment variables configure the Swagger UI and RapiDoc embeds.
+`http://localhost:3000/api/overview` руу зочилж, Try It консолыг ашиглана уу. Үүнтэй адил
+орчны хувьсагч нь Swagger UI болон RapiDoc суулгацыг тохируулдаг.
 
-## 4. Running unit tests
+## 4. Нэгжийн туршилтуудыг ажиллуулж байна
 
-The proxy exposes a fast Node-based test suite:
+Прокси нь зангилаанд суурилсан хурдан тестийн багцыг харуулж байна:
 
 ```bash
 npm run test:tryit-proxy
 ```
 
-The tests cover address parsing, origin handling, rate limiting, and bearer
-injection.
+Туршилтууд нь хаяг задлан шинжлэх, гарал үүслийн зохицуулалт, хувь хэмжээг хязгаарлах, эзэмшигчийг хамардаг
+тарилга.
 
-## 5. Probe automation & metrics
+## 5. Шинжилгээний автоматжуулалт ба хэмжүүр
 
-Use the bundled probe to verify `/healthz` and a sample endpoint:
+`/healthz` болон дээжийн төгсгөлийн цэгийг шалгахын тулд багцалсан датчикийг ашиглана уу:
 
 ```bash
 TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" \
@@ -99,18 +100,18 @@ TRYIT_PROXY_SAMPLE_PATH="/v1/status" \
 npm run probe:tryit-proxy
 ```
 
-Environment knobs:
+Байгаль орчны товчлуурууд:
 
-- `TRYIT_PROXY_SAMPLE_PATH` — optional Torii route (without `/proxy`) to exercise.
-- `TRYIT_PROXY_SAMPLE_METHOD` — defaults to `GET`; set to `POST` for write routes.
-- `TRYIT_PROXY_PROBE_TOKEN` — injects a temporary bearer token for the sample call.
-- `TRYIT_PROXY_PROBE_TIMEOUT_MS` — overrides the default 5 s timeout.
-- `TRYIT_PROXY_PROBE_METRICS_FILE` — Prometheus textfile destination for `probe_success`/`probe_duration_seconds`.
-- `TRYIT_PROXY_PROBE_LABELS` — comma-separated `key=value` pairs appended to the metrics (defaults to `job=tryit-proxy` and `instance=<proxy URL>`).
+- `TRYIT_PROXY_SAMPLE_PATH` — дасгал хийх нэмэлт Torii маршрут (`/proxy` байхгүй).
+- `TRYIT_PROXY_SAMPLE_METHOD` — анхдагч нь `GET`; бичих маршрутын хувьд `POST` гэж тохируулна.
+- `TRYIT_PROXY_PROBE_TOKEN` — дээжийн дуудлагад түр зуурын тэмдэгтийг оруулна.
+- `TRYIT_PROXY_PROBE_TIMEOUT_MS` — өгөгдмөл 5 секундын хугацааг хүчингүй болгодог.
+- `TRYIT_PROXY_PROBE_METRICS_FILE` — `probe_success`/`probe_duration_seconds`-д зориулсан Prometheus текст файлын очих газар.
+- `TRYIT_PROXY_PROBE_LABELS` — хэмжигдэхүүнд хавсаргасан таслалаар тусгаарлагдсан `key=value` хосууд (`job=tryit-proxy` болон `instance=<proxy URL>`-ийн өгөгдмөл).
 
-When `TRYIT_PROXY_PROBE_METRICS_FILE` is set, the script rewrites the file
-atomically so your node_exporter/textfile collector always sees a complete
-payload. Example:
+`TRYIT_PROXY_PROBE_METRICS_FILE` тохируулагдсан үед скрипт нь файлыг дахин бичдэг
+атомын хувьд таны node_exporter/textfile цуглуулагч үргэлж бүрэн гүйцэд хардаг
+ачаалал. Жишээ:
 
 ```bash
 TRYIT_PROXY_PUBLIC_URL="https://docs.sora.example/proxy" \
@@ -119,16 +120,16 @@ TRYIT_PROXY_PROBE_LABELS="job=tryit-proxy,cluster=staging" \
 npm run probe:tryit-proxy
 ```
 
-Forward the resulting metrics to Prometheus and reuse the sample alert in the
-developer-portal docs to page when `probe_success` drops to `0`.
+Үр дүнгийн хэмжигдэхүүнийг Prometheus руу шилжүүлж, жишээний дохиог дахин ашиглана уу.
+`probe_success` `0` болж буурах үед хөгжүүлэгч-порталын баримтуудыг хуудас руу оруулна.
 
-## 6. Production hardening checklist
+## 6. Үйлдвэрлэлийг хатууруулах хяналтын хуудас
 
-Before publishing the proxy beyond local development:
+Орон нутгийн хөгжлөөс гадна проксиг нийтлэхээс өмнө:
 
-- Terminate TLS ahead of the proxy (reverse proxy or managed gateway).
-- Configure structured logging and forward to observability pipelines.
-- Rotate bearer tokens and store them in your secrets manager.
-- Monitor the proxy’s `/healthz` endpoint and aggregate latency metrics.
-- Align rate limits with your Torii staging quotas; adjust the `Retry-After`
-  behaviour to communicate throttling to clients.
+- TLS-ийг проксигийн өмнө дуусгах (урвуу прокси эсвэл удирддаг гарц).
+- Бүтэцлэгдсэн бүртгэлийг тохируулж, ажиглалтын шугам руу шилжүүлэх.
+- Тэмдэглэгээний токенуудыг эргүүлж, нууц менежертээ хадгалаарай.
+- Проксины `/healthz` төгсгөлийн цэг болон нийт хоцрогдлын хэмжигдэхүүнийг хянах.
+- Үнийн хязгаарлалтыг Torii шатлалын квоттой тааруулах; `Retry-After` тохируулна уу
+  Үйлчлүүлэгчидтэй харилцах харилцааг багасгах зан үйл.

@@ -10,89 +10,90 @@ translation_last_reviewed: 2026-02-07
 title: Confidential Assets & ZK Transfers
 description: Phase C blueprint for shielded circulation, registries, and operator controls.
 slug: /nexus/confidential-assets
+translator: machine-google-reviewed
 ---
 
 <!--
 SPDX-License-Identifier: Apache-2.0
 -->
-# Confidential Assets & ZK Transfer Design
+# လျှို့ဝှက်ပိုင်ဆိုင်မှုများနှင့် ZK လွှဲပြောင်းခြင်းဒီဇိုင်း
 
-## Motivation
-- Deliver opt-in shielded asset flows so domains can preserve transactional privacy without altering transparent circulation.
-- Provide auditors and operators with lifecycle controls (activation, rotation, revocation) for circuits and cryptographic parameters.
+## စေ့ဆော်မှု
+- ပွင့်လင်းမြင်သာသောလည်ပတ်စီးဆင်းမှုကိုမပြောင်းလဲဘဲ domains များသည် ငွေပေးငွေယူကိုယ်ရေးကိုယ်တာအား ထိန်းသိမ်းထားနိုင်သောကြောင့် ရွေးချယ်မှုအကာအရံရှိသော ပိုင်ဆိုင်မှုစီးဆင်းမှုများကို ပေးပို့ပါ။
+- စာရင်းစစ်များနှင့် အော်ပရေတာများအား ဆားကစ်များနှင့် cryptographic ကန့်သတ်ချက်များအတွက် lifecycle ထိန်းချုပ်မှုများ (အသက်သွင်းခြင်း၊ လည်ပတ်ခြင်း၊ ရုတ်သိမ်းခြင်း) ကို ပေးပါ။
 
-## Threat Model
-- Validators are honest-but-curious: they execute consensus faithfully but attempt to inspect ledger/state.
-- Network observers see block data and gossiped transactions; no assumption of private gossip channels.
-- Out of scope: off-ledger traffic analysis, quantum adversaries (tracked separately under PQ roadmap), ledger availability attacks.
+## ခြိမ်းခြောက်မှုပုံစံ
+- စိစစ်သူများသည် ရိုးသားသော်လည်း စူးစမ်းလိုသည်- ၎င်းတို့သည် အများဆန္ဒကို သစ္စာရှိရှိ လုပ်ဆောင်သော်လည်း လယ်ဂျာ/ပြည်နယ်ကို စစ်ဆေးရန် ကြိုးစားကြသည်။
+- ကွန်ရက်လေ့လာသူများသည် ဒေတာပိတ်ဆို့ခြင်းနှင့် အတင်းအဖျင်းအပေးအယူများကို ကြည့်ရှုခြင်း၊ ပုဂ္ဂလိက အတင်းအဖျင်း ချန်နယ်များဟု ယူဆခြင်း မရှိပါ။
+- နယ်ပယ်ပြင်ပ- လယ်ဂျာလမ်းကြောင်းခွဲခြမ်းစိတ်ဖြာမှု၊ ကွမ်တမ်ရန်ဘက်များ (PQ လမ်းပြမြေပုံအောက်တွင် သီးခြားခြေရာခံထားသည်)၊ လယ်ဂျာရရှိနိုင်မှုတိုက်ခိုက်မှုများ။
 
-## Design Overview
-- Assets may declare a *shielded pool* in addition to existing transparent balances; shielded circulation is represented via cryptographic commitments.
-- Notes encapsulate `(asset_id, amount, recipient_view_key, blinding, rho)` with:
-  - Commitment: `Comm = Pedersen(params_id || asset_id || amount || recipient_view_key || blinding)`.
-  - Nullifier: `Null = Poseidon(domain_sep || nk || rho || asset_id || chain_id)`, independent of note ordering.
-  - Encrypted payload: `enc_payload = AEAD_XChaCha20Poly1305(ephemeral_shared_key, note_plaintext)`.
-- Transactions transport Norito-encoded `ConfidentialTransfer` payloads containing:
-  - Public inputs: Merkle anchor, nullifiers, new commitments, asset id, circuit version.
-  - Encrypted payloads for recipients and optional auditors.
-  - Zero-knowledge proof attesting value conservation, ownership, and authorization.
-- Verifying keys and parameter sets are controlled through on-ledger registries with activation windows; nodes refuse to validate proofs that reference unknown or revoked entries.
-- Consensus headers commit to the active confidential feature digest so blocks are only accepted when registry and parameter state matches.
-- Proof construction uses a Halo2 (Plonkish) stack without trusted setup; Groth16 or other SNARK variants are intentionally unsupported in v1.
+## ဒီဇိုင်းအကျဉ်းချုပ်
+- ပိုင်ဆိုင်မှုများသည် ရှိပြီးသား ပွင့်လင်းမြင်သာသော လက်ကျန်များအပြင် *အကာအရံရှိသော ရေကူးကန်* ကို ကြေညာနိုင်သည်။ အကာအကွယ်ပေးထားသော လည်ပတ်မှုကို ကုဒ်ဝှက်ထားသော ကတိကဝတ်များမှတစ်ဆင့် ကိုယ်စားပြုသည်။
+- မှတ်စုများကို `(asset_id, amount, recipient_view_key, blinding, rho)` ဖြင့် ဖုံးအုပ်ထားသည်-
+  - ကတိကဝတ်- `Comm = Pedersen(params_id || asset_id || amount || recipient_view_key || blinding)`။
+  - Nullifier- `Null = Poseidon(domain_sep || nk || rho || asset_id || chain_id)`၊ မှတ်စုမှာယူခြင်းမရှိဘဲ။
+  - ကုဒ်ဝှက်ထားသော payload- `enc_payload = AEAD_XChaCha20Poly1305(ephemeral_shared_key, note_plaintext)`။
+- ငွေပေးငွေယူ သယ်ယူပို့ဆောင်ရေး Norito-encoded `ConfidentialTransfer` ပါရှိသော payloads
+  - အများသူငှာ သွင်းအားစုများ- Merkle ကျောက်ဆူး၊ ပျက်ပြယ်စေသော အရာများ၊ ကတိကဝတ်အသစ်များ၊ ပိုင်ဆိုင်မှု ID၊ circuit ဗားရှင်း။
+  - လက်ခံသူများနှင့် ရွေးချယ်နိုင်သော စာရင်းစစ်များအတွက် ကုဒ်ဝှက်ထားသော payloads။
+  - တန်ဖိုးထိန်းသိမ်းမှု၊ ပိုင်ဆိုင်မှုနှင့် ခွင့်ပြုချက်တို့ကို သက်သေအထောက်အထား သုည-အသိပညာ။
+- သော့များနှင့် ပါရာမီတာအစုံများကို အကောင့်ဖွင့်ခြင်းပြတင်းပေါက်များဖြင့် ထိန်းချုပ်ထားသည်။ node များသည် အမည်မသိ ရည်ညွှန်းသော သို့မဟုတ် ရုပ်သိမ်းထားသော အထောက်အထားများကို တရားဝင်အတည်ပြုရန် ငြင်းဆိုထားသည်။
+- အများသဘောတူသော ခေါင်းစီးများသည် တက်ကြွသောလျှို့ဝှက်အင်္ဂါရပ်ကို ချေဖျက်ရန် ကတိပြုထားသောကြောင့် မှတ်ပုံတင်ခြင်းနှင့် ကန့်သတ်ချက်အခြေအနေနှင့် ကိုက်ညီသည့်အခါမှသာ ဘလောက်များကို လက်ခံပါသည်။
+- အထောက်အထားတည်ဆောက်မှုတွင် ယုံကြည်စိတ်ချရသော စနစ်ထည့်သွင်းခြင်းမရှိဘဲ Halo2 (Plonkish) စတန်းကို အသုံးပြုသည်။ Groth16 သို့မဟုတ် အခြား SNARK မျိုးကွဲများကို v1 တွင် ရည်ရွယ်ချက်ရှိရှိ ပံ့ပိုးမထားပါ။
 
 ### Deterministic Fixtures
 
-Confidential memo envelopes now ship with a canonical fixture at `fixtures/confidential/encrypted_payload_v1.json`. The dataset captures a positive v1 envelope plus negative malformed samples so SDKs can assert parsing parity. The Rust data-model tests (`crates/iroha_data_model/tests/confidential_encrypted_payload_vectors.rs`) and Swift suite (`IrohaSwift/Tests/IrohaSwiftTests/ConfidentialEncryptedPayloadTests.swift`) both load the fixture directly, guaranteeing that Norito encoding, error surfaces, and regression coverage stay aligned as the codec evolves.
+လျှို့ဝှက်မှတ်စုတိုစာအိတ်များကို ယခု `fixtures/confidential/encrypted_payload_v1.json` တွင် Canonical fixture ဖြင့် ပို့ပေးပါသည်။ ဒေတာအတွဲသည် အပြုသဘောဆောင်သော v1 စာအိတ်တစ်ခုနှင့် အနုတ်ပုံသဏ္ဍာန်မမှန်သောနမူနာများကို ဖမ်းယူထားသောကြောင့် SDK များသည် ခွဲခြမ်းစိတ်ဖြာမှုကွာဟမှုကို အခိုင်အမာအတည်ပြုနိုင်သည်။ Rust data-model tests (`crates/iroha_data_model/tests/confidential_encrypted_payload_vectors.rs`) နှင့် Swift suite (`IrohaSwift/Tests/IrohaSwiftTests/ConfidentialEncryptedPayloadTests.swift`) တို့သည် Norito encoding၊ error surfaces နှင့် regression coverage တို့သည် fixture ကို တိုက်ရိုက်တင်ပေးပြီး Norito encoding၊ error surfaces နှင့် regression coverage တို့သည် ကုဒ်ဒက်များပြောင်းလဲလာသည်နှင့်အမျှ ဆက်နေမည်ဟု အာမခံပါသည်။
 
-Swift SDKs can now emit shield instructions without bespoke JSON glue: construct a
-`ShieldRequest` with the 32-byte note commitment, encrypted payload, and debit metadata,
-then call `IrohaSDK.submit(shield:keypair:)` (or `submitAndWait`) to sign and relay the
-transaction over `/v1/pipeline/transactions`. The helper validates commitment lengths,
-threads `ConfidentialEncryptedPayload` into the Norito encoder, and mirrors the `zk::Shield`
-layout described below so wallets stay in lock-step with Rust.
+Swift SDK များသည် စိတ်ကြိုက် JSON ကော်မပါဘဲ အကာအရံညွှန်ကြားချက်များကို ထုတ်လွှတ်နိုင်ပါပြီ- a ကို တည်ဆောက်ပါ။
+`ShieldRequest` 32-byte မှတ်စုကတိကဝတ်၊ ကုဒ်ဝှက်ထားသော payload နှင့် debit metadata တို့နှင့်အတူ
+ထို့နောက် `IrohaSDK.submit(shield:keypair:)` (သို့မဟုတ် `submitAndWait`) ကို ခေါ်ဆို၍ လက်မှတ် ရေးထိုးပြီး ထပ်ဆင့်ပို့ပါ။
+`/v1/pipeline/transactions` ကျော် အရောင်းအဝယ်။ အကူအညီပေးသူက ကတိကဝတ်အရှည်များကို သက်သေပြသည်၊
+`ConfidentialEncryptedPayload` ကို Norito ကုဒ်ဒါသို့ တွဲပေးကာ `zk::Shield` ကို ထင်ဟပ်စေသည်
+အောက်တွင်ဖော်ပြထားသော အပြင်အဆင်သည် ပိုက်ဆံအိတ်များကို Rust ဖြင့် လော့ခ်ချသည့်အဆင့်တွင် ရှိနေစေပါသည်။
 
-## Consensus Commitments & Capability Gating
-- Block headers expose `conf_features = { vk_set_hash, poseidon_params_id, pedersen_params_id, conf_rules_version }`; the digest participates in the consensus hash and must equal the local registry view for block acceptance.
-- Governance can stage upgrades by programming `next_conf_features` with a future `activation_height`; until that height, block producers must continue to emit the previous digest.
-- Validator nodes MUST operate with `confidential.enabled = true` and `assume_valid = false`. Startup checks refuse to join the validator set if either condition fails or if local `conf_features` diverge.
-- P2P handshake metadata now includes `{ enabled, assume_valid, conf_features }`. Peers advertising unsupported features are rejected with `HandshakeConfidentialMismatch` and never enter consensus rotation.
-- Non-validator observers may set `assume_valid = true`; they blindly apply confidential deltas but do not influence consensus safety.
+## အများသဘောတူ ကတိကဝတ်များ နှင့် စွမ်းဆောင်ရည် သတ်မှတ်ခြင်း
+- ပိတ်ဆို့ခေါင်းစီးများကို `conf_features = { vk_set_hash, poseidon_params_id, pedersen_params_id, conf_rules_version }` ဖော်ထုတ်ပါ။ digest သည် အများသဘောတူထားသော hash တွင်ပါဝင်ပြီး block လက်ခံမှုအတွက် local registry view နှင့် တူညီရပါမည်။
+- အုပ်ချုပ်ရေးသည် အနာဂတ် `activation_height` ဖြင့် `next_conf_features` ပရိုဂရမ်ဖြင့် အဆင့်မြှင့်တင်နိုင်သည်။ ထိုအမြင့်အထိ၊ လုပ်ကွက်ထုတ်လုပ်သူများသည် ယခင်အနှစ်ချုပ်ကို ဆက်လက်ထုတ်လွှတ်ရမည်ဖြစ်သည်။
+- Validator node များသည် `confidential.enabled = true` နှင့် `assume_valid = false` ဖြင့် လုပ်ဆောင်ရပါမည်။ အခြေအနေတစ်ခုခု ပျက်သွားပါက သို့မဟုတ် ဒေသဆိုင်ရာ `conf_features` ကွဲပြားသွားပါက စတင်စစ်ဆေးခြင်းတွင် တရားဝင်သတ်မှတ်ခြင်းတွင် ပါဝင်ရန် ငြင်းဆိုထားသည်။
+- ယခု P2P လက်ဆွဲခြင်း မက်တာဒေတာတွင် `{ enabled, assume_valid, conf_features }` ပါဝင်ပါသည်။ ရွယ်တူများ ကြော်ငြာခြင်းကို ပံ့ပိုးမထားသော အင်္ဂါရပ်များကို `HandshakeConfidentialMismatch` ဖြင့် ပယ်ချပြီး အများဆန္ဒအလှည့်ကို ဘယ်တော့မှ မထည့်ပါ။
+- တရားဝင်မဟုတ်သော အကဲခတ်သူများသည် `assume_valid = true` ကို သတ်မှတ်နိုင်သည်။ ၎င်းတို့သည် လျှို့ဝှက်မြစ်ဝကျွန်းပေါ်ဒေသများကို မျက်စိစုံမှိတ် အသုံးချသော်လည်း အများသဘောတူသော လုံခြုံမှုကို မလွှမ်းမိုးပါ။
 
-## Asset Policies
-- Each asset definition carries an `AssetConfidentialPolicy` set by the creator or via governance:
-  - `TransparentOnly`: default mode; only transparent instructions (`MintAsset`, `TransferAsset`, etc.) are permitted and shielded operations are rejected.
-  - `ShieldedOnly`: all issuance and transfers must use confidential instructions; `RevealConfidential` is forbidden so balances never surface publicly.
-  - `Convertible`: holders may move value between transparent and shielded representations using the on/off-ramp instructions below.
-- Policies follow a constrained FSM to prevent stranding funds:
-  - `TransparentOnly → Convertible` (immediate enablement of shielded pool).
-  - `TransparentOnly → ShieldedOnly` (requires pending transition and conversion window).
-  - `Convertible → ShieldedOnly` (enforced minimum delay).
-  - `ShieldedOnly → Convertible` (migration plan required so shielded notes remain spendable).
-  - `ShieldedOnly → TransparentOnly` is disallowed unless the shielded pool is empty or governance encodes a migration that unshields outstanding notes.
-- Governance instructions set `pending_transition { new_mode, effective_height, previous_mode, transition_id, conversion_window }` via the `ScheduleConfidentialPolicyTransition` ISI and may abort scheduled changes with `CancelConfidentialPolicyTransition`. Mempool validation ensures no transaction straddles the transition height and inclusion fails deterministically if a policy check would change mid-block.
-- Pending transitions are applied automatically when a new block opens: once the block height enters the conversion window (for `ShieldedOnly` upgrades) or reaches the programmed `effective_height`, the runtime updates `AssetConfidentialPolicy`, refreshes `zk.policy` metadata, and clears the pending entry. If transparent supply remains when a `ShieldedOnly` transition matures, the runtime aborts the change and logs a warning, leaving the previous mode intact.
-- Config knobs `policy_transition_delay_blocks` and `policy_transition_window_blocks` enforce minimum notice and grace periods to let wallets convert notes around the switch.
-- `pending_transition.transition_id` doubles as an audit handle; governance must quote it when finalising or cancelling transitions so operators can correlate on/off-ramp reports.
-- `policy_transition_window_blocks` defaults to 720 (≈12 hours at 60 s block time). Nodes clamp governance requests that attempt shorter notice.
-- Genesis manifests and CLI flows surface current and pending policies. Admission logic reads the policy at execution time to confirm each confidential instruction is authorised.
-- Migration checklist — see “Migration sequencing” below for the staged upgrade plan that Milestone M0 tracks.
+## ပိုင်ဆိုင်မှုမူဝါဒများ
+- ပိုင်ဆိုင်မှု အဓိပ္ပါယ်ဖွင့်ဆိုချက်တစ်ခုစီတွင် ဖန်တီးသူမှ သတ်မှတ်ထားသော `AssetConfidentialPolicy` ပါရှိသည်-
+  - `TransparentOnly`- မူရင်းမုဒ်။ ပွင့်လင်းမြင်သာသော ညွှန်ကြားချက်များ (`MintAsset`၊ `TransferAsset` စသည်ဖြင့်) ကိုသာ ခွင့်ပြုထားပြီး အကာအရံလုပ်ဆောင်မှုများကို ပယ်ချပါသည်။
+  - `ShieldedOnly`- ထုတ်ပေးခြင်းနှင့် လွှဲပြောင်းခြင်းများအားလုံးသည် လျှို့ဝှက်ညွှန်ကြားချက်များကို အသုံးပြုရပါမည်။ `RevealConfidential` ကို တားမြစ်ထားသောကြောင့် လက်ကျန်များကို လူသိရှင်ကြား ပေါ်မလာတော့ပါ။
+  - `Convertible`- ကိုင်ဆောင်သူများသည် အောက်ဖော်ပြပါ အဖွင့်/အပိတ် လမ်းညွှန်ချက်များကို အသုံးပြု၍ ဖောက်ထွင်းမြင်ရသော နှင့် အကာအရံများကြားမှ တန်ဖိုးကို ရွှေ့နိုင်သည်။
+- ဘဏ္ဍာငွေများ သောင်တင်နေခြင်းကို ကာကွယ်ရန် မူဝါဒများသည် ကန့်သတ်ထားသော FSM ကို လိုက်နာသည်-
+  - `TransparentOnly → Convertible` (အကာအရံရှိသော ရေကန်ကို ချက်ချင်းဖွင့်ခြင်း)။
+  - `TransparentOnly → ShieldedOnly` (ဆိုင်းငံ့အကူးအပြောင်းနှင့် ပြောင်းလဲခြင်းဝင်းဒိုး လိုအပ်သည်)။
+  - `Convertible → ShieldedOnly` (အနည်းဆုံး နှောင့်နှေးမှုကို ကန့်သတ်ထားသည်)။
+  - `ShieldedOnly → Convertible` (ရွှေ့ပြောင်းနေထိုင်မှုအစီအစဉ် လိုအပ်သောကြောင့် အကာအရံမှတ်စုများကို သုံးစွဲနိုင်သည်)။
+  - `ShieldedOnly → TransparentOnly` သည် အကာအရံမရှိသော ရေကန်သည် ဗလာဖြစ်နေသည် သို့မဟုတ် အုပ်ချုပ်ရေးမှ ထူးခြားသောမှတ်စုများကို အကာအရံမရှိသော ရွှေ့ပြောင်းခြင်းအား ကုဒ်နံပါတ်ဝှက်ထားခြင်းကို ခွင့်မပြုပါ။
+- အုပ်ချုပ်မှုလမ်းညွှန်ချက်များသည် `pending_transition { new_mode, effective_height, previous_mode, transition_id, conversion_window }` ကို `ScheduleConfidentialPolicyTransition` ISI မှတစ်ဆင့် သတ်မှတ်ပြီး `CancelConfidentialPolicyTransition` ဖြင့် စီစဉ်ထားသော ပြောင်းလဲမှုများကို ပယ်ဖျက်နိုင်သည်။ Mempool validation သည် အကူးအပြောင်းအမြင့်ကို ကျော်တက်သွားခြင်းမရှိကြောင်း သေချာစေပြီး မူဝါဒစစ်ဆေးမှုတစ်ခုသည် အလယ်အလတ်တုံးကို ပြောင်းလဲမည်ဆိုပါက ပါဝင်မှုမှာ အဆုံးအဖြတ်မအောင်မြင်ပါ။
+- ဘလောက်အသစ်တစ်ခုဖွင့်သောအခါတွင် ဆိုင်းငံ့ထားသောအကူးအပြောင်းများကို အလိုအလျောက်အသုံးပြုသည်- ဘလောက်အမြင့်သည် ပြောင်းလဲခြင်းဝင်းဒိုး (`ShieldedOnly` အဆင့်မြှင့်တင်မှုများအတွက်) သို့မဟုတ် ပရိုဂရမ်ပြုလုပ်ထားသော `effective_height` သို့ရောက်ရှိသည်နှင့်၊ runtime အပ်ဒိတ်များ `AssetConfidentialPolicy` သည် `ShieldedOnly` ကို ပြန်လည်စတင်ပြီး metadata၊ ထည့်သွင်းမှုနှင့် ရှင်းလင်းသည်။ `ShieldedOnly` အသွင်ကူးပြောင်းမှု ရင့်လာသောအခါတွင် ဖောက်ထွင်းမြင်ရသော ထောက်ပံ့မှုသည် ကျန်ရှိနေပါက၊ runtime သည် အပြောင်းအလဲကို ပျက်ပြယ်သွားပြီး ယခင်မုဒ်ကို နဂိုအတိုင်းထားကာ သတိပေးချက်တစ်ခုကို မှတ်တမ်းတင်ထားသည်။
+- Config knobs `policy_transition_delay_blocks` နှင့် `policy_transition_window_blocks` သည် ပိုက်ဆံအိတ်များကို switch ပတ်ပတ်လည်တွင် မှတ်စုများအဖြစ်ပြောင်းခွင့်ပြုရန် အနိမ့်ဆုံးသတိပေးချက်နှင့် ကျေးဇူးတော်ကာလများကို ပြဌာန်းထားသည်။
+- `pending_transition.transition_id` သည် စာရင်းစစ်လက်ကိုင်အဖြစ် နှစ်ဆတိုးသည်။ အော်ပရေတာများသည် အဖွင့်/အပိတ်အစီရင်ခံချက်များကို ဆက်စပ်ဆောင်ရွက်နိုင်စေရန် အကူးအပြောင်းများကို အပြီးသတ်သည့်အခါ သို့မဟုတ် ပယ်ဖျက်သည့်အခါ အုပ်ချုပ်မှုစနစ်သည် ၎င်းကိုကိုးကားရပါမည်။
+- `policy_transition_window_blocks` သည် 720 (≈12 နာရီ 60 s ပိတ်ဆို့ချိန်) သို့ ပုံသေဖြစ်သည်။ တိုတောင်းသောသတိပေးချက်ကို ကြိုးပမ်းသော Nodes များက ကုပ်ကုပ်အုပ်ချုပ်မှုတောင်းဆိုမှုများ။
+- ကမ္ဘာဦးကျမ်းတွင် ဖော်ပြပြီး CLI သည် လက်ရှိနှင့် ဆိုင်းငံ့ထားသောမူဝါဒများကို ပေါ်လွင်စေသည်။ လျှို့ဝှက်ညွှန်ကြားချက်တစ်ခုစီကို ခွင့်ပြုကြောင်း အတည်ပြုရန် ဝင်ခွင့်ဆိုင်ရာ လော့ဂျစ်သည် အကောင်အထည်ဖော်ချိန်၌ မူဝါဒကို ဖတ်သည်။
+- Milestone M0 လမ်းကြောင်းအတိုင်း အဆင့်မြှင့်ထားသော အဆင့်မြှင့်တင်မှု အစီအစဉ်အတွက် အောက်ဖော်ပြပါ “ရွှေ့ပြောင်းခြင်းဆိုင်ရာ စီစစ်ခြင်း” ကို ကြည့်ပါ။
 
-#### Monitoring transitions via Torii
+#### Torii မှတစ်ဆင့် အကူးအပြောင်းများကို စောင့်ကြည့်ခြင်း။
 
-Wallets and auditors poll `GET /v1/confidential/assets/{definition_id}/transitions` to inspect
-the active `AssetConfidentialPolicy`. The JSON payload always includes the canonical
-asset id, the latest observed block height, the policy’s `current_mode`, the mode that is
-effective at that height (conversion windows temporarily report `Convertible`), and the
-expected `vk_set_hash`/Poseidon/Pedersen parameter identifiers. When a governance
-transition is pending the response also embeds:
+ပိုက်ဆံအိတ်များနှင့် စာရင်းစစ်များသည် `GET /v1/confidential/assets/{definition_id}/transitions` ကို စစ်ဆေးရန် စစ်တမ်းကောက်ယူသည်။
+အသက်ဝင်သော `AssetConfidentialPolicy`။ JSON payload တွင် canonical အမြဲပါဝင်သည်။
+ပိုင်ဆိုင်မှု id၊ နောက်ဆုံးတွေ့ရှိထားသည့် ဘလောက်အမြင့်၊ မူဝါဒ၏ `current_mode`၊ ဖြစ်သည့် မုဒ်
+ထိုအမြင့်တွင် ထိရောက်မှု (ပြောင်းလဲခြင်း windows ယာယီ `Convertible`) နှင့်
+မျှော်လင့်ထားသော `vk_set_hash`/Poseidon/Pedersen ပါရာမီတာ ခွဲခြားသတ်မှတ်မှုများ။ အုပ်ချုပ်မှုတစ်ခုလုပ်တဲ့အခါ
+အကူးအပြောင်းကို ဆိုင်းငံ့ထားပြီး တုံ့ပြန်ချက်ကိုလည်း ထည့်သွင်းထားသည်-
 
-- `transition_id` — audit handle returned by `ScheduleConfidentialPolicyTransition`.
-- `previous_mode`/`new_mode`.
-- `effective_height`.
-- `conversion_window` and the derived `window_open_height` (the block where wallets must
-  begin conversion for ShieldedOnly cut-overs).
+- `transition_id` — `ScheduleConfidentialPolicyTransition` မှ ပြန်ပေးထားသော စာရင်းစစ်လက်ကိုင်။
+- `previous_mode`/`new_mode`။
+- `effective_height`။
+- `conversion_window` နှင့် ဆင်းသက်လာသော `window_open_height` (ပိုက်ဆံအိတ်ရှိရမည့် ပိတ်ဆို့ခြင်း
+  ShieldedOnly ဖြတ်တောက်ခြင်းများအတွက် စတင်ပြောင်းလဲခြင်း)။
 
-Example response:
+ဥပမာ တုံ့ပြန်ချက်-
 
 ```json
 {
@@ -114,202 +115,196 @@ Example response:
 }
 ```
 
-A `404` response indicates no matching asset definition exists. When no transition is
-scheduled the `pending_transition` field is `null`.
+`404` တုံ့ပြန်မှုသည် ကိုက်ညီသော ပိုင်ဆိုင်မှု အဓိပ္ပါယ်ဖွင့်ဆိုချက် မရှိသည်ကို ညွှန်ပြပါသည်။ အကူးအပြောင်းမရှိတဲ့အခါ
+စီစဉ်ထားသော `pending_transition` အကွက်သည် `null` ဖြစ်သည်။
 
-### Policy state machine
+### ပေါ်လစီပြည်နယ်စက်| လက်ရှိမုဒ် | နောက်မုဒ် | လိုအပ်ချက်များ | ထိရောက်သော ကိုင်တွယ်မှု | မှတ်စုများ |
+|--------------------|--------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| TransparentOnly | ပြောင်းလဲနိုင်သော | အုပ်ချုပ်မှုစနစ်သည် အတည်ပြုသူ/ကန့်သတ်ချက်စာရင်းသွင်းမှုများကို အသက်သွင်းထားသည်။ `ScheduleConfidentialPolicyTransition` ကို `effective_height ≥ current_height + policy_transition_delay_blocks` ဖြင့် တင်ပြပါ။ | အကူးအပြောင်းသည် `effective_height` တွင် အတိအကျ လုပ်ဆောင်သည်။ အကာအရံရှိသော ရေကူးကန်ကို ချက်ချင်းရနိုင်သည်။                   | ပွင့်လင်းမြင်သာသောစီးဆင်းမှုများကို ထိန်းသိမ်းထားစဉ် လျှို့ဝှက်ထားမှုကို ဖွင့်ရန်အတွက် မူရင်းလမ်းကြောင်း။               |
+| TransparentOnly | အကာအရံများသာ | အပေါ်ကအတိုင်းပါပဲ၊ ပေါင်း `policy_transition_window_blocks ≥ 1`။                                                         | Runtime သည် `Convertible` တွင် `effective_height - policy_transition_window_blocks` မှ အလိုအလျောက်ဝင်ရောက်ပါသည်။ `effective_height` တွင် `ShieldedOnly` သို့ပြောင်းပါ။ | ပွင့်လင်းမြင်သာသော ညွှန်ကြားချက်များကို မပိတ်ထားမီ အဆုံးအဖြတ်ပေးသော ပြောင်းလဲခြင်းဝင်းဒိုးကို ပံ့ပိုးပေးသည်။   |
+| ပြောင်းလဲနိုင်သော | အကာအရံများသာ | `effective_height ≥ current_height + policy_transition_delay_blocks` ဖြင့် စီစဉ်ထားသော အကူးအပြောင်း။ စာရင်းစစ် မက်တာဒေတာမှတစ်ဆင့် အုပ်ချုပ်ရေးသည် (`transparent_supply == 0`) ကို အသိအမှတ်ပြုရမည်။ runtime သည် ၎င်းကို ဖြတ်တောက်ရာတွင် တွန်းအားပေးသည်။ | အထက်ဖော်ပြပါအတိုင်း တူညီသော window semantics ဖောက်ထွင်းမြင်ရသော ထောက်ပံ့မှုသည် `effective_height` တွင် သုညမဟုတ်ပါက၊ အကူးအပြောင်းသည် `PolicyTransitionPrerequisiteFailed` ဖြင့်ပျက်သွားပါသည်။ | ပိုင်ဆိုင်မှုကို အပြည့်အဝလျှို့ဝှက်လည်ပတ်မှုအဖြစ် သော့ခတ်ထားသည်။                                     |
+| အကာအရံများသာ | ပြောင်းလဲနိုင်သော | စီစဉ်ထားသောအကူးအပြောင်း; အရေးပေါ်ငွေထုတ်ခြင်း မရှိပါ (`withdraw_height` မသတ်မှတ်ထားပါ)။                                    | ပြည်နယ်ကို `effective_height` တွင် ပြန်လှန်ပါ။ အကာအရံမှတ်စုများ တရားဝင်ကျန်နေချိန်တွင် ချဉ်းကပ်လမ်းများကို ပြန်ဖွင့်ကြောင်းဖော်ပြသည်။                           | ပြုပြင်ထိန်းသိမ်းမှု ပြတင်းပေါက်များ သို့မဟုတ် စာရင်းစစ်သုံးသပ်ချက်များအတွက် အသုံးပြုသည်။                                          |
+| အကာအရံများသာ | TransparentOnly | အုပ်ချုပ်ရေးသည် `shielded_supply == 0` ကို သက်သေပြရမည် သို့မဟုတ် လက်မှတ်ရေးထိုးထားသော `EmergencyUnshield` အစီအစဉ် (စာရင်းစစ်လက်မှတ်များ လိုအပ်သည်)။ | Runtime သည် `effective_height` ၏ ရှေ့တွင် `Convertible` ဝင်းဒိုးကို ဖွင့်ထားသည်။ အမြင့်တွင်၊ လျှို့ဝှက်ညွှန်ကြားချက်များ ခက်ခက်ခဲခဲ ပျက်ကွက်ပြီး ပိုင်ဆိုင်မှုသည် ပွင့်လင်းမြင်သာသော မုဒ်သို့ ပြန်သွားပါသည်။ | နောက်ဆုံး-အပန်းဖြေစခန်းထွက်ပေါက်။ ဝင်းဒိုးအတွင်း လျှို့ဝှက်မှတ်စုတစ်ခုခု ကုန်သွားပါက အကူးအပြောင်းသည် အလိုအလျောက် ပယ်ဖျက်သည်။ |
+| မဆို | လက်ရှိ | နှင့်တူသည်။ `CancelConfidentialPolicyTransition` သည် ဆိုင်းငံ့ထားသောပြောင်းလဲမှုကို ရှင်းလင်းသည်။                                                        | `pending_transition` ကို ချက်ချင်း ဖယ်ရှားလိုက်ပါ။                                                                          | လက်ရှိအနေအထားကို ထိန်းသိမ်းပါ။ ပြည့်စုံမှုအတွက် ပြသထားသည်။                                             |
 
-| Current mode       | Next mode        | Prerequisites                                                                 | Effective-height handling                                                                                         | Notes                                                                                     |
-|--------------------|------------------|-------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------|
-| TransparentOnly    | Convertible      | Governance has activated verifier/parameter registry entries. Submit `ScheduleConfidentialPolicyTransition` with `effective_height ≥ current_height + policy_transition_delay_blocks`. | Transition executes exactly at `effective_height`; shielded pool becomes available immediately.                   | Default path for enabling confidentiality while keeping transparent flows.               |
-| TransparentOnly    | ShieldedOnly     | Same as above, plus `policy_transition_window_blocks ≥ 1`.                                                         | Runtime auto-enters `Convertible` at `effective_height - policy_transition_window_blocks`; flips to `ShieldedOnly` at `effective_height`. | Provides deterministic conversion window before transparent instructions are disabled.   |
-| Convertible        | ShieldedOnly     | Scheduled transition with `effective_height ≥ current_height + policy_transition_delay_blocks`. Governance SHOULD certify (`transparent_supply == 0`) via audit metadata; runtime enforces this at cut-over. | Identical window semantics as above. If the transparent supply is non-zero at `effective_height`, the transition aborts with `PolicyTransitionPrerequisiteFailed`. | Locks the asset into fully confidential circulation.                                     |
-| ShieldedOnly       | Convertible      | Scheduled transition; no active emergency withdrawal (`withdraw_height` unset).                                    | State flips at `effective_height`; reveal ramps reopen while shielded notes remain valid.                           | Used for maintenance windows or auditor reviews.                                          |
-| ShieldedOnly       | TransparentOnly  | Governance must prove `shielded_supply == 0` or stage a signed `EmergencyUnshield` plan (auditor signatures required). | Runtime opens a `Convertible` window ahead of `effective_height`; at the height, confidential instructions hard-fail and the asset returns to transparent-only mode. | Last-resort exit. Transition auto-cancels if any confidential note spends during the window. |
-| Any                | Same as current  | `CancelConfidentialPolicyTransition` clears pending change.                                                        | `pending_transition` removed immediately.                                                                          | Maintains status quo; shown for completeness.                                             |
+အထက်ဖော်ပြပါ အကူးအပြောင်းများကို အုပ်ချုပ်မှုတင်ပြမှုအတွင်း ပယ်ချပါသည်။ အချိန်ဇယားဆွဲထားသော အကူးအပြောင်းကို အသုံးမပြုမီ လိုအပ်ချက်များကို Runtime မှ စစ်ဆေးပါသည်။ ကြိုတင်သတ်မှတ်ချက်များ ပျက်ကွက်ခြင်းသည် ပိုင်ဆိုင်မှုအား ၎င်း၏ယခင်မုဒ်သို့ ပြန်တွန်းပြီး တယ်လီမီတာနှင့် ပိတ်ဆို့ခြင်းဖြစ်ရပ်များမှတစ်ဆင့် `PolicyTransitionPrerequisiteFailed` ကို ထုတ်လွှတ်သည်။
 
-Transitions not listed above are rejected during governance submission. Runtime checks the prerequisites right before applying a scheduled transition; failing preconditions pushes the asset back to its previous mode and emits `PolicyTransitionPrerequisiteFailed` via telemetry and block events.
+### ရွှေ့ပြောင်းခြင်း အစီအစဉ်
 
-### Migration sequencing
+2. **အကူးအပြောင်းကို အဆင့်သတ်မှတ်ပါ-** `policy_transition_delay_blocks` ကို လေးစားသော `ScheduleConfidentialPolicyTransition` ကို `effective_height` ဖြင့် တင်ပြပါ။ `ShieldedOnly` သို့ပြောင်းသောအခါ၊ ပြောင်းလဲခြင်းဝင်းဒိုး (`window ≥ policy_transition_window_blocks`) ကို သတ်မှတ်ပါ။
+3. **အော်ပရေတာလမ်းညွှန်ချက်ကို ထုတ်ဝေပါ-** ပြန်ပေးထားသော `transition_id` ကို မှတ်တမ်းတင်ပြီး အဖွင့်/အပိတ် ပြေးစာအုပ်ကို ဖြန့်ဝေပါ။ Wallets များနှင့် စာရင်းစစ်များသည် `/v1/confidential/assets/{id}/transitions` ကို စာရင်းသွင်းပြီး ဖွင့်ထားသော window အမြင့်ကို လေ့လာပါ။
+4. **Window enforcement-** ဝင်းဒိုးဖွင့်သောအခါ၊ runtime သည် မူဝါဒကို `Convertible` သို့ပြောင်းပြီး၊ `PolicyTransitionWindowOpened { transition_id }` ကို ထုတ်လွှတ်ကာ ကွဲလွဲနေသော အုပ်ချုပ်မှုတောင်းဆိုချက်များကို ပယ်ချသည်။
+5. ** အပြီးသတ်ခြင်း သို့မဟုတ် ဖျက်ပစ်ခြင်း-** `effective_height` တွင်၊ runtime သည် အကူးအပြောင်းအတွက် လိုအပ်ချက်များကို စစ်ဆေးပေးသည် (ဖောက်ထွင်းမြင်ရသည့် ထောက်ပံ့မှု သုည၊ အရေးပေါ်ငွေထုတ်ခြင်း မရှိခြင်း စသည်)။ အောင်မြင်မှု မူဝါဒကို တောင်းဆိုထားသည့် မုဒ်သို့ ပြောင်းသည်။ ချို့ယွင်းချက်သည် `PolicyTransitionPrerequisiteFailed` ကို ထုတ်လွှတ်သည်၊ ဆိုင်းငံ့ထားသော အကူးအပြောင်းကို ရှင်းလင်းစေပြီး မူဝါဒကို မပြောင်းလဲစေပါ။
+6. **Schema အဆင့်မြှင့်တင်မှုများ-** အောင်မြင်သောအကူးအပြောင်းတစ်ခုပြီးနောက်၊ အုပ်ချုပ်မှုစနစ်သည် ပိုင်ဆိုင်မှုအစီအစဉ်ဗားရှင်း (ဥပမာ၊ `asset_definition.v2`) ကို အဖုအထစ်ဖြစ်စေပြီး CLI ကိရိယာသည် အမှတ်စဉ်ဖော်ပြသည့်အခါတွင် `confidential_policy` လိုအပ်သည်။ Genesis မှ အဆင့်မြှင့်ထားသော docs သည် validators ကို ပြန်လည်စတင်ခြင်းမပြုမီ မူဝါဒဆက်တင်များနှင့် မှတ်ပုံတင်လက်ဗွေများကို ထည့်သွင်းရန် အော်ပရေတာများအား ညွှန်ကြားထားသည်။
 
-2. **Stage the transition:** Submit `ScheduleConfidentialPolicyTransition` with an `effective_height` that respects `policy_transition_delay_blocks`. When moving toward `ShieldedOnly`, specify a conversion window (`window ≥ policy_transition_window_blocks`).
-3. **Publish operator guidance:** Record the returned `transition_id` and circulate an on/off-ramp runbook. Wallets and auditors subscribe to `/v1/confidential/assets/{id}/transitions` to learn the window open height.
-4. **Window enforcement:** When the window opens, the runtime switches the policy to `Convertible`, emits `PolicyTransitionWindowOpened { transition_id }`, and begins rejecting conflicting governance requests.
-5. **Finalize or abort:** At `effective_height`, the runtime verifies the transition prerequisites (zero transparent supply, no emergency withdrawals, etc.). Success flips the policy to the requested mode; failure emits `PolicyTransitionPrerequisiteFailed`, clears the pending transition, and leaves the policy unchanged.
-6. **Schema upgrades:** After a successful transition, governance bumps the asset schema version (e.g., `asset_definition.v2`) and CLI tooling requires `confidential_policy` when serialising manifests. Genesis upgrade docs instruct operators to add policy settings and registry fingerprints before restarting validators.
+လျှို့ဝှက်ချက်ဖြင့် စတင်သည့် ကွန်ရက်အသစ်များသည် လိုချင်သောမူဝါဒကို ဥပါဒ်တွင် တိုက်ရိုက်ကုဒ်လုပ်ထားသည်။ လွှင့်တင်ပြီးနောက် မုဒ်များကို ပြောင်းလဲသည့်အခါတွင် ၎င်းတို့သည် အထက်ဖော်ပြပါ စစ်ဆေးစာရင်းကို လိုက်နာဆဲဖြစ်သောကြောင့် ပြောင်းလဲခြင်းဝင်းဒိုးများသည် အဆုံးအဖြတ်အတိုင်း ဆက်လက်တည်ရှိပြီး ပိုက်ဆံအိတ်များကို ချိန်ညှိရန် အချိန်ရှိသည်။
 
-New networks that start with confidentiality enabled encode the desired policy directly in genesis. They still follow the checklist above when changing modes post-launch so that conversion windows remain deterministic and wallets have time to adjust.
+### Norito ပေါ်လွင်သော ဗားရှင်းပြုလုပ်ခြင်းနှင့် အသက်သွင်းခြင်း။
 
-### Norito manifest versioning & activation
-
-- Genesis manifests MUST include a `SetParameter` for the custom `confidential_registry_root` key. The payload is Norito JSON matching `ConfidentialRegistryMeta { vk_set_hash: Option<String> }`: omit the field (`null`) when no verifier entries are active, otherwise supply a 32-byte hex string (`0x…`) equal to the hash produced by `compute_vk_set_hash` over the verifier instructions shipped in the manifest. Nodes refuse to start if the parameter is missing or the hash disagrees with the encoded registry writes.
-- The on-wire `ConfidentialFeatureDigest::conf_rules_version` embeds the manifest layout version. For v1 networks it MUST remain `Some(1)` and equals `iroha_config::parameters::defaults::confidential::RULES_VERSION`. When the ruleset evolves, bump the constant, regenerate manifests, and roll out binaries in lock-step; mixing versions causes validators to reject blocks with `ConfidentialFeatureDigestMismatch`.
-- Activation manifests SHOULD bundle registry updates, parameter lifecycle changes, and policy transitions so the digest stays consistent:
-  1. Apply the planned registry mutations (`Publish*`, `Set*Lifecycle`) in an offline state view and compute the post-activation digest with `compute_confidential_feature_digest`.
-  2. Emit `SetParameter::custom(confidential_registry_root, {"vk_set_hash": "0x…"})` using the computed hash so lagging peers can recover the correct digest even if they miss intermediate registry instructions.
-  3. Append the `ScheduleConfidentialPolicyTransition` instructions. Each instruction must quote the governance-issued `transition_id`; manifests that forget it will be rejected by the runtime.
-  4. Persist the manifest bytes, a SHA-256 fingerprint, and the digest used in the activation plan. Operators verify all three artefacts before voting the manifest into effect to avoid partitions.
-- When rollouts require a deferred cut-over, record the target height in a companion custom parameter (for example `custom.confidential_upgrade_activation_height`). This gives auditors a Norito-encoded proof that validators honoured the notice window before the digest change took effect.
+- ကမ္ဘာဦးကျမ်းတွင် စိတ်ကြိုက် `confidential_registry_root` သော့အတွက် `SetParameter` ပါဝင်ရမည်။ payload သည် Norito JSON သည် `ConfidentialRegistryMeta { vk_set_hash: Option<String> }` ဖြစ်သည်- 18NI0000012NIX 10 နှင့်ညီမျှသည့် 32-byte hex string (I18NI0000012NIX) 010 ကျော်ဖြင့်ထုတ်လုပ်ထားသော I18NI0000012NIX) ကို 10 နှင့်ညီမျှသော I18NI0000012NIX) မန်နီးဖက်စ်တွင် စိစစ်ရေးမှူးညွှန်ကြားချက်များ ပေးပို့ထားသည်။ ကန့်သတ်ချက်များ ပျောက်ဆုံးနေပါက သို့မဟုတ် hash များသည် ကုဒ်လုပ်ထားသော registry တွင် ရေးသားထားသည်ကို သဘောမတူပါက Node များ စတင်ရန် ငြင်းဆိုသည်။
+- on-wire `ConfidentialFeatureDigest::conf_rules_version` သည် manifest layout ဗားရှင်းကို ထည့်သွင်းထားသည်။ v1 ကွန်ရက်များအတွက် ၎င်းသည် `Some(1)` ရှိနေမည်ဖြစ်ပြီး `iroha_config::parameters::defaults::confidential::RULES_VERSION` နှင့် ညီမျှရပါမည်။ စည်းမျဥ်းများ တိုးလာသောအခါ၊ ကိန်းသေများကို ဆောင့်ကန်ပါ၊ သရုပ်ကို ပြန်လည်ထုတ်ပါ၊ သော့ခတ်အဆင့်တွင် binaries ကို ထုတ်ပါ။ ဗားရှင်းများ ရောနှောခြင်းသည် `ConfidentialFeatureDigestMismatch` ဖြင့် ပိတ်ဆို့ခြင်းများကို စိစစ်သူများကို ငြင်းပယ်စေသည်။
+- အသက်သွင်းခြင်းသည် အစုအစည်း မှတ်ပုံတင်အပ်ဒိတ်များ၊ ပါရာမီတာ ဘဝသံသရာပြောင်းလဲမှုများနှင့် မူဝါဒအကူးအပြောင်းများကို ဖော်ပြသင့်သည်-
+  1. အော့ဖ်လိုင်းအခြေအနေမြင်ကွင်းတွင် စီစဉ်ထားသော မှတ်ပုံတင်ထားသော ဗီဇပြောင်းလဲမှုများ (`Publish*`၊ `Set*Lifecycle`) ကို အသုံးပြုပြီး `compute_confidential_feature_digest` ဖြင့် တွက်ချက်ပြီး အသက်သွင်းပြီးနောက် အချေအတင်ကို တွက်ချက်ပါ။
+  2. တွက်ချက်ထားသော hash ကို အသုံးပြု၍ `SetParameter::custom(confidential_registry_root, {"vk_set_hash": "0x…"})` ကို ထုတ်လွှတ်သောကြောင့် နောက်ကျနေသော ရွယ်တူများသည် အလယ်အလတ် မှတ်ပုံတင်ခြင်း ညွှန်ကြားချက်များကို လွတ်သွားသော်လည်း မှန်ကန်သော အချေအတင်ကို ပြန်လည်ရယူနိုင်ပါသည်။
+  3. `ScheduleConfidentialPolicyTransition` ညွှန်ကြားချက်များကို ဖြည့်စွက်ပါ။ ညွှန်ကြားချက်တစ်ခုစီသည် အုပ်ချုပ်ရေးမှထုတ်ပေးသော `transition_id` ကိုကိုးကားရပါမည်။ မေ့သွားပါက ၎င်းကို runtime မှ ပယ်ချမည် ဖြစ်သည်။
+  4. ထင်ရှားသောဘိုက်များ၊ SHA-256 လက်ဗွေနှင့် စတင်လုပ်ဆောင်မှုအစီအစဉ်တွင် အသုံးပြုသည့် အချေအတင်များကို ဆက်လက်ထားရှိပါ။ အပိုင်းများကို ရှောင်ရှားရန် အော်ပရေတာများသည် သရုပ်ပြမှုကို အသက်ဝင်စေရန် မဲပေးခြင်းမပြုမီ ရှေးဟောင်းပစ္စည်း သုံးခုလုံးကို စစ်ဆေးအတည်ပြုပါသည်။
+- ဖြန့်ချိမှုများသည် ရွှေ့ဆိုင်းထားသောဖြတ်တောက်မှုတစ်ခု လိုအပ်သည့်အခါ၊ အဖော်စိတ်ကြိုက်ကန့်သတ်ဘောင်တစ်ခုတွင် ပစ်မှတ်အမြင့်ကို မှတ်တမ်းတင်ပါ (ဥပမာ `custom.confidential_upgrade_activation_height`)။ ၎င်းသည် စာရင်းစစ်များအား အချေအတင်ပြောင်းလဲမှုမစတင်မီတွင် အတည်ပြုသူများသည် သတိပေးချက်ဝင်းဒိုးအား ဂုဏ်ပြုသည့် Norito-ကုဒ်လုပ်ထားသော အထောက်အထားကို ပေးသည်။
 
 ## Verifier & Parameter Lifecycle
 ### ZK Registry
-- Ledger stores `ZkVerifierEntry { vk_id, circuit_id, version, proving_system, curve, public_inputs_schema_hash, vk_hash, vk_len, max_proof_bytes, gas_schedule_id, activation_height, deprecation_height, withdraw_height, status, metadata_uri_cid, vk_bytes_cid }` where `proving_system` is currently fixed to `Halo2`.
-- `(circuit_id, version)` pairs are globally unique; the registry maintains a secondary index for lookups by circuit metadata. Attempts to register a duplicate pair are rejected during admission.
-- `circuit_id` must be non-empty and `public_inputs_schema_hash` must be provided (typically a Blake2b-32 hash of the verifier’s canonical public-input encoding). Admission rejects records that omit these fields.
-- Governance instructions include:
-  - `PUBLISH` to add a `Proposed` entry with metadata only.
-  - `ACTIVATE { vk_id, activation_height }` to schedule entry activation at an epoch boundary.
-  - `DEPRECATE { vk_id, deprecation_height }` to mark the final height where proofs may reference the entry.
-  - `WITHDRAW { vk_id, withdraw_height }` for emergency shutdown; affected assets freeze confidential spending after the withdraw height until new entries activate.
-- Genesis manifests auto-emit a `confidential_registry_root` custom parameter whose `vk_set_hash` matches the active entries; validation cross-checks this digest against local registry state before a node can join consensus.
-- Registering or updating a verifier requires a `gas_schedule_id`; verification enforces that the registry entry is `Active`, present in the `(circuit_id, version)` index, and that Halo2 proofs provide an `OpenVerifyEnvelope` whose `circuit_id`, `vk_hash`, and `public_inputs_schema_hash` match the registry record.
+- လက်ရှိတွင် `proving_system` ကို `Halo2` သို့ ပြင်ဆင်ထားသည့် `ZkVerifierEntry { vk_id, circuit_id, version, proving_system, curve, public_inputs_schema_hash, vk_hash, vk_len, max_proof_bytes, gas_schedule_id, activation_height, deprecation_height, withdraw_height, status, metadata_uri_cid, vk_bytes_cid }` လယ်ဂျာစတိုးဆိုင်များ။
+- `(circuit_id, version)` အတွဲများသည် တစ်ကမ္ဘာလုံးတွင် ထူးခြားပါသည်။ registry သည် circuit metadata ဖြင့်ရှာဖွေမှုအတွက် ဒုတိယအညွှန်းကို ထိန်းသိမ်းထားသည်။ ထပ်နေသောအတွဲကို ဝင်ခွင့်စာရင်းသွင်းရန် ကြိုးပမ်းမှုကို ငြင်းပယ်သည်။
+- `circuit_id` သည် အလွတ်မဟုတ်ရမည်ဖြစ်ပြီး `public_inputs_schema_hash` ကို ပေးရမည် (ပုံမှန်အားဖြင့် အတည်ပြုသူ၏ canonical public-input encoding ၏ Blake2b-32 hash တစ်ခု)။ ဝင်ခွင့်သည် ဤနယ်ပယ်များကို ချန်လှပ်ထားသည့် မှတ်တမ်းများကို ငြင်းပယ်သည်။
+- အုပ်ချုပ်မှု ညွှန်ကြားချက်များ ပါဝင်သည်။
+  - မက်တာဒေတာဖြင့်သာ `Proposed` ထည့်သွင်းရန် `PUBLISH`။
+  - `ACTIVATE { vk_id, activation_height }` သည် ခေတ်နယ်နိမိတ်တစ်ခုတွင် ဝင်ခွင့်စတင်ခြင်းကို အချိန်ဇယားဆွဲရန်။
+  အထောက်အထားများသည် ဝင်ရောက်မှုကို ကိုးကားနိုင်သည့် နောက်ဆုံးအမြင့်ကို မှတ်သားရန် `DEPRECATE { vk_id, deprecation_height }`။
+  - အရေးပေါ်ပိတ်ရန်အတွက် `WITHDRAW { vk_id, withdraw_height }`၊ ကန့်သတ်ထားသော ပိုင်ဆိုင်မှုများသည် အသစ်များ စတင်မဖွင့်မချင်း အမြင့်ကို ရုပ်သိမ်းပြီးနောက် လျှို့ဝှက်အသုံးစရိတ်ကို ရပ်တန့်စေပါသည်။
+- Genesis သည် `confidential_registry_root` စိတ်ကြိုက် parameter တစ်ခုကို အလိုအလျောက်ထုတ်လွှတ်ကြောင်း ထင်ရှားစေပြီး `vk_set_hash` သည် လက်ရှိထည့်သွင်းမှုများနှင့် ကိုက်ညီပါသည်။ node သည် အများသဘောတူဆန္ဒမပါဝင်မီ ဤအချက်များကို ဒေသဆိုင်ရာ registry state နှင့် ကိုက်ညီမှုရှိမရှိ စစ်ဆေးပေးပါသည်။
+- အတည်ပြုသူအား မှတ်ပုံတင်ခြင်း သို့မဟုတ် အပ်ဒိတ်လုပ်ခြင်း `gas_schedule_id` လိုအပ်သည်။ `Active` သည် `(circuit_id, version)` အညွှန်းတွင် ပါရှိပြီး Halo2 အထောက်အထားများသည် `OpenVerifyEnvelope` ဖြစ်သည့် `OpenVerifyEnvelope`၊ I18NI00000150108X နှင့် ကိုက်ညီသော `pending_transition` ကို ပံ့ပိုးပေးပါသည်။ မှတ်ပုံတင်မှတ်တမ်း။
 
-### Proving Keys
-- Proving keys remain off-ledger but are referenced by content-addressed identifiers (`pk_cid`, `pk_hash`, `pk_len`) published alongside verifier metadata.
-- Wallet SDKs fetch PK data, verify hashes, and cache locally.
+### သက်သေသော့များ
+- သက်သေပြသော့များသည် လယ်ဂျာမဟုတ်သော်လည်း အကြောင်းအရာ-လိပ်စာသတ်မှတ်မှုစနစ် (`pk_cid`, `pk_hash`, `pk_len`) တို့နှင့်အတူ ထုတ်ဝေထားသော အတည်ပြုသူ မက်တာဒေတာဖြင့် ရည်ညွှန်းပါသည်။
+- Wallet SDKs များသည် PK ဒေတာကို ရယူပြီး၊ ဟက်ကာများကို စစ်ဆေးကာ စက်တွင်းရှိ ကက်ရှ်များ။
 
-### Pedersen & Poseidon Parameters
-- Separate registries (`PedersenParams`, `PoseidonParams`) mirror verifier lifecycle controls, each with `params_id`, hashes of generators/constants, activation, deprecation, and withdraw heights.
-
-## Deterministic Ordering & Nullifiers
-- Each asset maintains a `CommitmentTree` with `next_leaf_index`; blocks append commitments in deterministic order: iterate transactions in block order; within each transaction iterate shielded outputs by ascending serialized `output_idx`.
-- `note_position` is derived from the tree offsets but **not** part of the nullifier; it only feeds membership paths within the proof witness.
-- Nullifier stability under reorgs is guaranteed by the PRF design; the PRF input binds `{ nk, note_preimage_hash, asset_id, chain_id, params_id }`, and anchors reference historical Merkle roots limited by `max_anchor_age_blocks`.
+### Pedersen & Poseidon ကန့်သတ်ချက်များ
+- သီးခြားမှတ်ပုံတင်မှုများ (`PedersenParams`၊ `PoseidonParams`) မှန်မှန်ကန်ကန်အတည်ပြုမှုဘဝစက်ဝန်းထိန်းချုပ်မှုများ၊ တစ်ခုစီတွင် `params_id`၊ ဂျင်နရေတာ/ကိန်းသေများ၏ ကန့်လန့်ကာများ၊ အသက်သွင်းခြင်း၊ ခွဲထုတ်ခြင်းနှင့် အမြင့်များကို ရုပ်သိမ်းခြင်း။## Deterministic Ordering & Nullifiers
+- ပစ္စည်းတစ်ခုစီသည် `next_leaf_index` နှင့် `CommitmentTree` ကို ထိန်းသိမ်းထားသည်။ ပိတ်ဆို့ခြင်းများသည် အဆုံးအဖြတ်အစီအစဥ်အတိုင်း ကတိကဝတ်များကို ပေါင်းထည့်သည်- ဘလောက်အစီအစဥ်တွင် အရောင်းအဝယ်များကို ထပ်လောင်းပါ။ အရောင်းအ၀ယ်တစ်ခုစီတွင် အမှတ်စဉ် `output_idx` ကို အတက်အဆင်းပြုလုပ်ခြင်းဖြင့် အကာအရံထုတ်ပေးမှုများကို ထပ်တလဲလဲပြုလုပ်သည်။
+- `note_position` သည် သစ်ပင် အော့ဖ်ဆက်များမှ ဆင်းသက်လာသော်လည်း nullifier ၏ အစိတ်အပိုင်း **မဟုတ်ပါ**။ ၎င်းသည် သက်သေသက်သေများအတွင်း အသင်းဝင်လမ်းကြောင်းများကိုသာ ကျွေးမွေးပါသည်။
+- reorgs အောက်တွင် Nullifier တည်ငြိမ်မှုကို PRF ဒီဇိုင်းဖြင့် အာမခံပါသည်။ PRF ထည့်သွင်းမှုသည် `{ nk, note_preimage_hash, asset_id, chain_id, params_id }` နှင့် `max_anchor_age_blocks` ကန့်သတ်ထားသော သမိုင်းဆိုင်ရာ Merkle အမြစ်များကို ကိုးကားသော ကျောက်ဆူးများ။
 
 ## Ledger Flow
-1. **MintConfidential { asset_id, amount, recipient_hint }**
-   - Requires asset policy `Convertible` or `ShieldedOnly`; admission checks asset authority, retrieves current `params_id`, samples `rho`, emits commitment, updates Merkle tree.
-   - Emits `ConfidentialEvent::Shielded` with the new commitment, Merkle root delta, and transaction call hash for audit trails.
-2. **TransferConfidential { asset_id, proof, circuit_id, version, nullifiers, new_commitments, enc_payloads, anchor_root, memo }**
-   - VM syscall verifies proof using registry entry; host ensures nullifiers unused, commitments appended deterministically, anchor is recent.
-   - Ledger records `NullifierSet` entries, stores encrypted payloads for recipients/auditors, and emits `ConfidentialEvent::Transferred` summarising nullifiers, ordered outputs, proof hash, and Merkle roots.
-3. **RevealConfidential { asset_id, proof, circuit_id, version, nullifier, amount, recipient_account, anchor_root }**
-   - Available only for `Convertible` assets; proof validates note value equals revealed amount, ledger credits transparent balance, and burns the shielded note by marking the nullifier spent.
-   - Emits `ConfidentialEvent::Unshielded` with the public amount, consumed nullifiers, proof identifiers, and transaction call hash.
+1. **MintConfidential { asset_id၊ ပမာဏ၊ လက်ခံသူ_အရိပ်အမြွက်}**
+   - ပိုင်ဆိုင်မှုမူဝါဒ `Convertible` သို့မဟုတ် `ShieldedOnly` လိုအပ်သည်။ ဝင်ခွင့်စစ်ဆေးမှုများသည် ပိုင်ဆိုင်မှုအာဏာပိုင်၊ လက်ရှိ `params_id`၊ နမူနာ `rho`၊ ကတိကဝတ်များကို ထုတ်လွှတ်သည်၊ Merkle သစ်ပင်ကို အပ်ဒိတ်လုပ်ပါသည်။
+   - ကတိကဝတ်အသစ်၊ Merkle root delta နှင့် စာရင်းစစ်လမ်းကြောင်းများအတွက် ငွေပေးငွေယူခေါ်ဆိုမှု hash ဖြင့် `ConfidentialEvent::Shielded` ကို ထုတ်လွှတ်သည်။
+2. **TransferConfidential { asset_id၊ အထောက်အထား၊ circuit_id၊ ဗားရှင်း၊ nullifiers၊ new_commitments၊ enc_payloads၊ anchor_root၊ မှတ်စုတို }**
+   - VM syscall သည် registry entry ကိုအသုံးပြု၍ အထောက်အထားကိုစစ်ဆေးသည်။ host သည် အသုံးမပြုသော nullifiers များကို သေချာစေသည်၊ ကတိကဝတ်များကို အဆုံးအဖြတ်အတိုင်း ပေါင်းထည့်ထားသည်၊ anchor သည် မကြာသေးပါ။
+   - Ledger သည် `NullifierSet` သွင်းမှုများကို မှတ်တမ်းတင်သည်၊ လက်ခံသူများ/စာရင်းစစ်များအတွက် ကုဒ်ကုဒ်လုပ်ထားသော payload များကို သိမ်းဆည်းကာ `ConfidentialEvent::Transferred` သည် nullifiers အကျဉ်းချုပ်များ၊ အမိန့်ထုတ်မှုများ၊ အထောက်အထား hash နှင့် Merkle အမြစ်များကို ထုတ်လွှတ်သည်။
+3. **RevealConfidential { asset_id၊ အထောက်အထား၊ circuit_id၊ ဗားရှင်း၊ nullifier၊ ပမာဏ၊ recipient_account၊ anchor_root }**
+   - `Convertible` ပိုင်ဆိုင်မှုများအတွက်သာ ရရှိနိုင်ပါသည်။ အထောက်အထားသည် မှတ်စုတန်ဖိုးကို ထုတ်ဖော်ပြသသည့်ပမာဏနှင့် ညီမျှသည်၊ လယ်ဂျာခရက်ဒစ်များ ပွင့်လင်းသော လက်ကျန်ငွေကို သက်သေပြပြီး သုံးစွဲထားသော nullifier ကို အမှတ်အသားပြုခြင်းဖြင့် အကာအရံများကို လောင်ကျွမ်းစေပါသည်။
+   - `ConfidentialEvent::Unshielded` ကို အများသူငှာ ပမာဏ၊ စားသုံးထားသော ပျက်ပြယ်စေသော၊ အထောက်အထား အထောက်အထားများနှင့် ငွေပေးငွေယူ ခေါ်ဆိုမှု hash တို့ဖြင့် ထုတ်လွှတ်ပါသည်။
 
-## Data Model Additions
-- `ConfidentialConfig` (new config section) with enablement flag, `assume_valid`, gas/limit knobs, anchor window, verifier backend.
-- `ConfidentialNote`, `ConfidentialTransfer`, and `ConfidentialMint` Norito schemas with explicit version byte (`CONFIDENTIAL_ASSET_V1 = 0x01`).
-- `ConfidentialEncryptedPayload` wraps AEAD memo bytes with `{ version, ephemeral_pubkey, nonce, ciphertext }`, defaulting to `version = CONFIDENTIAL_ENCRYPTED_PAYLOAD_V1` for the XChaCha20-Poly1305 layout.
-- Canonical key-derivation vectors live in `docs/source/confidential_key_vectors.json`; both the CLI and Torii endpoint regress against these fixtures.
-- `asset::AssetDefinition` gains `confidential_policy: AssetConfidentialPolicy { mode, vk_set_hash, poseidon_params_id, pedersen_params_id, pending_transition }`.
-- `ZkAssetState` persists the `(backend, name, commitment)` binding for transfer/unshield verifiers; execution rejects proofs whose referenced or inline verifying key fails to match the registered commitment.
-- `CommitmentTree` (per asset with frontier checkpoints), `NullifierSet` keyed by `(chain_id, asset_id, nullifier)`, `ZkVerifierEntry`, `PedersenParams`, `PoseidonParams` stored in world state.
-- Mempool maintains transient `NullifierIndex` and `AnchorIndex` structures for early duplicate detection and anchor age checks.
-- Norito schema updates include canonical ordering for public inputs; round-trip tests ensure encoding determinism.
-- Encrypted payload roundtrips are locked in via unit tests (`crates/iroha_data_model/src/confidential.rs`). Follow-up wallet vectors will attach canonical AEAD transcripts for auditors. `norito.md` documents the on-wire header for the envelope.
+## ဒေတာမော်ဒယ် ထပ်လောင်းမှုများ
+- ဖွင့်ထားသောအလံ၊ `assume_valid`၊ ဓာတ်ငွေ့/ကန့်သတ်ခလုတ်များ၊ ကျောက်ဆူးဝင်းဒိုး၊ အတည်ပြုစနစ်နောက်ကွယ်ပါရှိသော `ConfidentialConfig` (ပြင်ဆင်မှုအပိုင်းအသစ်)။
+- `ConfidentialNote`၊ `ConfidentialTransfer`၊ နှင့် `ConfidentialMint` Norito တိကျပြတ်သားသောဗားရှင်း byte (`CONFIDENTIAL_ASSET_V1 = 0x01`) နှင့် schemas။
+- `ConfidentialEncryptedPayload` သည် XChaCha20-Poly1305 အပြင်အဆင်အတွက် `{ version, ephemeral_pubkey, nonce, ciphertext }` ဖြင့် AEAD မှတ်စုဘိုက်များကို `version = CONFIDENTIAL_ENCRYPTED_PAYLOAD_V1` သို့ ပုံသေသတ်မှတ်ထားသည်။
+- Canonical သော့မှဆင်းသက်လာသော vector များသည် `docs/source/confidential_key_vectors.json` တွင်နေထိုင်သည်; CLI နှင့် Torii အဆုံးမှတ် နှစ်ခုလုံးသည် ဤပွဲများနှင့် ဆန့်ကျင်ဘက်သို့ ပြန်သွားသည်။
+- `asset::AssetDefinition` အမြတ် `confidential_policy: AssetConfidentialPolicy { mode, vk_set_hash, poseidon_params_id, pedersen_params_id, pending_transition }`။
+- `ZkAssetState` သည် `(backend, name, commitment)` ကို လွှဲပြောင်းခြင်း/အကာအကွယ်မဲ့ စိစစ်မှုများအတွက် ဆက်ရှိနေသည် ။ ကတိကဝတ်ပြုထားသည့် ကတိကဝတ်များနှင့် မကိုက်ညီသော သော့ကို ကိုးကားသော သို့မဟုတ် အတွင်းပိုင်းစစ်ဆေးခြင်းဆိုင်ရာ အထောက်အထားများကို ကတိကဝတ် ပယ်ချပါသည်။
+- `CommitmentTree` (နယ်ခြားစစ်ဆေးရေးဂိတ်များပါသည့် ပစ္စည်းတစ်ခုလျှင်)၊ `NullifierSet` သော့ခတ်ထားသော `(chain_id, asset_id, nullifier)`၊ `ZkVerifierEntry`၊ `PedersenParams`၊ `PoseidonParams` တွင် စတိုးဆိုင်
+- Mempool သည် စောစီးစွာ ထပ်နေသည့်ရှာဖွေတွေ့ရှိမှုနှင့် ကျောက်ဆူးအသက်စစ်ဆေးမှုများအတွက် ယာယီ `NullifierIndex` နှင့် `AnchorIndex` တည်ဆောက်မှုများကို ထိန်းသိမ်းထားသည်။
+- Norito schema အပ်ဒိတ်များတွင် အများသူငှာ သွင်းအားစုများအတွက် canonical ordering ပါဝင်သည်။ အသွားအပြန် စမ်းသပ်မှုများသည် ကုဒ်နံပါတ်သတ်မှတ်မှုကို သေချာစေသည်။
+- ကုဒ်ဝှက်ထားသော payload အသွားအပြန်ခရီးများကို ယူနစ်စမ်းသပ်မှုများ (`crates/iroha_data_model/src/confidential.rs`) မှတစ်ဆင့် လော့ခ်ချထားသည်။ နောက်ဆက်တွဲ ပိုက်ဆံအိတ် vector များသည် စာရင်းစစ်များအတွက် canonical AEAD မှတ်တမ်းများကို ပူးတွဲပေးပါမည်။ `norito.md` သည် စာအိတ်အတွက် ကြိုးမဲ့ခေါင်းစီးကို မှတ်တမ်းတင်ထားသည်။
 
-## IVM Integration & Syscall
-- Introduce `VERIFY_CONFIDENTIAL_PROOF` syscall accepting:
-  - `circuit_id`, `version`, `scheme`, `public_inputs`, `proof`, and resulting `ConfidentialStateDelta { asset_id, nullifiers, commitments, enc_payloads }`.
-  - Syscall loads verifier metadata from registry, enforces size/time limits, charges deterministic gas, and only applies delta if proof succeeds.
-- Host exposes read-only `ConfidentialLedger` trait for retrieving Merkle root snapshots and nullifier status; Kotodama library provides witness assembly helpers and schema validation.
-- Pointer-ABI docs updated to clarify proof buffer layout and registry handles.
+## IVM ပေါင်းစပ်ခြင်းနှင့် Syscall
+- `VERIFY_CONFIDENTIAL_PROOF` syscall လက်ခံခြင်းကို မိတ်ဆက်ပေးပါ-
+  - `circuit_id`, `version`, `scheme`, `public_inputs`, `proof` နှင့် ရလဒ် `ConfidentialStateDelta { asset_id, nullifiers, commitments, enc_payloads }`။
+  - Syscall သည် မှတ်ပုံတင်ခြင်းမှ အတည်ပြုသည့် မက်တာဒေတာကို တင်ဆောင်သည်၊ အရွယ်အစား/အချိန်ကန့်သတ်ချက်များကို ပြဋ္ဌာန်းပေးသည်၊ အဆုံးအဖြတ်ပေးသည့်ဓာတ်ငွေ့ကို ကောက်ခံပြီး အထောက်အထားအောင်မြင်ပါက မြစ်ဝကျွန်းပေါ်ဒေသကိုသာ သက်ရောက်မှုရှိသည်။
+- Host သည် Merkle root လျှပ်တစ်ပြက်ရိုက်ချက်များနှင့် nullifier အခြေအနေကို ပြန်လည်ရယူရန်အတွက် ဖတ်ရန်-သီးသန့် `ConfidentialLedger` လက္ခဏာကို ဖော်ထုတ်ပေးပါသည်။ Kotodama စာကြည့်တိုက်သည် သက်သေခံ စည်းဝေးပွဲ အထောက် အကူများနှင့် ဇယားအား အတည်ပြုချက် ပေးပါသည်။
+- Pointer-ABI docs များကို အထောက်အထားကြားခံပုံစံနှင့် registry လက်ကိုင်များကို ရှင်းလင်းရန် အပ်ဒိတ်လုပ်ထားသည်။
 
 ## Node Capability Negotiation
-- Handshake advertises `feature_bits.confidential` together with a `ConfidentialFeatureDigest { vk_set_hash, poseidon_params_id, pedersen_params_id, conf_rules_version }`. Validator participation requires `confidential.enabled=true`, `assume_valid=false`, identical verifier backend identifiers, and matching digests; mismatches fail the handshake with `HandshakeConfidentialMismatch`.
-- Config supports `assume_valid` for observer nodes only: when disabled, encountering confidential instructions yields deterministic `UnsupportedInstruction` without panic; when enabled, observers apply declared state deltas without verifying proofs.
-- Mempool rejects confidential transactions if local capability is disabled. Gossip filters avoid sending shielded transactions to peers without matching capability while blind-forwarding unknown verifier IDs within size limits.
+- Handshake သည် `feature_bits.confidential` ကို `ConfidentialFeatureDigest { vk_set_hash, poseidon_params_id, pedersen_params_id, conf_rules_version }` နှင့်အတူ ကြော်ငြာသည်။ Validator ပါဝင်မှုသည် `confidential.enabled=true`၊ `assume_valid=false`၊ တူညီသော verifier backend identifiers နှင့် ကိုက်ညီသော digests လိုအပ်ပါသည်။ `HandshakeConfidentialMismatch` နှင့် လက်ဆွဲခြင်း မကိုက်ညီပါ။
+- Config သည် `assume_valid` ကို လေ့လာသူ node များအတွက်သာ ပံ့ပိုးပေးသည်- ပိတ်ထားသည့်အခါ၊ လျှို့ဝှက်ညွှန်ကြားချက်များကို ကြုံတွေ့ရပါက ထိတ်လန့်မှုမရှိဘဲ အဆုံးအဖြတ်ပေးသည့် `UnsupportedInstruction` ကို ထုတ်ပေးပါသည်။ ဖွင့်ထားသောအခါတွင် လေ့လာသူများသည် အထောက်အထားများကို မစစ်ဆေးဘဲ ကြေညာထားသော မြစ်ဝကျွန်းပေါ်ဒေသများကို အသုံးပြုသည်။
+- ဒေသတွင်းလုပ်ဆောင်နိုင်စွမ်းကိုပိတ်ထားပါက Mempool သည် လျှို့ဝှက်ငွေပေးချေမှုများကို ငြင်းပယ်သည်။ အတင်းအဖျင်း စစ်ထုတ်မှုများသည် အရွယ်အစား ကန့်သတ်ချက်များအတွင်း မျက်ကန်းမသိသော အတည်ပြုသူ ID များကို အရွယ်အစား ကန့်သတ်ချက်များအတွင်း လိုက်လျောညီထွေဖြစ်စေသော စွမ်းဆောင်ရည်မရှိဘဲ တူညီသောစွမ်းရည်မရှိဘဲ ရွယ်တူများထံ ပေးပို့ခြင်းကို ရှောင်ကြဉ်ပါသည်။
 
-### Reveal Pruning & Nullifier Retention Policy
+### Pruning & Nullifier Retention Policy ကို ဖော်ပြပါ။
 
-Confidential ledgers must retain enough history to prove note freshness and to
-replay governance-driven audits. The default policy, enforced by
-`ConfidentialLedger`, is:
+လျှို့ဝှက်စာရင်းဇယားများသည် ဆန်းသစ်မှုနှင့် မှတ်သားထားရန် လုံလောက်သောမှတ်တမ်းကို ထိန်းသိမ်းထားရပါမည်။
+အုပ်ချုပ်မှုစနစ်ဖြင့် မောင်းနှင်သော စာရင်းစစ်များကို ပြန်လည်ဖွင့်ပါ။ ပုံသေမူဝါဒဖြင့် ပြဋ္ဌာန်းထားသည်။
+`ConfidentialLedger` မှာ-
 
-- **Nullifier retention:** keep spent nullifiers for *minimum* `730` days (24
-  months) after spend height, or the regulator-mandated window if longer.
-  Operators may extend the window via `confidential.retention.nullifier_days`.
-  Nullifiers younger than the retention window MUST remain queryable via Torii so
-  auditors can prove double-spend absence.
-- **Reveal pruning:** transparent reveals (`RevealConfidential`) prune the
-  associated note commitments immediately after the block finalises, but the
-  consumed nullifier remains subject to the retention rule above. Reveal-related
-  events (`ConfidentialEvent::Unshielded`) record the public amount, recipient,
-  and proof hash so reconstructing historic reveals does not require the pruned
-  ciphertext.
-- **Frontier checkpoints:** commitment frontiers maintain rolling checkpoints
-  covering the larger of `max_anchor_age_blocks` and the retention window. Nodes
-  compact older checkpoints only after all nullifiers within the interval expire.
-- **Stale digest remediation:** if `HandshakeConfidentialMismatch` is raised due
-  to digest drift, operators should (1) verify that nullifier retention windows
-  align across the cluster, (2) run `iroha_cli app confidential verify-ledger` to
-  regenerate the digest against the retained nullifier set, and (3) redeploy the
-  refreshed manifest. Any nullifiers pruned prematurely must be restored from
-  cold storage before rejoining the network.
+- **Nullifier retention-** သုံးစွဲထားသော nullifiers များကို *အနည်းဆုံး* `730` ရက် (24 ရက်) ထားရှိပါ။
+  လများ) အမြင့်ကိုသုံးပြီးနောက်၊ သို့မဟုတ် ပိုကြာပါက ထိန်းညှိပေးသော window ကို။
+  အော်ပရေတာများသည် `confidential.retention.nullifier_days` မှတစ်ဆင့် ဝင်းဒိုးကို တိုးချဲ့နိုင်သည်။
+  ထိန်းသိမ်းထားသောဝင်းဒိုးထက်ငယ်သော Nullifiers များသည် Torii မှတစ်ဆင့် စုံစမ်းနိုင်ရမည်ဖြစ်သောကြောင့်
+  စာရင်းစစ်များသည် နှစ်ဆသုံးစွဲခြင်းမရှိကြောင်း သက်သေပြနိုင်သည်။
+- **Reveal pruning:** ဖောက်ထွင်းမြင်ရသော (`RevealConfidential`) သုတ်သင်ခြင်း
+  ပိတ်ဆို့ခြင်း အပြီးသတ်ပြီးနောက် ချက်ခြင်း ဆက်စပ်မှတ်စု ကတိကဝတ်များ ရှိသော်လည်း၊
+  စားသုံးထားသော nullifier သည် အထက်ဖော်ပြပါ ထိန်းသိမ်းမှုစည်းမျဉ်းအတိုင်း ဆက်လက်တည်ရှိနေပါသည်။ ဆက်စပ်ဖော်ပြသည်။
+  ဖြစ်ရပ်များ (`ConfidentialEvent::Unshielded`) အများသူငှာ ပမာဏကို မှတ်တမ်းတင်ပါ၊ လက်ခံသူ၊
+  နှင့် အထောက်အထား hash ဖြစ်သောကြောင့် သမိုင်းဝင်ဖော်ပြမှုများကို ပြန်လည်တည်ဆောက်ရာတွင် ဖြတ်တောက်ရန်မလိုအပ်ပါ။
+  စာဝှက်စာသား
+- ** Frontier စစ်ဆေးရေးဂိတ်များ-** ကတိကဝတ်နယ်ခြားများသည် လှိမ့်စစ်ဆေးရေးဂိတ်များကို ထိန်းသိမ်းထားသည်။
+  ပိုကြီးသော `max_anchor_age_blocks` နှင့် retention window ကို ဖုံးအုပ်ထားသည်။ ဆုံမှတ်များ
+  ကြားကာလအတွင်း nullifiers များအားလုံး သက်တမ်းကုန်ပြီးမှသာ အဟောင်းစစ်ဆေးရေးဂိတ်များကို ကျစ်လစ်စေပါသည်။
+- ** Stale digest remedation :** `HandshakeConfidentialMismatch` ကို သတ်မှတ်ရက်တွင် တိုးလာပါက၊
+  ပျံ့လွင့်မှုကို ချေဖျက်ရန်၊ အော်ပရေတာများသည် (၁) ထို nullifier retention windows ကို အတည်ပြုသင့်သည်။
+  အစုအဝေးကိုဖြတ်ပြီး ညှိပါ၊ (၂) `iroha_cli app confidential verify-ledger` သို့ ပြေးပါ။
+  သိမ်းထားသော nullifier set ကိုဆန့်ကျင်သော digest ကို ပြန်လည်ထုတ်ပေးပြီး (3) ၎င်းကို ပြန်လည်အသုံးချပါ။
+  ပြန်လည်ဆန်းသစ်ထားသော မန်နီးဖက်စ်။ အချိန်မတန်မီ ဖြတ်တောက်ထားသော မည်သည့် nullifiers များမှ ပြန်လည်ရယူရပါမည်။
+  ကွန်ရက်သို့မဝင်မီ အအေးခန်းသိုလှောင်မှု။
 
-Document local overrides in the operations runbook; governance policies extending
-the retention window must update node configuration and archival storage plans in
-lockstep.
+လုပ်ငန်းလည်ပတ်မှုစာရင်းစာအုပ်တွင် စက်တွင်းမှ အစားထိုးမှုများကို မှတ်တမ်းတင်ပါ။ အုပ်ချုပ်မှုမူဝါဒများ တိုးချဲ့ဆောင်ရွက်ခြင်း
+ထိန်းသိမ်းဝင်းဒိုးသည် node configuration နှင့် archival storage အစီအစဉ်များကို အပ်ဒိတ်လုပ်ရပါမည်။
+သော့ခတ်ခြင်း။
 
-### Eviction & Recovery Flow
+### နှင်ထုတ်ခြင်းနှင့် ပြန်လည်ရယူခြင်း စီးဆင်းမှု
 
-1. During dial, `IrohaNetwork` compares the advertised capabilities. Any mismatch raises `HandshakeConfidentialMismatch`; the connection is closed and the peer remains in the discovery queue without ever being promoted to `Ready`.
-2. The failure is surfaced via the network service log (including the remote digest and backend), and Sumeragi never schedules the peer for proposal or voting.
-3. Operators remediate by aligning verifier registries and parameter sets (`vk_set_hash`, `pedersen_params_id`, `poseidon_params_id`) or by staging `next_conf_features` with an agreed `activation_height`. Once the digest matches, the next handshake succeeds automatically.
-4. If a stale peer manages to broadcast a block (e.g., via archival replay), validators reject it deterministically with `BlockRejectionReason::ConfidentialFeatureDigestMismatch`, keeping ledger state consistent across the network.
+1. ဖုန်းခေါ်ဆိုစဉ်အတွင်း `IrohaNetwork` သည် ကြော်ငြာထားသော စွမ်းရည်များကို နှိုင်းယှဉ်ပါသည်။ မည်သည့်မကိုက်ညီမှုမဆို `HandshakeConfidentialMismatch` ကိုတိုးစေသည်။ ချိတ်ဆက်မှုကို ပိတ်ထားပြီး ရွယ်တူသည် `Ready` သို့ ရာထူးတိုးခြင်းမပြုဘဲ ရှာဖွေတွေ့ရှိမှုတန်းစီတွင် ရှိနေပါသည်။
+2. ပျက်ကွက်မှုကို ကွန်ရက်ဝန်ဆောင်မှုမှတ်တမ်း (အဝေးမှချေဖျက်ခြင်းနှင့် နောက်ကွယ်တွင် အပါအဝင်) မှတစ်ဆင့် ပေါ်လာပြီး Sumeragi သည် အဆိုပြုချက် သို့မဟုတ် မဲပေးခြင်းအတွက် သက်တူရွယ်တူကို မည်သည့်အခါမျှ အချိန်ဇယားဆွဲမည်မဟုတ်ပါ။
+3. အော်ပရေတာများသည် အတည်ပြုမှုစာရင်းသွင်းမှုများနှင့် ကန့်သတ်ချက်အစုံများ (`vk_set_hash`, `pedersen_params_id`, `poseidon_params_id`) သို့မဟုတ် `next_conf_features` ကို သဘောတူညီထားသော `next_conf_features` ဖြင့် အဆင့်သတ်မှတ်ခြင်းဖြင့် ပြန်လည်ပြင်ဆင်သည်။ အချေအတင် ကိုက်ညီသည်နှင့် နောက်လက်ဆွဲခြင်းသည် အလိုအလျောက် အောင်မြင်ပါသည်။
+4. အရွယ်တူရွယ်တူတစ်ဦးသည် ဘလောက်တစ်ခုအား ထုတ်လွှင့်ရန် စီမံခန့်ခွဲပါက (ဥပမာ၊ မှတ်တမ်းဟောင်းကို ပြန်လည်ပြသခြင်းမှတစ်ဆင့်)၊ အတည်ပြုသူများသည် ၎င်းအား `BlockRejectionReason::ConfidentialFeatureDigestMismatch` ဖြင့် အဆုံးအဖြတ်ပေးကာ ကွန်ရက်တစ်ခုလုံးတွင် စာရင်းဇယားအခြေအနေကို လိုက်လျောညီထွေဖြစ်စေရန် အဆုံးအဖြတ်ပေးသည်။
 
-### Replay-safe handshake flow
+### ပြန်ဖွင့်သည်- အန္တရာယ်ကင်းသော လက်ဆွဲနှုတ်ဆက်ခြင်း
 
-1. Each outbound attempt allocates fresh Noise/X25519 key material. The handshake payload that is signed (`handshake_signature_payload`) concatenates the local and remote ephemeral public keys, the Norito-encoded advertised socket address, and—when compiled with `handshake_chain_id`—the chain identifier. The message is AEAD-encrypted before it leaves the node.
-2. The responder recomputes the payload with the peer/local key order reversed and verifies the Ed25519 signature embedded in `HandshakeHelloV1`. Because both ephemeral keys and the advertised address are part of the signature domain, replaying a captured message against another peer or recovering a stale connection fails verification deterministically.
-3. Confidential capability flags and the `ConfidentialFeatureDigest` travel inside `HandshakeConfidentialMeta`. The receiver compares the tuple `{ enabled, assume_valid, verifier_backend, digest }` against its locally configured `ConfidentialHandshakeCaps`; any mismatch exits early with `HandshakeConfidentialMismatch` before the transport transitions to `Ready`.
-4. Operators MUST recompute the digest (via `compute_confidential_feature_digest`) and restart nodes with the updated registries/policies before reconnecting. Peers advertising old digests continue to fail the handshake, preventing stale state from re-entering the validator set.
-5. Handshake successes and failures update the standard `iroha_p2p::peer` counters (`handshake_failure_count`, error taxonomy helpers) and emit structured log entries tagged with the remote peer ID and digest fingerprint. Monitor these indicators to catch replay attempts or misconfigurations during rollout.
+1. အပြင်ထွက်ကြိုးပမ်းမှုတိုင်းသည် လတ်ဆတ်သော Noise/X25519 သော့ချက်ပစ္စည်းကို ခွဲဝေပေးသည်။ (`handshake_signature_payload`) တွင် ရေးထိုးထားသည့် လက်ဆွဲ ဝန်ထုပ်ဝန်ပိုးသည် ဒေသတွင်းနှင့် အဝေးထိန်း ပေါ်ပင် အများသူငှာသော့များ၊ Norito ကုဒ်ဖြင့် ကြော်ငြာထားသည့် ဆော့ဖ်ဝဲလိပ်စာနှင့်—`handshake_chain_id`—ကွင်းဆက် identifier တို့ကို ပေါင်းစပ်ထားသည်။ မက်ဆေ့ဂျ်သည် node မှမထွက်ခွာမီ AEAD-ကုဒ်ဝှက်ထားသည်။
+2. တုံ့ပြန်သူသည် လုပ်ဖော်ကိုင်ဖက်/ဒေသခံသော့အမှာစာဖြင့် ပေးဆောင်မှုကို ပြန်လည်တွက်ချက်ပြီး `HandshakeHelloV1` တွင် ထည့်သွင်းထားသော Ed25519 လက်မှတ်ကို အတည်ပြုသည်။ ပေါ်ပင်သော့များနှင့် ကြော်ငြာထားသည့်လိပ်စာ နှစ်ခုစလုံးသည် လက်မှတ်ဒိုမိန်း၏ တစ်စိတ်တစ်ပိုင်းဖြစ်သောကြောင့်၊ ဖမ်းယူထားသော မက်ဆေ့ချ်ကို အခြားမျိုးတူများနှင့် ပြန်လည်ပြသခြင်း သို့မဟုတ် ဖောက်ပြန်နေသည့် ချိတ်ဆက်မှုအား ပြန်လည်ရယူခြင်းသည် အဆုံးအဖြတ်အရ စိစစ်မှု မအောင်မြင်ပါ။
+3. လျှို့ဝှက်လုပ်ဆောင်နိုင်မှု အလံများနှင့် `ConfidentialFeatureDigest` သည် `HandshakeConfidentialMeta` အတွင်းသို့ လည်ပတ်သည်။ လက်ခံသူသည် tuple `{ enabled, assume_valid, verifier_backend, digest }` ကို ၎င်း၏စက်တွင်းသတ်မှတ်ထားသော `ConfidentialHandshakeCaps` နှင့် နှိုင်းယှဉ်သည်။ သယ်ယူပို့ဆောင်ရေး `Ready` သို့မကူးပြောင်းမီ `HandshakeConfidentialMismatch` နှင့် ကိုက်ညီမှုမရှိပါက စောစောထွက်ပါမည်။
+4. အော်ပရေတာများသည် (`compute_confidential_feature_digest`) မှတဆင့် digest ကို ပြန်လည်တွက်ချက်ပြီး ပြန်လည်ချိတ်ဆက်ခြင်းမပြုမီ အပ်ဒိတ်စာရင်းသွင်းခြင်း/မူဝါဒများဖြင့် ဆုံမှတ်များကို ပြန်လည်စတင်ရပါမည်။ သက်တူရွယ်တူများသည် အထောက်အထားဟောင်းများကို ကြော်ငြာရာတွင် လက်ဆွဲနှုတ်ဆက်ခြင်းမှ ဆက်လက်ပျက်ကွက်သွားကာ ပျက်ယွင်းနေသောအခြေအနေသို့ ပြန်လည်ထည့်သွင်းခြင်းမှ တားဆီးပေးပါသည်။
+5. လက်ဆွဲနှုတ်ဆက်ခြင်း အောင်မြင်မှုများနှင့် ကျရှုံးမှုများသည် စံ `iroha_p2p::peer` ကောင်တာများ (`handshake_failure_count`၊ အမှားအယွင်းများကို ခွဲခြားသတ်မှတ်ပေးသူများ) ကို အပ်ဒိတ်လုပ်ပြီး အဝေးထိန်းမျိုးတူ ID ဖြင့် တဂ်လုပ်ထားသော ဖွဲ့စည်းတည်ဆောက်ပုံမှတ်တမ်းများကို ထုတ်လွှတ်ပြီး လက်ဗွေကို ချေဖျက်ပါ။ ထုတ်လွှင့်နေစဉ်အတွင်း ပြန်လည်ပြသရန် ကြိုးပမ်းမှုများ သို့မဟုတ် ပုံစံမှားယွင်းမှုများကို ဖမ်းမိရန် ဤညွှန်ကိန်းများကို စောင့်ကြည့်ပါ။## သော့စီမံခန့်ခွဲမှုနှင့် ပေးဆောင်မှုများ
+- အကောင့်တစ်ခုချင်းသော့ဆင်းသက်လာမှု အထက်တန်းအဆင့်-
+  - `sk_spend` → `nk` ( nullifier key), `ivk` (အဝင်ကြည့်ရှုသောကီး), `ovk` (အထွက်ကြည့်ရှုသော့), `fvk`။
+- ကုဒ်ဝှက်ထားသော မှတ်စု ပေးဆောင်မှုများသည် ECDH မှရရှိသော မျှဝေသောသော့များဖြင့် AEAD ကို အသုံးပြုသည်။ ရွေးချယ်နိုင်သော စာရင်းစစ်ကြည့်ရှုမှုသော့များကို ပိုင်ဆိုင်မှုမူဝါဒအလိုက် အထွက်များနှင့် တွဲထားနိုင်သည်။
+- CLI ထပ်တိုးမှုများ- `confidential create-keys`၊ `confidential send`၊ `confidential export-view-key`၊ စာရင်းစစ်မှတ်စုများကို ကုဒ်ဝှက်ခြင်းအတွက် စာရင်းစစ်ကိရိယာနှင့် `iroha app zk envelope` အကူအညီပေးသူ `iroha app zk envelope` တို့ကို ထုတ်လုပ်/စစ်ဆေးခြင်းအတွက် အကူအညီပေးသူ I18NT00000001es Torii သည် `POST /v1/confidential/derive-keyset` မှတစ်ဆင့် တူညီသော ဆင်းသက်လာခြင်းကို ဖော်ထုတ်ပြီး hex နှင့် base64 ပုံစံများ နှစ်မျိုးလုံးကို ပြန်ပေးသောကြောင့် ပိုက်ဆံအိတ်များသည် သော့အဆင့်ဆင့်ကို ပရိုဂရမ်ကျကျ ရယူနိုင်ပါသည်။
 
-## Key Management & Payloads
-- Per-account key derivation hierarchy:
-  - `sk_spend` → `nk` (nullifier key), `ivk` (incoming viewing key), `ovk` (outgoing viewing key), `fvk`.
-- Encrypted note payloads use AEAD with ECDH-derived shared keys; optional auditor view keys may be attached to outputs per asset policy.
-- CLI additions: `confidential create-keys`, `confidential send`, `confidential export-view-key`, auditor tooling for decrypting memos, and the `iroha app zk envelope` helper for producing/inspecting Norito memo envelopes offline. Torii exposes the same derivation flow via `POST /v1/confidential/derive-keyset`, returning both hex and base64 forms so wallets can fetch key hierarchies programmatically.
-
-## Gas, Limits & DoS Controls
-- Deterministic gas schedule:
-  - Halo2 (Plonkish): base `250_000` gas + `2_000` gas per public input.
-  - `5` gas per proof byte, plus per-nullifier (`300`) and per-commitment (`500`) charges.
-  - Operators may override these constants via the node configuration (`confidential.gas.{proof_base, per_public_input, per_proof_byte, per_nullifier, per_commitment}`); changes propagate at startup or when the config layer hot-reloads and are applied deterministically across the cluster.
+## ဓာတ်ငွေ့၊ ကန့်သတ်ချက်များနှင့် DoS ထိန်းချုပ်မှုများ
+- သတ်မှတ်ဓာတ်ငွေ့အချိန်ဇယား-
+  - Halo2 (Plonkish) : အခြေခံ `250_000` ဓာတ်ငွေ့ + `2_000` အများသူငှာ ထည့်သွင်းမှုအလိုက် ဓာတ်ငွေ့။
+  - အထောက်အထားဘိုက်တစ်ခုလျှင် `5` ဓာတ်ငွေ့၊ အပေါင်း ပျက်ပြယ်သွားသော (`300`) နှင့် ကတိကဝတ် (`500`) ကျသင့်ငွေ။
+  - အော်ပရေတာများသည် node configuration (`confidential.gas.{proof_base, per_public_input, per_proof_byte, per_nullifier, per_commitment}`); စတင်ချိန်တွင် သို့မဟုတ် config အလွှာ hot-reloads နှင့် cluster တစ်လျှောက် အဆုံးအဖြတ်အတိုင်း အသုံးချသည့်အခါတွင် အပြောင်းအလဲများ ပျံ့နှံ့သွားပါသည်။
 - Hard limits (configurable defaults):
-- `max_proof_size_bytes = 262_144`.
-- `max_nullifiers_per_tx = 8`, `max_commitments_per_tx = 8`, `max_confidential_ops_per_block = 256`.
-- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`. Proofs that exceed `verify_timeout_ms` abort the instruction deterministically (governance ballots emit `proof verification exceeded timeout`, `VerifyProof` returns an error).
-- Additional quotas ensure liveness: `max_proof_bytes_block`, `max_verify_calls_per_tx`, `max_verify_calls_per_block`, and `max_public_inputs` bound block builders; `reorg_depth_bound` (≥ `max_anchor_age_blocks`) governs frontier checkpoint retention.
-- Runtime execution now rejects transactions that exceed these per-transaction or per-block limits, emitting deterministic `InvalidParameter` errors and leaving ledger state unchanged.
-- Mempool prefilters confidential transactions by `vk_id`, proof length, and anchor age before invoking the verifier to keep resource usage bounded.
-- Verification halts deterministically on timeout or bound violation; transactions fail with explicit errors. SIMD backends are optional but do not alter gas accounting.
+- `max_proof_size_bytes = 262_144`။
+- `max_nullifiers_per_tx = 8`, `max_commitments_per_tx = 8`, `max_confidential_ops_per_block = 256`။
+- `verify_timeout_ms = 750`, `max_anchor_age_blocks = 10_000`။ `verify_timeout_ms` ထက်ကျော်လွန်သော အထောက်အထားများသည် ညွှန်ကြားချက်ကို အတိအကျ ပျက်ပြယ်သွားသည် (အုပ်ချုပ်မှုမဲများသည် `proof verification exceeded timeout`၊ `VerifyProof` သည် အမှားတစ်ခု ပြန်ဖြစ်သွားသည်)။
+- ထပ်လောင်းခွဲတမ်းများသည် အသက်ရှင်သန်မှုကို သေချာစေသည်- `max_proof_bytes_block`, `max_verify_calls_per_tx`, `max_verify_calls_per_block`, နှင့် `max_public_inputs` ဘောင်းဘီဘလောက်တည်ဆောက်သူများ၊ `reorg_depth_bound` (≥ `max_anchor_age_blocks`) သည် နယ်ခြားစစ်ဆေးရေးဂိတ် ထိန်းသိမ်းမှုကို ထိန်းချုပ်သည်။
+- ယခု Runtime execution သည် ဤငွေလွှဲနှုန်းတစ်ခု သို့မဟုတ် တစ်တုံးကန့်သတ်ချက်များထက်ကျော်လွန်သော ငွေပေးငွေယူများကို ပယ်ချပြီး အဆုံးအဖြတ်ပေးသော `InvalidParameter` အမှားများကို ထုတ်လွှတ်ကာ လယ်ဂျာအခြေအနေကို မပြောင်းလဲပါ။
+- အရင်းအမြစ်အသုံးပြုမှုကို ကန့်သတ်ထားရန် အတည်ပြုသူအား မခေါ်ဆိုမီ အထောက်အထားအလျားနှင့် ကျောက်ဆူးခေတ် `vk_id` ဖြင့် လျှို့ဝှက်ငွေပေးငွေယူများကို Mempool မှ ကြိုတင်စစ်ထုတ်သည်။
+- အချိန်ကုန်သွားခြင်း သို့မဟုတ် ကန့်သတ်ချိုးဖောက်မှုအပေါ် အတည်ပြုခြင်းအား အဆုံးအဖြတ်ပြုခြင်း ရပ်တန့်ခြင်း တိကျပြတ်သားသော အမှားများဖြင့် ငွေပေးငွေယူများ ပျက်ကွက်သည်။ SIMD နောက်ခံများသည် ရွေးချယ်နိုင်သော်လည်း ဓာတ်ငွေ့စာရင်းအင်းအား ပြောင်းလဲခြင်းမပြုပါ။
 
 ### Calibration Baselines & Acceptance Gates
-- **Reference platforms.** Calibration runs MUST cover the three hardware profiles below. Runs failing to capture all profiles are rejected during review.
+- **အကိုးအကားပလပ်ဖောင်းများ။** Calibration သည် အောက်ဖော်ပြပါ ဟာ့ဒ်ဝဲပရိုဖိုင်သုံးခုကို ဖုံးအုပ်ထားရပါမည်။ ပရိုဖိုင်အားလုံးကို ဖမ်းယူရန် ပျက်ကွက်သည့် လုပ်ဆောင်မှုများကို ပြန်လည်သုံးသပ်နေစဉ်အတွင်း ပယ်ချပါသည်။
 
-  | Profile | Architecture | CPU / Instance | Compiler flags | Purpose |
-  | --- | --- | --- | --- | --- |
-  | `baseline-simd-neutral` | `x86_64` | AMD EPYC 7B12 (32c) or Intel Xeon Gold 6430 (24c) | `RUSTFLAGS="-C target-feature=-avx,-avx2,-fma"` | Establish floor values without vector intrinsics; used to tune fallback cost tables. |
-  | `baseline-avx2` | `x86_64` | Intel Xeon Gold 6430 (24c) | default release | Validates AVX2 path; checks that SIMD speedups stay within tolerance of neutral gas. |
-  | `baseline-neon` | `aarch64` | AWS Graviton3 (c7g.4xlarge) | default release | Ensures NEON backend remains deterministic and aligned with x86 schedules. |
+  | ကိုယ်ရေးအကျဉ်း | ဗိသုကာ | CPU/Instance | Compiler အလံများ | ရည်ရွယ်ချက် |
+  | ---| ---| ---| ---| ---|
+  | `baseline-simd-neutral` | `x86_64` | AMD EPYC 7B12 (32c) သို့မဟုတ် Intel Xeon Gold 6430 (24c) | `RUSTFLAGS="-C target-feature=-avx,-avx2,-fma"` | vector ပင်ကိုယ်စိတ်မပါဘဲ ကြမ်းပြင်တန်ဖိုးများကို ထူထောင်ပါ။ ကုန်ကျစရိတ်ဇယားများကို ညှိရန်အသုံးပြုသည်။ |
+  | `baseline-avx2` | `x86_64` | Intel Xeon Gold 6430 (24c) | ပုံသေထုတ်လွှတ်မှု | AVX2 လမ်းကြောင်းကို အတည်ပြုသည်။ SIMD အရှိန်မြှင့်မှုများသည် ကြားနေဓာတ်ငွေ့များ၏ ခံနိုင်ရည်အောက်တွင် ရှိနေကြောင်း စစ်ဆေးသည်။ |
+  | `baseline-neon` | `aarch64` | AWS Graviton3 (c7g.4xlarge) | ပုံသေထုတ်လွှတ်မှု | NEON backend သည် အဆုံးအဖြတ်ရှိပြီး x86 အချိန်ဇယားများနှင့် ကိုက်ညီကြောင်း သေချာစေသည်။ |
 
-- **Benchmark harness.** All gas calibration reports MUST be produced with:
+- **Benchmark ကြိုးကြိုး။** ဓာတ်ငွေ့ ချိန်ညှိခြင်း အစီရင်ခံစာများအားလုံးကို အောက်ပါတို့နှင့်အတူ ထုတ်လုပ်ရပါမည်-
   - `CRITERION_HOME=target/criterion cargo bench -p iroha_core isi_gas_calibration -- --sample-size 200 --warm-up-time 5 --save-baseline <profile-label>`
-  - `cargo test -p iroha_core bench_repro -- --ignored` to confirm the deterministic fixture.
-  - `CRITERION_HOME=target/criterion cargo bench -p ivm gas_calibration -- --sample-size 200 --warm-up-time 5 --save-baseline <profile-label>` whenever VM opcode costs change.
+  - `cargo test -p iroha_core bench_repro -- --ignored` အဆုံးအဖြတ်ခံစစ်မှူးကို အတည်ပြုရန်။
+  - VM opcode ကုန်ကျစရိတ် ပြောင်းလဲသည့်အခါတိုင်း `CRITERION_HOME=target/criterion cargo bench -p ivm gas_calibration -- --sample-size 200 --warm-up-time 5 --save-baseline <profile-label>`။
 
-- **Fixed randomness.** Export `IROHA_CONF_GAS_SEED=conf-gas-seed-2026Q1` before running benches so `iroha_test_samples::gen_account_in` switches to the deterministic `KeyPair::from_seed` path. The harness prints `IROHA_CONF_GAS_SEED_ACTIVE=…` once; if the variable is missing, review MUST fail. Any new calibration utilities must continue honouring this env var when introducing auxiliary randomness.
+- **ကျပန်းပြင်ဆင်ထားသည်။** `IROHA_CONF_GAS_SEED=conf-gas-seed-2026Q1` ကို ခုံတန်းလျားများမပြေးဆွဲမီတွင် `iroha_test_samples::gen_account_in` သည် အဆုံးအဖြတ်ပေးသော `KeyPair::from_seed` လမ်းကြောင်းသို့ ပြောင်းသည်။ သံကြိုးသည် `IROHA_CONF_GAS_SEED_ACTIVE=…` ကို တစ်ကြိမ်ပုံနှိပ်သည်။ variable ပျောက်နေပါက ပြန်လည်စစ်ဆေးရန် မအောင်မြင်ပါ။ auxiliary randomness ကိုမိတ်ဆက်ပေးသောအခါတွင် calibration utilities အသစ်တိုင်းသည် ဤ env var ကို ဂုဏ်ပြုပေးရပါမည်။
 
-- **Result capture.**
-  - Upload Criterion summaries (`target/criterion/**/raw.csv`) for each profile into the release artefact.
-  - Store derived metrics (`ns/op`, `gas/op`, `ns/gas`) in the [Confidential Gas Calibration ledger](./confidential-gas-calibration) along with the git commit and compiler version used.
-  - Maintain the last two baselines per profile; delete older snapshots once the newest report is validated.
+- ** ရလဒ်ကို ဖမ်းယူပါ။**
+  - ပရိုဖိုင်တစ်ခုစီအတွက် စံသတ်မှတ်ချက်အနှစ်ချုပ်များ (`target/criterion/**/raw.csv`) ကို ထုတ်ဝေပြီးသော အနုပညာပစ္စည်းများသို့ အပ်လုဒ်လုပ်ပါ။
+  - [Confidential Gas Calibration ledger](I18NU000000292X, `gas/op`, `ns/gas`) မှရရှိသော မက်ထရစ်များကို [Confidential Gas Calibration ledger](./confidential-gas-calibration) တွင် အသုံးပြုထားသော git commit နှင့် compiler ဗားရှင်းနှင့်အတူ သိမ်းဆည်းပါ။
+  - ပရိုဖိုင်တစ်ခုလျှင် နောက်ဆုံးအခြေခံလိုင်းနှစ်ခုကို ထိန်းသိမ်းပါ။ နောက်ဆုံးအစီရင်ခံစာကို အတည်ပြုပြီးသည်နှင့် လျှပ်တစ်ပြက်အဟောင်းများကို ဖျက်ပါ။
 
-- **Acceptance tolerances.**
-  - Gas deltas between `baseline-simd-neutral` and `baseline-avx2` MUST remain ≤ ±1.5%.
-  - Gas deltas between `baseline-simd-neutral` and `baseline-neon` MUST remain ≤ ±2.0%.
-  - Calibration proposals exceeding these thresholds require either schedule adjustments or an RFC explaining the discrepancy and mitigation.
+- **လက်ခံမှု သည်းခံနိုင်မှု။**
+  - `baseline-simd-neutral` နှင့် `baseline-avx2` အကြား ဓာတ်ငွေ့မြစ်ဝကျွန်းပေါ်ဒေသ ≤ ±1.5% ရှိနေရမည်။
+  - `baseline-simd-neutral` နှင့် `baseline-neon` အကြား ဓာတ်ငွေ့မြစ်ဝကျွန်းပေါ်ဒေသ ≤ ±2.0% ရှိနေရမည်။
+  - ဤသတ်မှတ်ချက်များထက်ကျော်လွန်၍ ချိန်ညှိခြင်းအဆိုပြုချက်များသည် အချိန်ဇယား ချိန်ညှိမှုများ သို့မဟုတ် ကွာဟမှုနှင့် လျော့ပါးသွားမှုကို ရှင်းပြသည့် RFC တစ်ခုခု လိုအပ်သည်။
 
-- **Review checklist.** Submitters are responsible for:
-  - Including `uname -a`, `/proc/cpuinfo` excerpts (model, stepping), and `rustc -Vv` in the calibration log.
-  - Verifying `IROHA_CONF_GAS_SEED` echoed in the bench output (the benches print the active seed).
-  - Ensuring pacemaker and confidential verifier feature flags mirror production (`--features confidential,telemetry` when running benches with Telemetry).
+- **စစ်ဆေးရန်စာရင်း။** တင်သွင်းသူများသည် အောက်ပါတို့အတွက် တာဝန်ရှိပါသည်။
+  - စံကိုက်ချိန်ညှိမှုမှတ်တမ်းတွင် `uname -a`၊ `/proc/cpuinfo` ကောက်နှုတ်ချက် (မော်ဒယ်၊ အဆင့်တက်ခြင်း) နှင့် `rustc -Vv` ပါဝင်သည်။
+  - `IROHA_CONF_GAS_SEED` သည် ခုံတန်းလျားအထွက်တွင် ပဲ့တင်ထပ်နေကြောင်း အတည်ပြုခြင်း (ခုံတန်းလျားများသည် တက်ကြွသောမျိုးစေ့များကို ပုံနှိပ်ထားသည်)။
+  - နှလုံးခုန်နှုန်းထိန်းကိရိယာနှင့် လျှို့ဝှက်စစ်ဆေးသည့်စနစ် လုပ်ဆောင်ချက် အလံများ မှန်ထုတ်လုပ်ခြင်း (`--features confidential,telemetry` ကို Telemetry ဖြင့် ခုံတန်းလျားများ လည်ပတ်နေသည့်အခါ) သေချာစေခြင်း။
 
 ## Config & Operations
-- `iroha_config` gains `[confidential]` section:
+- `iroha_config` သည် `[confidential]` အပိုင်း-
   ```toml
   [confidential]
   enabled = true
@@ -334,54 +329,52 @@ lockstep.
   registry_max_params_entries = 32
   registry_max_delta_per_block = 4
   ```
-- Telemetry emits aggregate metrics: `confidential_proof_verified`, `confidential_verifier_latency_ms`, `confidential_proof_bytes_total`, `confidential_nullifier_spent`, `confidential_commitments_appended`, `confidential_mempool_rejected_total{reason}`, and `confidential_policy_transitions_total`, never exposing plaintext data.
-- RPC surfaces:
+- Telemetry သည် စုစည်းမက်ထရစ်များကို ထုတ်လွှတ်သည်- `confidential_proof_verified`၊ `confidential_verifier_latency_ms`၊ `confidential_proof_bytes_total`၊ `confidential_nullifier_spent`၊ `confidential_commitments_appended`၊ I18NI000001018X၊ never စာသားအချက်အလက်ကို ဖော်ထုတ်ခြင်း။
+- RPC မျက်နှာပြင်များ
   - `GET /confidential/capabilities`
   - `GET /confidential/zk_registry`
   - `GET /confidential/params`
 
-## Testing Strategy
-- Determinism: randomized transaction shuffling within blocks yields identical Merkle roots and nullifier sets.
-- Reorg resilience: simulate multi-block reorgs with anchors; nullifiers remain stable and stale anchors rejected.
-- Gas invariants: verify identical gas usage across nodes with and without SIMD acceleration.
-- Boundary testing: proofs at size/gas ceilings, max in/out counts, timeout enforcement.
-- Lifecycle: governance operations for verifier and parameter activation/deprecation, rotation spend tests.
-- Policy FSM: allowed/disallowed transitions, pending transition delays, and mempool rejection around effective heights.
-- Registry emergencies: emergency withdrawal freezes affected assets at `withdraw_height` and rejects proofs afterwards.
-- Capability gating: validators with mismatched `conf_features` reject blocks; observers with `assume_valid=true` keep up without affecting consensus.
-- State equivalence: validator/full/observer nodes produce identical state roots on the canonical chain.
-- Negative fuzzing: malformed proofs, oversized payloads, and nullifier collisions reject deterministically.
+## စမ်းသပ်ခြင်းဗျူဟာ
+- အဆုံးအဖြတ်ပေးခြင်း- လုပ်ကွက်များအတွင်း ကျပန်းငွေပေးငွေယူ မွှေနှောက်ခြင်းသည် တူညီသော Merkle အမြစ်များနှင့် nullifier အစုံများကို ထုတ်ပေးသည်။
+- Reorg ခံနိုင်ရည်အား- ကျောက်ဆူးများဖြင့် ပိတ်ဆို့ထားသော reorg အများအပြားကို အတုယူပါ။ nullifiers များသည် တည်ငြိမ်နေပြီး ဟောင်းနွမ်းသော ကျောက်ဆူးများကို ငြင်းပယ်ထားသည်။
+- ဓာတ်ငွေ့မျိုးကွဲများ- SIMD အရှိန်မြှင့်ခြင်းနှင့်အတူ node များတစ်လျှောက် တူညီသောဓာတ်ငွေ့အသုံးပြုမှုကို စစ်ဆေးပါ။
+- နယ်နိမိတ်စမ်းသပ်ခြင်း- အရွယ်အစား/ဓာတ်ငွေ့မျက်နှာကျက်ရှိ အထောက်အထားများ၊ အများဆုံးဝင်/ထွက်အရေအတွက်၊ အချိန်ကုန်ဆုံးမှု ပြဋ္ဌာန်းခြင်း။
+- Lifecycle- အတည်ပြုစနစ်နှင့် ကန့်သတ်ချက်များအား အသက်သွင်းခြင်း/ကန့်ကွက်ခြင်း၊ အလှည့်ကျ စမ်းသပ်မှုများအတွက် အုပ်ချုပ်မှုဆိုင်ရာ လုပ်ဆောင်ချက်များ။
+- မူဝါဒ FSM- ခွင့်ပြု/မထားသော အကူးအပြောင်းများ၊ ဆိုင်းငံ့ထားသော အကူးအပြောင်းနှောင့်နှေးမှုများ၊ ထိရောက်သော အမြင့်များအနီးရှိ mempool ငြင်းပယ်ခြင်း။
+- Registry အရေးပေါ်အခြေအနေများ- အရေးပေါ်ငွေထုတ်ခြင်းသည် `withdraw_height` တွင် ထိခိုက်သည့်ပိုင်ဆိုင်မှုများကို ရပ်တန့်စေပြီး သက်သေပြပြီးနောက်တွင် ငြင်းပယ်သည်။
+- စွမ်းဆောင်ရည်ဂိတ်ပေါက်- `conf_features` နှင့် မကိုက်ညီသော အကွက်များကို ငြင်းပယ်သည့် တရားဝင်သူများ၊ `assume_valid=true` ပါသော လေ့လာသူများသည် အများဆန္ဒကို မထိခိုက်စေဘဲ ဆက်လက်လုပ်ဆောင်ပါ။
+- State equivalence- validator/full/observer node များသည် canonical chain တွင် ထပ်တူထပ်မျှသော state root များကို ထုတ်လုပ်သည်။
+- အနုတ်လက္ခဏာပြခြင်း- ပုံသဏ္ဍာန်မမှန်သော အထောက်အထားများ၊ ကြီးမားသောဝန်ထုပ်ဝန်ပိုးများနှင့် nullifier တိုက်မိမှုများသည် အဆုံးအဖြတ်အရ ငြင်းပယ်ပါသည်။
 
-## Outstanding Work
-- Benchmark Halo2 parameter sets (circuit size, lookup strategy) and record the results in the calibration playbook so gas/timeout defaults can be updated alongside the next `confidential_assets_calibration.md` refresh.
-- Finalize auditor disclosure policies and associated selective-viewing APIs, wiring the approved workflow into Torii once the governance draft is signed off.
-- Extend the witness encryption scheme to cover multi-recipient outputs and batched memos, documenting the envelope format for SDK implementers.
-- Commission an external security review of circuits, registries, and parameter-rotation procedures and archive the findings next to the internal audit reports.
-- Specify auditor spentness reconciliation APIs and publish view-key scope guidance so wallet vendors can implement the same attestation semantics.
+## ထူးချွန်သောအလုပ်
+- Benchmark Halo2 ကန့်သတ်ဘောင်များ (ဆားကစ်အရွယ်အစား၊ ရှာဖွေမှုနည်းဗျူဟာ) နှင့် ရလဒ်များကို ချိန်ညှိခြင်းဖွင့်စာအုပ်တွင် မှတ်တမ်းတင်ထားသောကြောင့် ဓာတ်ငွေ့/အချိန်လွန်ပုံသေများကို လာမည့် `confidential_assets_calibration.md` ပြန်လည်ဆန်းသစ်မှုနှင့်အတူ အပ်ဒိတ်လုပ်နိုင်ပါသည်။
+- စာရင်းစစ်၏ ထုတ်ဖော်မှုမူဝါဒများနှင့် ဆက်စပ်ရွေးချယ်မှု-ကြည့်ရှုခြင်း API များကို အပြီးသတ်လုပ်ဆောင်ပြီး အုပ်ချုပ်မှုမူကြမ်းကို လက်မှတ်ရေးထိုးပြီးသည်နှင့် အတည်ပြုထားသော အလုပ်အသွားအလာကို Torii သို့ ချိတ်ဆက်ပါ။
+- SDK အကောင်အထည်ဖေါ်သူများအတွက် စာအိတ်ဖော်မတ်ကို မှတ်တမ်းတင်ခြင်း - လက်ခံသူများစွာ၏ ထွက်ပေါက်များနှင့် အစုလိုက်အစီအစဥ်များကို ကာမိစေရန် သက်သေခံ ကုဒ်ဝှက်ခြင်းအစီအစဉ်ကို တိုးချဲ့ပါ။
+- ဆားကစ်များ၊ မှတ်ပုံတင်ခြင်းများ၊ နှင့် ကန့်သတ်လည်ပတ်ခြင်းဆိုင်ရာ လုပ်ထုံးလုပ်နည်းများကို ပြင်ပလုံခြုံရေးပြန်လည်သုံးသပ်မှုအား ကော်မရှင်ဖွဲ့ပြီး အတွင်းစစ်ဆေးမှုအစီရင်ခံစာများဘေးတွင် တွေ့ရှိချက်များကို သိမ်းဆည်းပါ။
+- စာရင်းစစ်သုံးစွဲမှုပြန်လည်ပေါင်းစည်းရေး APIs များကိုသတ်မှတ်ပြီး မြင်ကွင်း-သော့နယ်ပယ်လမ်းညွှန်ချက်ကို ထုတ်ဝေခြင်းဖြင့် ပိုက်ဆံအိတ်ရောင်းချသူများသည် တူညီသောသက်သေအထောက်အထားကို အကောင်အထည်ဖော်နိုင်စေရန်။## အကောင်အထည်ဖော်မှု Phasing
+1. ** Phase M0 — Stop-Ship Hardening**
+   - ✅ Nullifier ဆင်းသက်လာခြင်းသည် ယခု Poseidon PRF ဒီဇိုင်း (`nk`, `rho`, `asset_id`, `chain_id`) ဖြင့် လယ်ဂျာမွမ်းမံမှုများတွင် ပြဌာန်းထားသော ကတိကဝတ်ပြုထားသော အမိန့်ကို လိုက်နာပါသည်။
+   - ✅ Execution သည် သက်သေအရွယ်အစားထုပ်များနှင့် အရောင်းအ၀ယ်/တစ်ကွက်လျှင် လျှို့ဝှက်ခွဲတမ်းများကို ပြဋ္ဌာန်းထားပြီး၊ ဘတ်ဂျက်ပိုငွေလွှဲမှုများကို အဆုံးအဖြတ်ပေးသောအမှားများဖြင့် ပယ်ချပါသည်။
+   - ✅ P2P လက်ဆွဲခြင်းသည် `ConfidentialFeatureDigest` (backend digest + registry fingerprints) ကို ကြော်ငြာပြီး `HandshakeConfidentialMismatch` မှတစ်ဆင့် အတိအကျ မကိုက်ညီပါ။
+   - ✅ လျှို့ဝှက်လုပ်ဆောင်မှုလမ်းကြောင်းများတွင် ထိတ်လန့်ကြောက်ရွံ့မှုများကို ဖယ်ရှားပြီး လိုက်ဖက်ညီသောစွမ်းရည်မရှိဘဲ node များအတွက် အခန်းကဏ္ဍကို ထည့်သွင်းပါ။
+   - ⚪ နယ်ခြားစစ်ဆေးရေးဂိတ်များအတွက် အချိန်ကုန်သွားသော ဘတ်ဂျက်များကို တွန်းအားပေးရန်နှင့် နယ်မြေစစ်ဆေးရေးဂိတ်များအတွက် နက်ရှိုင်းသောအပိုင်းများကို ကန့်သတ်ပါ။
+     - ✅ အတည်ပြုခြင်း အချိန်ကုန်သွားသော ဘတ်ဂျက်များကို ပြဌာန်းထားသည်။ ယခုအခါ `verify_timeout_ms` ထက်ကျော်လွန်သော အထောက်အထားများသည် အဆုံးအဖြတ်အရ ပျက်ကွက်ပါသည်။
+     - ✅ နယ်ခြားစစ်ဆေးရေးဂိတ်များသည် ယခု `reorg_depth_bound` ကို လေးစားလိုက်နာပြီး အဆုံးအဖြတ်ပေးသော လျှပ်တစ်ပြက်ရိုက်ချက်များကို ထိန်းသိမ်းထားစဉ် ပြင်ဆင်ထားသော ဝင်းဒိုးထက် ပိုဟောင်းသော စစ်ဆေးရေးဂိတ်များကို ဖြတ်တောက်လိုက်ပါသည်။
+   - mint/transfer/reveal ညွှန်ကြားချက်များအတွက် `AssetConfidentialPolicy`၊ မူဝါဒ FSM နှင့် ဥပဒေစိုးမိုးရေးဂိတ်များကို မိတ်ဆက်ပေးပါ။
+   - ဘလောက်ခေါင်းစီးများတွင် `conf_features` ကို သွင်းပြီး registry/parameter များ ကွဲပြားသွားသောအခါ validator ပါဝင်မှုကို ငြင်းဆိုပါ။
+2. ** Phase M1 — မှတ်ပုံတင်ခြင်းနှင့် ကန့်သတ်ချက်များ**
+   - Land `ZkVerifierEntry`၊ `PedersenParams`၊ နှင့် `PoseidonParams` သည် အုပ်ချုပ်မှုဆိုင်ရာ ops၊ genesis anchoring, and cache management တို့ပါရှိသော မှတ်ပုံတင်မှုများ။
+   - မှတ်ပုံတင်ခြင်းရှာဖွေမှုများ၊ ဓာတ်ငွေ့အချိန်ဇယား IDs၊ schema hashing နှင့် size စစ်ဆေးမှုများလိုအပ်ရန် Wire syscall ။
+   - Ship encrypt လုပ်ထားသော payload format v1၊ wallet key ဆင်းသက်လာသော vector များနှင့် လျှို့ဝှက်သော့စီမံခန့်ခွဲမှုအတွက် CLI ပံ့ပိုးမှု။
+3. **အဆင့် M2 — ဓာတ်ငွေ့နှင့် စွမ်းဆောင်ရည်**
+   - သတ်မှတ်ပြဋ္ဌာန်းထားသော ဓာတ်ငွေ့အချိန်ဇယား၊ တစ်တုံးတစ်တုံးလျှင် ကောင်တာများနှင့် တယ်လီမီတာဖြင့် စံကိုက်ကြိုးများကို အကောင်အထည်ဖော်ပါ (latency၊ အထောက်အထားအရွယ်အစား၊ mempool ငြင်းပယ်မှုများ) ကို အကောင်အထည်ဖော်ပါ။
+   - ပိုင်ဆိုင်မှုလုပ်ငန်းအများအပြားအတွက် ခိုင်မာစေမည့် CommitmentTree စစ်ဆေးရေးဂိတ်များ၊ LRU တင်ခြင်းနှင့် nullifier အညွှန်းများ။
+4. **Phase M3 — လှည့်ခြင်းနှင့် ပိုက်ဆံအိတ်တူးခြင်း**
+   - multi-parameter နှင့် multi-version proof လက်ခံမှုကို ဖွင့်ပါ။ အသွင်ကူးပြောင်းရေးဆိုင်ရာ စာအုပ်များနှင့်အတူ အုပ်ချုပ်မှု-မောင်းနှင်သော အသက်သွင်းခြင်း/ကန့်ကွက်ခြင်းကို ပံ့ပိုးပါ။
+   - ပိုက်ဆံအိတ် SDK/CLI ရွှေ့ပြောင်းခြင်းစီးဆင်းမှုများ၊ စာရင်းစစ်စကင်န်ဖတ်ခြင်းလုပ်ငန်းအသွားအလာများနှင့် သုံးစွဲမှုပြန်လည်သင့်မြတ်ရေးကိရိယာတို့ကို ပေးပို့ပါ။
+5. ** Phase M4 — စာရင်းစစ်နှင့် အလုပ်များ**
+   - စာရင်းစစ်သော့လုပ်ငန်းအသွားအလာများ၊ ရွေးချယ်ထားသောထုတ်ဖော် APIs နှင့် လုပ်ငန်းလည်ပတ်မှုဆိုင်ရာစာအုပ်များကို ပံ့ပိုးပေးပါ။
+   - ပြင်ပ ကုဒ်ဝှက်ခြင်း/လုံခြုံရေး ပြန်လည်သုံးသပ်ခြင်းကို အချိန်ဇယားဆွဲပြီး `status.md` တွင် တွေ့ရှိချက်များကို ထုတ်ဝေပါ။
 
-## Implementation Phasing
-1. **Phase M0 — Stop-Ship Hardening**
-   - ✅ Nullifier derivation now follows the Poseidon PRF design (`nk`, `rho`, `asset_id`, `chain_id`) with deterministic commitment ordering enforced in ledger updates.
-   - ✅ Execution enforces proof size caps and per-transaction/per-block confidential quotas, rejecting over-budget transactions with deterministic errors.
-   - ✅ P2P handshake advertises `ConfidentialFeatureDigest` (backend digest + registry fingerprints) and fails mismatches deterministically via `HandshakeConfidentialMismatch`.
-   - ✅ Remove panics in confidential execution paths and add role gating for nodes without matching capability.
-   - ⚪ Enforce verifier timeout budgets and reorg depth bounds for frontier checkpoints.
-     - ✅ Verification timeout budgets enforced; proofs exceeding `verify_timeout_ms` now fail deterministically.
-     - ✅ Frontier checkpoints now respect `reorg_depth_bound`, pruning checkpoints older than the configured window while keeping deterministic snapshots.
-   - Introduce `AssetConfidentialPolicy`, policy FSM, and enforcement gates for mint/transfer/reveal instructions.
-   - Commit `conf_features` in block headers and refuse validator participation when registry/parameter digests diverge.
-2. **Phase M1 — Registries & Parameters**
-   - Land `ZkVerifierEntry`, `PedersenParams`, and `PoseidonParams` registries with governance ops, genesis anchoring, and cache management.
-   - Wire syscall to require registry lookups, gas schedule IDs, schema hashing, and size checks.
-   - Ship encrypted payload format v1, wallet key derivation vectors, and CLI support for confidential key management.
-3. **Phase M2 — Gas & Performance**
-   - Implement deterministic gas schedule, per-block counters, and benchmark harnesses with telemetry (verify latency, proof sizes, mempool rejections).
-   - Harden CommitmentTree checkpoints, LRU loading, and nullifier indices for multi-asset workloads.
-4. **Phase M3 — Rotation & Wallet Tooling**
-   - Enable multi-parameter and multi-version proof acceptance; support governance-driven activation/deprecation with transition runbooks.
-   - Deliver wallet SDK/CLI migration flows, auditor scanning workflows, and spentness reconciliation tooling.
-5. **Phase M4 — Audit & Ops**
-   - Provide auditor key workflows, selective disclosure APIs, and operational runbooks.
-   - Schedule external cryptography/security review and publish findings in `status.md`.
-
-Each phase updates roadmap milestones and associated tests to maintain deterministic execution guarantees for the blockchain network.
+အဆင့်တစ်ခုစီသည် blockchain ကွန်ရက်အတွက် အဆုံးအဖြတ်ပေးသည့် အာမခံချက်များကို ထိန်းသိမ်းထားရန် လမ်းပြမြေပုံမှတ်တိုင်များနှင့် ဆက်စပ်စစ်ဆေးမှုများကို အပ်ဒိတ်လုပ်သည်။

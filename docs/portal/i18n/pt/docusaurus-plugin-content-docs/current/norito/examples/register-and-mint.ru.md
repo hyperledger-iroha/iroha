@@ -4,30 +4,32 @@ direction: ltr
 source: docs/portal/docs/norito/examples/register-and-mint.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
 slug: /norito/examples/register-and-mint
-title: Зарегистрировать домен и выпустить активы
-description: Показывает создание доменов с разрешениями, регистрацию активов и детерминированный выпуск.
-source: crates/ivm/docs/examples/13_register_and_mint.ko
+título: Зарегистрировать домен и выпустить активы
+description: Показывает создание доменов с разрешениями, registrate активов и детерминированный выпуск.
+fonte: crates/ivm/docs/examples/13_register_and_mint.ko
 ---
 
-Показывает создание доменов с разрешениями, регистрацию активов и детерминированный выпуск.
+Registre as atividades e determine a sua atividade.
 
 ## Пошаговый обход реестра
 
-- Убедитесь, что аккаунт назначения (например `ih58...`) существует, повторяя фазу подготовки в каждом quickstart SDK.
-- Вызовите точку входа `register_and_mint`, чтобы создать определение актива ROSE и выпустить 250 единиц для Alice в одной транзакции.
-- Проверьте балансы через `client.request(FindAccountAssets)` или `iroha_cli ledger assets list --account ih58...`, чтобы подтвердить успешный выпуск.
+- Verifique se a conta está configurada (por exemplo, `ih58...`) para instalar o SDK de início rápido.
+- Вызовите точку входа `register_and_mint`, чтобы создать определение актива ROSE e выпустить 250 единиц para Alice em одной транзакции.
+- Verifique os saldos de `client.request(FindAccountAssets)` ou `iroha_cli ledger assets list --account ih58...`, que podem ser usados.
 
-## Связанные руководства SDK
+## Como usar o SDK
 
-- [Quickstart Rust SDK](/sdks/rust)
-- [Quickstart Python SDK](/sdks/python)
-- [Quickstart JavaScript SDK](/sdks/javascript)
+- [Início rápido Rust SDK](/sdks/rust)
+- [Início rápido do SDK do Python](/sdks/python)
+- [SDK JavaScript de início rápido](/sdks/javascript)
 
-[Скачать исходник Kotodama](/norito-snippets/register-and-mint.ko)
+[Kotodama](/norito-snippets/register-and-mint.ko)
 
 ```text
 // Register a new asset and mint some to the specified account.

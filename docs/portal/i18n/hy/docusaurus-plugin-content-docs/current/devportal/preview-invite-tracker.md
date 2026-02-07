@@ -8,131 +8,131 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: Preview invite tracker
 sidebar_label: Preview tracker
 description: Wave-by-wave status log for the checksum-gated docs portal preview program.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-This tracker records every docs portal preview wave so DOCS-SORA owners and
-governance reviewers can see which cohort is active, who approved the invites,
-and which artefacts still need attention. Update it whenever invites are sent,
-revoked, or deferred so the audit trail stays inside the repository.
+Այս հետագծողը գրանցում է փաստաթղթերի պորտալի նախադիտման յուրաքանչյուր ալիք, որպեսզի DOCS-SORA սեփականատերերը և
+Կառավարման վերանայողները կարող են տեսնել, թե որ խումբն է ակտիվ, ով է հաստատել հրավերները,
+և որ արտեֆակտները դեռ ուշադրության կարիք ունեն: Թարմացրեք այն, երբ հրավերներ են ուղարկվում,
+չեղյալ համարվել կամ հետաձգվել, որպեսզի աուդիտի հետքը մնա պահեստի ներսում:
 
-## Wave status
+## Ալիքի կարգավիճակ
 
-| Wave | Cohort | Tracker issue | Approver(s) | Status | Target window | Notes |
+| Ալիք | Կոհորտա | Հետագծողի խնդիր | Հաստատող(ներ) | Կարգավիճակը | Թիրախային պատուհան | Ծանոթագրություններ |
 | --- | --- | --- | --- | --- | --- | --- |
-| **W0 – Core maintainers** | Docs + SDK maintainers validating checksum flow | `DOCS-SORA-Preview-W0` (GitHub/ops tracker) | Docs/DevRel lead + Portal TL | 🈴 Completed | Q2 2025 weeks 1–2 | Invites sent 2025‑03‑25, telemetry stayed green, exit summary published 2025‑04‑08. |
-| **W1 – Partners** | SoraFS operators, Torii integrators under NDA | `DOCS-SORA-Preview-W1` | Docs/DevRel lead + Governance liaison | 🈴 Completed | Q2 2025 week 3 | Invites ran 2025‑04‑12 → 2025‑04‑26 with all eight partners acked; evidence captured in [`preview-feedback/w1/log.md`](./preview-feedback/w1/log.md) and the exit digest in [`preview-feedback/w1/summary.md`](./preview-feedback/w1/summary.md). |
-| **W2 – Community** | Curated community waitlist (≤25 at a time) | `DOCS-SORA-Preview-W2` | Docs/DevRel lead + Community manager | 🈴 Completed | Q3 2025 week 1 (tentative) | Invites ran 2025‑06‑15 → 2025‑06‑29 with telemetry green throughout; evidence + findings captured in [`preview-feedback/w2/summary.md`](./preview-feedback/w2/summary.md). |
-| **W3 – Beta cohorts** | Finance/observability beta + SDK partner + ecosystem advocate | `DOCS-SORA-Preview-W3` | Docs/DevRel lead + Governance liaison | 🈴 Completed | Q1 2026 week 8 | Invites ran 2026‑02‑18 → 2026‑02‑28; digest + portal data generated via `preview-20260218` wave (see [`preview-feedback/w3/summary.md`](./preview-feedback/w3/summary.md)). |
+| **W0 – Հիմնական պահպանողներ ** | Փաստաթղթեր + SDK սպասարկողներ, որոնք վավերացնում են ստուգիչ գումարի հոսքը | `DOCS-SORA-Preview-W0` (GitHub/ops tracker) | Docs/DevRel առաջատար + Portal TL | 🈴 Ավարտված | Q2 2025 շաբաթ 1–2 | Հրավերներն ուղարկվեցին 2025-03-25, հեռաչափությունը մնաց կանաչ, ելքի ամփոփագիրը հրապարակվեց 2025-04-08: |
+| **W1 – Գործընկերներ** | SoraFS օպերատորներ, Torii ինտեգրատորներ NDA-ի ներքո | `DOCS-SORA-Preview-W1` | Docs/DevRel առաջատար + Կառավարման կապ | 🈴 Ավարտված | Q2 2025 շաբաթ 3 | Հրավերները գործարկվել են 2025–04–12 → 2025–04–26 բոլոր ութ գործընկերների հետ. [`preview-feedback/w1/log.md`]-ում (./preview-feedback/w1/log.md) և ելքի ամփոփումը [`preview-feedback/w1/summary.md`]-ում (./preview-feedback/w1/summary.md): |
+| **W2 – Համայնք** | Համայնքի ընտրված սպասման ցուցակ (≤25 միաժամանակ) | `DOCS-SORA-Preview-W2` | Docs/DevRel առաջատար + Համայնքի կառավարիչ | 🈴 Ավարտված | Q3 2025 շաբաթ 1 (փորձնական) | Հրավերները գործարկվել են 2025-06-15 → 2025-06-29 թվականներին՝ հեռաչափական կանաչով; ապացույց + գտածոներ, որոնք վերցված են [`preview-feedback/w2/summary.md`] (./preview-feedback/w2/summary.md): |
+| **W3 – Բետա խմբեր ** | Ֆինանսներ/դիտորդական բետա + SDK գործընկեր + էկոհամակարգի պաշտպան | `DOCS-SORA-Preview-W3` | Docs/DevRel առաջատար + Կառավարման կապ | 🈴 Ավարտված | Q1 2026 շաբաթ 8 | Հրավերներն առաջադրվել են 2026-02-18 → 2026-02-28; digest + պորտալի տվյալները, որոնք ստեղծվել են `preview-20260218` ալիքի միջոցով (տես [`preview-feedback/w3/summary.md`](./preview-feedback/w3/summary.md)): |
 
-> Note: link each tracker issue to the corresponding preview request tickets and
-> archive them under the `docs-portal-preview` project so approvals remain
-> discoverable.
+> Նշում․ յուրաքանչյուր հետագծային խնդիր կապեք համապատասխան նախադիտման հարցումների տոմսերին և
+> արխիվացրեք դրանք `docs-portal-preview` նախագծի ներքո, որպեսզի հաստատումները մնան
+> հայտնաբերելի:
 
-## Active tasks (W0)
+## Ակտիվ առաջադրանքներ (W0)
 
-- ✅ Preflight artefacts refreshed (GitHub Actions `docs-portal-preview` run 2025‑03‑24, descriptor verified via `scripts/preview_verify.sh` using tag `preview-2025-03-24`).
-- ✅ Telemetry baselines captured (`docs.preview.integrity`, `TryItProxyErrors` dashboards snapshot saved to the W0 tracker issue).
-- ✅ Outreach copy locked using [`docs/examples/docs_preview_invite_template.md`](../../../examples/docs_preview_invite_template.md) with preview tag `preview-2025-03-24`.
-- ✅ Intake requests logged for the first five maintainers (tickets `DOCS-SORA-Preview-REQ-01` … `-05`).
-- ✅ First five invites sent 2025‑03‑25 10:00–10:20 UTC after seven consecutive green telemetry days; acknowledgements stored in `DOCS-SORA-Preview-W0`.
-- ✅ Monitor telemetry + host office hours (daily check-ins through 2025‑03‑31; checkpoint log below).
-- ✅ Collect midpoint feedback / issues and tag them `docs-preview/w0` (see [W0 digest](./preview-feedback/w0/summary.md)).
-- ✅ Publish wave summary + invite exit confirmations (exit bundle dated 2025‑04‑08; see [W0 digest](./preview-feedback/w0/summary.md)).
-- ✅ W3 beta wave tracked; future waves scheduled as needed after governance review.
+- ✅ Նախնական թռիչքային արտեֆակտները թարմացվել են (GitHub Actions `docs-portal-preview` գործարկվել է 2025-03-24, նկարագրիչը ստուգվել է `scripts/preview_verify.sh`-ի միջոցով՝ օգտագործելով I18NI00000066 պիտակը):
+- ✅ Հեռուստաչափության ելակետային գծերը նկարահանված են (`docs.preview.integrity`, `TryItProxyErrors` վահանակների պատկերը պահված է W0 հետագծման հարցում):
+- ✅ Outreach պատճենը կողպված է [`docs/examples/docs_preview_invite_template.md`] (../../../examples/docs_preview_invite_template.md) օգտագործելով՝ `preview-2025-03-24` նախադիտման պիտակով:
+- ✅ Ընդունման հարցումները գրանցված են առաջին հինգ սպասարկողների համար (տոմսեր `DOCS-SORA-Preview-REQ-01` … `-05`):
+- ✅ Առաջին հինգ հրավերներն ուղարկվել են 2025-03-25 10:00-10:20 UTC յոթ անընդմեջ կանաչ հեռաչափական օրերից հետո; հավաստագրերը պահվում են `DOCS-SORA-Preview-W0`-ում:
+- ✅ Դիտարկեք հեռաչափությունը + ընդունող գրասենյակի ժամերը (ամենօրյա գրանցումներ մինչև 2025-03-31 թվականները, անցակետի գրանցամատյանը ստորև):
+- ✅ Հավաքեք միջին կետի հետադարձ կապ / խնդիրներ և նշեք դրանք `docs-preview/w0` (տես [W0 digest](./preview-feedback/w0/summary.md)):
+- ✅ Հրապարակել ալիքի ամփոփագիրը + հրավերի ելքի հաստատումները (ելքի փաթեթը թվագրված է 2025-04-08, տես [W0 digest](./preview-feedback/w0/summary.md)):
+- ✅ W3 բետա ալիքի հետևում; ապագա ալիքները պլանավորվում են ըստ անհրաժեշտության կառավարման վերանայումից հետո:
 
-## W1 partner wave summary
+## W1 գործընկեր ալիքի ամփոփում
 
-- ✅ **Legal & governance approvals.** Partner addendum signed 2025‑04‑05; approvals uploaded to `DOCS-SORA-Preview-W1`.
-- ✅ **Telemetry + Try it staging.** Change ticket `OPS-TRYIT-147` executed 2025‑04‑06 with Grafana snapshots for `docs.preview.integrity`, `TryItProxyErrors`, and `DocsPortal/GatewayRefusals` archived.
-- ✅ **Artefact + checksum prep.** `preview-2025-04-12` bundle verified; descriptor/checksum/probe logs stored under `artifacts/docs_preview/W1/preview-2025-04-12/`.
-- ✅ **Invite roster + dispatch.** All eight partner requests (`DOCS-SORA-Preview-REQ-P01…P08`) approved; invites sent 2025‑04‑12 15:00–15:21 UTC with acknowledgements logged per reviewer.
-- ✅ **Feedback instrumentation.** Daily office hours + telemetry checkpoints recorded; see [`preview-feedback/w1/summary.md`](./preview-feedback/w1/summary.md) for the digest.
-- ✅ **Final roster/exit log.** [`preview-feedback/w1/log.md`](./preview-feedback/w1/log.md) now records invite/ack timestamps, telemetry evidence, quiz exports, and artefact pointers as of 2025‑04‑26 so governance can replay the wave.
+- ✅ **Իրավական և կառավարման հաստատումներ։** Գործընկերների հավելվածը ստորագրվել է 2025–04–05; հաստատումներ՝ վերբեռնված `DOCS-SORA-Preview-W1`-ում:
+- ✅ **Հեռաչափություն + Փորձեք այն բեմադրել։** Փոխել `OPS-TRYIT-147` տոմսը կատարված 2025-04-06 թվականներին՝ Grafana նկարներով I18NI000000077X, I18NI000000007X, I18NI0000000077X, I18NI000000000000000077X, I18NI00000007 նկարների համար։ արխիվացված։
+- ✅ **Artefact + checksum prep.** `preview-2025-04-12` փաթեթը ստուգված է; `artifacts/docs_preview/W1/preview-2025-04-12/`-ում պահվող նկարագրիչ/ստուգիչ գումար/զոնդ տեղեկամատյաններ:
+- ✅ **Հրավիրել ցուցակ + ուղարկել։** Գործընկերների բոլոր ութ հարցումները (`DOCS-SORA-Preview-REQ-P01…P08`) հաստատվել են; հրավերներ ուղարկվել են 2025-04-12 15:00-15:21UTC՝ յուրաքանչյուր գրախոսի կողմից գրանցված հաստատումներով:
+- ✅ **Հետադարձ կապի գործիքավորում։** Օրական գրասենյակային ժամեր + հեռաչափական անցակետեր գրանցված; տես [`preview-feedback/w1/summary.md`](./preview-feedback/w1/summary.md) մարսողության համար:
+- ✅ **Վերջնական ցուցակ/ելքի մատյան։** [`preview-feedback/w1/log.md`](./preview-feedback/w1/log.md) այժմ գրանցում է հրավիրելու/ընդունման ժամանակի դրոշմակնիքները, հեռաչափության ապացույցները, վիկտորինայի արտահանումները և արտեֆակտ ցուցիչները 2025-04-26 թվականների դրությամբ, որպեսզի կառավարումը կարողանա նորից նվագարկել:
 
-## Invite log — W0 core maintainers
+## Հրավերների մատյան — W0 հիմնական սպասարկողներ
 
-| Reviewer ID | Role | Request ticket | Invite sent (UTC) | Expected exit (UTC) | Status | Notes |
+| Գրախոսի ID | Դերը | Պահանջել տոմս | Հրավերն ուղարկված է (UTC) | Ակնկալվող ելք (UTC) | Կարգավիճակը | Ծանոթագրություններ |
 | --- | --- | --- | --- | --- | --- | --- |
-| docs-core-01 | Portal maintainer | `DOCS-SORA-Preview-REQ-01` | 2025‑03‑25 10:05 | 2025‑04‑08 10:00 | Active | Acked checksum verification; focusing on nav/sidebar review. |
-| sdk-rust-01 | Rust SDK lead | `DOCS-SORA-Preview-REQ-02` | 2025‑03‑25 10:08 | 2025‑04‑08 10:00 | Active | Testing SDK recipes + Norito quickstarts. |
-| sdk-js-01 | JS SDK maintainer | `DOCS-SORA-Preview-REQ-03` | 2025‑03‑25 10:12 | 2025‑04‑08 10:00 | Active | Validating Try it console + ISO flows. |
-| sorafs-ops-01 | SoraFS operator liaison | `DOCS-SORA-Preview-REQ-04` | 2025‑03‑25 10:15 | 2025‑04‑08 10:00 | Active | Auditing SoraFS runbooks + orchestration docs. |
-| observability-01 | Observability TL | `DOCS-SORA-Preview-REQ-05` | 2025‑03‑25 10:18 | 2025‑04‑08 10:00 | Active | Reviewing telemetry/incident appendices; owns Alertmanager coverage. |
+| docs-core-01 | Պորտալի պահպանող | `DOCS-SORA-Preview-REQ-01` | 2025-03-25 10:05 | 2025-04-08 10:00 | Ակտիվ | Ընդունված ստուգիչ գումարի ստուգում; կենտրոնանալով նավի / կողային տողի վերանայման վրա: |
+| sdk-rust-01 | Rust SDK կապար | `DOCS-SORA-Preview-REQ-02` | 2025-03-25 10:08 | 2025-04-08 10:00 | Ակտիվ | SDK բաղադրատոմսերի փորձարկում + Norito արագ մեկնարկներ: |
+| sdk-js-01 | JS SDK սպասարկող | `DOCS-SORA-Preview-REQ-03` | 2025-03-25 10:12 | 2025-04-08 10:00 | Ակտիվ | Վավերացում Փորձեք այն վահանակ + ISO հոսքեր: |
+| սորաֆս-ոպս-01 | SoraFS օպերատորի կապի | `DOCS-SORA-Preview-REQ-04` | 2025-03-25 10:15 | 2025-04-08 10:00 | Ակտիվ | Աուդիտորական SoraFS runbooks + նվագախմբային փաստաթղթեր: |
+| դիտելիություն-01 | Դիտորդականություն TL | `DOCS-SORA-Preview-REQ-05` | 2025-03-25 10:18 | 2025-04-08 10:00 | Ակտիվ | Հեռաչափության/միջադեպի հավելվածների վերանայում; պատկանում է Alertmanager ծածկույթին: |
 
-All invites reference the same `docs-portal-preview` artefact (run 2025‑03‑24,
-tag `preview-2025-03-24`) and the verification transcript captured in
-`DOCS-SORA-Preview-W0`. Any additions/pauses must be logged in both the table
-above and the tracker issue before proceeding to the next wave.
+Բոլոր հրավերները վերաբերում են նույն `docs-portal-preview` արտեֆակտին (աշխատել 2025-03-24,
+հատկորոշիչը `preview-2025-03-24`) և ստուգման վերծանումը գրանցված
+`DOCS-SORA-Preview-W0`. Ցանկացած հավելում/դադար պետք է գրանցվի երկու աղյուսակում
+վերևում և հետախույզի խնդիրը՝ նախքան հաջորդ ալիքին անցնելը:
 
-## Checkpoint log — W0
+## Անցակետի մատյան — W0
 
-| Date (UTC) | Activity | Notes |
+| Ամսաթիվ (UTC) | Գործունեություն | Ծանոթագրություններ |
 | --- | --- | --- |
-| 2025‑03‑26 | Telemetry baseline review + office hours | `docs.preview.integrity` + `TryItProxyErrors` remained green; office hours confirmed all reviewers completed checksum verification. |
-| 2025‑03‑27 | Midpoint feedback digest posted | Summary captured in [`preview-feedback/w0/summary.md`](./preview-feedback/w0/summary.md); two minor nav issues logged as `docs-preview/w0` labels, no incidents reported. |
-| 2025‑03‑31 | Final week telemetry spot check | Last pre-exit office hours; reviewers confirmed remaining docs tasks on track, no alerts fired. |
-| 2025‑04‑08 | Exit summary + invite closures | Acknowledged completed reviews, revoked temporary access, archived findings in [`preview-feedback/w0/summary.md`](./preview-feedback/w0/summary.md#exit-summary-2025-04-08); tracker updated before prepping W1. |
+| 2025-03-26 | Հեռուստաչափության ելակետային վերանայում + գրասենյակային ժամեր | `docs.preview.integrity` + `TryItProxyErrors` մնաց կանաչ; գրասենյակային ժամերը հաստատեցին, որ բոլոր վերանայողները ավարտեցին ստուգիչ գումարի ստուգումը: |
+| 2025-03-27 | Միջին կետի հետադարձ կապը տեղադրվել է | [`preview-feedback/w0/summary.md`] (./preview-feedback/w0/summary.md); նավի երկու աննշան խնդիրներ գրանցված են որպես `docs-preview/w0` պիտակներ, ոչ մի միջադեպ չի հաղորդվել: |
+| 2025-03-31 | Հեռուստաչափության կետի վերջին շաբաթվա ստուգում | Նախաելքի վերջին աշխատանքային ժամերը; վերանայողները հաստատել են փաստաթղթերի մնացած առաջադրանքները, որոնք ուղու վրա են, ահազանգեր չեն հնչել: |
+| 2025-04-08 | Ելքի ամփոփագիր + հրավերների փակումներ | Հաստատված ավարտված վերանայումներ, չեղյալ համարված ժամանակավոր մուտք, արխիվացված գտածոներ [`preview-feedback/w0/summary.md`]-ում (./preview-feedback/w0/summary.md#exit-summary-2025-04-08); որոնիչը թարմացվել է W1-ը պատրաստելուց առաջ: |
 
-## Invite log — W1 partners
+## Հրավերների մատյան — W1 գործընկերներ
 
-| Reviewer ID | Role | Request ticket | Invite sent (UTC) | Expected exit (UTC) | Status | Notes |
+| Գրախոսի ID | Դերը | Պահանջել տոմս | Հրավերն ուղարկված է (UTC) | Ակնկալվող ելք (UTC) | Կարգավիճակը | Ծանոթագրություններ |
 | --- | --- | --- | --- | --- | --- | --- |
-| sorafs-op-01 | SoraFS operator (EU) | `DOCS-SORA-Preview-REQ-P01` | 2025‑04‑12 15:00 | 2025‑04‑26 15:00 | Completed | Delivered orchestrator ops feedback 2025‑04‑20; exit ack 15:05 UTC. |
-| sorafs-op-02 | SoraFS operator (JP) | `DOCS-SORA-Preview-REQ-P02` | 2025‑04‑12 15:03 | 2025‑04‑26 15:00 | Completed | Logged rollout guidance comments in `docs-preview/w1`; exit ack 15:10 UTC. |
-| sorafs-op-03 | SoraFS operator (US) | `DOCS-SORA-Preview-REQ-P03` | 2025‑04‑12 15:06 | 2025‑04‑26 15:00 | Completed | Dispute/blacklist edits filed; exit ack 15:12 UTC. |
-| torii-int-01 | Torii integrator | `DOCS-SORA-Preview-REQ-P04` | 2025‑04‑12 15:09 | 2025‑04‑26 15:00 | Completed | Try it auth walkthrough accepted; exit ack 15:14 UTC. |
-| torii-int-02 | Torii integrator | `DOCS-SORA-Preview-REQ-P05` | 2025‑04‑12 15:12 | 2025‑04‑26 15:00 | Completed | RPC/OAuth doc comments logged; exit ack 15:16 UTC. |
-| sdk-partner-01 | SDK partner (Swift) | `DOCS-SORA-Preview-REQ-P06` | 2025‑04‑12 15:15 | 2025‑04‑26 15:00 | Completed | Preview integrity feedback merged; exit ack 15:18 UTC. |
-| sdk-partner-02 | SDK partner (Android) | `DOCS-SORA-Preview-REQ-P07` | 2025‑04‑12 15:18 | 2025‑04‑26 15:00 | Completed | Telemetry/redaction review done; exit ack 15:22 UTC. |
-| gateway-ops-01 | Gateway operator | `DOCS-SORA-Preview-REQ-P08` | 2025‑04‑12 15:21 | 2025‑04‑26 15:00 | Completed | Gateway DNS runbook comments filed; exit ack 15:24 UTC. |
+| սորաֆս-օպ-01 | SoraFS օպերատոր (ԵՄ) | `DOCS-SORA-Preview-REQ-P01` | 2025-04-12 15:00 | 2025-04-26 15:00 | Ավարտված | Ներկայացվել է նվագախմբի հետադարձ կապ 2025–04–20; exit ack 15:05UTC. |
+| սորաֆս-օպ-02 | SoraFS օպերատոր (JP) | `DOCS-SORA-Preview-REQ-P02` | 2025-04-12 15:03 | 2025-04-26 15:00 | Ավարտված | Մուտքագրված տեղադրման ուղեցույցի մեկնաբանությունները `docs-preview/w1`-ում; ելք 15:10UTC. |
+| սորաֆս-օպ-03 | SoraFS օպերատոր (ԱՄՆ) | `DOCS-SORA-Preview-REQ-P03` | 2025-04-12 15:06 | 2025-04-26 15:00 | Ավարտված | Ներկայացված վեճերի/սև ցուցակի խմբագրումները; exit ack 15:12UTC. |
+| torii-int-01 | Torii ինտեգրատոր | `DOCS-SORA-Preview-REQ-P04` | 2025-04-12 15:09 | 2025-04-26 15:00 | Ավարտված | Փորձեք այն auth walkthrough ընդունված; exit ack 15:14UTC. |
+| torii-int-02 | Torii ինտեգրատոր | `DOCS-SORA-Preview-REQ-P05` | 2025-04-12 15:12 | 2025-04-26 15:00 | Ավարտված | RPC/OAuth փաստաթղթի մեկնաբանությունները գրանցված են; exit ack 15:16UTC. |
+| sdk-partner-01 | SDK գործընկեր (Swift) | `DOCS-SORA-Preview-REQ-P06` | 2025-04-12 15:15 | 2025-04-26 15:00 | Ավարտված | Նախադիտման ամբողջականության հետադարձ կապը միավորվել է; exit ack 15:18UTC. |
+| sdk-partner-02 | SDK գործընկեր (Android) | `DOCS-SORA-Preview-REQ-P07` | 2025-04-12 15:18 | 2025-04-26 15:00 | Ավարտված | Կատարված է հեռաչափության/ռեդակցիոն վերանայում; exit ack 15:22UTC. |
+| gateway-ops-01 | Դարպասի օպերատոր | `DOCS-SORA-Preview-REQ-P08` | 2025-04-12 15:21 | 2025-04-26 15:00 | Ավարտված | Gateway DNS runbook մեկնաբանությունները ներկայացվել են; exit ack 15:24UTC. |
 
-## Checkpoint log — W1
+## Անցակետի մատյան — W1
 
-| Date (UTC) | Activity | Notes |
+| Ամսաթիվ (UTC) | Գործունեություն | Ծանոթագրություններ |
 | --- | --- | --- |
-| 2025‑04‑12 | Invite dispatch + artefact verification | All eight partners emailed with `preview-2025-04-12` descriptor/archive; acknowledgements stored in tracker. |
-| 2025‑04‑13 | Telemetry baseline review | `docs.preview.integrity`, `TryItProxyErrors`, and `DocsPortal/GatewayRefusals` dashboards reviewed — green across the board; office hours confirmed checksum verification completed. |
-| 2025‑04‑18 | Mid-wave office hours | `docs.preview.integrity` remained green; two doc nits logged under `docs-preview/w1` (nav wording + Try it screenshot). |
-| 2025‑04‑22 | Final telemetry spot check | Proxy + dashboards still healthy; no new issues raised, noted in tracker ahead of exit. |
-| 2025‑04‑26 | Exit summary + invite closures | All partners confirmed review completion, invites revoked, evidence archived in [`preview-feedback/w1/summary.md`](./preview-feedback/w1/summary.md#exit-summary-2025-04-26). |
+| 2025-04-12 | Հրավեր ուղարկել + արտեֆակտի ստուգում | Բոլոր ութ գործընկերները էլեկտրոնային փոստով ուղարկվել են `preview-2025-04-12` նկարագրիչ/արխիվ; հավատարմագրերը պահվում են tracker-ում: |
+| 2025-04-13 | Հեռաչափության ելակետային վերանայում | `docs.preview.integrity`, `TryItProxyErrors` և `DocsPortal/GatewayRefusals` վահանակները վերանայվել են. գրասենյակային ժամերի հաստատված ստուգիչ գումարի ստուգումն ավարտված է: |
+| 2025-04-18 | Միջին ալիքի աշխատանքային ժամեր | `docs.preview.integrity` մնաց կանաչ; երկու փաստաթուղթ, որոնք գրանցված են `docs-preview/w1`-ի տակ (նավ ձևակերպում + Փորձեք սքրինշոթ): |
+| 2025-04-22 | Հեռուստաչափության վերջնական ստուգում | Վստահված անձ + վահանակները դեռ առողջ են; ոչ մի նոր խնդիր չի բարձրացվել, որը նշվել է ելքից առաջ tracker-ում: |
+| 2025-04-26 | Ելքի ամփոփագիր + հրավերների փակումներ | Բոլոր գործընկերները հաստատել են վերանայման ավարտը, հրավերները չեղյալ են հայտարարվել, ապացույցները արխիվացված են [`preview-feedback/w1/summary.md`]-ում (./preview-feedback/w1/summary.md#exit-summary-2025-04-26): |
 
-## W3 beta cohort recap
+## W3 բետա կոհորտայի ամփոփում
 
-- ✅ Invites sent 2026‑02‑18 with checksum verification + acknowledgements logged the same day.
-- ✅ Feedback collected under `docs-preview/20260218` with governance issue `DOCS-SORA-Preview-20260218`; digest + summary generated via `npm run --prefix docs/portal preview:wave -- --wave preview-20260218`.
-- ✅ Access revoked 2026‑02‑28 after the final telemetry check; tracker + portal tables updated to show W3 as completed.
+- ✅ Հրավերներ ուղարկվել են 2026-02-18 թվականներին՝ ստուգիչ գումարի ստուգմամբ + նույն օրը գրանցված հաստատումներով:
+- ✅ Հետադարձ կապ հավաքագրվել է `docs-preview/20260218`-ի ներքո կառավարման խնդրի հետ կապված `DOCS-SORA-Preview-20260218`; digest + ամփոփում, որը ստեղծվել է `npm run --prefix docs/portal preview:wave -- --wave preview-20260218`-ի միջոցով:
+- ✅ Մուտքը չեղյալ է համարվել 2026-02-28 թվականներին վերջնական հեռաչափական ստուգումից հետո; հետագծող + պորտալի աղյուսակները թարմացվել են՝ W3-ը ավարտված ցույց տալու համար:
 
-## Invite log — W2 community
-
-| Reviewer ID | Role | Request ticket | Invite sent (UTC) | Expected exit (UTC) | Status | Notes |
+## Հրավերների մատյան — W2 համայնք| Գրախոսի ID | Դերը | Պահանջել տոմս | Հրավերն ուղարկված է (UTC) | Ակնկալվող ելք (UTC) | Կարգավիճակը | Ծանոթագրություններ |
 | --- | --- | --- | --- | --- | --- | --- |
-| comm-vol-01 | Community reviewer (SDK) | `DOCS-SORA-Preview-REQ-C01` | 2025‑06‑15 16:00 | 2025‑06‑29 16:00 | Completed | Ack 16:06 UTC; focusing on SDK quickstarts; exit confirmed 2025‑06‑29. |
-| comm-vol-02 | Community reviewer (Governance) | `REQ-C02` | 2025‑06‑15 16:03 | 2025‑06‑29 16:00 | Completed | Governance/SNS review done; exit confirmed 2025‑06‑29. |
-| comm-vol-03 | Community reviewer (Norito) | `REQ-C03` | 2025‑06‑15 16:06 | 2025‑06‑29 16:00 | Completed | Norito walkthrough feedback logged; exit ack 2025‑06‑29. |
-| comm-vol-04 | Community reviewer (SoraFS) | `REQ-C04` | 2025‑06‑15 16:09 | 2025‑06‑29 16:00 | Completed | SoraFS runbook review done; exit ack 2025‑06‑29. |
-| comm-vol-05 | Community reviewer (Accessibility) | `REQ-C05` | 2025‑06‑15 16:12 | 2025‑06‑29 16:00 | Completed | Accessibility/UX notes shared; exit ack 2025‑06‑29. |
-| comm-vol-06 | Community reviewer (Localization) | `REQ-C06` | 2025‑06‑15 16:15 | 2025‑06‑29 16:00 | Completed | Localization feedback logged; exit ack 2025‑06‑29. |
-| comm-vol-07 | Community reviewer (Mobile) | `REQ-C07` | 2025‑06‑15 16:18 | 2025‑06‑29 16:00 | Completed | Mobile SDK doc checks delivered; exit ack 2025‑06‑29. |
-| comm-vol-08 | Community reviewer (Observability) | `REQ-C08` | 2025‑06‑15 16:21 | 2025‑06‑29 16:00 | Completed | Observability appendix review done; exit ack 2025‑06‑29. |
+| comm-vol-01 | Համայնքի վերանայող (SDK) | `DOCS-SORA-Preview-REQ-C01` | 2025-06-15 16:00 | 2025-06-29 16:00 | Ավարտված | Ակ 16:06UTC; կենտրոնանալով SDK արագ մեկնարկների վրա; ելքը հաստատված է 2025-06-29: |
+| comm-vol-02 | Համայնքի վերանայող (Կառավարում) | `REQ-C02` | 2025-06-15 16:03 | 2025-06-29 16:00 | Ավարտված | Կատարված է կառավարման/SNS վերանայում; ելքը հաստատված է 2025-06-29: |
+| comm-vol-03 | Համայնքի գրախոս (Norito) | `REQ-C03` | 2025-06-15 16:06 | 2025-06-29 16:00 | Ավարտված | Norito հետադարձ կապը գրանցված է; ելք 2025-06-29: |
+| comm-vol-04 | Համայնքի գրախոս (SoraFS) | `REQ-C04` | 2025-06-15 16:09 | 2025-06-29 16:00 | Ավարտված | SoraFS runbook վերանայումն արված է; ելք 2025-06-29: |
+| comm-vol-05 | Համայնքի գրախոս (Մատչելիություն) | `REQ-C05` | 2025-06-15 16:12 | 2025-06-29 16:00 | Ավարտված | Մատչելիություն/UX նշումներ համօգտագործված; ելք 2025-06-29: |
+| comm-vol-06 | Համայնքի վերանայող (Տեղայնացում) | `REQ-C06` | 2025-06-15 16:15 | 2025-06-29 16:00 | Ավարտված | Տեղայնացման հետադարձ կապը գրանցված է; ելք 2025-06-29: |
+| comm-vol-07 | Համայնքի գրախոս (Բջջային) | `REQ-C07` | 2025-06-15 16:18 | 2025-06-29 16:00 | Ավարտված | Բջջային SDK փաստաթղթերի ստուգումներ են առաքվում; ելք 2025-06-29: |
+| comm-vol-08 | Համայնքի վերանայող (դիտելիություն) | `REQ-C08` | 2025-06-15 16:21 | 2025-06-29 16:00 | Ավարտված | Կատարված է դիտարկելիության հավելվածի վերանայում; ելք 2025-06-29: |
 
-## Checkpoint log — W2
+## Անցակետի մատյան — W2
 
-| Date (UTC) | Activity | Notes |
+| Ամսաթիվ (UTC) | Գործունեություն | Ծանոթագրություններ |
 | --- | --- | --- |
-| 2025‑06‑15 | Invite dispatch + artefact verification | `preview-2025-06-15` descriptor/archive shared with 8 community reviewers; acknowledgements stored in tracker. |
-| 2025‑06‑16 | Telemetry baseline review | `docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals` dashboards green; Try it proxy logs show community tokens active. |
-| 2025‑06‑18 | Office hours & issue triage | Collected two suggestions (`docs-preview/w2 #1` tooltip wording, `#2` localization sidebar) — both routed to Docs. |
-| 2025‑06‑21 | Telemetry check + doc fixes | Docs addressed `docs-preview/w2 #1/#2`; dashboards still green, no incidents. |
-| 2025‑06‑24 | Final week office hours | Reviewers confirmed remaining feedback submissions; no alert fire. |
-| 2025‑06‑29 | Exit summary + invite closures | Acks recorded, preview access revoked, telemetry snapshots + artefacts archived (see [`preview-feedback/w2/summary.md`](./preview-feedback/w2/summary.md#exit-summary-2025-06-29)). |
-| 2025‑04‑15 | Office hours & issue triage | Two documentation suggestions logged under `docs-preview/w1`; no incidents or alerts triggered. |
+| 2025-06-15 | Հրավեր ուղարկել + արտեֆակտի ստուգում | `preview-2025-06-15` նկարագրիչ/արխիվ՝ համօգտագործված համայնքի 8 վերանայողների հետ; հավատարմագրերը պահվում են tracker-ում: |
+| 2025-06-16 | Հեռաչափության ելակետային վերանայում | `docs.preview.integrity`, `TryItProxyErrors`, `DocsPortal/GatewayRefusals` վահանակներ կանաչ; Փորձեք այն վստահված անձի տեղեկամատյանները, որոնք ցույց են տալիս ակտիվ համայնքի նշանները: |
+| 2025-06-18 | Գրասենյակային ժամեր և թողարկում | Հավաքվել է երկու առաջարկ (`docs-preview/w2 #1` գործիքի հուշման ձևակերպում, `#2` տեղայնացման կողագոտ) — երկուսն էլ ուղղորդվել են դեպի Փաստաթղթեր: |
+| 2025-06-21 | Հեռաչափության ստուգում + փաստաթղթի շտկում | `docs-preview/w2 #1/#2` հասցեով փաստաթղթեր; վահանակները դեռ կանաչ են, միջադեպեր չկան: |
+| 2025-06-24 | Ավարտական ​​շաբաթվա աշխատանքային ժամեր | Վերանայողները հաստատել են հետադարձ կապի մնացած ներկայացումները. ոչ ահազանգ կրակ: |
+| 2025-06-29 | Ելքի ամփոփագիր + հրավերների փակումներ | Արձանագրված ակսեր, նախադիտման հասանելիությունը չեղյալ է հայտարարվել, հեռաչափական պատկերներ + արտեֆակտներ արխիվացված (տես [`preview-feedback/w2/summary.md`](./preview-feedback/w2/summary.md#exit-summary-2025-06-29)): |
+| 2025-04-15 | Գրասենյակային ժամեր և թողարկում | `docs-preview/w1`-ում գրանցված երկու փաստաթղթերի առաջարկներ; ոչ մի միջադեպ կամ ահազանգ չի ստացվել: |
 
-## Reporting hooks
+## Հաշվետվության կեռիկներ
 
-- Each Wednesday, update the tracker table above plus the active invite issue
-  with a short status note (invites sent, active reviewers, incidents).
-- When a wave closes, append the feedback summary path (for example,
-  `docs/portal/docs/devportal/preview-feedback/w0/summary.md`) and link it from
+- Ամեն չորեքշաբթի թարմացրեք վերևում գտնվող հետագծերի աղյուսակը և ակտիվ հրավերի հարցը
+  կարճ կարգավիճակի նշումով (ուղարկված հրավերներ, ակտիվ գրախոսներ, միջադեպեր):
+- Երբ ալիքը փակվում է, ավելացրեք հետադարձ կապի ամփոփ ուղին (օրինակ.
+  `docs/portal/docs/devportal/preview-feedback/w0/summary.md`) և միացրեք այն
   `status.md`.
-- If any pause criteria from the [preview invite flow](./preview-invite-flow.md)
-  trigger, add the remediation steps here before resuming invites.
+- Եթե որևէ դադարի չափանիշ [նախադիտման հրավերի հոսքից] (./preview-invite-flow.md)
+  գործարկեք, ավելացրեք վերականգնման քայլերն այստեղ՝ նախքան հրավերները վերսկսելը:

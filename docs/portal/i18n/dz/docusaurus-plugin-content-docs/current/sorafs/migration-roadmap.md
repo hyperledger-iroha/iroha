@@ -5,44 +5,46 @@ source: docs/portal/docs/sorafs/migration-roadmap.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: "SoraFS Migration Roadmap"
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-> Adapted from [`docs/source/sorafs/migration_roadmap.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/migration_roadmap.md).
+> [`docs/source/sorafs/migration_roadmap.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/migration_roadmap.md)ལས་བསྒྱུར་བཅོས་འབད་ཡོདཔ།
 
-# SoraFS Migration Roadmap (SF-1)
+# SoraFS གནས་སྤོ་འགྲུལ་ལམ་ (SF-1)
 
-This document operationalises the migration guidance captured in
-`docs/source/sorafs_architecture_rfc.md`. It expands the SF-1 deliverables into
-execution-ready milestones, gating criteria, and owner checklists so storage,
-artifact hosting to SoraFS-backed publication.
+ཡིག་ཆ་འདི་གིས་ ༢༠༠༨ ལུ་ བཟུང་ཡོད་པའི་གནས་སྤོའི་ལམ་སྟོན་འདི་བཀོལ་སྤྱོད་འབདཝ་ཨིན།
+`docs/source/sorafs_architecture_rfc.md`. འདི་གིས་ ཨེསི་ཨེཕ་-༡ འདི་ རྒྱ་སྐྱེད་འབདཝ་ཨིན།
+ལག་ལེན་འཐབ་བཏུབ་པའི་ མཐོ་རིམ་གྱི་ མཐོ་ཚད་དང་ འཛུལ་ནིའི་ཚད་གཞི་ དེ་ལས་ ཇོ་བདག་ཞིབ་དཔྱད་ཐོ་ཡིག་ཚུ་ བསག་བཞག་ཚུགས།
+SoraFS ལུ་ གཙོ་བོར་བཏོན་པའི་ ཅ་རྙིང་།
 
-The roadmap is intentionally deterministic: every milestone names the required
-artifacts, command invocations, and attestation steps so downstream pipelines
-produce identical outputs and governance retains an auditable trail.
+ལམ་སྟོན་འདི་ ཤེས་བཞིན་དུ་ གཏན་འབེབས་བཟོཝ་ཨིན།
+ཅ་རྙིང་དང་ བཀའ་རྒྱ་གནང་མི་ དེ་ལས་ བདེན་ཁུངས་བཀལ་ནིའི་ གོ་རིམ་ཚུ་ མར་གྱི་ མདོང་ལམ་ཚུ་ཨིན།
+ཐོན་འབྲས་འདྲ་མཚུངས་དང་ གཞུང་སྐྱོང་གིས་ རྩིས་ཞིབ་འབད་ཚུགས་པའི་ ལམ་ཕྱོགས་ཅིག་ བཞགཔ་ཨིན།
 
-## Milestone Overview
+## མའིལ་སི་ཊོན་གྱི་སྤྱིར་བཏང་བལྟ་བ།
 
-| Milestone | Window | Primary Goals | Must Ship | Owners |
+| མའིལ་སི་ཊོན་ | སྒོ་སྒྲིག་ | དམིགས་ཡུལ་གཙོ་བོ་ | གྲུ་དགོས། | ཇོ་བདག་ |
 |-----------|--------|---------------|-----------|--------|
-| **M1 – Deterministic Enforcement** | Weeks 7–12 | Enforce signed fixtures and stage alias proofs while pipelines adopt expectation flags. | Nightly fixture verification, council-signed manifests, alias registry staging entries. | Storage, Governance, SDKs |
+| **M1 – གཏན་འཇགས་བཀག་སྡོམ་** | བདུན་ཕྲག་ ༧–༡༢ | མཚན་རྟགས་བཀོད་ཡོད་པའི་ སྒྲིག་ཆས་དང་ འཁྲབ་སྟེགས་མིང་གཞན་བདེན་ཁུངས་ཚུ་ བཀག་ཆ་འབད་བའི་སྐབས་ རེ་བ་གི་རྒྱལ་དར་ཚུ་ ངོས་ལེན་འབདཝ་ཨིན། | མཚན་མོའི་སྒྲིག་བཀོད་བདེན་དཔྱད་དང་ ཚོགས་སྡེ་གིས་མིང་རྟགས་བཀོད་པའི་མངོན་གསལ་ དེ་ལས་ ཐོ་བཀོད་ཐོ་བཀོད་ཀྱི་ཐོ་བཀོད་ཚུ་ ཐོ་བཀོད་འབདཝ་ཨིན། | Storage, གཞུང་སྐྱོང་།, SDKs |
 
-Milestone status is tracked in `docs/source/sorafs/migration_ledger.md`. All
-changes to this roadmap MUST update the ledger to keep governance and release
-engineering in sync.
+མའིལ་སི་ཊོན་གནས་རིམ་འདི་ `docs/source/sorafs/migration_ledger.md` ནང་ལུ་བརྟག་ཞིབ་འབདཝ་ཨིན། གེ་ར
+གཞུང་སྐྱོང་དང་ གློད་གྲོལ་འབད་ནིའི་དོན་ལུ་ ལམ་སྟོན་འདི་ དུས་མཐུན་བཟོ་དགོཔ་མནའ་འབད།
+བཟོ་རིག་འདི་མཉམ་འབྱུང་ནང་།
 
-## Workstreams
+## ལས་ཀའི་རྒྱུན་རིམ།
 
-### 2. Deterministic Pinning Adoption
+### 2. གཏན་ཚིགས་ཀྱི་ཆ་ཤས།
 
-| Step | Milestone | Description | Owner(s) | Output |
-|------|-----------|-------------|----------|--------|
-| Fixture rehearsals | M0 | Weekly dry-runs comparing local chunk digests against `fixtures/sorafs_chunker`. Publish report under `docs/source/sorafs/reports/`. | Storage Providers | `determinism-<date>.md` with pass/fail matrix. |
-| Enforce signatures | M1 | `ci/check_sorafs_fixtures.sh` + `.github/workflows/sorafs-fixtures-nightly.yml` fail if signatures or manifests drift. Development overrides require governance waiver attached to PR. | Tooling WG | CI log, waiver ticket link (if applicable). |
-| Expectation flags | M1 | Pipelines call `sorafs_manifest_stub` with explicit expectations to pin outputs: | Docs CI | Updated scripts referencing expectation flags (see command block below). |
-| Registry-first pinning | M2 | `sorafs pin propose` and `sorafs pin approve` wrap manifest submissions; CLI defaults to `--require-registry`. | Governance Ops | Registry CLI audit log, telemetry for failed proposals. |
-| Observability parity | M3 | Prometheus/Grafana dashboards alert when chunk inventories diverge from registry manifests; alerts wired to ops on-call. | Observability | Dashboard link, alert rule IDs, GameDay results. |
+| གོམ་པ་ | མའིལ་སི་ཊོན་ | འགྲེལ་བཤད་ | ཇོ་བདག་(ཚུ་) | ཐོན་འབྲས་ |
+|-----------------------------------------------------------------------------------------------
+| ཕིག་ཅར་སྦྱང་བ་ | M0 | བདུན་ཕྲག་རེ་ནང་ ས་གནས་ཀྱི་ཆ་ཤས་འཇུ་བ་ཚུ་ ག་བསྡུར་འབད་དེ་ `fixtures/sorafs_chunker` ལུ་ ག་བསྡུར་འབདཝ་ཨིན། `docs/source/sorafs/reports/` གི་འོག་ལུ་ དཔེ་སྐྲུན་སྙན་ཞུ། | མཁོ་སྤྲོད་པ་ | I18NI000000013X ཆོག་ཐམ་/འཐུས་ཤོར་མེ་ཊིགསི་དང་གཅིག་ཁར་། |
+| བརྡ་རྟགས་ཚུ་བསྟར་སྤྱོད་འབད་ནི། | M1 | I18NI000000014X + `.github/workflows/sorafs-fixtures-nightly.yml` མཚན་རྟགས་ཚུ་ཡང་ན་ གསལ་སྟོན་ཚུ་ འཕྱེལ་འགྱོ་བ་ཅིན་ འཐུས་ཤོར་འབྱུང་འོང་། གོང་འཕེལ་གྱི་ཚབ་ལུ་ གཞུང་སྐྱོང་དགོངས་ཞུ་འབད་དགོཔ་འདི་ PR ལུ་མཐུད་དེ་ཡོདཔ་ཨིན། | ལག་ཆས་ WG | CI log, དགོངས་ཞུའི་ཤོག་བྱང་འབྲེལ་ལམ་ (འཇུག་སྤྱོད་འབད་བཏུབ་པ་ཅིན་)། |
+| རེ་བ་གི་རྒྱལ་དར་ཚུ་ | M1 | པའི་པེ་ལིན་གྱིས་ ཐོན་འབྲས་ཚུ་ པིག་འབད་ནིའི་དོན་ལུ་ རེ་བ་གསལ་ཏོག་ཏོ་ཡོད་མི་དང་གཅིག་ཁར་ `sorafs_manifest_stub` འབོཝ་ཨིན། | ཡིག་ཆ་སི་ཨའི་ | དུས་མཐུན་བཟོ་ཡོད་པའི་ཡིག་ཚུགས་ཚུ་ གཞི་བསྟུན་ གཞི་བསྟུན་གྱི་ དར་ཆ་ཚུ་ (འོག་གི་བརྡ་བཀོད་བཀག་ཆ་བལྟ།)། |
+| ཐོ་བཀོད་དང་པ་ པིན་ནིང་ | M2 | I18NI000000017X དང་ `sorafs pin approve` བཤུབ་པའི་མངོན་རྟགས་གསལ་བྱེད་ཚུ། CLI གིས་ `--require-registry` ལུ་སྔོན་སྒྲིག་འབདཝ་ཨིན། | གཞུང་སྐྱོང་ Ops | ཐོ་བཀོད་ CLI རྩིས་ཞིབ་དྲན་ཐོ། |
+| བལྟ་རྟོག་འབད་བཏུབ་པའི་ཆ་རྐྱེན། | M3 | Prometheus/I18NT0000001X ཐོ་བཀོད་ལས་ ཐོ་གཞུང་ཚུ་ཁ་སྟོར་འགྱོ་བའི་སྐབས་ ཆ་རྐྱེན་ཚུ་ མངོན་གསལ་འབད་བའི་སྐབས་ Grafana ཌེཤ་བོརཊི་ཚུ་ མངོན་གསལ་འབདཝ་ཨིན། དྲན་སྐུལ་ཚུ་ གློག་ཐག་གུ་ ཨོཔ་ཚུ་ལུ་ འབོད་བཀུག་འབདཝ་ཨིན། | བལྟ་རྟོག་འབད་ཚུགསཔ་ | ཌེཤ་བོརཌ་འབྲེལ་ལམ་ ཉེན་བརྡ་ལམ་ལུགས་ཨའི་ཌི་ཚུ་ གེམ་ཌེ་གི་གྲུབ་འབྲས། |
 
-#### Canonical publishing command
+#### དཀར་ཆག་དཔེ་སྐྲུན་བཀའ་རྒྱ།
 
 ```bash
 cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
@@ -56,50 +58,50 @@ cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- docs/book \
   --dag-codec=0x71
 ```
 
-Replace the digest, size, and CID values with the expected references recorded in
-the migration ledger entry for the artifact.
+ནང་ལུ་ཐོ་བཀོད་འབད་ཡོད་པའི་ རེ་བ་ཡོད་པའི་གཞི་བསྟུན་ཚུ་དང་གཅིག་ཁར་ ཌའི་ཇེསཊི་དང་ ཚད་ དེ་ལས་ སི་ཨའི་ཌི་གནས་གོང་ཚུ་ ཚབ་བཙུགས།
+གནས་སྤོ་བའི་ ལག་ཆ་ གི་དོན་ལུ་ གནས་སྤོ་བའི་ ལག་དེབ་ཐོ་བཀོད་འབད་ནི།
 
-### 3. Alias Transition & Communications
+### 3. མིང་གཞན་འགྱུར་དང་བརྡ་འཕྲིན།
 
-| Step | Milestone | Description | Owner(s) | Output |
-|------|-----------|-------------|----------|--------|
-| Alias proofs in staging | M1 | Register alias claims in the Pin Registry staging environment and attach Merkle proofs to manifests (`--alias`). | Governance, Docs | Proof bundle stored next to manifest + ledger comment with alias name. |
-| Proof enforcement | M2 | Gateways reject manifests without fresh `Sora-Proof` headers; CI gains `sorafs alias verify` step to fetch proofs. | Networking | Gateway config patch + CI output capturing verification success. |
+| གོམ་པ་ | མའིལ་སི་ཊོན་ | འགྲེལ་བཤད་ | ཇོ་བདག་(ཚུ་) | ཐོན་འབྲས་ |
+|-----------------------------------------------------------------------------------------------
+| འཁྲབ་སྟོན་ནང་ མིང་གཞན་བདེན་དཔང་ཚུ་ | M1 | Pin ཐོ་བཀོད་ཀྱི་མཐའ་འཁོར་དང་ Merkle གི་བདེན་ཁུངས་ཚུ་ གསལ་སྟོན་གྱི་ མངོན་གསལ་ཚུ་ མཐུད་དེ་ ༼I18NI0000020X༽ ཐོ་བཀོད་འབད། (I18NI0000020X) | གཞུང་སྐྱོང་ ཡིག་ཆ་ | བདེན་དཔང་བཱན་ཌལ་ གསལ་སྟོན་གྱི་བོ་ལོག་ཁར་ གསོག་འཇོག་འབད་ཡོདཔ་ + མིང་གཞན་མིང་དང་གཅིག་ཁར་ ལེཌི་ཇར་བསམ་འཆར། |
+| བདེན་དཔང་བཀག་སྡོམ་ | M2 | སྒོ་སྒྲིག་ཚུ་གིས་ I18NI0000021X མགོ་ཡིག་ཚུ་མེད་པར་ གསལ་སྟོན་འབདཝ་ཨིན། CI ཐོབ་མི་ I18NI0000002X བདེན་དཔང་ལེན་ནིའི་དོན་ལུ་ གོམ་པ་གཅིག་ཨིན། | ཡོངས་འབྲེལ་ | གཱེཊི་ཝེ་རིམ་སྒྲིག་ཐབས་འཕྲུལ་ + སི་ཨའི་ཨའུཊི་པུཊི་གིས་ བདེན་དཔྱད་མཐར་འཁྱོལ་བཟུང་ནི། |
 
-### 4. Communication & Audit
+### 4. བརྡ་སྤྲོད་དང་རྩིས་ཞིབ།
 
-- **Ledger discipline:** every state change (fixture drift, registry submission,
-  alias activation) must append a dated note to
+- **Ledger སྒྲིག་ཁྲིམས་:** མངའ་སྡེ་བསྒྱུར་བཅོས་རེ་རེ་ (གཏན་བཟོའི་ཌིརཕཊི་ ཐོ་བཀོད་ཕུལ་ནི།
+  alias activation) གིས་ ཚེས་གྲངས་དྲན་འཛིན་ཅིག་ ཁ་སྐོང་འབད་དགོ།
   `docs/source/sorafs/migration_ledger.md`.
-- **Governance minutes:** council sessions approving pin registry changes or
-  alias policies must reference both this roadmap and the ledger.
-- **External comms:** DevRel publishes status updates at each milestone (blog +
-  changelog excerpt) highlighting deterministic guarantees and alias timelines.
+- **གཞུང་སྐྱོང་གི་སྐར་མ་:** ཚོགས་སྡེའི་ཚོགས་ཐེངས་ཚུ་གིས་ པིན་ཐོ་བཀོད་བསྒྱུར་བཅོས་ཚུ་ ཆ་འཇོག་འབད་དོ་ཡོདཔ།
+  alias སྲིད་བྱུས་ཚུ་གིས་ ས་ཁྲ་འདི་དང་ རྩིས་ཁྲ་གཉིས་ཆ་ར་ལུ་ གཞི་བསྟུན་འབད་དགོ།
+- **ཕྱིའི་ཀོརསི་:** ཌིབ་རེལ་གྱིས་ མཐོ་ཚད་རེ་རེ་ནང་ གནས་ཚད་དུས་མཐུན་བཟོ་མི་ཚུ་ (blog +) དཔར་བསྐྲུན་འབདཝ་ཨིན།
+  regresslog exserp) གཏན་འབེབས་འགན་ལེན་དང་ མིང་གཞན་དུས་ཚོད་གྲལ་ཐིག་ཚུ་ གཙོ་བོར་བཏོན་ནི།
 
-## Dependencies & Risks
+## བརྟེན་པ་དང་ཉེན་ཁ།
 
-| Dependency | Impact | Mitigation |
-|------------|--------|------------|
-| Pin Registry contract availability | Blocks M2 pin-first rollout. | Stage contract ahead of M2 with replay tests; maintain envelope fallback until regression-free. |
-| Council signing keys | Required for manifest envelopes and registry approvals. | Signing ceremony documented in `docs/source/sorafs/signing_ceremony.md`; rotate keys with overlap and ledger note. |
-| SDK release cadence | Clients must honour alias proofs before M3. | Align SDK release windows with milestone gates; add migration checklists to release templates. |
+| བརྟེན་ | ཕན་གནོད་ | མར་ཕབ་ |
+|------------------------------------------- |
+| Pin ཐོ་བཀོད་ཀྱི་གན་རྒྱ་ཐོབ་ཚུལ་ | Blocks M2 པིན-དང་པ་ བསྐོར་འགྲུབ། | བསྐྱར་རྩེད་བརྟག་དཔྱད་དང་བཅས་ M2 གི་གདོང་ཁར་ གནས་རིམ་གན་ཡིག་། འགྱུར་ལྡོག་མེད་པའི་ཚུན་ཚོད་ ཡིག་ཤུབས་ཀྱི་ ཕོལ་ལོག་རྒྱུན་སྐྱོང་འབད། |
+| ཚོགས་སྡེ་མིང་རྟགས་བཀོད་པའི་ལྡེ་མིག་ | གསལ་སྟོན་ཡིག་ཤུབས་དང་ཐོ་བཀོད་ཆ་འཇོག་དགོས་མཁོ། | `docs/source/sorafs/signing_ceremony.md` ནང་ ཡིག་ཐོག་ལུ་བཀོད་པའི་མཛད་སྒོ། མཉམ་བསྡོམས་དང་ ལག་དེབ་དྲན་ཐོ་ཚུ་ བསྐོར་རྒྱབ་འབད། |
+| ཨེསི་ཌི་ཀེ་ གསར་བཏོན་གྱི་ གདམ་ཁའི་ | མཁོ་མངགས་འབད་མི་ཚུ་གིས་ M3 གི་ཧེ་མ་ མིང་གཞན་བདེན་ཁུངས་ཚུ་ལུ་ གུས་ཞབས་འབད་དགོ། | ཨེསི་ཌི་ཀེ་ སྒོ་སྒྲིག་ཚུ་ མཚམས་ཐིག་སྒོ་ཚུ་དང་གཅིག་ཁར་ ཕྲང་སྒྲིག་འབད། ཊེམ་པེལེཊི་ཚུ་གསར་བཏོན་འབད་ནི་ལུ་ གནས་སྤོ་ཞིབ་དཔྱད་ཐོ་ཡིག་ཚུ་ཁ་སྐོང་འབད། |
 
-Residual risks and mitigations are mirrored in `docs/source/sorafs_architecture_rfc.md`
-and should be cross-referenced when adjustments are made.
+ལྷག་ལུས་ཉེན་ཁ་དང་ མར་ཕབ་ཚུ་ `docs/source/sorafs_architecture_rfc.md` ནང་ གསལ་སྟོན་འབདཝ་ཨིན།
+དང་ བདེ་སྒྲིག་འབད་བའི་སྐབས་ ཕར་ཚུར་གཞི་བསྟུན་འབད་དགོ།
 
-## Exit Criteria Checklist
+## ཕྱིར་ཐོན་ཁྱོན་སྙོམ་དཔྱད་ཐོ་།
 
-| Milestone | Criteria |
-|-----------|----------|
-| M1 | - Nightly fixture job green for seven consecutive days. <br /> - Staging alias proofs verified in CI. <br /> - Governance ratifies expectation flag policy. |
+| མའིལ་སི་ཊོན་ | ཚད་གཞི་ |
+|---------------------------------------------------------------------------------------------------
+| M1 | - མཚན་མོའི་སྒྲིག་ཆས་ལས་ཀ་འདི་ཉིན་བདུན་རིང་ལུ་ལྗང་ཁུ་ཡོད། <br /> - CI ནང་ མིང་གཞན་བདེན་ཁུངས་ཚུ་ བདེན་དཔྱད་འབད་ཡོདཔ། <br /> - གཞུང་སྐྱོང་གིས་ རེ་བ་གི་རྒྱལ་དར་སྲིད་བྱུས་འདི་ ཆ་འཇོག་འབདཝ་ཨིན། |
 
-## Change Management
+## ལེགས་བཅོས་འབད་ནི།
 
-1. Propose adjustments via PR updating this file **and**
+༡ ཡིག་སྣོད་འདི་དུས་མཐུན་བཟོ་མི་ PR བརྒྱུད་དེ་ བདེ་སྒྲིག་འབད་ནིའི་གྲོས་འཆར་བཀོད། **དང་**
    `docs/source/sorafs/migration_ledger.md`.
-2. Link supporting governance minutes and CI evidence in the PR description.
-3. On merge, notify storage + DevRel mailing list with summary and expected
-   operator actions.
+༢ གཞུང་སྐྱོང་སྐར་མ་དང་ PR འགྲེལ་བཤད་ནང་ CI སྒྲུབ་བྱེད་ལུ་རྒྱབ་སྐྱོར་འབད་ནི།
+༣ མཉམ་བསྡོམས་འབད་བའི་སྐབས་ གསོག་འཇོག་ + ཌི་ཝི་རེལ་ཡིག་འཕྲིན་ཐོ་ཡིག་འདི་ བཅུད་བསྡུས་དང་རེ་བ་དང་གཅིག་ཁར་ བརྡ་སྤྲོད་འབད།
+   བཀོལ་སྤྱོད་བྱ་བ་ཚུ་།
 
-Following this procedure ensures the SoraFS rollout remains deterministic,
-auditable, and transparent across teams participating in the Nexus launch.
+བྱ་རིམ་འདི་ལུ་གཞི་བཞག་སྟེ་ SoraFS བརྡ་བཀོད་འདི་ ངེས་གཏན་བཟོཝ་ཨིན།
+རྩིས་ཞིབ་འབད་ཚུགསཔ་དང་ I18NT0000005X འགོ་འབྱེད་ནང་ བཅའ་མར་གཏོགས་མི་སྡེ་ཚན་ཚུ་ནང་ དྭངས་གསལ་ཅན།

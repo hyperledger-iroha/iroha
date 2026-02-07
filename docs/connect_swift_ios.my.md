@@ -7,31 +7,32 @@ generator: scripts/sync_docs_i18n.py
 source_hash: e3f492c3253124b1066f1ca4389c5ccf4b96a723a2cd9c30ca28ec92775eeaf4
 source_last_modified: "2026-01-05T18:22:23.396018+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-## Recommended SDK Flow (ConnectClient + Norito bridge)
+## အကြံပြုထားသော SDK Flow (ConnectClient + Norito တံတား)
 
-Need a full Xcode integration walkthrough (SPM/CocoaPods, XCFramework wiring, ChaChaPoly helpers)?
-See `docs/connect_swift_integration.md` for the end-to-end packaging guide.
+Xcode ပေါင်းစည်းခြင်းဆိုင်ရာ လမ်းညွှန်ချက်အပြည့်အစုံ (SPM/CocoaPods၊ XCFramework ဝါယာကြိုးများ၊ ChaChaPoly အကူအညီများ) လိုအပ်ပါသလား။
+အဆုံးမှအဆုံး ထုပ်ပိုးမှုလမ်းညွှန်အတွက် `docs/connect_swift_integration.md` ကို ကြည့်ပါ။
 
-The Swift SDK ships a Norito-backed Connect stack:
+Swift SDK သည် Norito ကျောထောက်နောက်ခံပြုထားသော Connect stack ကို ပေးပို့သည်-
 
-- `ConnectClient` maintains the WebSocket (`/v1/connect/ws?...`) transport on top of
-  `URLSessionWebSocketTask`.
-- `ConnectSession` orchestrates the lifecycle (open → approve/reject → sign → close) and
-  decrypts ciphertext frames once direction keys are installed.
-- `ConnectCrypto` exposes X25519 key generation plus Norito-compliant direction-key
-  derivation so apps never have to implement HKDF/HMAC plumbing manually.
-- `ConnectEnvelope`/`ConnectControl` represent the typed Norito frames emitted by the
-  Rust bridge (`connect_norito_bridge`); ciphertext envelopes are decrypted via the
-  same FFI helpers used on Android/Rust, guaranteeing parity.
+- `ConnectClient` သည် WebSocket (`/v1/connect/ws?...`) သယ်ယူပို့ဆောင်ရေးကို ထိပ်တွင် ထိန်းသိမ်းထားသည်။
+  `URLSessionWebSocketTask`။
+- `ConnectSession` သည် ဘဝစက်ဝန်းအား ကြိုးကိုင်ပေးသည် (ဖွင့် → အတည်ပြု/ငြင်းပယ် → ဆိုင်းဘုတ် → ပိတ်သည်) နှင့်
+  ဦးတည်ချက်ကီးများကို ထည့်သွင်းပြီးသည်နှင့် ciphertext frames များကို ကုဒ်ကုဒ်လုပ်သည်။
+- `ConnectCrypto` သည် X25519 သော့မျိုးဆက်နှင့် Norito လိုက်လျောညီထွေရှိသော ဦးတည်ချက်ကီးကို ဖော်ထုတ်သည်
+  ဆင်းသက်လာခြင်းကြောင့် အပလီကေးရှင်းများသည် HKDF/HMAC ရေပိုက်များကို ကိုယ်တိုင်အကောင်အထည်ဖော်ရန် ဘယ်သောအခါမှ မလိုအပ်ပါ။
+- `ConnectEnvelope`/`ConnectControl` မှ ထုတ်လွှတ်သော ရိုက်ထည့်ထားသော Norito ဘောင်များကို ကိုယ်စားပြုသည်
+  သံချေးတံတား (`connect_norito_bridge`); ciphertext စာအိတ်များကို စာဝှက်ဖြင့် စာဝှက်ထားသည်။
+  တူညီမှုကိုအာမခံပြီး Android/Rrust တွင်အသုံးပြုသည့် FFI ကူညီပေးသူများ။
 
-Before starting a session:
-1. Derive the 32-byte session identifier (`sid`) using the same BLAKE2b recipe as other
-   SDKs (`"iroha-connect|sid|" || chain_id || app_pk || nonce16`).
-2. Generate a Connect key pair via `ConnectCrypto.generateKeyPair()` or reuse a stored
-   private key (public keys can be recomputed with `ConnectCrypto.publicKey(fromPrivateKey:)`).
-3. Create the WebSocket client and start it inside an async context.
+စက်ရှင်တစ်ခု မစတင်မီ-
+1. အခြား BLAKE2b ချက်ပြုတ်နည်းကို အသုံးပြု၍ 32-byte စက်ရှင်အမှတ်အသား (`sid`) ကို ရယူပါ
+   SDKs (`"iroha-connect|sid|" || chain_id || app_pk || nonce16`)။
+2. `ConnectCrypto.generateKeyPair()` မှတစ်ဆင့် ချိတ်ဆက်သော့အတွဲကို ဖန်တီးပါ သို့မဟုတ် သိမ်းဆည်းထားသည့်အရာကို ပြန်သုံးပါ
+   သီးသန့်သော့ (အများပြည်သူသော့များကို `ConnectCrypto.publicKey(fromPrivateKey:)` ဖြင့် ပြန်လည်တွက်ချက်နိုင်သည်)။
+3. WebSocket ကလိုင်းယင့်ကိုဖန်တီးပြီး async context တစ်ခုအတွင်း စတင်ပါ။
 
 ```swift
 import IrohaSwift
@@ -79,15 +80,15 @@ Task {
 }
 ```
 
-`ConnectSession` throws `ConnectSessionError.missingDecryptionKeys` if ciphertext frames
-arrive before direction keys are installed; derive them immediately after processing an
-`Approve` control (wallet public key is included in the payload). To inspect ciphertext
-frames manually, call `ConnectEnvelope.decrypt(frame:symmetricKey:)` with the directional
-key that matches the frame’s direction.
+စာသားဘောင်များကို `ConnectSession` သည် `ConnectSessionError.missingDecryptionKeys` ကို ပစ်သည်
+လမ်းညွှန်ခလုတ်များ မတပ်ဆင်မီ ရောက်ရှိလာခြင်း၊ လုပ်ဆောင်ပြီးပါက ၎င်းတို့ကို ချက်ချင်းရယူပါ။
+`Approve` ထိန်းချုပ်မှု (ပိုက်ဆံအိတ် အများသူငှာသော့သည် payload တွင် ပါ၀င်သည်)။ ciphertext စစ်ဆေးရန်
+ဘောင်များကို ကိုယ်တိုင်၊ လမ်းညွှန်ချက်ဖြင့် `ConnectEnvelope.decrypt(frame:symmetricKey:)` သို့ခေါ်ဆိုပါ။
+ဖရိမ်၏ဦးတည်ချက်နှင့်ကိုက်ညီသောသော့။
 
-> **Tip:** When the Norito bridge is missing (e.g., Swift Package Manager builds without
-> the XCFramework), the SDK automatically falls back to a JSON shim. Encryption helpers
-> (`ConnectCrypto.*`) require the bridge, so link the XCFramework in production apps.
+> ** အကြံပြုချက်-** Norito တံတား ပျောက်ဆုံးသောအခါ (ဥပမာ၊ Swift Package Manager မပါဘဲ တည်ဆောက်သည်
+> XCFramework)၊ SDK သည် JSON shim သို့ အလိုအလျောက် ပြန်ကျသွားပါသည်။ ကုဒ်ဝှက်ခြင်း အထောက်အကူများ
+> (`ConnectCrypto.*`) တံတားလိုအပ်သည်၊ ထို့ကြောင့် XCFramework ကို ထုတ်လုပ်မှုအက်ပ်များတွင် ချိတ်ဆက်ပါ။
 
 ```swift
 import Foundation
@@ -287,19 +288,19 @@ let ctReject = sealEnvelopeV1(key: kWallet, sid: sid, dir: 1, seq: 2, payload: r
 let frameReject = frameCiphertextV1Demo(sid: sid, dir: 1, seq: 2, aead: ctReject)
 ws.send(.data(frameReject)) { err in if let err = err { print("ws send reject:", err) } }
 ```
-## CI validation
+## CI အတည်ပြုခြင်း။
 
-- Before making Connect or bridge integration changes, run:
+- ချိတ်ဆက်မှု သို့မဟုတ် ပေါင်းစည်းမှုဆိုင်ရာ အပြောင်းအလဲများကို မပြုလုပ်မီ၊ လုပ်ဆောင်ပါ-
 
   ```bash
   make swift-ci
   ```
 
-  The command validates Swift fixtures, checks the dashboard feeds, and renders the CLI
-  summaries. The CI workflow relies on Buildkite metadata
-  (`ci/xcframework-smoke:<lane>:device_tag`) to map results back to the simulator or
-  StrongBox lanes—after changing pipelines or agent tags, confirm the metadata still
-  appears in the logs.
-- If the run fails, follow `docs/source/swift_parity_triage.md` and inspect the
-  `mobile_ci` output to determine which lane needs regeneration or further incident
-  handling.
+  ညွှန်ကြားချက်သည် Swift တပ်ဆင်မှုများကို တရားဝင်စေသည်၊ ဒက်ရှ်ဘုတ်ဖိဒ်များကို စစ်ဆေးပြီး CLI ကို ပြန်ဆိုသည်
+  အနှစ်ချုပ် CI အလုပ်အသွားအလာသည် Buildkite မက်တာဒေတာအပေါ် မူတည်သည်။
+  ရလဒ်များကို Simulator သို့ပြန်သွားရန် (`ci/xcframework-smoke:<lane>:device_tag`)
+  StrongBox လမ်းကြောများ—ပိုက်လိုင်းများ သို့မဟုတ် အေးဂျင့်တဂ်များကို ပြောင်းလဲပြီးနောက်၊ မက်တာဒေတာကို ဆက်လက်အတည်ပြုပါ။
+  မှတ်တမ်းများတွင် ပေါ်လာသည်။
+- အကယ်၍ run ၍မရပါက `docs/source/swift_parity_triage.md` ကို လိုက်နာပြီး စစ်ဆေးပါ။
+  မည်သည့်လမ်းကြောကို ပြန်လည်ပြုပြင်ရန် သို့မဟုတ် နောက်ထပ်ဖြစ်ရပ်ကို လိုအပ်ကြောင်း ဆုံးဖြတ်ရန် `mobile_ci` အထွက်
+  ကိုင်တွယ်။

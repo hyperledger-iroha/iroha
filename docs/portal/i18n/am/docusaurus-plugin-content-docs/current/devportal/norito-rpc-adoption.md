@@ -8,48 +8,50 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: Norito-RPC Adoption Schedule
 sidebar_label: Norito-RPC adoption
 description: Cross-SDK rollout plan, evidence checklist, and automation hooks for roadmap item NRPC-4.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-> Canonical planning notes live in `docs/source/torii/norito_rpc_adoption_schedule.md`.  
-> This portal copy distils the rollout expectations for SDK authors, operators, and reviewers.
+> የቀኖናዊ እቅድ ማስታወሻዎች በ`docs/source/torii/norito_rpc_adoption_schedule.md` ውስጥ ይኖራሉ።  
+> ይህ የፖርታል ቅጂ ለኤስዲኬ ደራሲዎች፣ ኦፕሬተሮች እና ገምጋሚዎች የሚጠበቀውን የልቀት ተስፋ ያጠፋል።
 
-## Objectives
+# አላማዎች
 
-- Align every SDK (Rust CLI, Python, JavaScript, Swift, Android) on the binary Norito-RPC transport ahead of the AND4 production toggle.
-- Keep phase gates, evidence bundles, and telemetry hooks deterministic so governance can audit the rollout.
-- Make it trivial to capture fixture and canary evidence with the shared helpers that roadmap NRPC-4 calls out.
+- እያንዳንዱን ኤስዲኬ (Rust CLI፣ Python፣ JavaScript፣ Swift፣ Android) በሁለትዮሽ Norito-RPC ትራንስፖርት ከ AND4 ምርት መቀያየር በፊት አሰልፍ።
+- የደረጃ በሮች፣ የማስረጃ እሽጎች እና የቴሌሜትሪ መንጠቆዎች ወሳኙን ያቆዩ አስተዳደር ልቀቱን ኦዲት ማድረግ ይችላል።
+- የመንገድ ካርታ NRPC-4 ከሚጠራው የጋራ ረዳቶች ጋር ቋሚ እና የካናሪ ማስረጃዎችን ለመያዝ ቀላል ያድርጉት።
 
-## Phase timeline
+## ደረጃ የጊዜ መስመር
 
-| Phase | Window | Scope | Exit Criteria |
-|-------|--------|-------|---------------|
-| **P0 – Lab parity** | Q2 2025 | Rust CLI + Python smoke suites run `/v1/norito-rpc` in CI, JS helper passes unit tests, Android mock harness exercises dual transports. | `python/iroha_python/scripts/run_norito_rpc_smoke.sh` and `javascript/iroha_js/test/noritoRpcClient.test.js` green in CI; Android harness wired into `./gradlew test`. |
-| **P1 – SDK preview** | Q3 2025 | Shared fixture bundle checked in, `scripts/run_norito_rpc_fixtures.sh --sdk <label>` records logs + JSON in `artifacts/norito_rpc/`, optional Norito transport flags exposed in SDK samples. | Fixture manifest signed, README updates show opt-in usage, Swift preview API available behind the IOS2 flag. |
-| **P2 – Staging / AND4 preview** | Q1 2026 | Staging Torii pools prefer Norito, Android AND4 preview clients and Swift IOS2 parity suites default to the binary transport, telemetry dashboard `dashboards/grafana/torii_norito_rpc_observability.json` populated. | `docs/source/torii/norito_rpc_stage_reports.md` captures the canary, `scripts/telemetry/test_torii_norito_rpc_alerts.sh` passes, Android mock harness replay captures success/error cases. |
-| **P3 – Production GA** | Q4 2026 | Norito becomes the default transport for all SDKs; JSON remains a brownout fallback. Release jobs archive parity artefacts with every tag. | Release checklist bundles Norito smoke output for Rust/JS/Python/Swift/Android; Alert thresholds for Norito vs JSON error-rate SLOs enforced; `status.md` and release notes cite GA evidence. |
+| ደረጃ | መስኮት | ወሰን | መውጫ መስፈርት |
+|-------|--------|-------|
+| ** P0 - የላብራቶሪ እኩልነት *** | Q22025 | Rust CLI + Python smoke suites `/v1/norito-rpc` በCI ውስጥ ያካሂዳሉ፣ JS አጋዥ የዩኒት ፈተናዎችን ያልፋል፣ አንድሮይድ ሞክ ታጥቆ ባለሁለት መጓጓዣዎችን ይሠራል። | `python/iroha_python/scripts/run_norito_rpc_smoke.sh` እና `javascript/iroha_js/test/noritoRpcClient.test.js` አረንጓዴ በ CI; አንድሮይድ መታጠቂያ ወደ I18NI0000023X ተሽሯል። |
+| ** P1 - የኤስዲኬ ቅድመ እይታ *** | Q32025 | የጋራ መገልገያ ቅርቅብ ተመዝግቦ ገብቷል፣ `scripts/run_norito_rpc_fixtures.sh --sdk <label>` መዝገቦች ምዝግብ ማስታወሻዎች + JSON በI18NI0000025X፣ አማራጭ Norito የትራንስፖርት ባንዲራዎች በኤስዲኬ ናሙናዎች ውስጥ ተጋልጠዋል። | የማሳያ አንጸባራቂ ተፈርሟል፣ README ዝማኔዎች የመርጦ መግቢያ አጠቃቀምን ያሳያሉ፣ የስዊፍት ቅድመ እይታ API ከ IOS2 ባንዲራ ጀርባ ይገኛል። |
+| ** P2 - ደረጃ / AND4 ቅድመ እይታ *** | Q12026 | የደረጃ Torii ገንዳዎች I18NT0000002Xን፣ የአንድሮይድ AND4 ቅድመ እይታ ደንበኞችን እና የስዊፍት IOS2 ፓሪቲ ስብስቦችን ከሁለትዮሽ ትራንስፖርት ነባሪ ይመርጣሉ፣ ቴሌሜትሪ ዳሽቦርድ `dashboards/grafana/torii_norito_rpc_observability.json` ተሞልቷል። | `docs/source/torii/norito_rpc_stage_reports.md` ካናሪውን፣ `scripts/telemetry/test_torii_norito_rpc_alerts.sh` ማለፊያዎችን ይይዛል፣ የአንድሮይድ ሞክ ማሰሪያ መልሶ ማጫወት የስኬት/የስህተት ጉዳዮችን ይይዛል። |
+| ** P3 - ምርት GA *** | Q42026 | Norito ለሁሉም ኤስዲኬዎች ነባሪ መጓጓዣ ይሆናል። JSON እንደ ቡኒ ውድቀት ሆኖ ይቆያል። የተለቀቁ ስራዎች የእኩልነት ቅርሶችን በእያንዳንዱ መለያ ያከማቹ። | የፍተሻ ዝርዝር ቅርቅቦችን ይልቀቁ Norito የጭስ ውፅዓት ለ Rust/JS/Python/Swift/Android; ለNorito vs JSON የስህተት መጠን SLOs የማንቂያ ገደቦች ተፈጻሚ ሆነዋል። `status.md` እና የተለቀቁ ማስታወሻዎች የ GA ማስረጃን ይጠቅሳሉ። |
 
-## SDK deliverables & CI hooks
+## ኤስዲኬ መላኪያዎች እና CI መንጠቆዎች
 
-- **Rust CLI & integration harness** – extend `iroha_cli pipeline` smoke tests to force the Norito transport once `cargo xtask norito-rpc-verify` lands. Guard with `cargo test -p integration_tests -- norito_streaming` (lab) and `cargo xtask norito-rpc-verify` (staging/GA), storing artefacts under `artifacts/norito_rpc/`.
-- **Python SDK** – default the release smoke (`python/iroha_python/scripts/release_smoke.sh`) to Norito RPC, keep `run_norito_rpc_smoke.sh` as the CI entrypoint, and document parity handling in `python/iroha_python/README.md`. CI target: `PYTHON_BIN=python3 python/iroha_python/scripts/run_norito_rpc_smoke.sh`.
-- **JavaScript SDK** – stabilise `NoritoRpcClient`, let governance/query helpers default to Norito when `toriiClientConfig.transport.preferred === "norito_rpc"`, and capture end-to-end samples in `javascript/iroha_js/recipes/`. CI must run `npm test` plus the dockerised `npm run test:norito-rpc` job before publish; provenance uploads Norito smoke logs under `javascript/iroha_js/artifacts/`.
-- **Swift SDK** – wire the Norito bridge transport behind the IOS2 flag, mirror the fixture cadence, and ensure the Connect/Norito parity suite runs inside the Buildkite lanes referenced in `docs/source/sdk/swift/index.md`.
-- **Android SDK** – AND4 preview clients and the mock Torii harness adopt Norito, with retry/backoff telemetry documented in `docs/source/sdk/android/networking.md`. The harness shares fixtures with other SDKs via `scripts/run_norito_rpc_fixtures.sh --sdk android`.
+- ** Rust CLI & Integation Harness *** - `iroha_cli pipeline` የጭስ ሙከራዎችን አንድ ጊዜ Norito መጓጓዣን ለማስገደድ `cargo xtask norito-rpc-verify` መሬቶችን ያራዝሙ። በ`cargo test -p integration_tests -- norito_streaming` (ላብራቶሪ) እና `cargo xtask norito-rpc-verify` (ስቴጅንግ/ጂኤ)፣ በ`artifacts/norito_rpc/` ስር ያሉ ቅርሶችን ጠብቅ።
+- **Python ኤስዲኬ** - የሚለቀቀውን ጭስ (`python/iroha_python/scripts/release_smoke.sh`) ወደ Norito RPC ነባሪ፣ `run_norito_rpc_smoke.sh` እንደ CI መግቢያ ነጥብ ያቆይ እና በ`python/iroha_python/README.md` ውስጥ እኩል አያያዝን ያቅርቡ። CI ኢላማ: `PYTHON_BIN=python3 python/iroha_python/scripts/run_norito_rpc_smoke.sh`.
+- ** ጃቫ ስክሪፕት ኤስዲኬ *** - `NoritoRpcClient` ን ያረጋጋል፣ የአስተዳደር/ጥያቄ ረዳቶች Norito በ `toriiClientConfig.transport.preferred === "norito_rpc"` ጊዜ ነባሪ ይፍቀዱ እና ከጫፍ እስከ ጫፍ ናሙናዎችን በ `javascript/iroha_js/recipes/` ይቅረጹ። CI ከመታተሙ በፊት `npm test` እና dockerized `npm run test:norito-rpc` ሥራን ማስኬድ አለበት። የፕሮቬንሽን ሰቀላዎች I18NT0000009X የጭስ ማውጫ በ `javascript/iroha_js/artifacts/` ስር።
+- ** ፈጣን ኤስዲኬ *** - ከ IOS2 ባንዲራ በስተጀርባ ያለውን የNorito ድልድይ ማጓጓዣን ሽቦ ያድርጉ ፣ የቋሚውን ትክክለኛነት ያንፀባርቁ እና የግንኙነት / Norito የፓርቲ ስብስብ በ `docs/source/sdk/swift/index.md` ውስጥ በተጠቀሰው የBuildkite መስመሮች ውስጥ መሄዱን ያረጋግጡ።
+- **አንድሮይድ ኤስዲኬ** – የ AND4 ቅድመ እይታ ደንበኞች እና የማስመሰያው Torii መታጠቂያ Norito ተቀብለዋል፣ በ `docs/source/sdk/android/networking.md` ውስጥ በድጋሚ በመሞከር/በኋላ አጥፋ ቴሌሜትሪ ተመዝግቧል። መታጠቂያው መገልገያዎችን ከሌሎች ኤስዲኬዎች ጋር በI18NI0000047X በኩል ያጋራል።
 
-## Evidence & automation
+## ማስረጃ እና አውቶማቲክ
 
-- `scripts/run_norito_rpc_fixtures.sh` wraps `cargo xtask norito-rpc-verify`, captures stdout/stderr, and emits `fixtures.<sdk>.summary.json` so SDK owners have a deterministic artefact to attach to `status.md`. Use `--sdk <label>` and `--out artifacts/norito_rpc/<stamp>/` to keep CI bundles tidy.
-- `cargo xtask norito-rpc-verify` enforces schema hash parity (`fixtures/norito_rpc/schema_hashes.json`) and fails if Torii returns `X-Iroha-Error-Code: schema_mismatch`. Pair every failure with a JSON fallback capture for debugging.
-- `scripts/telemetry/test_torii_norito_rpc_alerts.sh` and `dashboards/grafana/torii_norito_rpc_observability.json` define the alert contracts for NRPC-2. Run the script after every dashboard edit and store the `promtool` output in the canary bundle.
-- `docs/source/runbooks/torii_norito_rpc_canary.md` describes the staging and production drills; update it whenever fixture hashes or alert gates change.
+- `scripts/run_norito_rpc_fixtures.sh` ይጠቀልላል `cargo xtask norito-rpc-verify`፣ stdout/stderr ን ይይዛል እና `fixtures.<sdk>.summary.json` ያወጣል ስለዚህ የኤስዲኬ ባለቤቶች ከ`status.md` ጋር የሚያያይዘው ቆራጥ አርቴፋክት አላቸው። የCI ጥቅሎችን ንፁህ ለማድረግ `--sdk <label>` እና `--out artifacts/norito_rpc/<stamp>/` ይጠቀሙ።
+- `cargo xtask norito-rpc-verify` schema hash parity (`fixtures/norito_rpc/schema_hashes.json`) ያስፈጽማል እና Torii `X-Iroha-Error-Code: schema_mismatch` ከመለሰ አልተሳካም። እያንዳንዱን ውድቀት ለማረም ከJSON የኋላ ቀረጻ ጋር ያጣምሩ።
+- `scripts/telemetry/test_torii_norito_rpc_alerts.sh` እና `dashboards/grafana/torii_norito_rpc_observability.json` ለNRPC-2 የማንቂያ ውል ይገልፃሉ። ከእያንዳንዱ ዳሽቦርድ አርትዖት በኋላ ስክሪፕቱን ያሂዱ እና የ`promtool` ውፅዓት በካናሪ ጥቅል ውስጥ ያከማቹ።
+- `docs/source/runbooks/torii_norito_rpc_canary.md` የዝግጅት እና የምርት ልምምዶችን ይገልፃል; ቋሚ ሃሽ ወይም የማንቂያ በሮች ሲቀየሩ ያዘምኑት።
 
-## Reviewer checklist
+## የገምጋሚ ማረጋገጫ ዝርዝር
 
-Before ticking an NRPC-4 milestone, confirm:
+የNRPC-4 ወሳኝ ደረጃ ላይ ምልክት ከማድረግዎ በፊት፣ ያረጋግጡ፡-
 
-1. Latest fixture bundle hashes match `fixtures/norito_rpc/schema_hashes.json` and the corresponding CI artefact recorded under `artifacts/norito_rpc/<stamp>/`.
-2. SDK README / portal docs describe how to force JSON fallback and cite the Norito transport default.
-3. Telemetry dashboards show dual-stack error-rate panels with alert links, and the Alertmanager dry run (`scripts/telemetry/test_torii_norito_rpc_alerts.sh`) is attached to the tracker.
-4. The adoption schedule here matches the tracker entry (`docs/source/torii/norito_rpc_tracker.md`) and the roadmap (NRPC-4) references the same evidence bundle.
+1. የቅርብ ጊዜ የቋሚ ቅርቅብ hashes `fixtures/norito_rpc/schema_hashes.json` እና ተዛማጅ CI artefact በ `artifacts/norito_rpc/<stamp>/` ተመዝግቧል።
+2. ኤስዲኬ README / portal docs የJSON ውድቀትን እንዴት ማስገደድ እንደሚቻል ይገልፃሉ እና የNorito የትራንስፖርት ነባሪ ይጥቀሱ።
+3. የቴሌሜትሪ ዳሽቦርዶች ባለሁለት-ቁልል ስህተት-ተመን ፓነሎችን የማንቂያ ማገናኛዎች ያሳያሉ፣ እና የ Alertmanager dry run (`scripts/telemetry/test_torii_norito_rpc_alerts.sh`) ከመከታተያው ጋር ተያይዟል።
+4. እዚህ ያለው የጉዲፈቻ መርሃ ግብር ከመከታተያ ግቤት (`docs/source/torii/norito_rpc_tracker.md`) እና የመንገድ ካርታው (NRPC-4) ከተመሳሳይ ማስረጃ ጥቅል ጋር ይዛመዳል።
 
-Staying disciplined on the schedule keeps cross-SDK behaviour predictable and lets governance audit Norito-RPC adoption without bespoke requests.
+በጊዜ ሰሌዳው ላይ በዲሲፕሊን መቆየቱ-የኤስዲኬ ባህሪን ሊተነበይ የሚችል እና የአስተዳደር ቁጥጥር Norito-RPC ያለአንዳች ጥያቄ መቀበል ያስችላል።

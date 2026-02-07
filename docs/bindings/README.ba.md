@@ -7,82 +7,83 @@ generator: scripts/sync_docs_i18n.py
 source_hash: bf9773ecd75fc31ee89da58a3c5eda846b910eb6e131f1e042b565892e028f16
 source_last_modified: "2025-12-29T18:16:35.062011+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# SDK Binding & Fixture Governance
+# SDK бәйләү & Фикстура идара итеү
 
-WP1-E on the roadmap calls out “docs/bindings” as the canonical place to keep the
-cross-language binding state. This document records the binding inventory,
-regeneration commands, drift guards, and evidence locations so the GPU parity
-gates (WP1-E/F/G) and the cross-SDK cadence council have a single reference.
+WP1-E юл картаһында саҡырыуҙар “өҫтәлдәр/бәйләүҙәр” канонлы урын булараҡ, һаҡлау өсөн
+тел араһындағы бәйләүсе хәл. Был документта мотлаҡ инвентарь теркәлә,
+регенерация командалары, дрейф һаҡсылары һәм дәлилдәр урындары шулай GPU паритеты
+ҡапҡалар (WP1-E/F/G) һәм SDK кросс-каденция советы бер һылтанмаға эйә.
 
-## Shared guardrails
-- **Canonical playbook:** `docs/source/norito_binding_regen_playbook.md` spells out
-  the rotation policy, expected evidence, and the escalation workflow for Android,
-  Swift, Python, and future bindings.
-- **Norito schema parity:** `scripts/check_norito_bindings_sync.py` (invoked via
-  `scripts/check_norito_bindings_sync.sh` and gated in CI by
-  `ci/check_norito_bindings_sync.sh`) blocks builds when the Rust, Java, or Python
-  schema artefacts drift.
-- **Cadence watchdog:** `scripts/check_fixture_cadence.py` reads the
-  `artifacts/*_fixture_regen_state.json` files and enforces the Tue/Fri (Android,
-  Python) and Wed (Swift) windows so roadmap gates have auditable timestamps.
+## Дөйөм ҡоршауҙар
+- **Каноник пьесалар китабы:** I18NI000000003Х 1990 йылдарҙа
+  ротация сәйәсәте, көтөлгән дәлилдәр, һәм Android өсөн эскалация эш ағымы,
+  Свифт, Питон һәм киләсәктә бәйләүҙәр.
+- **I18NT000000000000Х схемаһы паритеты:** I18NI000000004X
+  I18NI000000005X һәм CI-ла ҡапҡалы.
+  I18NI000000006X) блоктар төҙөлә, ҡасан тут, Java, йәки Python
+  схема артефакттары дрейф.
+- **Каденс күҙәтеүсе:** I18NI000000007X уҡый.
+  I18NI000000008X файлдар һәм үтәй Tue/Fri (Android,
+  Python) һәм туй (Swift) тәҙрәләр шулай юл картаһы ҡапҡалары аудит ваҡыт маркалары бар.
 
-## Binding matrix
+## бәйләү матрицаһы
 
-| Binding | Entry points | Fixture / regen command | Drift guards | Evidence |
-|---------|--------------|-------------------------|--------------|----------|
-| Android (Java) | `java/iroha_android/` (`java/iroha_android/README.md`) | `scripts/android_fixture_regen.sh` → `artifacts/android_fixture_regen_state.json` | `scripts/check_android_fixtures.py`, `ci/check_android_fixtures.sh`, `java/iroha_android/run_tests.sh` | `artifacts/android/fixture_runs/` |
-| Swift (iOS/macOS) | `IrohaSwift/` (`IrohaSwift/README.md`) | `scripts/swift_fixture_regen.sh` (optionally `SWIFT_FIXTURE_ARCHIVE`) → `artifacts/swift_fixture_regen_state.json` | `scripts/check_swift_fixtures.py`, `ci/check_swift_fixtures.sh`, `scripts/swift_fixture_archive.py` | `docs/source/swift_parity_triage.md`, `docs/source/sdk/swift/ios2_fixture_cadence_brief.md` |
-| Python | `python/iroha_python/` (`python/iroha_python/README.md`) | `scripts/python_fixture_regen.sh` → `artifacts/python_fixture_regen_state.json` | `scripts/check_python_fixtures.py`, `python/iroha_python/scripts/run_checks.sh` | `docs/source/norito_binding_regen_playbook.md`, `docs/source/sdk/python/connect_end_to_end.md` |
-| JavaScript | `javascript/iroha_js/` (`docs/source/sdk/js/publishing.md`) | `npm run release:provenance`, `scripts/js_sbom_provenance.sh`, `scripts/js_signed_staging.sh` | `npm run test`, `javascript/iroha_js/scripts/verify-release-tarball.mjs`, `javascript/iroha_js/scripts/record-release-provenance.mjs` | `artifacts/js-sdk-provenance/`, `artifacts/js/npm_staging/`, `artifacts/js/verification/`, `artifacts/js/sbom/` |
+| Бәйләнеш | Яҙылыу мәрәйҙәре | Фикстура / реген командаһы | Дрейф һаҡсылары | Дәлилдәр |
+|-----------------------------------------------------------|---|---------------|
+| Андроид (Java) | `java/iroha_android/` X (`java/iroha_android/README.md`) | `scripts/android_fixture_regen.sh` → `artifacts/android_fixture_regen_state.json` | `scripts/check_android_fixtures.py`, `ci/check_android_fixtures.sh`, `java/iroha_android/run_tests.sh` | `artifacts/android/fixture_runs/` |
+| Свифт (iOS/macOS) | I18NI000000017X (I18NI000000018X) | `scripts/swift_fixture_regen.sh` X (факультатив `SWIFT_FIXTURE_ARCHIVE`) → `artifacts/swift_fixture_regen_state.json` | I18NI00000022Х, `ci/check_swift_fixtures.sh`, `scripts/swift_fixture_archive.py` | `docs/source/swift_parity_triage.md`, `docs/source/sdk/swift/ios2_fixture_cadence_brief.md` |
+| Питон | `python/iroha_python/` (I18NI000000028X) | `scripts/python_fixture_regen.sh` → I18NI000000030X | I18NI000000031X, I18NI000000032X | `docs/source/norito_binding_regen_playbook.md`, I18NI000000034X |
+| JavaScript | I18NI000000035X (I18NI000000036X) | I18NI000000037X, I18NI000000038X, `scripts/js_signed_staging.sh` | `npm run test`, `javascript/iroha_js/scripts/verify-release-tarball.mjs`, `javascript/iroha_js/scripts/record-release-provenance.mjs` | `artifacts/js-sdk-provenance/`, `artifacts/js/npm_staging/`, I18NI000000045X, I18NI000000046X |
 
-## Binding details
+## Билдәләү реквизиттары
 
-### Android (Java)
-The Android SDK lives under `java/iroha_android/` and consumes the canonical Norito
-fixtures produced by `scripts/android_fixture_regen.sh`. That helper exports
-Fresh `.norito` blobs from the Rust toolchain, updates
-`artifacts/android_fixture_regen_state.json`, and records cadence metadata that
-`scripts/check_fixture_cadence.py` and governance dashboards consume. Drift is
-detected by `scripts/check_android_fixtures.py` (also wired into
-`ci/check_android_fixtures.sh`) and by `java/iroha_android/run_tests.sh`, which
-exercises the JNI bindings, WorkManager queue replay, and StrongBox fallbacks.
-Rotation evidence, failure notes, and rerun transcripts live under
+### Android (Ява)
+Android SDK йәшәй I18NI000000047X аҫтында һәм канонлы Norito ҡуллана.
+I18NI000000048X тарафынан етештерелгән ҡоролмалары. Шул ярҙамсы экспортҡа сыға
+Яңы I18NI0000000049X таптар Rust toolchein, яңыртыу
+I18NI000000050X, һәм каденция метамағлүмәттәрен теркәй, тип
+`scripts/check_fixture_cadence.py` һәм идара итеү таҡталары ҡулланыла. Дрифт -
+асыҡланған I18NI0000000052X (шулай уҡ сымлы инә
+I18NI000000053X) һәм I18NI000000054X, улар
+JNI бәйләүҙәрен, WorkManager сират реплейы һәм StongBox fallbacks күнекмәләр үткәрә.
+Ротацион дәлилдәр, уңышһыҙлыҡ билдәләй, һәм перерапечка стенограммалар буйынса йәшәй .
 `artifacts/android/fixture_runs/`.
 
-### Swift (macOS/iOS)
-`IrohaSwift/` mirrors the same Norito payloads via `scripts/swift_fixture_regen.sh`.
-The script records rotation owner, cadence label, and source (`live` vs `archive`)
-inside `artifacts/swift_fixture_regen_state.json` and feeds the metadata into the
-cadence checker. `scripts/swift_fixture_archive.py` allows maintainers to ingest
-Rust-generated archives; `scripts/check_swift_fixtures.py` and
-`ci/check_swift_fixtures.sh` enforce byte-level parity plus SLA age limits, while
-`scripts/swift_fixture_regen.sh` supports `SWIFT_FIXTURE_EVENT_TRIGGER` for manual
-rotations. The escalation workflow, KPIs, and dashboards are documented in
-`docs/source/swift_parity_triage.md` and the cadence briefs under
+### Свифт (macOS/iOS)
+`IrohaSwift/` көҙгө шул уҡ I18NT000000002X файҙалы йөктәр аша I18NI0000000057X.
+Сценарий ротация хужаһы, каденция ярлығы һәм сығанаҡ (I18NI0000000058X vs I18NI000000059X) яҙылған.
+I18NI000000060X эсендә һәм метамағлүмәттәрҙе ашата.
+каденция тикшерелеүе. I18NI000000061X хеҙмәтләндергәндәр ашау мөмкинлеге бирә
+Ҡырҡылған генерацияланған архивтар; I18NI00000062Х һәм
+I18NI0000000063X байт кимәлендәге паритетты үтәү плюс SLA йәш сиктәре, шул уҡ ваҡытта
+Ҡулланма өсөн I18NI00000000064X I18NI00000000065X ярҙам итә
+әйләнеше. Эскалляция эш ағымы, KPI һәм приборҙар таҡталары 2012 йылда документлаштырылған.
+I18NI000000066X һәм каденция буйынса брифтар .
 `docs/source/sdk/swift/`.
 
-### Python
-The Python client (`python/iroha_python/`) shares the Android fixtures. Running
-`scripts/python_fixture_regen.sh` pulls the latest `.norito` payloads, refreshes
-`python/iroha_python/tests/fixtures/`, and will emit cadence metadata into
-`artifacts/python_fixture_regen_state.json` once the first post-roadmap rotation
-is captured. `scripts/check_python_fixtures.py` and
-`python/iroha_python/scripts/run_checks.sh` gate pytest, mypy, ruff, and fixture
-parity locally and in CI. The end-to-end docs (`docs/source/sdk/python/…`) and
-the binding regen playbook describe how to coordinate rotations with the Android
-owners.
+### Питон
+Python клиент (`python/iroha_python/`) Android ҡоролмалары менән уртаҡлаша. Йүгереүсе
+I18NI0000000069X һуңғы тарта I18NI0000000070 Еҫәгеҙ, яңыртыу
+`python/iroha_python/tests/fixtures/`, һәм каденция метамағлүмәттәрен сығарасаҡ.
+I18NI0000000072X бер тапҡыр беренсе юл картаһы ротацияһы
+әсирлеккә алына. `scripts/check_python_fixtures.py` һәм .
+I18NI0000000074X ҡапҡаһы питест, mypy, руф, һәм ҡоролма
+паритет урындағы һәм CI. Осҡа тиклем docs (`docs/source/sdk/python/…`) һәм
+бәйләүсе реген пьеса китабы Android менән әйләнештәрҙе нисек координациялау тураһында һүрәтләй
+хужалары.
 
 ### JavaScript
-`javascript/iroha_js/` does not rely on local `.norito` files, but WP1-E tracks
-its release evidence so GPU CI lanes inherit complete provenance. Every release
-captures provenance via `npm run release:provenance` (powered by
-`javascript/iroha_js/scripts/record-release-provenance.mjs`), generates and signs
-SBOM bundles with `scripts/js_sbom_provenance.sh`, runs the signed staging dry-run
-(`scripts/js_signed_staging.sh`), and verifies the registry artefact with
-`javascript/iroha_js/scripts/verify-release-tarball.mjs`. The resulting metadata
-lands under `artifacts/js-sdk-provenance/`, `artifacts/js/npm_staging/`,
-`artifacts/js/sbom/`, and `artifacts/js/verification/`, providing deterministic
-evidence for roadmap JS5/JS6 and WP1-F benchmark runs. The publishing playbook in
-`docs/source/sdk/js/` ties the automation together.
+I18NI0000000076X урындағы I18NI000000077X файлдарына таянмай, әммә WP1-E тректары .
+уның сығарыу дәлилдәре шулай GPU CI һыҙаттары тулы провенанс мираҫҡа ала. Һәр релиз
+I18NI000000078X аша провенансты тотоу (2000 й.
+I18NI000000079X), генерациялай һәм билдәләр
+SBOM өйөмдәре менән I18NI00000000080X, идара итеү стадияһында ҡуйылған ҡоро-йүгерә
+(`scripts/js_signed_staging.sh`), һәм реестр артефактын раҫлай.
+`javascript/iroha_js/scripts/verify-release-tarball.mjs`. Һөҙөмтәлә барлыҡҡа килгән метамағлүмәттәр
+ерҙәре I18NI000000083X, I18NI000000084X,
+I18NI000000085X, һәм I18NI000000086X, детерминистик тәьмин итеү
+юл картаһы өсөн дәлилдәр JS5/JS6 һәм WP1-F эталон йүгерә. 1990 йылда нәшриәт пьесалары китабы.
+`docs/source/sdk/js/` автоматлаштырыуҙы бергә бәйләй.

@@ -11,53 +11,54 @@ id: chunker-conformance
 title: SoraFS Chunker Conformance Guide
 sidebar_label: Chunker Conformance
 description: Requirements and workflows for preserving the deterministic SF1 chunker profile across fixtures and SDKs.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
+:::注意规范来源
 :::
 
-This guide codifies the requirements every implementation must follow to stay
-aligned with the SoraFS deterministic chunker profile (SF1). It also
-documents the regeneration workflow, signing policy, and verification steps so
-fixture consumers across SDKs remain in sync.
+本指南规定了每个实施必须遵循的要求
+与 SoraFS 确定性分块配置文件 (SF1) 一致。它还
+记录再生工作流程、签名策略和验证步骤，以便
+跨 SDK 的灯具消费者保持同步。
 
-## Canonical Profile
+## 规范配置文件
 
-- Profile handle: `sorafs.sf1@1.0.0`
-- Input seed (hex): `0000000000dec0ded`
-- Target size: 262 144 bytes (256 KiB)
-- Minimum size: 65 536 bytes (64 KiB)
-- Maximum size: 524 288 bytes (512 KiB)
-- Rolling polynomial: `0x3DA3358B4DC173`
-- Gear table seed: `sorafs-v1-gear`
-- Break mask: `0x0000FFFF`
+- 型材手柄：`sorafs.sf1@1.0.0`
+- 输入种子（十六进制）：`0000000000dec0ded`
+- 目标大小：262144 字节 (256KiB)
+- 最小大小：65536 字节 (64KiB)
+- 最大大小：524288 字节 (512KiB)
+- 滚动多项式：`0x3DA3358B4DC173`
+- 齿轮表种子：`sorafs-v1-gear`
+- 中断掩码：`0x0000FFFF`
 
-Reference implementation: `sorafs_chunker::chunk_bytes_with_digests_profile`.
-Any SIMD acceleration must produce identical boundaries and digests.
+参考实现：`sorafs_chunker::chunk_bytes_with_digests_profile`。
+任何 SIMD 加速都必须产生相同的边界和摘要。
 
-## Fixture Bundle
+## 夹具捆绑包
 
-`cargo run --locked -p sorafs_chunker --bin export_vectors` regenerates the
-fixtures and emits the following files under `fixtures/sorafs_chunker/`:
+`cargo run --locked -p sorafs_chunker --bin export_vectors` 重新生成
+固定装置并在 `fixtures/sorafs_chunker/` 下发出以下文件：
 
-- `sf1_profile_v1.{json,rs,ts,go}` — canonical chunk boundaries for Rust,
-  TypeScript, and Go consumers. Each file advertises the canonical handle as the
-  first (and only) entry in `profile_aliases`. The ordering is enforced by
-  `ensure_charter_compliance` and MUST NOT be altered.
-- `manifest_blake3.json` — BLAKE3-verified manifest covering every fixture file.
-- `manifest_signatures.json` — Council signatures (Ed25519) over the manifest
-  digest.
-- `sf1_profile_v1_backpressure.json` and raw corpora inside `fuzz/` —
-  deterministic streaming scenarios used by chunker back-pressure tests.
+- `sf1_profile_v1.{json,rs,ts,go}` — Rust 的规范块边界，
+  TypeScript 和 Go 消费者。每个文件都将规范句柄通告为
+  `profile_aliases` 中的第一个（也是唯一一个）条目。该顺序由以下机构强制执行
+  `ensure_charter_compliance` 并且不得更改。
+- `manifest_blake3.json` — BLAKE3 验证的清单涵盖每个夹具文件。
+- `manifest_signatures.json` — 舱单上的理事会签名 (Ed25519)
+  消化。
+- `sf1_profile_v1_backpressure.json` 和 `fuzz/` 内的原始语料库 —
+  chunker 背压测试使用的确定性流场景。
 
-### Signing Policy
+### 签名政策
 
-Fixture regeneration **must** include a valid council signature. The generator
-rejects unsigned output unless `--allow-unsigned` is passed explicitly (intended
-only for local experimentation). Signature envelopes are append-only and
-deduplicated per signer.
+灯具再生**必须**包含有效的理事会签名。发电机
+拒绝无符号输出，除非显式传递 `--allow-unsigned`（预期
+仅用于本地实验）。签名信封仅供附加，
+对每个签名者进行重复数据删除。
 
-To add a council signature:
+添加理事会签名：
 
 ```bash
 cargo run --locked -p sorafs_chunker --bin export_vectors \
@@ -65,33 +66,33 @@ cargo run --locked -p sorafs_chunker --bin export_vectors \
   --signature-out=fixtures/sorafs_chunker/manifest_signatures.json
 ```
 
-## Verification
+## 验证
 
-The CI helper `ci/check_sorafs_fixtures.sh` replays the generator with
-`--locked`. If fixtures drift or signatures are missing, the job fails. Use
-this script in nightly workflows and before submitting fixture changes.
+CI 助手 `ci/check_sorafs_fixtures.sh` 重放生成器
+`--locked`。如果夹具漂移或签名丢失，作业就会失败。使用
+在每晚工作流程中以及提交夹具更改之前执行此脚本。
 
-Manual verification steps:
+手动验证步骤：
 
-1. Run `cargo test -p sorafs_chunker`.
-2. Invoke `ci/check_sorafs_fixtures.sh` locally.
-3. Confirm `git status -- fixtures/sorafs_chunker` is clean.
+1. 运行 `cargo test -p sorafs_chunker`。
+2.本地调用`ci/check_sorafs_fixtures.sh`。
+3. 确认 `git status -- fixtures/sorafs_chunker` 干净。
 
-## Upgrade Playbook
+## 升级剧本
 
-When proposing a new chunker profile or updating SF1:
+当提出新的 chunker 配置文件或更新 SF1 时：
 
-See also: [`docs/source/sorafs/chunker_profile_authoring.md`](./chunker-profile-authoring.md) for
-metadata requirements, proposal templates, and validation checklists.
+另请参阅：[`docs/source/sorafs/chunker_profile_authoring.md`](./chunker-profile-authoring.md)
+元数据要求、提案模板和验证清单。
 
-1. Draft a `ChunkProfileUpgradeProposalV1` (see RFC SF‑1) with new parameters.
-2. Regenerate fixtures via `export_vectors` and record the new manifest digest.
-3. Sign the manifest with the required council quorum. All signatures must be
-   appended to `manifest_signatures.json`.
-4. Update affected SDK fixtures (Rust/Go/TS) and ensure cross-runtime parity.
-5. Regenerate fuzz corpora if parameters change.
-6. Update this guide with the new profile handle, seeds, and digest.
-7. Submit the change alongside updated tests and roadmap updates.
+1. 起草具有新参数的 `ChunkProfileUpgradeProposalV1`（请参阅 RFC SF-1）。
+2. 通过 `export_vectors` 重新生成装置并记录新的清单摘要。
+3. 以所需的理事会法定人数签署清单。所有签名必须
+   附加到 `manifest_signatures.json`。
+4. 更新受影响的 SDK 固定装置 (Rust/Go/TS) 并确保跨运行时奇偶校验。
+5. 如果参数发生变化，重新生成模糊语料库。
+6. 使用新的配置文件句柄、种子和摘要更新本指南。
+7. 提交更改以及更新的测试和路线图更新。
 
-Changes that affect chunk boundaries or digests without following this process
-are invalid and must not be merged.
+不遵循此过程而影响块边界或摘要的更改
+无效，不得合并。

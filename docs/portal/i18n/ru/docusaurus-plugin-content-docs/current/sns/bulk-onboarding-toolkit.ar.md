@@ -4,47 +4,49 @@ direction: ltr
 source: docs/portal/docs/sns/bulk-onboarding-toolkit.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note المصدر القياسي
+:::примечание
 يعكس `docs/source/sns/bulk_onboarding_toolkit.md` حتى يرى المشغلون الخارجيون
-نفس ارشادات SN-3b دون استنساخ المستودع.
+Был создан SN-3b в Колумбийском университете.
 :::
 
 # عدة ادوات التهيئة بالجملة لـ SNS (SN-3b)
 
-**مرجع خارطة الطريق:** SN-3b "Bulk onboarding tooling"  
-**الاثار:** `scripts/sns_bulk_onboard.py`, `scripts/tests/test_sns_bulk_onboard.py`,
+**Отзыв:** SN-3b «Инструменты для массового внедрения»  
+**اثار:** `scripts/sns_bulk_onboard.py`, `scripts/tests/test_sns_bulk_onboard.py`,
 `docs/portal/scripts/sns_bulk_release.sh`
 
-غالبا ما يجهز المسجلون الكبار مئات تسجيلات `.sora` او `.nexus` مع نفس
-موافقات الحوكمة وقنوات التسوية. صياغة payloads JSON يدويا او اعادة تشغيل
-CLI لا يتوسع، لذا يقدم SN-3b builder حتمي من CSV الى Norito يحضر هياكل
-`RegisterNameRequestV1` لـ Torii او الـ CLI. يتحقق المساعد من كل صف مسبقا،
-ويصدر كلا من manifest مجمع و JSON اختياري مفصول باسطر، ويمكنه ارسال
-payloads تلقائيا مع تسجيل ايصالات منظمة لاغراض التدقيق.
+Он был отправлен в службу `.sora` и `.nexus`.
+Наслаждайтесь исчезновением. Создание полезных данных в формате JSON и просмотр изображений
+CLI для запуска SN-3b builder в формате CSV Norito для загрузки
+`RegisterNameRequestV1` для Torii в CLI. يتحقق المساعد من كل صف مسبقا،
+Создайте файл манифеста и JSON-файл, созданный в соответствии с требованиями пользователя.
+полезная нагрузка находится в зоне действия защитного кожуха.
 
-## 1. مخطط CSV
+## 1. Загрузить CSV
 
-يتطلب المحلل صف العناوين التالي (الترتيب مرن):
+Ответ на вопрос:
 
-| العمود | مطلوب | الوصف |
+| عمود | مطلوب | الوصف |
 |--------|-------|-------|
-| `label` | نعم | التسمية المطلوبة (يقبل حالة مختلطة; الاداة تطبع حسب Norm v1 و UTS-46). |
-| `suffix_id` | نعم | معرف لاحقة رقمي (عشري او `0x` hex). |
-| `owner` | نعم | سلسلة AccountId (IH58 literal; optional @domain hint) لمالك التسجيل. |
+| `label` | نعم | Приложение для проверки (в стандартном исполнении; стандартная версия Norm v1 и UTS-46). |
+| `suffix_id` | نعم | Введите код (код `0x` hex). |
+| `owner` | نعم | Введите AccountId (литерал IH58; необязательная подсказка @domain). |
 | `term_years` | نعم | عدد صحيح `1..=255`. |
-| `payment_asset_id` | نعم | اصل التسوية (مثل `xor#sora`). |
-| `payment_gross` / `payment_net` | نعم | اعداد صحيحة غير موقعة تمثل وحدات الاصل. |
-| `settlement_tx` | نعم | قيمة JSON او سلسلة حرفية تصف معاملة الدفع او hash. |
+| `payment_asset_id` | نعم | Это приложение (код `xor#sora`). |
+| `payment_gross` / `payment_net` | نعم | Это было сделано для того, чтобы покончить с собой. |
+| `settlement_tx` | نعم | Используйте JSON для обработки данных и хэша. |
 | `payment_payer` | نعم | AccountId الذي فوض الدفع. |
-| `payment_signature` | نعم | JSON او سلسلة حرفية تحتوي دليل توقيع steward او الخزينة. |
-| `controllers` | اختياري | قائمة مفصولة بفاصلة او فاصلة منقوطة لعناوين حسابات controller. الافتراضي `[owner]` عند الحذف. |
-| `metadata` | اختياري | JSON inline او `@path/to/file.json` يقدم تلميحات resolver وسجلات TXT وغيرها. الافتراضي `{}`. |
-| `governance` | اختياري | JSON inline او `@path` يشير الى `GovernanceHookV1`. `--require-governance` يفرض هذا العمود. |
+| `payment_signature` | نعم | JSON используется в качестве стюарда и тренера. |
+| `controllers` | ختياري | Для этого необходимо установить контроллер управления. Это `[owner]`. |
+| `metadata` | ختياري | Встроенный JSON и `@path/to/file.json` в качестве преобразователя и TXT. Приложение `{}`. |
+| `governance` | ختياري | Встроенный JSON — `@path` вместо `GovernanceHookV1`. `--require-governance` находится в разработке. |
 
-يمكن لاي عمود الاشارة الى ملف خارجي عبر بادئة قيمة الخلية بـ `@`.
-يتم حل المسارات نسبة الى ملف CSV.
+Он был главой государства-члена Совета директоров `@`.
+Загрузите файл CSV.
 
 ## 2. تشغيل المساعد
 
@@ -54,16 +56,16 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
   --ndjson artifacts/sns_bulk_requests.ndjson
 ```
 
-خيارات رئيسية:
+Ответ:
 
-- `--require-governance` يرفض الصفوف بدون hook حوكمة (مفيد لمزادات premium او
+- `--require-governance` для крючка حوكمة (для премиум-класса).
   التعيينات المحجوزة).
-- `--default-controllers {owner,none}` يقرر ما اذا كانت خلايا controllers
-  الفارغة تعود الى حساب owner.
-- `--controllers-column`, `--metadata-column`, و `--governance-column` تسمح
-  باعادة تسمية الاعمدة الاختيارية عند العمل مع exports خارجية.
+- `--default-controllers {owner,none}` для контроллеров
+  الفارغة تعود الى حساب владелец.
+- `--controllers-column`, `--metadata-column`, и `--governance-column`.
+  Вы можете экспортировать товары в другие страны.
 
-عند النجاح يكتب السكربت manifest مجمع:
+В манифесте манифеста:
 
 ```json
 {
@@ -100,8 +102,8 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
 }
 ```
 
-اذا تم تمرير `--ndjson`، يكتب كل `RegisterNameRequestV1` ايضا كسطر JSON واحد
-حتى تتمكن الاتمتة من بث الطلبات مباشرة الى Torii:
+Для `--ndjson` и `RegisterNameRequestV1` используется файл JSON.
+Вы можете получить доступ к файлу Torii:
 
 ```bash
 jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
@@ -113,12 +115,12 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
   done
 ```
 
-## 3. الارسال الالي
+## 3. Обратная связь
 
-### 3.1 وضع Torii REST
+### 3.1 в Torii REST
 
-حدد `--submit-torii-url` مع `--submit-token` او `--submit-token-file` لارسال كل
-ادخال في manifest مباشرة الى Torii:
+`--submit-torii-url` и `--submit-token` и `--submit-token-file`.
+В манифесте Torii:
 
 ```bash
 python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json \
@@ -127,19 +129,17 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --poll-status \
   --suffix-map configs/sns_suffix_map.json \
   --submission-log artifacts/sns_bulk_submit.log
-```
+```- Установите `POST /v1/sns/registrations` для подключения к HTTP.
+  Позвоните в компанию NDJSON.
+- `--poll-status` для `/v1/sns/registrations/{selector}` для `/v1/sns/registrations/{selector}`.
+  Приложение (حتى `--poll-attempts`, версия 5) было отключено. وفر
+  `--suffix-map` (JSON يحول `suffix_id` الى قيم "суффикс") в исходном коде
+  Запустите опрос `{label}.{suffix}`.
+- Доступные варианты: `--submit-timeout`, `--poll-attempts`, и `--poll-interval`.
 
-- يصدر المساعد `POST /v1/sns/registrations` لكل طلب ويتوقف عند اول خطا HTTP.
-  تضاف الردود الى مسار السجل كسجلات NDJSON.
-- `--poll-status` يعيد الاستعلام عن `/v1/sns/registrations/{selector}` بعد كل
-  ارسال (حتى `--poll-attempts`, الافتراضي 5) لتاكيد ظهور السجل. وفر
-  `--suffix-map` (JSON يحول `suffix_id` الى قيم "suffix") كي تتمكن الاداة من
-  اشتقاق لواحق `{label}.{suffix}` عند polling.
-- اعدادات قابلة للضبط: `--submit-timeout`, `--poll-attempts`, و `--poll-interval`.
+### 3.2 в интерфейсе командной строки iroha
 
-### 3.2 وضع iroha CLI
-
-لتمرير كل ادخال في manifest عبر CLI، وفر مسار الملف التنفيذي:
+Откройте файл манифеста CLI, а затем нажмите кнопку «Сохранить»:
 
 ```bash
 python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json \
@@ -149,18 +149,18 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- يجب ان تكون controllers من نوع `Account` (`controller_type.kind = "Account"`)
-  لان CLI حاليا لا يدعم سوى controllers المعتمدة على الحساب.
-- تكتب blobs الخاصة بـ metadata و governance في ملفات مؤقتة لكل طلب ويتم
-  تمريرها الى `iroha sns register --metadata-json ... --governance-json ...`.
-- يتم تسجيل stdout و stderr مع اكواد الخروج؛ الاكواد غير الصفرية توقف التشغيل.
+- На контроллерах управления в формате `Account` (`controller_type.kind = "Account"`)
+  Интерфейс командной строки обеспечивает доступ к контроллерам, которые можно использовать.
+- Создание больших двоичных объектов для метаданных и управления в режиме реального времени.
+  Используется `iroha sns register --metadata-json ... --governance-json ...`.
+- Выполняется стандартный вывод и стандартный вывод stderr в режиме ожидания. Он сказал, что это не так.
 
-يمكن تشغيل وضعي الارسال معا (Torii و CLI) للتحقق المتقاطع من نشر المسجل او
-لتمرين مسارات fallback.
+Для запуска программы (Torii и CLI) выполните следующие действия.
+Альтернативный вариант - запасной вариант.
 
-### 3.3 ايصالات الارسال
+### 3.3 Дополнительная информация
 
-عند تمرير `--submission-log <path>` يضيف السكربت سجلات NDJSON تلتقط:
+Для этого используйте `--submission-log <path>` на сайте NDJSON:
 
 ```json
 {"timestamp":"2026-03-30T07:22:04.123Z","mode":"torii","index":12,"selector":"1:alpha","status":200,"success":true,"detail":"..."}
@@ -168,17 +168,17 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
 {"timestamp":"2026-03-30T07:22:06.789Z","mode":"cli","index":12,"selector":"1:alpha","status":0,"success":true,"detail":"Registration accepted"}
 ```
 
-تتضمن ردود Torii الناجحة حقولا منظمة مستخرجة من `NameRecordV1` او
-`RegisterNameResponseV1` (مثل `record_status`, `record_pricing_class`,
-`record_owner`, `record_expires_at_ms`, `registry_event_version`, `suffix_id`,
-`label`) حتى تتمكن لوحات المتابعة وتقارير الحوكمة من تحليل السجل دون تفتيش
-نص حر. ارفق هذا السجل مع تذكرة المسجل بجانب manifest لاثبات قابل لاعادة
+تتضمن ردود Torii Установите флажок `NameRecordV1` او
+`RegisterNameResponseV1` (например, `record_status`, `record_pricing_class`,
+И18НИ00000080Х, И18НИ00000081Х, И18НИ00000082Х, И18НИ00000083Х,
+`label`). تفتيش
+نص حر. ارفق هذا السجل مع تذكرة المسجل بجانب Manifest لاثبات قابل لاعادة
 الانتاج.
 
 ## 4. اتـمتة اصدار بوابة الوثائق
 
-تستدعي مهام CI والبوابة `docs/portal/scripts/sns_bulk_release.sh` الذي يلف
-المساعد ويخزن الاثار تحت `artifacts/sns/releases/<timestamp>/`:
+تستدعي CI والبوابة `docs/portal/scripts/sns_bulk_release.sh` يلف
+Ссылка на файл `artifacts/sns/releases/<timestamp>/`:
 
 ```bash
 docs/portal/scripts/sns_bulk_release.sh \
@@ -191,24 +191,24 @@ docs/portal/scripts/sns_bulk_release.sh \
   --cli-config configs/registrar.toml
 ```
 
-السكربت:
+Сообщение:
 
-1. يبني `registrations.manifest.json` و `registrations.ndjson` وينسخ CSV الاصلي
-   الى مجلد الاصدار.
-2. يرسل manifest عبر Torii و/او CLI (عند التهيئة)، ويكتب `submissions.log` مع
+1. Загрузите `registrations.manifest.json` и `registrations.ndjson` в формате CSV.
+   В конце концов.
+2. Создайте манифест Torii и CLI (программный интерфейс) и `submissions.log`.
    الايصالات المنظمة اعلاه.
-3. يصدر `summary.json` الذي يصف الاصدار (المسارات، عنوان Torii، مسار CLI،
-   timestamp) لكي تتمكن اتـمتة البوابة من رفع الحزمة الى مخزن الاثار.
-4. ينتج `metrics.prom` (override عبر `--metrics`) متضمنا عدادات متوافقة مع
-   Prometheus لعدد الطلبات الاجمالي وتوزيع اللاحقات ومجاميع الاصل ونتائج الارسال.
-   يربط JSON الملخص بهذا الملف.
+3. Установите `summary.json` в диалоговом окне (запустите Torii, откройте CLI).
+   временная метка) لكي تمكن اتـمتة البوابة من رفع الحزمة الى مخزن الاثار.
+4. Установите `metrics.prom` (переопределите `--metrics`)
+   Prometheus будет отключен от сети и будет отключен от сети.
+   Используйте JSON для просмотра.
 
-تقوم workflows بارشفة مجلد الاصدار كاثر واحد، والذي يحتوي الان كل ما تحتاجه
+Рабочие процессы
 الاعتمادات للتدقيق.
 
-## 5. القياس ولوحات المتابعة
+## 5. Свободный ход
 
-يعرض ملف المقاييس الناتج عن `sns_bulk_release.sh` السلاسل التالية:
+Для получения дополнительной информации о `sns_bulk_release.sh` выполните следующие действия:
 
 ```
 # HELP sns_bulk_release_requests_total Number of registration requests per release and suffix.
@@ -219,34 +219,32 @@ sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="xor#sora"} 
 sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",success="true"} 118
 ```
 
-قم بتغذية `metrics.prom` الى sidecar Prometheus لديك (مثلا عبر Promtail او
-مستورد دفعات) للحفاظ على توافق المسجلين وstewards وشركاء الحوكمة حول تقدم
-الجملة. لوحة Grafana `dashboards/grafana/sns_bulk_release.json` تعرض نفس
-البيانات مع لوحات لعدد الطلبات لكل لاحقة، حجم الدفع، ونسب نجاح/فشل الارسال.
-تقوم اللوحة بالتصفية عبر `release` حتى يتمكن المدققون من التعمق في تشغيل CSV
+На автомобиле `metrics.prom` с коляской Prometheus (на сайте Promtail).
+Он был назначен стюардом Стоуэллом Стюардом и стюардами и капитаном Стивом Стоуардом.
+جملة. Grafana `dashboards/grafana/sns_bulk_release.json` تعرض نفس
+Он был убит в 1980-х годах в Лос-Анджелесе, где он провел время.
+تقوم اللوحة بالتصفية عبر `release` حتى يتمكن المدققون من التعمق في Открыть CSV
 واحد.
 
-## 6. التحقق وحالات الفشل
+## 6. التحقق وحالات الفشل- **Обозначенная метка:** يتم تطبيع الادخالات باستخدام Python IDNA с строчными буквами
+  Норма v1. Он выступил с речью в газете "Санкт-Петербург".
+- **Добавление:** يجب ان تقع, идентификаторы суффиксов, годы семестра и подсказки по ценам.
+  `u16` и `u8`. Установите флажок в шестнадцатеричном формате `i64::MAX`.
+- **Метаданные управления:** встроенный формат JSON. ويتم حل
+  Создайте файл CSV. метаданные доступны для скачивания.
+- **Контроллеры:** Установите флажок `--default-controllers`. قدم قوائم
+  Контроллер установлен (тип `ih58...;ih58...`).
 
-- **توحيد label:** يتم تطبيع الادخالات باستخدام Python IDNA مع lowercase وفلاتر
-  Norm v1. تفشل التسميات غير الصالحة بسرعة قبل اي اتصال شبكي.
-- **حواجز رقمية:** يجب ان تقع suffix ids و term years و pricing hints ضمن حدود
-  `u16` و `u8`. تقبل حقول الدفع اعدادا عشرية او hex حتى `i64::MAX`.
-- **تحليل metadata او governance:** يتم تحليل JSON inline مباشرة؛ ويتم حل
-  مراجع الملفات نسبة الى موقع CSV. metadata غير الكائن ينتج خطا تحقق.
-- **Controllers:** الخلايا الفارغة تلتزم بـ `--default-controllers`. قدم قوائم
-  controller صريحة (مثل `ih58...;ih58...`) عند التفويض لجهات غير المالك.
-
-يتم الابلاغ عن الاخطاء مع ارقام صفوف سياقية (مثلا
+Он был показан в 2007 году и в 2007 году в Сейме (Миссисипи).
 `error: row 12 term_years must be between 1 and 255`). يخرج السكربت بالكود `1`
-عند اخطاء التحقق و `2` عندما يكون مسار CSV مفقودا.
+Для этого используется файл `2`, созданный в формате CSV.
 
-## 7. الاختبار والاعتمادية
+## 7. Защитное действие
 
-- يغطي `python3 -m pytest scripts/tests/test_sns_bulk_onboard.py` تحليل CSV،
-  اصدار NDJSON، فرض الحوكمة، ومسارات ارسال CLI او Torii.
-- المساعد مكتوب ببايثون فقط (بدون تبعيات اضافية) ويعمل حيث يتوفر `python3`.
-  يتم تتبع سجل الالتزامات بجانب CLI في المستودع الرئيسي للموثوقية.
+- Введите `python3 -m pytest scripts/tests/test_sns_bulk_onboard.py` в формате CSV.
+  Создайте NDJSON, подключите CLI и Torii.
+- Убийца Питера Уоррена (Бондон Пьер Уотсон) в роли Дэниэла Уайта `python3`.
+  Включите интерфейс командной строки для изменения настроек.
 
-للانتاج، ارفق manifest الناتج وحزمة NDJSON مع تذكرة المسجل حتى يتمكن stewards
-من اعادة تشغيل الـ payloads الدقيقة التي تم ارسالها الى Torii.
+Заявление о проведении манифеста, организованного NDJSON, и председателя совета директоров стюардов
+Для создания полезных нагрузок необходимо использовать Torii.

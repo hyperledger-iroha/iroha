@@ -4,30 +4,32 @@ direction: ltr
 source: docs/portal/docs/norito/examples/transfer-asset.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-slug: /norito/examples/transfer-asset
-title: نقل أصل بين الحسابات
-description: سير عمل بسيط لنقل الأصول يعكس بدايات SDK السريعة وجولات دفتر الأستاذ.
-source: examples/transfer/transfer.ko
+slug: /norito/ejemplos/transfer-asset
+título: نقل أصل بين الحسابات
+descripción: سير عمل بسيط لنقل الأصول يعكس بدايات SDK السريعة وجولات دفتر الأستاذ.
+fuente: ejemplos/transfer/transfer.ko
 ---
 
-سير عمل بسيط لنقل الأصول يعكس بدايات SDK السريعة وجولات دفتر الأستاذ.
+Para obtener más información, consulte el SDK y los archivos adjuntos.
 
 ## جولة دفتر الأستاذ
 
-- موّل Alice بالأصل المستهدف مسبقا (على سبيل المثال عبر المقتطف `register and mint` أو تدفقات البدء السريع للـ SDK).
+- Mi nombre es Alice (hay un archivo `register and mint` que contiene el SDK).
 - نفّذ نقطة الدخول `do_transfer` لنقل 10 وحدات من Alice إلى Bob مع استيفاء إذن `AssetTransferRole`.
 - استعلم عن الأرصدة (`FindAccountAssets`, `iroha_cli ledger assets list`) أو اشترك في أحداث خط الأنابيب لملاحظة نتيجة النقل.
 
 ## أدلة SDK ذات صلة
 
 - [البدء السريع لـ Rust SDK](/sdks/rust)
-- [البدء السريع لـ Python SDK](/sdks/python)
+- [Aplicación del SDK de Python](/sdks/python)
 - [البدء السريع لـ JavaScript SDK](/sdks/javascript)
 
-[نزّل مصدر Kotodama](/norito-snippets/transfer-asset.ko)
+[Actualización Kotodama](/norito-snippets/transfer-asset.ko)
 
 ```text
 // Transfer example: uses typed pointer constructors and transfer_asset syscall

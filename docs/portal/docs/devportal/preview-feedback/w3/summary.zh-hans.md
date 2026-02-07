@@ -11,32 +11,33 @@ id: preview-feedback-w3-summary
 title: W3 beta feedback & status
 sidebar_label: W3 summary
 description: Live digest for the 2026 beta preview wave (finance, observability, SDK, and ecosystem cohorts).
+translator: machine-google-reviewed
 ---
 
-| Item | Details |
-| --- | --- |
-| Wave | W3 — Beta cohorts (finance + ops + SDK partner + ecosystem advocate) |
-| Invite window | 2026‑02‑18 → 2026‑02‑28 |
-| Artefact tag | `preview-20260218` |
-| Tracker issue | `DOCS-SORA-Preview-W3` |
-| Participants | finance-beta-01, observability-ops-02, partner-sdk-03, ecosystem-advocate-04 |
+|项目 |详情 |
+| ---| ---|
+|波| W3 — Beta 群组（财务 + 运营 + SDK 合作伙伴 + 生态系统倡导者）|
+|邀请窗口 | 2026-02-18 → 2026-02-28 |
+|文物标签| `preview-20260218` |
+|追踪器问题 | `DOCS-SORA-Preview-W3` |
+|参与者 |财务-beta-01、可观察性-ops-02、合作伙伴-sdk-03、生态系统-倡导者-04 |
 
-## Highlights
+## 亮点
 
-1. **End-to-end evidence pipeline.** `npm run preview:wave -- --wave preview-20260218 --invite-start 2026-02-18 --invite-end 2026-02-28 --report-date 2026-03-01 --notes "Finance/observability beta wave"` generates the per-wave summary (`artifacts/docs_portal_preview/preview-20260218-summary.json`), digest (`preview-20260218-digest.md`), and refreshes `docs/portal/src/data/previewFeedbackSummary.json` so governance reviewers can rely on a single command.
-2. **Telemetry + governance coverage.** All four reviewers acknowledged checksum-gated access, submitted feedback, and were revoked on time; the digest references the feedback issues (`docs-preview/20260218` set + `DOCS-SORA-Preview-20260218`) alongside the Grafana runs collected during the wave.
-3. **Portal surfacing.** The refreshed portal table now shows the closed W3 wave with latency and response-rate metrics, and the new log page below mirrors the event timeline for auditors who do not pull the raw JSON log.
+1. **端到端证据管道。** `npm run preview:wave -- --wave preview-20260218 --invite-start 2026-02-18 --invite-end 2026-02-28 --report-date 2026-03-01 --notes "Finance/observability beta wave"` 生成每波摘要 (`artifacts/docs_portal_preview/preview-20260218-summary.json`)、摘要 (`preview-20260218-digest.md`) 并刷新 `docs/portal/src/data/previewFeedbackSummary.json`，以便治理审核人员可以依赖单个命令。
+2. **遥测+治理覆盖范围。** 所有四位审阅者均承认校验和门控访问，提交反馈，并按时撤销；该摘要引用了反馈问题（`docs-preview/20260218` 集 + `DOCS-SORA-Preview-20260218`）以及在 Wave 期间收集的 Grafana 运行。
+3. **门户呈现。** 刷新后的门户表现在显示已关闭的 W3 波以及延迟和响应率指标，下面的新日志页面反映了不提取原始 JSON 日志的审核员的事件时间线。
 
-## Action items
+## 行动项目
 
-| ID | Description | Owner | Status |
-| --- | --- | --- | --- |
-| W3-A1 | Capture preview digest and attach to tracker. | Docs/DevRel lead | ✅ Completed 2026‑02‑28 |
-| W3-A2 | Mirror invite/digest evidence into portal + roadmap/status. | Docs/DevRel lead | ✅ Completed 2026‑02‑28 |
+|身份证 |描述 |业主|状态 |
+| ---| ---| ---| ---|
+| W3-A1 |捕获预览摘要并附加到跟踪器。 |文档/DevRel 领导 | ✅ 2026-02-28 完成 |
+| W3-A2 |将邀请/摘要证据镜像到门户+路线图/状态中。 |文档/DevRel 领导 | ✅ 2026-02-28 完成 |
 
-## Exit summary (2026-02-28)
+## 退出总结 (2026-02-28)
 
-- Invites dispatched 2026‑02‑18 with acknowledgements logged minutes later; preview access revoked 2026‑02‑28 after the final telemetry check passed.
-- Digest + summary captured under `artifacts/docs_portal_preview/`, with the raw log anchored by `artifacts/docs_portal_preview/feedback_log.json` for replayability.
-- Issue follow-ups filed under `docs-preview/20260218` with the governance tracker `DOCS-SORA-Preview-20260218`; CSP/Try it notes routed to the observability/finance owners and linked from the digest.
-- Tracker row updated to 🈴 Completed and the portal feedback table reflects the closed wave, completing the remaining DOCS-SORA beta-readiness task.
+- 2026 年 2 月 18 日发出邀请，并在几分钟后记录确认；最终遥测检查通过后，预览访问权限于 2026 年 2 月 28 日被撤销。
+- 在 `artifacts/docs_portal_preview/` 下捕获的摘要 + 摘要，原始日志由 `artifacts/docs_portal_preview/feedback_log.json` 锚定以实现可重玩性。
+- 向治理跟踪器 `DOCS-SORA-Preview-20260218` 提交 `docs-preview/20260218` 下的问题跟进； CSP/Try it 注释路由至可观察性/财务所有者并从摘要链接。
+- 跟踪器行更新为🈴已完成，门户反馈表反映了已关闭的浪潮，完成了剩余的 DOCS-SORA beta 准备任务。

@@ -4,43 +4,45 @@ direction: ltr
 source: docs/portal/docs/sorafs/node-storage.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: node-storage
-title: Design de storage do nodo SoraFS
-sidebar_label: Design de storage do nodo
-description: Arquitetura de storage, quotas e hooks de ciclo de vida para nodes Torii que hospedam dados SoraFS.
+идентификатор: хранилище узлов
+title: Проектирование хранилища данных SoraFS
+Sidebar_label: Проект хранилища данных
+описание: Архитектура хранилища, квоты и циклические подключения к узлам Torii, которые используются в больницах SoraFS.
 ---
 
-:::note Fonte canonica
-Esta pagina espelha `docs/source/sorafs/sorafs_node_storage.md`. Mantenha ambas as copias sincronizadas.
+:::примечание Fonte canonica
+Эта страница написана `docs/source/sorafs/sorafs_node_storage.md`. Мантенья представился как копиас синхронизадас.
 :::
 
-## Design de storage do nodo SoraFS (Draft)
+## Проект хранилища под номером SoraFS (Черновик)
 
-Esta nota refina como um nodo Iroha (Torii) pode optar pela camada de
-availability de dados do SoraFS e dedicar um pedaco do disco local para
-armazenar e servir chunks. Ela complementa a especificacao de discovery
-`sorafs_node_client_protocol.md` e o trabalho de fixtures SF-1b ao detalhar a
-arquitetura do lado do storage, controles de recursos e plumbing de
-configuracao que devem aterrissar no nodo e nos caminhos do gateway.
-Os drills operacionais ficam no
-[Runbook de operacoes do nodo](./node-operations).
+Это замечание, как номер Iroha (Torii), может быть выбрано вручную
+Доступность дадов SoraFS и местная педагогия для дискотек
+Армазенар и сервир куски. Эла дополняет особое открытие
+`sorafs_node_client_protocol.md` и обработка светильников SF-1b и деталей
+Архитектура складских помещений, элементы управления рекурсиями и сантехникой
+сконфигурировать, что мы должны включить ни один узел, ни наш шлюз.
+Os Drill Operationaconais Ficam нет
+[Runbook de Operacoes do nodo](./node-operations).
 
-### Objetivos
+### Цельвос
 
-- Permitir que qualquer validador ou processo auxiliar do Iroha exponha disco
-  ocioso como provedor SoraFS sem afetar as responsabilidades do ledger.
-- Manter o modulo de storage deterministico e guiado por Norito: manifests,
-  planos de chunk, raizes Proof-of-Retrievability (PoR) e adverts de provedor sao
-  a fonte de verdade.
-- Impor quotas definidas pelo operador para que um nodo nao esgote seus
-  recursos ao aceitar demasiadas requisicoes de pin ou fetch.
-- Expor saude/telemetria (amostragem PoR, latencia de fetch de chunk, pressao de
-  disco) de volta para governanca e clientes.
+- Разрешить проверку качества или вспомогательный процесс для Iroha exponha disco.
+  ocioso comoprovor SoraFS sem afetar, поскольку ответственность лежит в бухгалтерской книге.
+- Мантер или модуль детерминированного хранения и поддержка Norito: манифесты,
+  планы фрагментов, вызывает доказательство возможности восстановления (PoR) и рекламные объявления о проверке
+  Фонте де Вердаде.
+- Импорт квот, определенных оператором, для того, чтобы мы могли это сделать.
+  recursos ao aceitar demasiadas requisicoes de pin или fetch.
+- Экспорт данных/телеметрия (амострагем PoR, задержка извлечения фрагмента, нажатие
+  дискотека) де вольта для управления и клиентов.
 
-### Arquitetura de alto nivel
+### Архитектура Альто-Нивел
 
 ```
 +--------------------------------------------------------------------+
@@ -69,28 +71,28 @@ Os drills operacionais ficam no
 +--------------------------------------------------------------------+
 ```
 
-Modulos chave:
+Модули Chave:
 
-- **Gateway**: expoe endpoints HTTP Norito para propostas de pin, requisicoes de
-  fetch de chunks, amostragem PoR e telemetria. Valida payloads Norito e
-  encaminha requisicoes para o chunk store. Reutiliza o stack HTTP do Torii para
-  evitar um novo daemon.
-- **Pin Registry**: estado de pin de manifest rastreado em `iroha_data_model::sorafs`
-  e `iroha_core`. Quando um manifest e aceito o registry registra o digest do
-  manifest, digest do plano de chunk, raiz PoR e flags de capacidade do provedor.
-- **Chunk Storage**: implementacao `ChunkStore` em disco que ingere manifests
-  assinados, materializa planos de chunk usando `ChunkProfile::DEFAULT`, e
-  persiste chunks em layout deterministico. Cada chunk e associado a um
-  fingerprint de conteudo e metadados PoR para que a amostragem possa revalidar
-  sem reler o arquivo inteiro.
-- **Quota/Scheduler**: impoe limites configurados pelo operador (bytes max de
-  disco, pins pendentes max, fetches paralelos max, TTL de chunk) e coordena IO
-  para que as tarefas do ledger nao fiquem sem recursos. O scheduler tambem e
-  responsavel por servir provas PoR e requisicoes de amostragem com CPU limitada.
+- **Шлюз**: выставлять конечные точки HTTP Norito для запроса PIN-кода, реквизитов
+  принеси куски, амстрагем PoR и телеметрию. Действительные полезные данные Norito e
+  необходимо добавить реквизиты для хранения фрагментов. Повторно использовать стек HTTP с помощью Torii для параметра
+  эвитар ум ново демон.
+- **Реестр контактов**: адрес PIN-кода манифеста, присвоенный `iroha_data_model::sorafs`.
+  е `iroha_core`. Когда манифест и документ, регистрация реестра или дайджест делают
+  манифестировать, дайджест сделать план де чанка, поднять PoR и флаги возможности сделать проверор.
+- **Хранилище фрагментов**: реализовать `ChunkStore` на диске, который принимает манифесты.
+  assinados, материализация планов де куска usando `ChunkProfile::DEFAULT`, e
+  сохранять куски в детерминированном макете. Cada chunk e associado a um
+  Отпечатки пальцев и метаданные PoR, чтобы можно было повторно проверить отпечатки пальцев
+  Семь сообщений о внутреннем архиве.
+- **Квота/Планировщик**: ограничение настраиваемых параметров оператора (максимальное количество байтов).
+  дискотека, булавки с булавками max, извлекает параллели max, TTL фрагмента) и коордена IO
+  для того, чтобы тарифы делали бухгалтерскую книгу, она постоянно повторяется. Планировщик также
+  Ответ на запрос сервера, подтверждающий PoR, и необходимые ресурсы с ограничением ЦП.
 
-### Configuracao
+### Конфигурация
 
-Adicione uma nova secao em `iroha_config`:
+Добавление нового секао в `iroha_config`:
 
 ```toml
 [sorafs.storage]
@@ -106,42 +108,40 @@ adverts:
   availability = "hot"
   max_latency_ms = 500
   topics = ["sorafs.sf1.primary:global"]
-```
-
-- `enabled`: toggle de participacao. Quando false o gateway retorna 503 para
-  endpoints de storage e o nodo nao anuncia em discovery.
-- `data_dir`: diretorio raiz para dados de chunk, arvores PoR e telemetria de
-  fetch. Default `<iroha.data_dir>/sorafs`.
-- `max_capacity_bytes`: limite rigido para dados de chunk pinados. Uma tarefa de
-  fundo rejeita novos pins quando o limite e atingido.
-- `max_parallel_fetches`: limite de concorrencia imposto pelo scheduler para
-  balancear banda/IO de disco contra a carga do validador.
-- `max_pins`: maximo de pins de manifest que o nodo aceita antes de aplicar
-  eviccao/back pressure.
-- `por_sample_interval_secs`: cadencia para jobs automaticos de amostragem PoR.
-  Cada job amostra `N` folhas (configuravel por manifest) e emite eventos de
-  telemetria. A governanca pode escalar `N` de forma deterministica definindo a
-  chave de metadata `profile.sample_multiplier` (inteiro `1-4`). O valor pode
-  ser um numero/string unico ou um objeto com overrides por perfil, por exemplo
+```- `enabled`: переключение участия. Когда ложный вызов или возврат шлюза 503, пункт
+  конечные точки хранения и ничего не объявляется об обнаружении.
+- `data_dir`: директория для фрагментов данных, получения PoR и телеметрии
+  принести. По умолчанию `<iroha.data_dir>/sorafs`.
+- `max_capacity_bytes`: жесткое ограничение для кусочков пинад. Ума Тарефа де
+  Fundo Rejeita Novos булавки, сколько лимите и atingido.
+- `max_parallel_fetches`: лимит согласования для планировщика
+  Балансировочная полоса/дискотека против груза-валидатора.
+- `max_pins`: максимальное количество контактов манифеста, которое требуется до применения.
+  eviccao/обратное давление.
+- `por_sample_interval_secs`: каденция для автоматического выполнения заданий PoR.
+  Cada job amostra `N` folhas (настройка для манифеста) и выдача событий
+  телеметрия. Управление может повысить `N` детерминированной формы, определенной
+  введите метаданные `profile.sample_multiplier` (внутренний `1-4`). О доблесть!
+  ser um numero/string unico ou um objeto com переопределяет для perfil, для примера
   `{"default":2,"sorafs.sf2@1.0.0":3}`.
-- `adverts`: estrutura usada pelo gerador de advert para preencher campos
-  `ProviderAdvertV1` (stake pointer, hints de QoS, topics). Se omitido o nodo
-  usa defaults do registry de governanca.
+- `adverts`: использование рекламы для приукрашивающих кампусов
+  `ProviderAdvertV1` (указатель доли, подсказки по QoS, темы). Se omitido o nodo
+  По умолчанию в США используется реестр правительства.
 
-Plumbing de configuracao:
+Сантехнические работы в конфигурации:
 
-- `[sorafs.storage]` e definido em `iroha_config` como `SorafsStorage` e e
-  carregado do arquivo de config do nodo.
-- `iroha_core` e `iroha_torii` passam a configuracao de storage para o builder
-  do gateway e o chunk store no startup.
-- Overrides de dev/test existem (`SORAFS_STORAGE_*`, `SORAFS_STORAGE_PIN_*`), mas
-  deploys de producao devem confiar no arquivo de config.
+- `[sorafs.storage]` и определено `iroha_config` как `SorafsStorage` и e
+  сохраните файл конфигурации узла.
+- `iroha_core` и `iroha_torii` передайте конфигурацию хранилища для строителя.
+  сделать шлюз и хранилище фрагментов не запускается.
+- Переопределения существующего dev/test (`SORAFS_STORAGE_*`, `SORAFS_STORAGE_PIN_*`), мас.
+  развертывает производственное устройство, не хранящее конфигурацию.
 
-### Utilitarios de CLI
+### Утилиты CLI
 
-Enquanto a superficie HTTP do Torii ainda esta sendo ligada, o crate
-`sorafs_node` envia uma CLI leve para que operadores possam automatizar drills de
-ingestao/exportacao contra o backend persistente. [crates/sorafs_node/src/bin/sorafs-node.rs:1]
+Enquanto a superficie HTTP do Torii ainda esta sendo ligada, or crate
+`sorafs_node` через интерфейс командной строки позволяет автоматизировать работу операторов
+прием/экспорт в противоречии с сохранением серверной части. [crates/sorafs_node/src/bin/sorafs-node.rs:1]
 
 ```bash
 cargo run -p sorafs_node --bin sorafs-node ingest \
@@ -151,107 +151,103 @@ cargo run -p sorafs_node --bin sorafs-node ingest \
   --plan-json-out ./plan.json
 ```
 
-- `ingest` espera um manifest `.to` codificado em Norito mais os bytes de payload
-  correspondentes. Ele reconstroi o plano de chunk a partir do perfil de
-  chunking do manifest, impoe paridade de digest, persiste arquivos de chunk e
-  opcionalmente emite um blob JSON `chunk_fetch_specs` para que tooling downstream
-  valide o layout.
-- `export` aceita um ID de manifest e grava o manifest/payload armazenado em
-  disco (com plan JSON opcional) para que fixtures continuem reproduziveis.
+- `ingest` ожидает манифест `.to`, кодифицированный в Norito больше, чем байты полезной нагрузки
+  корреспонденты. Он реконструировал план куска части, чтобы сделать провал.
+  чанкирование делает манифест, impoe paridade de Digest, persiste arquivos de chunk e
+  Дополнительный эмитент blob JSON `chunk_fetch_specs` для последующих инструментов
+  действителен макет.
+- `export` указан идентификатор манифеста и сертификат или манифест/полезная нагрузка, заблокированная в них
+  дискотека (дополнительный план JSON), чтобы светильники продолжали воспроизводиться.
 
-Ambos os comandos imprimem um resumo Norito JSON em stdout, facilitando o uso em
-scripts. A CLI e coberta por um teste de integracao para garantir que manifests e
-payloads fazem round-trip corretamente antes das APIs Torii entrarem. [crates/sorafs_node/tests/cli.rs:1]
-
-> Paridade HTTP
+Добавляйте команды в резюме Norito JSON в стандартный вывод, упрощайте или используйте их
+сценарии. CLI и доступ к тесту интеграции для гарантии того, что манифестирует электронную почту.
+полезные нагрузки fazem туда и обратно соответствуют API Torii entrarem. [crates/sorafs_node/tests/cli.rs:1]> Паридад HTTP
 >
-> O gateway Torii agora expoe helpers read-only apoiados pelo mesmo
+> O шлюз Torii агора expoe helpers только для чтения apoiados pelo mesmo
 > `NodeHandle`:
 >
-> - `GET /v1/sorafs/storage/manifest/{manifest_id_hex}` - retorna o manifest
->   Norito armazenado (base64) junto com digest/metadata. [crates/iroha_torii/src/sorafs/api.rs:1207]
-> - `GET /v1/sorafs/storage/plan/{manifest_id_hex}` - retorna o plano de chunk
->   deterministico JSON (`chunk_fetch_specs`) para tooling downstream. [crates/iroha_torii/src/sorafs/api.rs:1259]
+> - `GET /v1/sorafs/storage/manifest/{manifest_id_hex}` - возврат или манифест
+> Norito Armazenado (base64) junto com дайджест/метаданные. [crates/iroha_torii/src/sorafs/api.rs:1207]
+> - `GET /v1/sorafs/storage/plan/{manifest_id_hex}` - возврат или плоскость фрагмента
+> Детерминированный JSON (`chunk_fetch_specs`) для последующих инструментов. [crates/iroha_torii/src/sorafs/api.rs:1259]
 >
-> Esses endpoints espelham a saida do CLI para que pipelines possam trocar
-> scripts locais por probes HTTP sem mudar parsers. [crates/iroha_torii/src/sorafs/api.rs:1207] [crates/iroha_torii/src/sorafs/api.rs:1259]
+> Конечные точки Esses используются в CLI для того, чтобы трубопроводы могли троакарами
+> локализованные скрипты для проверки HTTP-парсеров. [crates/iroha_torii/src/sorafs/api.rs:1207] [crates/iroha_torii/src/sorafs/api.rs:1259]
 
-### Ciclo de vida do nodo
+### Цикл жизни до нодо
 
-1. **Startup**:
-   - Se storage estiver habilitado o nodo inicializa o chunk store com o
-     diretorio e capacidade configurados. Isso inclui verificar ou criar a base
-     de dados de manifest PoR e fazer replay de manifests pinados para aquecer
-     caches.
-   - Registrar as rotas do gateway SoraFS (endpoints Norito JSON POST/GET para pin,
-     fetch, amostragem PoR, telemetria).
-   - Iniciar o worker de amostragem PoR e o monitor de quotas.
-2. **Discovery / Adverts**:
-   - Gerar documentos `ProviderAdvertV1` usando capacidade/saude atual, assinar
-     com a chave aprovada pelo conselho e publicar via discovery. Use a lista
-3. **Fluxo de pin**:
-   - O gateway recebe um manifest assinado (incluindo plano de chunk, raiz PoR,
-     assinaturas do conselho). Valida a lista de aliases (`sorafs.sf1@1.0.0`
-     requerido) e garante que o plano de chunk corresponde a metadata do manifest.
-   - Verifica quotas. Se capacidade/limites de pin excederem, responde com erro
-     de politica (Norito estruturado).
-   - Stream de dados de chunk para o `ChunkStore`, verificando digests durante
-     a ingestao. Atualiza arvores PoR e armazena metadata do manifest no registry.
-4. **Fluxo de fetch**:
-   - Serve requisicoes de range de chunk a partir do disco. O scheduler impoe
-     `max_parallel_fetches` e retorna `429` quando saturado.
-   - Emite telemetria estruturada (Norito JSON) com latencia, bytes servidos e
-     contadores de erro para monitoramento downstream.
-5. **Amostragem PoR**:
-   - O worker seleciona manifests proporcionalmente ao peso (por exemplo, bytes
-     armazenados) e roda amostragem deterministica usando a arvore PoR do chunk store.
-   - Persiste resultados para auditorias de governanca e inclui resumos em adverts
-     de provedor / endpoints de telemetria.
-6. **Eviccao / cumprimento de quotas**:
-   - Quando a capacidade e atingida o nodo rejeita novos pins por padrao. Opcionalmente,
-     operadores podem configurar politicas de eviccao (ex: TTL, LRU) quando o modelo
-     de governanca estiver definido; por ora o design assume quotas estritas e
-     operacoes de unpin iniciadas pelo operador.
+1. **Запуск**:
+   - Если хранилище уже привыкло или инициализировано, или сохранено хранилище фрагментов, как или
+     директория и возможности настройки. Включите проверку или создайте базу
+     де дадо манифеста PoR и fazer replay де манифесты пинадос для aquecer
+     кэши.
+   - Регистратор в качестве шлюза SoraFS (конечные точки Norito JSON POST/GET для вывода,
+     выборка, амстрагем PoR, телеметрия).
+   - Начальник или работник амострагема PoR и монитор квот.
+2. **Обнаружение/Реклама**:
+   - Загрузите документацию `ProviderAdvertV1`, используя емкость/загрузку вручную, в режиме реального времени.
+     com, а затем получили одобрение и публикацию через открытие. Используйте список
+3. **Пифтовый поток**:
+   - Шлюз принимает манифест уничтожения (включая план фрагмента, Raiz PoR,
+     ассинатурас ду совето). Проверьте список псевдонимов (`sorafs.sf1@1.0.0`
+     требуется) и гарантия, что план фрагмента соответствует метаданным в манифесте.
+   - Квоты Verifica. Если емкость/ограничения контакта превышены, ответьте на ошибку
+     политика (Norito estruturado).
+   - Поток данных фрагментов для `ChunkStore`, проверенный дайджест в течение всего времени.
+     прием внутрь. Метаданные Atualiza arvores PoR и Armazena не содержат реестра.
+4. **Поток выборки**:
+   - Подавайте предметы на дискотеку. О, планировщик импо
+     `max_parallel_fetches` и реторна `429`, когда насыщено.
+   - Эмитировать телеметрию estruturada (Norito JSON) с задержкой, байтами обслуживания и
+     Contadores de erro для мониторинга ниже по течению.
+5. **Амострагем ПоР**:
+   - Выбор рабочего манифестируется пропорционально песо (например, в байтах).
+     Armazenados) и детерминированный род Amostragem с использованием PoR для хранения фрагментов.
+   - Сохранять результаты для аудиторий правительства и включать резюме в рекламные объявления.
+     провод/конечные точки телеметрии.
+6. **Выселение/выселение квот**:
+   - Когда вы наденете булавку или наденете новые булавки для падрао. Опционально,
+     Operadores Podem configurar Politicas de eviccao (например: TTL, LRU) когда или модель
+     degovanca estiver definido; пора или дизайн принять квоты estritas e
+     Операции по откреплению начальных операций оператора.
 
-### Declaracao de capacidade e integracao de scheduling
-
-- Torii agora repassa updates de `CapacityDeclarationRecord` de `/v1/sorafs/capacity/declare`
-  para o `CapacityManager` embutido, de modo que cada nodo constroi uma visao em memoria
-  de suas alocacoes comprometidas de chunker e lane. O manager expoe snapshots read-only
-  para telemetria (`GET /v1/sorafs/capacity/state`) e impoe reservas por perfil ou lane
+### Объявление мощности и интеграция планирования- Torii после обновления обновлений `CapacityDeclarationRecord` от `/v1/sorafs/capacity/declare`
+  Для `CapacityManager` встроен режим, который каждый раз создает визу в памяти
+  де-суас-алокако, компрометидас-де-чанкер и переулок. O Manager предоставляет снимки только для чтения
+  для телеметрии (`GET /v1/sorafs/capacity/state`) и вводить резервы для каждого профиля или полосы
   antes de novas ordens serem aceitas. [crates/sorafs_node/src/capacity.rs:1] [crates/sorafs_node/src/lib.rs:60]
-- O endpoint `/v1/sorafs/capacity/schedule` aceita payloads `ReplicationOrderV1`
-  emitidos pela governanca. Quando a ordem mira o provedor local o manager verifica
-  scheduling duplicado, valida capacidade de chunker/lane, reserva o slice e retorna
-  um `ReplicationPlan` descrevendo capacidade restante para que ferramentas de
-  orquestracao possam seguir com a ingestao. Ordens para outros provedores sao
-  reconhecidas com resposta `ignored` para facilitar workflows multi-operador. [crates/iroha_torii/src/routing.rs:4845]
-- Hooks de conclusao (por exemplo, disparados apos ingestao bem sucedida) chamam
-  `POST /v1/sorafs/capacity/complete` para liberar reservas via
-  `CapacityManager::complete_order`. A resposta inclui um snapshot
-  `ReplicationRelease` (totais restantes, residuais de chunker/lane) para que tooling
-  de orquestracao possa enfileirar a proxima ordem sem polling. Trabalho futuro
-  vai conectar isso ao pipeline do chunk store assim que a logica de ingestao chegar.
+- Конечная точка O `/v1/sorafs/capacity/schedule` aceita полезные нагрузки `ReplicationOrderV1`
+  emitidos pelagovanca. Когда заказ будет проверен местным или проверенным менеджером
+  планирование дублирования, проверка мощности фрагмента/дорожки, резерв или срез и возврат
+  um `ReplicationPlan` требуется оставшаяся емкость для ферментации
+  orquestracao possam seguir com ingestao. Заказы на выездные мероприятия в Сан-Франциско
+  reconhecidas com resposta `ignored` для облегчения рабочих процессов с несколькими операторами. [crates/iroha_torii/src/routing.rs:4845]
+- Крючки для заключения (например, разногласия при приеме внутрь, чтобы добиться успеха) Chamam
+  `POST /v1/sorafs/capacity/complete` для освобождения резервов через
+  `CapacityManager::complete_order`. Ответ, включающий снимок
+  `ReplicationRelease` (все оставшиеся, остатки фрагмента/полосы) для инструмента
+  de orquestracao possa enfileirar a proxima ordem sem polling. Трабальо будущего
+  Вы подключаете этот конвейер к хранилищу фрагментов, чтобы получить логику приема.
   [crates/iroha_torii/src/routing.rs:4885] [crates/sorafs_node/src/capacity.rs:90]
-- O `TelemetryAccumulator` embutido pode ser mutado via
-  `NodeHandle::update_telemetry`, permitindo que workers de background registrem
-  amostras de PoR/uptime e eventualmente derivem payloads canonicos
-  `CapacityTelemetryV1` sem tocar nos internos do scheduler. [crates/sorafs_node/src/lib.rs:142] [crates/sorafs_node/src/telemetry.rs:1]
+- O `TelemetryAccumulator` можно внести изменения через
+  `NodeHandle::update_telemetry`, разрешение для работников фоновой регистрации
+  amostras de PoR/uptime и возможные производные полезные нагрузки canonicos
+  `CapacityTelemetryV1` sem tocar nos internos делает планировщик. [crates/sorafs_node/src/lib.rs:142] [crates/sorafs_node/src/telemetry.rs:1]
 
-### Integracoes e trabalho futuro
+### Интеграция и работа будущего
 
-- **Governanca**: estender `sorafs_pin_registry_tracker.md` com telemetria de
-  storage (taxa de sucesso PoR, utilizacao de disco). Politicas de admissao podem
-  exigir capacidade minima ou taxa minima de sucesso PoR antes de aceitar adverts.
-- **SDKs de cliente**: expor a nova configuracao de storage (limites de disco, alias)
-  para que ferramentas de gestao possam bootstrapar nodes programaticamente.
-- **Telemetria**: integrar com o stack de metricas existente (Prometheus /
-  OpenTelemetry) para que metricas de storage aparecam em dashboards de observabilidade.
-- **Seguranca**: rodar o modulo de storage em um pool dedicado de tarefas async com
-  back-pressure e considerar sandboxing de leituras de chunk via io_uring ou pools
-  tokio limitados para evitar que clientes maliciosos esgotem recursos.
+- **Управление**: estender `sorafs_pin_registry_tracker.md` с телеметрией
+  хранилище (налог на успех PoR, использование дискотеки). Политика приема на работу
+  Exigir Capacidade Minima или Taxa Minima de Sucesso PoR перед размещением рекламы.
+- **Клиентские SDK**: экспорт новой конфигурации хранилища (ограничения дискотеки, псевдонимы).
+  для программной загрузки узлов загрузочного узла.
+- **Телеметрия**: интеграция со стеком существующих метрик (Prometheus /
+  OpenTelemetry) для отображения показателей хранения на панелях наблюдения.
+- **Защита**: выбор модуля хранения данных в выделенном пуле тарифов асинхронной связи.
+  противодавление и рассмотреть возможность создания «песочницы» для фрагментов с помощью io_uring или пулов
+  Токио ограничено, чтобы избежать злонамеренных клиентов, которые повторяются.
 
-Este design mantem o modulo de storage opcional e deterministico enquanto fornece
-os knobs necessarios para operadores participarem da camada de availability de dados
-SoraFS. Implementa-lo exigira mudancas em `iroha_config`, `iroha_core`, `iroha_torii`
-e no gateway Norito, alem do tooling de advert de provedor.
+Это проектируемый мантем или модуль хранения, дополнительный и детерминированный, который необходим.
+Ручки управления, необходимые для участия участников в зоне доступности данных
+SoraFS. Реализовано более эффективно в `iroha_config`, `iroha_core`, `iroha_torii`
+Шлюза Norito нет, необходимо использовать инструменты для рекламы.

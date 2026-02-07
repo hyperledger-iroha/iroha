@@ -7,35 +7,36 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 5e9bf7a41f46d220502776b77d0e2cf86ba19874da9ea373ea440706e531b661
 source_last_modified: "2025-12-29T18:16:35.078745+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-Subject: [SNS Training] <suffix> cohort briefing — <date>
+Թեմա՝ [SNS Training] <վերածանց> կոհորտային ճեպազրույց — <ամսաթիվ>
 
-Hi <name/team>,
+Բարև <name/team>,
 
-You are scheduled for the upcoming Sora Name Service training covering the
-<suffix> suffix launch.
+Դուք նախատեսված եք Sora Name Service-ի առաջիկա վերապատրաստման համար, որն ընդգրկում է
+<վերածանց> վերջածանցի գործարկում:
 
-**Details**
-- **Date / Time:** <weekday, UTC offset + link to calendar invite>
-- **Duration:** 2 hours (includes labs + annex capture)
-- **Format:** Live workshop + breakout rooms
-- **Language:** <language> (simultaneous interpretation available: <yes/no>)
+**Մանրամասները**
+- **Ամսաթիվ/ժամ.** <շաբաթվա օր, UTC օֆսեթ + օրացույցի հրավերի հղում>
+- **Տևողությունը՝** 2 ժամ (ներառում է լաբորատորիաներ + հավելվածի գրավում)
+- **Ձևաչափ.** Ուղիղ սեմինար + ընդմիջման սենյակներ
+- **Լեզու.** <լեզու> (համաժամանակյա թարգմանությունը մատչելի է՝ <այո/ոչ>)
 
-**Pre-work (30 minutes)**
-1. Read `docs/source/sns/onboarding_kit.md`.
-2. Skim the KPI walkthrough (`docs/portal/docs/sns/kpi-dashboard.md`).
-3. Install the tooling listed in `docs/source/sns/training_collateral.md#13-lab-prerequisites`.
+**Նախնական աշխատանք (30 րոպե)**
+1. Կարդացեք `docs/source/sns/onboarding_kit.md`:
+2. Քաշեք KPI-ի բացահայտումը (`docs/portal/docs/sns/kpi-dashboard.md`):
+3. Տեղադրեք `docs/source/sns/training_collateral.md#13-lab-prerequisites`-ում նշված գործիքակազմը:
 
-**What to expect**
-- KPI dashboard orientation and registrar SLA review.
-- Manifest + resolver exercises with live validation.
-- Dispute drill covering guardian + council workflows.
-- KPI annex automation via `cargo xtask sns-annex`.
+**Ինչ սպասել**
+- KPI վահանակի կողմնորոշում և գրանցման SLA վերանայում:
+- Մանիֆեստ + լուծիչ վարժություններ կենդանի վավերացմամբ:
+- Խնամակալին + խորհրդի աշխատանքային հոսքերը ծածկող վեճերի վարժանք:
+- KPI հավելվածի ավտոմատացում `cargo xtask sns-annex`-ի միջոցով:
 
-Please confirm attendance by replying to this email or accepting the calendar
-invite. If you cannot attend, nominate a delegate and copy governance so we can
-keep the readiness log accurate.
+Խնդրում ենք հաստատել մասնակցությունը՝ պատասխանելով այս նամակին կամ ընդունելով օրացույցը
+հրավիրել. Եթե չեք կարող մասնակցել, նշանակեք պատվիրակ և պատճենեք կառավարումը, որպեսզի մենք կարողանանք
+ճշգրիտ պահել պատրաստության մատյանը:
 
-Thanks,  
+շնորհակալություն,  
 `sns-training@sora.org`

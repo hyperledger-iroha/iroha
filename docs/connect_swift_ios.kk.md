@@ -7,31 +7,32 @@ generator: scripts/sync_docs_i18n.py
 source_hash: e3f492c3253124b1066f1ca4389c5ccf4b96a723a2cd9c30ca28ec92775eeaf4
 source_last_modified: "2026-01-05T18:22:23.396018+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-## Recommended SDK Flow (ConnectClient + Norito bridge)
+## Ұсынылатын SDK ағыны (ConnectClient + Norito көпірі)
 
-Need a full Xcode integration walkthrough (SPM/CocoaPods, XCFramework wiring, ChaChaPoly helpers)?
-See `docs/connect_swift_integration.md` for the end-to-end packaging guide.
+Толық Xcode интеграциясы (SPM/CocoaPods, XCFramework сымдары, ChaChaPoly көмекшілері) керек пе?
+Үшін ұшына орау нұсқаулығын `docs/connect_swift_integration.md` қараңыз.
 
-The Swift SDK ships a Norito-backed Connect stack:
+Swift SDK Norito қолдауы бар Connect стекін жеткізеді:
 
-- `ConnectClient` maintains the WebSocket (`/v1/connect/ws?...`) transport on top of
+- `ConnectClient` жоғарғы жағында WebSocket (`/v1/connect/ws?...`) тасымалдауын қолдайды.
   `URLSessionWebSocketTask`.
-- `ConnectSession` orchestrates the lifecycle (open → approve/reject → sign → close) and
-  decrypts ciphertext frames once direction keys are installed.
-- `ConnectCrypto` exposes X25519 key generation plus Norito-compliant direction-key
-  derivation so apps never have to implement HKDF/HMAC plumbing manually.
-- `ConnectEnvelope`/`ConnectControl` represent the typed Norito frames emitted by the
-  Rust bridge (`connect_norito_bridge`); ciphertext envelopes are decrypted via the
-  same FFI helpers used on Android/Rust, guaranteeing parity.
+- `ConnectSession` өмірлік циклді реттейді (ашу → мақұлдау/қабылдамау → қол қою → жабу) және
+  бағыт пернелері орнатылғаннан кейін шифрленген мәтін жақтауларының шифрын шешеді.
+- `ConnectCrypto` X25519 кілт генерациясын және Norito-үйлесімді бағыт кілтін көрсетеді
+  туынды, сондықтан қолданбаларға ешқашан HKDF/HMAC сантехникасын қолмен енгізу қажет емес.
+- `ConnectEnvelope`/`ConnectControl` шығарылған Norito терілген кадрларды білдіреді
+  Тот көпірі (`connect_norito_bridge`); арқылы шифрленген мәтін конверттерінің шифры ашылады
+  Android/Rust жүйесінде қолданылатын бірдей FFI көмекшілері теңдікке кепілдік береді.
 
-Before starting a session:
-1. Derive the 32-byte session identifier (`sid`) using the same BLAKE2b recipe as other
-   SDKs (`"iroha-connect|sid|" || chain_id || app_pk || nonce16`).
-2. Generate a Connect key pair via `ConnectCrypto.generateKeyPair()` or reuse a stored
-   private key (public keys can be recomputed with `ConnectCrypto.publicKey(fromPrivateKey:)`).
-3. Create the WebSocket client and start it inside an async context.
+Сеансты бастамас бұрын:
+1. 32 байт сеанс идентификаторын (`sid`) басқаларымен бірдей BLAKE2b рецептісін пайдаланып шығарыңыз
+   SDK (`"iroha-connect|sid|" || chain_id || app_pk || nonce16`).
+2. `ConnectCrypto.generateKeyPair()` арқылы Connect пернелер жұбын жасаңыз немесе сақталған пернелерді қайта пайдаланыңыз.
+   жеке кілт (ашық кілттерді `ConnectCrypto.publicKey(fromPrivateKey:)` көмегімен қайта есептеуге болады).
+3. WebSocket клиентін жасаңыз және оны асинхронды контекст ішінде бастаңыз.
 
 ```swift
 import IrohaSwift
@@ -79,15 +80,15 @@ Task {
 }
 ```
 
-`ConnectSession` throws `ConnectSessionError.missingDecryptionKeys` if ciphertext frames
-arrive before direction keys are installed; derive them immediately after processing an
-`Approve` control (wallet public key is included in the payload). To inspect ciphertext
-frames manually, call `ConnectEnvelope.decrypt(frame:symmetricKey:)` with the directional
-key that matches the frame’s direction.
+`ConnectSession`, егер шифрлық мәтін жақтаулары болса, `ConnectSessionError.missingDecryptionKeys` шығарады
+бағыт пернелері орнатылмай тұрып келу; өңдеуден кейін оларды дереу алыңыз
+`Approve` басқару (әмиянның ашық кілті пайдалы жүктемеге кіреді). Шифрлық мәтінді тексеру үшін
+кадрларды қолмен бағыттау үшін `ConnectEnvelope.decrypt(frame:symmetricKey:)` нөміріне қоңырау шалыңыз
+жақтау бағытына сәйкес келетін перне.
 
-> **Tip:** When the Norito bridge is missing (e.g., Swift Package Manager builds without
-> the XCFramework), the SDK automatically falls back to a JSON shim. Encryption helpers
-> (`ConnectCrypto.*`) require the bridge, so link the XCFramework in production apps.
+> **Кеңес:** Norito көпірі болмаған кезде (мысалы, Swift Package Manager қолданбасын құрастырады.
+> XCFramework), SDK автоматты түрде JSON белгішесіне қайта түседі. Шифрлау көмекшілері
+> (`ConnectCrypto.*`) көпірді қажет етеді, сондықтан өндіріс қолданбаларында XCFramework байланыстырыңыз.
 
 ```swift
 import Foundation
@@ -287,19 +288,19 @@ let ctReject = sealEnvelopeV1(key: kWallet, sid: sid, dir: 1, seq: 2, payload: r
 let frameReject = frameCiphertextV1Demo(sid: sid, dir: 1, seq: 2, aead: ctReject)
 ws.send(.data(frameReject)) { err in if let err = err { print("ws send reject:", err) } }
 ```
-## CI validation
+## CI валидациясы
 
-- Before making Connect or bridge integration changes, run:
+- Connect немесе bridge біріктіру өзгерістерін жасамас бұрын, келесі әрекеттерді орындаңыз:
 
   ```bash
   make swift-ci
   ```
 
-  The command validates Swift fixtures, checks the dashboard feeds, and renders the CLI
-  summaries. The CI workflow relies on Buildkite metadata
-  (`ci/xcframework-smoke:<lane>:device_tag`) to map results back to the simulator or
-  StrongBox lanes—after changing pipelines or agent tags, confirm the metadata still
-  appears in the logs.
-- If the run fails, follow `docs/source/swift_parity_triage.md` and inspect the
-  `mobile_ci` output to determine which lane needs regeneration or further incident
-  handling.
+  Пәрмен Swift құрылғыларын тексереді, бақылау тақтасының арналарын тексереді және CLI көрсетеді
+  қорытындылар. CI жұмыс процесі Buildkite метадеректеріне сүйенеді
+  Нәтижелерді қайта симуляторға салыстыру үшін (`ci/xcframework-smoke:<lane>:device_tag`) немесе
+  StrongBox жолақтары — конвейерлерді немесе агент тегтерін өзгерткеннен кейін метадеректерді әлі де растаңыз
+  журналдарда пайда болады.
+- Егер іске қосу сәтсіз болса, `docs/source/swift_parity_triage.md` орындаңыз және тексеріңіз
+  Қай жолақты қалпына келтіру немесе одан әрі оқиға қажет екенін анықтау үшін `mobile_ci` шығысы
+  өңдеу.

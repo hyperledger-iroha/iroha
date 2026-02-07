@@ -4,22 +4,24 @@ direction: rtl
 source: docs/portal/docs/norito/examples/nft-flow.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
 slug: /norito/examples/nft-flow
-title: Acuñar, transferir y quemar un NFT
-description: Recorre el ciclo de vida de un NFT de extremo a extremo: acuñación al propietario, transferencia, etiquetado de metadatos y quema.
-source: crates/ivm/docs/examples/12_nft_flow.ko
+כותרת: Acuñar, transferir y quemar un NFT
+תיאור: Recorre el ciclo de vida de un NFT de extremo a extremo: acuñación al propietario, transferencia, etiquetado de metadatos y quema.
+מקור: crates/ivm/docs/examples/12_nft_flow.ko
 ---
 
 Recorre el ciclo de vida de un NFT de extremo a extremo: acuñación al propietario, transferencia, etiquetado de metadatos y quema.
 
-## Recorrido del libro mayor
+## ראש העיר Recorrido del libro
 
-- Asegúrate de que exista la definición del NFT (por ejemplo `n0#wonderland`) junto con las cuentas de propietario/receptor usadas en el fragmento (`ih58...`, `ih58...`).
-- Invoca el entrypoint `nft_issue_and_transfer` para acuñar el NFT, transferirlo de Alice a Bob y adjuntar una bandera de metadatos que describa la emisión.
-- Inspecciona el estado del libro mayor de NFT con `iroha_cli ledger nfts list --account <id>` o los equivalentes del SDK para verificar la transferencia, luego confirma que el activo se elimina una vez que se ejecuta la instrucción de quema.
+- Asegúrate de que exista la definición del NFT (for ejemplo `n0#wonderland`) junto con las cuentas de propietario/receptor usadas en el fragmento (`ih58...`, `ih58...`).
+- Invoca el entrypoint `nft_issue_and_transfer` para acuñar el NFT, transferirlo de Alice and Bob y adjuntar una bandera de metadatos que scriba la emisión.
+- Inspecciona el estado del libro Mayor de NFT con `iroha_cli ledger nfts list --account <id>` o los equivalentes del SDK para verificar la transferencia, luego confirma que el activo se elimina una vez que se ejecuta la instrucción de quema.
 
 ## Guías de SDK relacionadas
 

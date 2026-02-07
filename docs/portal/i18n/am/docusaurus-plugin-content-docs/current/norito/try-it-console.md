@@ -6,17 +6,19 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: Norito Try-It Console
 description: Use the developer-portal proxy, Swagger, and RapiDoc widgets to send real Torii / Norito-RPC requests directly from the documentation site.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-The portal bundles three interactive surfaces that relay traffic to Torii:
+ፖርታሉ ትራፊክን ወደ I18NT0000009X የሚያስተላልፍ ሶስት መስተጋብራዊ ንጣፎችን ያጠቃልላል፡
 
-- **Swagger UI** at `/reference/torii-swagger` renders the signed OpenAPI spec and automatically rewrites requests through the proxy when `TRYIT_PROXY_PUBLIC_URL` is set.
-- **RapiDoc** at `/reference/torii-rapidoc` exposes the same schema with file uploads and content-type selectors that work well for `application/x-norito`.
-- **Try it sandbox** on the Norito overview page provides a lightweight form for ad-hoc REST requests and OAuth-device logins.
+- **Swagger UI** በ `/reference/torii-swagger` የተፈረመውን OpenAPI spec ያቀርባል እና `TRYIT_PROXY_PUBLIC_URL` ሲቀናበር በፕሮክሲው በኩል በራስ ሰር ይጽፋል።
+- **RapiDoc** በ `/reference/torii-rapidoc` ላይ ለ`/reference/torii-rapidoc` በደንብ የሚሰሩ የፋይል ሰቀላዎች እና የይዘት አይነት መምረጫዎችን ያጋልጣል።
+- **ማጠሪያ ሞክረው** በI18NT0000004X አጠቃላይ እይታ ገጽ ለአድ-ሆክ REST ጥያቄዎች እና ለOAuth-device መግቢያዎች ቀላል ክብደት ያለው ቅጽ ያቀርባል።
 
-All three widgets send requests to the local **Try-It proxy** (`docs/portal/scripts/tryit-proxy.mjs`). The proxy verifies that `static/openapi/torii.json` matches the signed digest in `static/openapi/manifest.json`, enforces a rate limiter, redacts `X-TryIt-Auth` headers in logs, and tags every upstream call with `X-TryIt-Client` so Torii operators can audit traffic sources.
+ሶስቱም መግብሮች ለአካባቢው **ሙከራ-ተኪ** (`docs/portal/scripts/tryit-proxy.mjs`) ጥያቄዎችን ይልካሉ። ፕሮክሲው I18NI0000026X በ`static/openapi/torii.json` ከተፈረመው መፈጨት ጋር የሚዛመድ መሆኑን ያረጋግጣል፣ተመን የሚገድብ መሆኑን ያስፈጽማል፣በምዝግብ ማስታወሻዎች ውስጥ የ`X-TryIt-Auth` አርዕስትን ይቀይራል እና እያንዳንዱን የወዲያ ጥሪ በ`X-TryIt-Client` ከዋኝ ኦፕሬተር ኦዲት ማድረግ ይችላል።
 
-## Launch the proxy
+## ፕሮክሲውን ያስጀምሩ
 
 ```bash
 cd docs/portal
@@ -31,65 +33,65 @@ export DOCS_TRYIT_ALLOW_DEFAULT_BEARER=1
 npm run tryit-proxy
 ```
 
-- `TRYIT_PROXY_TARGET` is the Torii base URL you want to exercise.
-- `TRYIT_PROXY_ALLOWED_ORIGINS` must include every portal origin (local dev server, production hostname, preview URL) that should embed the console.
-- `TRYIT_PROXY_PUBLIC_URL` is consumed by `docusaurus.config.js` and injected into the widgets via `customFields.tryIt`.
-- `TRYIT_PROXY_BEARER` only loads when `DOCS_TRYIT_ALLOW_DEFAULT_BEARER=1`; otherwise users must supply their own token via the console or OAuth device flow.
-- `TRYIT_PROXY_CLIENT_ID` sets the `X-TryIt-Client` tag carried on every request.
-  Supplying `X-TryIt-Client` from the browser is allowed but values are trimmed
-  and rejected if they contain control characters.
+- `TRYIT_PROXY_TARGET` የአካል ብቃት እንቅስቃሴ ማድረግ የሚፈልጉት የ Torii መሰረት ዩአርኤል ነው።
+- `TRYIT_PROXY_ALLOWED_ORIGINS` ኮንሶሉን መክተት ያለበትን እያንዳንዱን የፖርታል መነሻ (አካባቢያዊ ዴቭ አገልጋይ፣ የምርት አስተናጋጅ ስም፣ ቅድመ እይታ URL) ማካተት አለበት።
+- `TRYIT_PROXY_PUBLIC_URL` በI18NI0000033X ተበላ እና በ `customFields.tryIt` በኩል ወደ መግብሮች ገብቷል።
+- `TRYIT_PROXY_BEARER` `DOCS_TRYIT_ALLOW_DEFAULT_BEARER=1` ሲጭን ብቻ; አለበለዚያ ተጠቃሚዎች የራሳቸውን ማስመሰያ በኮንሶል ወይም OAuth መሳሪያ ፍሰት በኩል ማቅረብ አለባቸው።
+- `TRYIT_PROXY_CLIENT_ID` በእያንዳንዱ ጥያቄ ላይ የሚደረገውን የI18NI0000038X መለያ ያዘጋጃል።
+  ከአሳሹ `X-TryIt-Client` ማቅረብ ይፈቀዳል ነገር ግን እሴቶች ተቆርጠዋል
+  እና የቁጥጥር ቁምፊዎችን ከያዙ ውድቅ ተደርጓል።
 
-On startup the proxy runs `verifySpecDigest` and exits with a remediation hint if the manifest is stale. Run `npm run sync-openapi -- --latest` to download the newest Torii specification or pass `TRYIT_PROXY_ALLOW_STALE_SPEC=1` for emergency overrides.
+በሚነሳበት ጊዜ ፕሮክሲው `verifySpecDigest` ያሂዳል እና አንጸባራቂው የቆየ ከሆነ በማሻሻያ ፍንጭ ይወጣል። አዲሱን የI18NT0000012X ስፔስፊኬሽን ለማውረድ `npm run sync-openapi -- --latest` ያሂዱ ወይም ለአደጋ ጊዜ መሻር `TRYIT_PROXY_ALLOW_STALE_SPEC=1` ማለፍ።
 
-To update or roll back the proxy target without editing environment files by hand, use the helper:
+የአካባቢ ፋይሎችን በእጅ ሳያርትዑ የተኪ ኢላማውን ለማዘመን ወይም ወደነበረበት ለመመለስ ረዳቱን ይጠቀሙ፡-
 
 ```bash
 npm run manage:tryit-proxy -- update --target https://new.torii.example
 npm run manage:tryit-proxy -- rollback
 ```
 
-## Wire the widgets
+## መግብሮችን ሽቦ ያድርጉ
 
-Serve the portal after the proxy is listening:
+ተኪው ካዳመጠ በኋላ ፖርታሉን ያገልግሉ፡-
 
 ```bash
 cd docs/portal
 TRYIT_PROXY_PUBLIC_URL="http://localhost:8787" npm run start
 ```
 
-`docusaurus.config.js` exposes the following knobs:
+`docusaurus.config.js` የሚከተሉትን እንቡጦች ያጋልጣል፡
 
-| Variable | Purpose |
+| ተለዋዋጭ | ዓላማ |
 | --- | --- |
-| `TRYIT_PROXY_PUBLIC_URL` | URL injected into Swagger, RapiDoc, and the Try it sandbox. Leave unset to hide the widgets during unauthorised previews. |
-| `TRYIT_PROXY_DEFAULT_BEARER` | Optional default token stored in memory. Requires `DOCS_TRYIT_ALLOW_DEFAULT_BEARER=1` and the HTTPS-only CSP guard (DOCS-1b) unless you pass `DOCS_SECURITY_ALLOW_INSECURE=1` locally. |
-| `DOCS_OAUTH_*` | Enable the OAuth device flow (`OAuthDeviceLogin` component) so reviewers can mint short-lived tokens without leaving the portal. |
+| `TRYIT_PROXY_PUBLIC_URL` | ዩአርኤል ወደ Swagger፣ RapiDoc እና ይሞክሩት ማጠሪያ ውስጥ ገብቷል። ያልተዘጋጁ ቅድመ-እይታዎች ጊዜ መግብሮችን ለመደበቅ እንዳልተዋቀሩ ይተዉት። |
+| `TRYIT_PROXY_DEFAULT_BEARER` | በማህደረ ትውስታ ውስጥ የተከማቸ አማራጭ ነባሪ ማስመሰያ። `DOCS_TRYIT_ALLOW_DEFAULT_BEARER=1` እና HTTPS-ብቻ CSP ጠባቂ (DOCS-1b) ይፈልጋል `DOCS_SECURITY_ALLOW_INSECURE=1` በአገር ውስጥ ካላለፉ። |
+| `DOCS_OAUTH_*` | ገምጋሚዎች ፖርታሉን ሳይለቁ ለአጭር ጊዜ የሚቆዩ ቶከኖችን ማመንጨት እንዲችሉ የOAuth መሳሪያ ፍሰትን (`OAuthDeviceLogin` አካል) ያንቁ። |
 
-When the OAuth variables are present the sandbox renders a **Sign in with device code** button that walks through the configured Auth server (see `config/security-helpers.js` for the exact shape). Tokens issued through the device flow are only cached in the browser session.
+የOAuth ተለዋዋጮች ባሉበት ጊዜ ማጠሪያው በተቀናበረው Auth አገልጋይ በኩል የሚሄድ **በመሳሪያ ኮድ ይግቡ** ቁልፍ ይሰጣል (ለትክክለኛው ቅርፅ `config/security-helpers.js` ይመልከቱ)። በመሳሪያው ፍሰት በኩል የተሰጡ ቶከኖች በአሳሽ ክፍለ ጊዜ ውስጥ ብቻ ተደብቀዋል።
 
-## Sending Norito-RPC payloads
+## Norito-RPC ጭነት በመላክ ላይ
 
-1. Build a `.norito` payload with the CLI or snippets described in the [Norito quickstart](./quickstart.md). The proxy forwards `application/x-norito` bodies unchanged, so you can reuse the same artefact you would post with `curl`.
-2. Open `/reference/torii-rapidoc` (preferred for binary payloads) or `/reference/torii-swagger`.
-3. Select the desired Torii snapshot from the drop-down. Snapshots are signed; the panel shows the manifest digest recorded in `static/openapi/manifest.json`.
-4. Choose the `application/x-norito` content type in the “Try it” drawer, click **Choose File**, and select your payload. The proxy rewrites the request to `/proxy/v1/pipeline/submit` and tags it with `X-TryIt-Client=docs-portal-rapidoc`.
-5. To download Norito responses, set `Accept: application/x-norito`. Swagger/RapiDoc expose the header selector in the same drawer and stream the binary back through the proxy.
+1. በCLI ወይም በ[Norito quickstart](./quickstart.md) የተገለጹትን የI18NI0000051X ክፍያ ጭነት ይገንቡ። ፕሮክሲው I18NI0000052X አካላትን ሳይለወጥ ያስተላልፋል፣ ስለዚህ እርስዎ በ`curl` የሚለጥፉትን ተመሳሳይ ቅርስ እንደገና መጠቀም ይችላሉ።
+2. `/reference/torii-rapidoc` ክፈት (ለሁለትዮሽ ጭነት ይመረጣል) ወይም `/reference/torii-swagger`።
+3. ከተቆልቋዩ ውስጥ የሚፈልጉትን I18NT0000013X ቅጽበታዊ ፎቶ ይምረጡ። ቅጽበተ-ፎቶዎች ተፈርመዋል; ፓኔሉ በ `static/openapi/manifest.json` ውስጥ የተቀዳውን አንጸባራቂ ማሟያ ያሳያል።
+4. በ"ሙከራው" መሳቢያ ውስጥ የI18NI0000057X የይዘት አይነትን ምረጥ፣*ፋይልን ምረጥ** የሚለውን ተጫን እና ክፍያህን ምረጥ። ተኪው ጥያቄውን ለ`/proxy/v1/pipeline/submit` በድጋሚ ይጽፋል እና በ `X-TryIt-Client=docs-portal-rapidoc` መለያ ይሰጠዋል ።
+5. የI18NT0000007X ምላሾችን ለማውረድ `Accept: application/x-norito` ያዘጋጁ። Swagger/RapiDoc የራስጌ መምረጡን በተመሳሳዩ መሳቢያ ውስጥ ያጋልጡ እና ሁለትዮሽውን በፕሮክሲው በኩል ይልቀቁ።
 
-For JSON-only routes the embedded Try it sandbox is often faster: enter the path (for example, `/v1/accounts/ih58.../assets`), select the HTTP method, paste a JSON body when needed, and hit **Send request** to inspect headers, duration, and payloads inline.
+ለJSON-ብቻ መንገዶች የተከተተው ማጠሪያ ሞክር ብዙ ጊዜ ፈጣን ነው፡ መንገዱን አስገባ (ለምሳሌ፡ `/v1/accounts/ih58.../assets`)፣ የኤችቲቲፒ ዘዴን ምረጥ፣ ሲያስፈልግ የJSON አካል ለጥፍ እና ራስጌን፣ የቆይታ ጊዜን እና የሚጫኑ ጭነቶችን በውስጥ መስመር ለመፈተሽ **ጥያቄ ላክ** የሚለውን ተጫን።
 
-## Troubleshooting
+## መላ መፈለግ
 
-| Symptom | Likely cause | Remediation |
+| ምልክት | ምክንያት | ማሻሻያ |
 | --- | --- | --- |
-| Browser console shows CORS errors or the sandbox warns that the proxy URL is missing. | Proxy is not running or the origin is not whitelisted. | Start the proxy, make sure `TRYIT_PROXY_ALLOWED_ORIGINS` covers your portal host, and relaunch `npm run start`. |
-| `npm run tryit-proxy` exits with “digest mismatch”. | The Torii OpenAPI bundle changed upstream. | Run `npm run sync-openapi -- --latest` (or `--version=<tag>`) and retry. |
-| Widgets return `401` or `403`. | Token missing, expired, or insufficient scopes. | Use the OAuth device flow or paste a valid bearer token into the sandbox. For static tokens you must export `DOCS_TRYIT_ALLOW_DEFAULT_BEARER=1`. |
-| `429 Too Many Requests` from the proxy. | Per-IP rate limit exceeded. | Raise `TRYIT_PROXY_RATE_LIMIT`/`TRYIT_PROXY_RATE_WINDOW_MS` for trusted environments or throttle test scripts. All rate-limit rejections increment `tryit_proxy_rate_limited_total`. |
+| የአሳሽ ኮንሶል የCORS ስህተቶችን ያሳያል ወይም ማጠሪያው ተኪ ዩአርኤል እንደጎደለ ያስጠነቅቃል። | ተኪ እየሰራ አይደለም ወይም መነሻው በተፈቀደላቸው ዝርዝር ውስጥ አልተመዘገበም። | ተኪውን ይጀምሩ፣ `TRYIT_PROXY_ALLOWED_ORIGINS` የእርስዎን ፖርታል አስተናጋጅ እንደሚሸፍን ያረጋግጡ እና I18NI0000063Xን እንደገና ያስጀምሩ። |
+| `npm run tryit-proxy` በ"መፍጨት አለመመጣጠን" ይወጣል። | የTorii I18NT0000002X ቅርቅብ ወደ ላይ ተቀይሯል። | `npm run sync-openapi -- --latest` (ወይም I18NI0000066X) ያሂዱ እና እንደገና ይሞክሩ። |
+| መግብሮች `401` ወይም I18NI0000068X ይመለሳሉ። | ማስመሰያ ይጎድላል፣ ጊዜው ያለፈበት ወይም በቂ ያልሆነ ወሰን። | የOAuth መሳሪያ ፍሰትን ተጠቀም ወይም የሚሰራ ተሸካሚ ማስመሰያ ወደ ማጠሪያ ሳጥን ውስጥ ለጥፍ። ለስታቲክ ቶከኖች `DOCS_TRYIT_ALLOW_DEFAULT_BEARER=1` ወደ ውጭ መላክ አለብህ። |
+| `429 Too Many Requests` ከተኪ። | የአይፒ ተመን ገደብ ታልፏል። | `TRYIT_PROXY_RATE_LIMIT`/I18NI0000072X ለታመኑ አካባቢዎች ወይም ስሮትል የሙከራ ስክሪፕቶች ያሳድጉ። ሁሉም ተመኖች-ገደብ ውድቅ ጭማሪ `tryit_proxy_rate_limited_total`. |
 
-## Observability
+# ታዛቢነት
 
-- `npm run probe:tryit-proxy` (wrapper around `scripts/tryit-proxy-probe.mjs`) calls `/healthz`, optionally exercises a sample route, and emits Prometheus textfiles for `probe_success` / `probe_duration_seconds`. Configure `TRYIT_PROXY_PROBE_METRICS_FILE` to integrate with node_exporter.
-- Set `TRYIT_PROXY_METRICS_LISTEN=127.0.0.1:9798` to expose counters (`tryit_proxy_requests_total`, `tryit_proxy_rate_limited_total`, `tryit_proxy_upstream_failures_total`) and latency histograms. The `dashboards/grafana/docs_portal.json` board reads these metrics to enforce DOCS-SORA SLOs.
-- Runtime logs live on stdout. Every entry includes the request id, upstream status, authentication source (`default`, `override`, or `client`), and duration; secrets are redacted before emission.
+- `npm run probe:tryit-proxy` (በ`scripts/tryit-proxy-probe.mjs` አካባቢ መጠቅለያ) ወደ `/healthz` ይደውላል ፣ እንደ አማራጭ የናሙና መንገድ ይሠራል እና Prometheus የጽሑፍ ፋይሎችን ለ`probe_success` / I18NI7000 ያወጣል። ከ node_exporter ጋር ለመዋሃድ I18NI0000079X አዋቅር።
+- ቆጣሪዎችን (`tryit_proxy_requests_total`፣ `tryit_proxy_rate_limited_total`፣ `tryit_proxy_upstream_failures_total`) እና የቆይታ ሂስቶግራምን ለማጋለጥ `TRYIT_PROXY_METRICS_LISTEN=127.0.0.1:9798` አዘጋጅ። የ`dashboards/grafana/docs_portal.json` ሰሌዳ DOCS-SORA SLOsን ለማስፈጸም እነዚህን መለኪያዎች ያነባል።
+- የሩጫ ጊዜ ምዝግብ ማስታወሻዎች በ stdout ላይ ይኖራሉ። እያንዳንዱ ግቤት የጥያቄውን መታወቂያ፣ የላይ ዥረት ሁኔታ፣ የማረጋገጫ ምንጭ (`default`፣ `override`፣ ወይም I18NI0000087X) እና የቆይታ ጊዜን ያካትታል። ሚስጥሮች ከመልቀቃቸው በፊት ተስተካክለዋል.
 
-If you need to validate that `application/x-norito` payloads reach Torii unchanged, run the Jest suite (`npm test -- tryit-proxy`) or inspect the fixtures under `docs/portal/scripts/__tests__/tryit-proxy.test.mjs`. The regression tests cover compressed Norito binaries, signed OpenAPI manifests, and proxy downgrade paths so NRPC rollouts keep a permanent evidence trail.
+የ`application/x-norito` ክፍያ Torii ሳይለወጥ መድረሱን ማረጋገጥ ካስፈለገዎት Jest suite (`npm test -- tryit-proxy`) ያሂዱ ወይም በ `docs/portal/scripts/__tests__/tryit-proxy.test.mjs` ስር ያሉትን እቃዎች ይፈትሹ። የድጋሚ ፈተናዎቹ የተጨመቁ Norito ሁለትዮሾችን፣ የተፈረሙ OpenAPI መግለጫዎችን እና የNRPC ልቀቶች ቋሚ የማስረጃ ዱካዎችን ይሸፍናሉ።

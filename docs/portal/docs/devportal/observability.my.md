@@ -11,40 +11,41 @@ id: observability
 title: Portal Observability & Analytics
 sidebar_label: Observability
 description: Telemetry, release tagging, and verification automation for the developer portal.
+translator: machine-google-reviewed
 ---
 
-The DOCS-SORA roadmap requires analytics, synthetic probes, and broken-link
-automation for every preview build. This note documents the plumbing that now
-ships with the portal so operators can wire monitoring without leaking visitor
-data.
+DOCS-SORA လမ်းပြမြေပုံသည် ခွဲခြမ်းစိတ်ဖြာမှု၊ ပေါင်းစပ်မှုဆိုင်ရာ ပစ္စတင်များနှင့် ပြတ်တောက်နေသော လင့်ခ်များ လိုအပ်သည်
+အစမ်းကြည့်တည်ဆောက်မှုတိုင်းအတွက် အလိုအလျောက်စနစ်။ ဤမှတ်စုသည် ယခု ပိုက်လိုင်းအကြောင်း မှတ်တမ်းတင်ထားသည်။
+ပေါက်ကြားခြင်းမရှိပဲ အော်ပရေတာများက ဝိုင်ယာကြိုးဖြင့် စောင့်ကြည့်စစ်ဆေးနိုင်စေရန် Portal ဖြင့် သင်္ဘောဖြင့် ပို့ဆောင်ပေးပါသည်။
+ဒေတာ။
 
-## Release tagging
+## အမှတ်အသားပြုခြင်းကို ထုတ်ဝေပါ။
 
-- Set `DOCS_RELEASE_TAG=<identifier>` (falls back to `GIT_COMMIT` or `dev`) when
-  building the portal. The value is injected into `<meta name="sora-release">`
-  so probes and dashboards can distinguish deployments.
-- `npm run build` emits `build/release.json` (written by
-  `scripts/write-checksums.mjs`) describing the tag, timestamp, and optional
-  `DOCS_RELEASE_SOURCE`. The same file is bundled into preview artefacts and
-  referenced by the link checker report.
+- `DOCS_RELEASE_TAG=<identifier>` (`GIT_COMMIT` သို့မဟုတ် `dev`) သို့ ပြန်ကျသွားသည့်အခါ၊
+  portal ကိုတည်ဆောက်ခြင်း။ တန်ဖိုးကို `<meta name="sora-release">` သို့ ထိုးသွင်းသည်။
+  ထို့ကြောင့် probes နှင့် dashboards များသည် deployments များကို ခွဲခြားနိုင်သည်။
+- `npm run build` သည် `build/release.json` ကိုထုတ်သည် (ရေးသားခဲ့သည်
+  `scripts/write-checksums.mjs`) တဂ်၊ အချိန်တံဆိပ်နှင့် ရွေးချယ်ခွင့်တို့ကို ဖော်ပြသည်
+  `DOCS_RELEASE_SOURCE`။ တူညီသောဖိုင်ကို အစမ်းကြည့်ရှုသည့်အရာများနှင့် စုစည်းထားသည်။
+  link checker အစီရင်ခံစာမှကိုးကား။
 
-## Privacy-preserving analytics
+## ကိုယ်ရေးကိုယ်တာ-ထိန်းသိမ်းခြင်းဆိုင်ရာ ခွဲခြမ်းစိတ်ဖြာချက်
 
-- Configure `DOCS_ANALYTICS_ENDPOINT=<https://collector.example/ingest>` to
-  enable the lightweight tracker. Payloads contain `{ event, path, locale,
-  release, ts }` with no referrer or IP metadata, and `navigator.sendBeacon`
-  is used whenever possible to avoid blocking navigations.
-- Control sampling with `DOCS_ANALYTICS_SAMPLE_RATE` (0–1). The tracker stores
-  the last-sent path and never emits duplicate events for the same navigation.
-- The implementation lives in `src/components/AnalyticsTracker.jsx` and is
-  mounted globally through `src/theme/Root.js`.
+- `DOCS_ANALYTICS_ENDPOINT=<https://collector.example/ingest>` ကို သတ်မှတ်ပါ။
+  ပေါ့ပါးသော tracker ကိုဖွင့်ပါ။ Payload များတွင် `{ event၊ path၊ locale၊
+  ထုတ်ဝေမှု၊ ts }` with no referrer or IP metadata, and `navigator.sendBeacon`
+  လမ်းကြောင်းများကို ပိတ်ဆို့ခြင်းမှ ရှောင်ရှားရန် ဖြစ်နိုင်သည့်အခါတိုင်းတွင် အသုံးပြုသည်။
+- `DOCS_ANALYTICS_SAMPLE_RATE` (0–1) ဖြင့် နမူနာယူခြင်းကို ထိန်းချုပ်ပါ။ tracker သည် စတိုးဆိုင်များ
+  နောက်ဆုံးပေးပို့သည့်လမ်းကြောင်းနှင့် တူညီသောလမ်းညွှန်မှုအတွက် ထပ်တူဖြစ်ရပ်များကို ဘယ်တော့မှ ထုတ်လွှတ်မည်မဟုတ်ပါ။
+- အကောင်အထည်ဖော်မှုသည် `src/components/AnalyticsTracker.jsx` တွင်နေထိုင်သည်။
+  `src/theme/Root.js` မှတဆင့် တစ်ကမ္ဘာလုံးတွင် တပ်ဆင်ထားသည်။
 
-## Synthetic probes
+## Synthetic probes များ
 
-- `npm run probe:portal` issues GET requests against common routes
-  (`/`, `/norito/overview`, `/reference/torii-swagger`, etc.) and verifies the
-  `sora-release` meta tag matches `--expect-release` (or
-  `DOCS_RELEASE_TAG`). Example:
+- `npm run probe:portal` ပြဿနာများသည် ဘုံလမ်းကြောင်းများအတွက် တောင်းဆိုချက်များကို ရယူပါ။
+  (`/`၊ `/norito/overview`၊ `/reference/torii-swagger` စသည်ဖြင့်) ကို စစ်ဆေးပြီး၊
+  `sora-release` မက်တာတက်ဂ်သည် `--expect-release` (သို့မဟုတ်
+  `DOCS_RELEASE_TAG`)။ ဥပမာ-
 
 ```bash
 PORTAL_BASE_URL="https://docs.staging.sora" \
@@ -52,59 +53,59 @@ DOCS_RELEASE_TAG="preview-42" \
 npm run probe:portal -- --expect-release=preview-42
 ```
 
-Failures are reported per path, making it easy to gate CD on probe success.
+လမ်းကြောင်းတစ်ခုစီတွင် ပျက်ကွက်မှုများကို အစီရင်ခံပြီး စီဒီကို စစ်ဆေးခြင်းအောင်မြင်မှုတွင် လွယ်ကူစွာ ဂိတ်ပေါက်နိုင်စေသည်။
 
-## Broken-link automation
+## ကျိုးပဲ့လင့်ခ် အလိုအလျောက်စနစ်
 
-- `npm run check:links` scans `build/sitemap.xml`, ensures every entry maps to a
-  local file (checking `index.html` fallbacks), and writes
-  `build/link-report.json` containing the release metadata, totals, failures,
-  and the SHA-256 fingerprint of `checksums.sha256` (exposed as `manifest.id`)
-  so every report can be tied back to the artefact manifest.
-- The script exits non-zero when a page is missing, so CI can block releases on
-  stale or broken routes. Reports cite the candidate paths that were attempted,
-  which helps trace routing regressions back to the docs tree.
+- `npm run check:links` သည် `build/sitemap.xml` ကို စကင်န်ဖတ်ပြီး ဝင်ခွင့်မြေပုံများအားလုံးကို သေချာစေသည်
+  local file (`index.html` မှားယွင်းမှုများကို စစ်ဆေးနေသည်) နှင့် ရေးသားသည်။
+  ထုတ်ပြန်ချက် မက်တာဒေတာ၊ စုစုပေါင်းများ၊ ကျရှုံးမှုများ ပါဝင်သော `build/link-report.json`
+  နှင့် `checksums.sha256` ၏ SHA-256 လက်ဗွေ (`manifest.id` အဖြစ် ထင်ရှားသည်)
+  ထို့ကြောင့် အစီရင်ခံစာတိုင်းကို artefact manifest နှင့် ပြန်ချိတ်နိုင်သည်။
+- စာမျက်နှာတစ်ခုပျောက်ဆုံးသောအခါတွင် script သည် သုညမဟုတ်သော ထွက်ပေါက်ဖြစ်သောကြောင့် CI သည် ထုတ်ဝေမှုများကို ပိတ်ဆို့နိုင်သည်။
+  ပျက်နေသော သို့မဟုတ် ပျက်နေသောလမ်းကြောင်းများ။ ကြိုးပမ်းခဲ့သည့် ကိုယ်စားလှယ်လောင်း လမ်းကြောင်းများကို ကိုးကား၍ အစီရင်ခံစာများ၊
+  ၎င်းသည် docs tree သို့ ပြန်သွားရန် လမ်းကြောင်းလမ်းကြောင်း ဆုတ်ယုတ်မှုများကို ခြေရာခံရန် ကူညီပေးသည်။
 
-## Grafana dashboard & alerts
+## Grafana ဒက်ရှ်ဘုတ် & သတိပေးချက်များ
 
-- `dashboards/grafana/docs_portal.json` publishes the **Docs Portal Publishing**
-  Grafana board. It ships the following panels:
-  - *Gateway Refusals (5m)* uses `torii_sorafs_gateway_refusals_total` scoped by
-    `profile`/`reason` so SREs can detect bad policy pushes or token failures.
-  - *Alias Cache Refresh Outcomes* and *Alias Proof Age p90* track
-    `torii_sorafs_alias_cache_*` to prove fresh proofs exist before a DNS cut
-    over.
-  - *Pin Registry Manifest Counts* plus the *Active Alias Count* stat mirror the
-    pin-registry backlog and total aliases so governance can audit each release.
-  - *Gateway TLS Expiry (hours)* highlights when the publishing gateway’s TLS
-    cert approaches expiry (alert threshold at 72 h).
-  - *Replication SLA Outcomes* and *Replication Backlog* keep an eye on
-    `torii_sorafs_replication_*` telemetry to ensure all replicas meet the GA
-    bar after publishing.
-- Use the built-in template variables (`profile`, `reason`) to focus on the
-  `docs.sora` publishing profile or investigate spikes across all gateways.
-- PagerDuty routing uses the dashboard panels as evidence: alerts named
-  `DocsPortal/GatewayRefusals`, `DocsPortal/AliasCache`, and
-  `DocsPortal/TLSExpiry` fire when the corresponding series breach their
-  thresholds. Link the alert’s runbook to this page so on-call engineers can
-  replay the exact Prometheus queries.
+- `dashboards/grafana/docs_portal.json` သည် **Docs Portal Publishing** ကို ထုတ်ဝေသည်
+  Grafana ဘုတ်။ ၎င်းသည် အောက်ပါအကန့်များကို ပို့ပေးသည်-
+  - *Gateway Reusals (5m)* ဖြင့် အတိုင်းအတာ `torii_sorafs_gateway_refusals_total` ကို အသုံးပြုသည်
+    `profile`/`reason` သို့မှသာ SRE များသည် ဆိုးရွားသောမူဝါဒ တွန်းပို့မှုများ သို့မဟုတ် တိုကင်ပျက်ကွက်မှုများကို ရှာဖွေတွေ့ရှိနိုင်ပါသည်။
+  - *Alias Cache Refresh Outcomes* နှင့် *Alias Proof Age p90* သီချင်း
+    DNS ဖြတ်တောက်ခြင်းမပြုမီ လတ်ဆတ်သောအထောက်အထားများ ရှိနေကြောင်း သက်သေပြရန် `torii_sorafs_alias_cache_*`
+    ကျော်
+  - *Pin Registry Manifest Counts* နှင့် *Active Alias Count* stat တို့သည် ရောင်ပြန်ဟပ်နေပါသည်။
+    pin-registry backlog နှင့် စုစုပေါင်း aliases ဖြစ်သောကြောင့် အုပ်ချုပ်ရေးသည် ထုတ်ဝေမှုတစ်ခုစီတိုင်းကို စစ်ဆေးနိုင်သည်။
+  - *Gateway TLS သက်တမ်းကုန်ဆုံးချိန် (နာရီများ)* သည် ထုတ်ဝေသည့်ဂိတ်ဝေး၏ TLS တွင် မီးမောင်းထိုးပြသည့်အခါ၊
+    လက်မှတ်သည် သက်တမ်းကုန်ဆုံးရန် နီးကပ်လာသည် (သတိပေးချက်အဆင့် 72 နာရီတွင်)။
+  - *Replication SLA Outcomes* နှင့် *Replication Backlog* ကို စောင့်ကြည့်ပါ။
+    ပုံတူအားလုံး GA နှင့်ကိုက်ညီကြောင်းသေချာစေရန် `torii_sorafs_replication_*` တယ်လီမီတာ
+    ထုတ်ဝေပြီးနောက်ဘား။
+- ၎င်းကိုအာရုံစိုက်ရန် built-in template variables (`profile`, `reason`) ကိုသုံးပါ။
+  `docs.sora` ပရိုဖိုင်ကို ထုတ်ဝေခြင်း သို့မဟုတ် တံခါးပေါက်များအားလုံးတွင် spikes များကို စုံစမ်းစစ်ဆေးပါ။
+- PagerDuty လမ်းကြောင်းပြခြင်းသည် ဒက်ရှ်ဘုတ်ပြားများကို သက်သေအဖြစ် အသုံးပြုသည်- အမည်ရှိ သတိပေးချက်များ
+  `DocsPortal/GatewayRefusals`၊ `DocsPortal/AliasCache` နှင့်
+  သက်ဆိုင်ရာ စီးရီးများ ဖောက်ဖျက်သောအခါ `DocsPortal/TLSExpiry` မီးလောင်သည်။
+  တံခါးခုံ။ ဖုန်းခေါ်ဆိုမှုဆိုင်ရာ အင်ဂျင်နီယာများ တတ်နိုင်သရွေ့ သတိပေးချက်၏ ရှေ့ပြေးစာအုပ်ကို ဤစာမျက်နှာသို့ လင့်ခ်ချိတ်ပါ။
+  အတိအကျ Prometheus မေးခွန်းများကို ပြန်ဖွင့်ပါ။
 
-## Putting it together
+##တွဲတင်​လိုက်​သည်​
 
-1. During `npm run build`, set the release/analytics environment variables and
-   let the post-build step emit `checksums.sha256`, `release.json`, and
-   `link-report.json`.
-2. Run `npm run probe:portal` against the preview hostname with
-   `--expect-release` wired to the same tag. Save the stdout for the publishing
-   checklist.
-3. Run `npm run check:links` to fail fast on broken sitemap entries and archive
-   the generated JSON report together with the preview artefacts. CI drops the
-   latest report at `artifacts/docs_portal/link-report.json` so governance can
-   download the evidence bundle straight from the build logs.
-4. Forward the analytics endpoint to your privacy-preserving collector (Plausible,
-   self-hosted OTEL ingest, etc.) and ensure sampling rates are documented per
-   release so dashboards interpret counts correctly.
-5. CI already wires these steps through the preview/deploy workflows
-   (`.github/workflows/docs-portal-preview.yml`,
-   `.github/workflows/docs-portal-deploy.yml`), so local dry runs only need to
-   cover secret-specific behaviour.
+1. `npm run build` ကာလအတွင်း၊ ထုတ်ဝေမှု/ခွဲခြမ်းစိတ်ဖြာမှုဆိုင်ရာ ကိန်းရှင်များကို သတ်မှတ်ပြီး၊
+   တည်ဆောက်ပြီးနောက် အဆင့် `checksums.sha256`၊ `release.json` နှင့်
+   `link-report.json`။
+2. `npm run probe:portal` ကို အစမ်းကြည့်ရှုသည့် hostname နှင့် ပတ်၍ Run ပါ။
+   `--expect-release` တူညီသော tag သို့ ကြိုးတပ်ထားသည်။ ထုတ်ဝေမှုအတွက် stdout ကိုသိမ်းဆည်းပါ။
+   စစ်ဆေးရန်စာရင်း။
+3. ပျက်စီးနေသော sitemap entries များနှင့် archive တွင်အမြန်ပျက်ကွက်စေရန် `npm run check:links` ကို run
+   အစမ်းကြည့်ရှုသည့်အရာများနှင့်အတူ ထုတ်လုပ်ထားသော JSON အစီရင်ခံစာ။ CI က ကျသွားတာ။
+   `artifacts/docs_portal/link-report.json` တွင် နောက်ဆုံးအစီရင်ခံချက် ဖြစ်သောကြောင့် အုပ်ချုပ်မှု လုပ်နိုင်မည်ဖြစ်သည်။
+   အထောက်အထားအစုအဝေးကို တည်ဆောက်မှတ်တမ်းများမှ တိုက်ရိုက်ဒေါင်းလုဒ်လုပ်ပါ။
+4. ခွဲခြမ်းစိတ်ဖြာမှုဆိုင်ရာ အဆုံးအဖြတ်ကို သင်၏ လျှို့ဝှက်ရေး ထိန်းသိမ်းမှု စုဆောင်းသူထံ ထပ်ဆင့်ပို့ပါ (ယုံကြည်နိုင်သည်၊
+   ကိုယ်တိုင်လက်ခံကျင်းပသော OTEL သုံးစွဲမှုစသည်ဖြင့်) နှင့် နမူနာနှုန်းထားများကို မှတ်တမ်းတင်ထားကြောင်း သေချာပါစေ။
+   ထို့ကြောင့် ဒက်ရှ်ဘုတ်များသည် အရေအတွက်များကို မှန်ကန်စွာ အနက်ဖွင့်ပါ။
+5. CI သည် ဤအဆင့်များကို အစမ်းကြည့်ရှုခြင်း/လုပ်ဆောင်မှုအသွားအလာများမှတစ်ဆင့် ကြိုးပေးနေပြီဖြစ်သည်။
+   (`.github/workflows/docs-portal-preview.yml`၊
+   `.github/workflows/docs-portal-deploy.yml`) ၊ ထို့ကြောင့် local dry run ရန်သာ လိုအပ်ပါသည်။
+   လျှို့ဝှက်ထားသော အပြုအမူကို ဖုံးကွယ်ပါ။

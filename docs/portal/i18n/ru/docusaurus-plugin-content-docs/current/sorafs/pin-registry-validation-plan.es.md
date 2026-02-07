@@ -4,36 +4,38 @@ direction: ltr
 source: docs/portal/docs/sorafs/pin-registry-validation-plan.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: pin-registry-validation-plan
-title: Plan de validacion de manifests del Pin Registry
-sidebar_label: Validacion del Pin Registry
-description: Plan de validacion para el gating de ManifestV1 previo al rollout del Pin Registry SF-4.
+id: план проверки-регистрации-пин-кода
+заголовок: План проверки деклараций реестра PIN-кодов
+Sidebar_label: Проверка реестра PIN-кода
+описание: План проверки для входа в ManifestV1 до развертывания реестра контактов SF-4.
 ---
 
-:::note Fuente canónica
-Esta pagina refleja `docs/source/sorafs/pin_registry_validation_plan.md`. Mantén ambas ubicaciones alineadas mientras la documentación heredada siga activa.
+:::примечание Фуэнте каноника
+Эта страница отражает `docs/source/sorafs/pin_registry_validation_plan.md`. Mantén ambas ubicaciones alineadas mientras la documentación hereedada siga active.
 :::
 
-# Plan de validacion de manifests del Pin Registry (Preparacion SF-4)
+# План проверки деклараций реестра PIN-кодов (Подготовка SF-4)
 
-Este plan describe los pasos requeridos para integrar la validacion de
-`sorafs_manifest::ManifestV1` en el futuro contrato del Pin Registry para que el
-trabajo de SF-4 se apoye en el tooling existente sin duplicar la logica de
-encode/decode.
+В этом плане опишите необходимые действия для интеграции
+`sorafs_manifest::ManifestV1` в будущем контракте с реестром контактов для этого
+Работа SF-4 выполняется в существующем инструменте без дублирования логики
+кодировать/декодировать.
 
-## Objetivos
+## Объективос
 
-1. Las rutas de envio del host verifican la estructura del manifest, el perfil de
-   chunking y los envelopes de gobernanza antes de aceptar propuestas.
-2. Torii y los servicios de gateway reutilizan las mismas rutinas de validacion
-   para asegurar un comportamiento determinista entre hosts.
-3. Las pruebas de integracion cubren casos positivos/negativos para aceptacion de
-   manifests, enforcement de politica y telemetria de errores.
+1. Руты отправки хоста проверяют структуру манифеста,
+   разбивая конверты губернатора до получения права собственности.
+2. Torii и службы шлюза повторно используют рутинные процедуры проверки.
+   для обеспечения совместимости между хостами.
+3. Процессы интеграции кубренских положительных/негативных случаев для принятия
+   манифесты, соблюдение политики и телеметрия ошибок.
 
-## Arquitectura
+## Архитектура
 
 ```mermaid
 flowchart LR
@@ -45,45 +47,41 @@ flowchart LR
     registry --> torii
 ```
 
-### Componentes
+### Компоненты
 
-- `ManifestValidator` (nuevo modulo en el crate `sorafs_manifest` o `sorafs_pin`)
-  encapsula los chequeos estructurales y los gates de politica.
-- Torii expone un endpoint gRPC `SubmitManifest` que llama a
-  `ManifestValidator` antes de reenviar al contrato.
-- La ruta de fetch del gateway puede consumir opcionalmente el mismo validador
-  al cachear nuevos manifests desde el registry.
+- `ManifestValidator` (новый модуль в ящике `sorafs_manifest` или `sorafs_pin`)
+  инкапсула структурных проверок и ворот политики.
+- Torii демонстрирует конечную точку gRPC `SubmitManifest`, которую вызывает
+  `ManifestValidator` перед повторным отправкой контракта.
+- Доступ к шлюзу может быть использован дополнительно для проверки подлинности сообщения.
+  Al Cachear Nuevos манифестируется из реестра.
 
-## Desglose de tareas
-
-| Tarea | Descripcion | Responsable | Estado |
+## Desglose de Tareas| Тарея | Описание | Ответственный | Эстадо |
 |------|-------------|-------------|--------|
-| Esqueleto de API V1 | Agregar `validate_manifest(manifest: &ManifestV1, policy: &PinPolicyInputs) -> Result<(), ValidationError>` a `sorafs_manifest`. Incluir verificacion de digest BLAKE3 y lookup del chunker registry. | Core Infra | ✅ Hecho | Los helpers compartidos (`validate_chunker_handle`, `validate_pin_policy`, `validate_manifest`) ahora viven en `sorafs_manifest::validation`. |
-| Cableado de politica | Mapear la configuracion de politica del registry (`min_replicas`, ventanas de expiracion, handles de chunker permitidos) a las entradas de validacion. | Governance / Core Infra | Pendiente — rastreado en SORAFS-215 |
-| Integracion Torii | Llamar al validador dentro del envio de manifests en Torii; devolver errores Norito estructurados ante fallas. | Torii Team | Planificado — rastreado en SORAFS-216 |
-| Stub de contrato host | Asegurar que el entrypoint del contrato rechace manifests que fallen el hash de validacion; exponer contadores de metricas. | Smart Contract Team | ✅ Hecho | `RegisterPinManifest` ahora invoca el validador compartido (`ensure_chunker_handle`/`ensure_pin_policy`) antes de mutar el estado y los tests unitarios cubren los casos de falla. |
-| Tests | Agregar tests unitarios para el validador + casos trybuild para manifests invalidos; tests de integracion en `crates/iroha_core/tests/pin_registry.rs`. | QA Guild | 🟠 En progreso | Los tests unitarios del validador aterrizaron junto con los rechazos on-chain; la suite completa de integracion sigue pendiente. |
-| Docs | Actualizar `docs/source/sorafs_architecture_rfc.md` y `migration_roadmap.md` una vez que el validador aterrice; documentar uso de CLI en `docs/source/sorafs/manifest_pipeline.md`. | Docs Team | Pendiente — rastreado en DOCS-489 |
+| Версия API V1 | Агрегар `validate_manifest(manifest: &ManifestV1, policy: &PinPolicyInputs) -> Result<(), ValidationError>` и `sorafs_manifest`. Включите проверку дайджеста BLAKE3 и поиск в реестре блоков. | Основная инфраструктура | ✅ Хечо | Наши помощники (`validate_chunker_handle`, `validate_pin_policy`, `validate_manifest`) сейчас живут в `sorafs_manifest::validation`. |
+| Политический кабель | Подключите политическую конфигурацию реестра (`min_replicas`, отверстия для истечения срока действия, ручки разрешений блоков) и входы проверки. | Управление / Основная инфраструктура | Ожидание — изменение в SORAFS-215 |
+| Интеграция Torii | Обратитесь к валидатору посылки манифестов в Torii; Ошибки развертывания Norito были созданы до падения. | Torii Команда | Планирование — изменение в SORAFS-216 |
+| Заглушка хоста контракта | Убедитесь, что точка входа в контратаку показывает, что хеш-код проверки упал; экспонер contadores de metricas. | Команда смарт-контрактов | ✅ Хечо | `RegisterPinManifest` сейчас вызывает эль-валидатор компартидо (`ensure_chunker_handle`/`ensure_pin_policy`) до изменения состояния и лос-тестов, унитариев, в случае падения. |
+| Тесты | Совокупное тестирование унитарных тестов для валидаторов + случаев trybuild для манифестов недействительных; тесты интеграции на `crates/iroha_core/tests/pin_registry.rs`. | Гильдия контроля качества | 🟠 В процессе | Лос-тесты унитарио дель валидатор атерризарон юнто с лос-реказос в сети; la suite Completea de Integracion Sigue Pendiente. |
+| Документы | Actualizar `docs/source/sorafs_architecture_rfc.md` y `migration_roadmap.md` una vez que el validador aterrice; Документация по использованию CLI в `docs/source/sorafs/manifest_pipeline.md`. | Команда Документов | Ожидание — изменение в DOCS-489 |
 
-## Dependencias
+## Зависимости
 
-- Finalizacion del esquema Norito del Pin Registry (ref: item SF-4 en el roadmap).
-- Envelopes del chunker registry firmados por el consejo (asegura que el mapping del validador sea determinista).
-- Decisiones de autenticacion de Torii para el envio de manifests.
+- Завершение регистрации номера Norito PIN-кода (ссылка: пункт SF-4 в дорожной карте).
+- Конверты реестра блоков для совета (гарантируйте, что отображение действительного морского детерминанта).
+- Решения аутентификации Torii для отправки манифестов.
 
-## Riesgos y mitigaciones
+## Рисгос и смягчение последствий
 
-| Riesgo | Impacto | Mitigacion |
+| Рисго | Влияние | Митигасьон |
 |--------|---------|------------|
-| Interpretacion divergente de politica entre Torii y el contrato | Aceptacion no determinista. | Compartir crate de validacion + agregar tests de integracion que comparen decisiones del host vs on-chain. |
-| Regresion de performance para manifests grandes | Envios mas lentos | Medir via cargo criterion; considerar cachear resultados de digest del manifest. |
-| Deriva de mensajes de error | Confusion de operadores | Definir codigos de error Norito; documentarlos en `manifest_pipeline.md`. |
+| Различные политические интерпретации между Torii и контрато | Принятие не является детерминистским. | Сравнение ящиков проверки + совокупность тестов интеграции, позволяющих сравнить решения хоста и сети. |
+| Регрессия производительности для больших проявлений | Приветствую вас больше всего | Медир по критерию груза; рассмотрите кэширование результатов дайджеста манифеста. |
+| Вывод сообщений об ошибках | Путаница операторов | Определите код ошибки Norito; документация в `manifest_pipeline.md`. |
 
-## Objetivos de cronograma
+## Объекты хронограммы
 
-- Semana 1: aterrizar el esqueleto `ManifestValidator` + tests unitarios.
-- Semana 2: cablear el envio en Torii y actualizar la CLI para mostrar errores de validacion.
-- Semana 3: implementar hooks del contrato, agregar tests de integracion, actualizar docs.
-- Semana 4: correr ensayo end-to-end con entrada en el ledger de migracion y capturar aprobacion del consejo.
-
-Este plan se referenciara en el roadmap una vez que comience el trabajo del validador.
+- Семана 1: aterrizar el esqueleto `ManifestValidator` + тесты unitarios.
+- Семана 2: подключите посылку к Torii и активизируйте CLI для устранения ошибок проверки.
+- Семана 3: реализация перехватчиков ошибок, объединение тестов интеграции, актуализация документации.
+- Семана 4: сквозное исправление с входом в книгу миграции и получение одобрения совета.Этот план является ссылкой на дорожную карту, которая приведет к началу работы валидатора.

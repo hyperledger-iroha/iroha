@@ -4,41 +4,41 @@ direction: ltr
 source: docs/portal/docs/sorafs/dispute-revocation-runbook.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: dispute-revocation-runbook
-title: Runbook des litiges et révocations SoraFS
-sidebar_label: Runbook litiges et révocations
-description: Flux de gouvernance pour déposer des litiges de capacité SoraFS, coordonner les révocations et évacuer les données de manière déterministe.
+id: disputa-revocación-runbook
+título: Runbook des litiges et révocations SoraFS
+sidebar_label: Litigios y revocaciones de Runbook
+descripción: Flujo de gobierno para depositar litigios de capacidad SoraFS, coordinar las revocaciones y evacuar las donaciones de manera determinada.
 ---
 
-:::note Source canonique
-Cette page reflète `docs/source/sorafs/dispute_revocation_runbook.md`. Gardez les deux copies synchronisées jusqu’à ce que la documentation Sphinx héritée soit retirée.
+:::nota Fuente canónica
+Esta página refleja `docs/source/sorafs/dispute_revocation_runbook.md`. Guarde las dos copias sincronizadas justo con la documentación heredada de Sphinx ya retirada.
 :::
 
-## Objectif
+## Objetivo
 
-Ce runbook guide les opérateurs de gouvernance dans la création de litiges de capacité SoraFS, la coordination des révocations et la garantie d’une évacuation déterministe des données.
+Este runbook guía a los operadores de gobierno en la creación de litigios de capacidad SoraFS, la coordinación de revocaciones y la garantía de una evacuación determinada de los donantes.
 
-## 1. Évaluer l’incident
+## 1. Evaluar el incidente
 
-- **Conditions de déclenchement :** détection d’une violation du SLA (disponibilité/échec PoR), déficit de réplication ou désaccord de facturation.
-- **Confirmer la télémétrie :** capturer les snapshots `/v1/sorafs/capacity/state` et `/v1/sorafs/capacity/telemetry` pour le fournisseur.
-- **Notifier les parties prenantes :** Storage Team (opérations du fournisseur), Governance Council (organe décisionnel), Observability (mises à jour des dashboards).
+- **Condiciones de cancelación:** detección de una violación del SLA (disponibilité/échec PoR), déficit de réplica o incumplimiento de facturación.
+- **Confirme la télémétrie:** capture las instantáneas `/v1/sorafs/capacity/state` y `/v1/sorafs/capacity/telemetry` para el proveedor.
+- **Notificador de las partes embarazadas:** Equipo de almacenamiento (operaciones del proveedor), Consejo de gobernanza (organe décisionnel), Observabilidad (mises à jour des Dashboards).
 
-## 2. Préparer le bundle de preuves
+## 2. Preparar el paquete de preuves1. Recopilador de artefactos brutos (telemetría JSON, registros CLI, notas de auditoría).
+2. Normalizar en un archivo determinado (por ejemplo, un tarball); consignador:
+   - digerir BLAKE3-256 (`evidence_digest`)
+   - tipo de medio (`application/zip`, `application/jsonl`, etc.)
+   - URI de alojamiento (almacenamiento de objetos, pin SoraFS o punto final accesible a través de Torii)
+3. Stocker le bundle dans le bucket de Collecte des preuves de gouvernance avec un accès write-once.
 
-1. Collecter les artefacts bruts (telemetry JSON, logs CLI, notes d’audit).
-2. Normaliser dans une archive déterministe (par exemple, un tarball) ; consigner :
-   - digest BLAKE3-256 (`evidence_digest`)
-   - type de média (`application/zip`, `application/jsonl`, etc.)
-   - URI d’hébergement (object storage, pin SoraFS ou endpoint accessible via Torii)
-3. Stocker le bundle dans le bucket de collecte des preuves de gouvernance avec un accès write-once.
+## 3. Presentar el litigio
 
-## 3. Déposer le litige
-
-1. Créez un JSON spec pour `sorafs_manifest_stub capacity dispute` :
+1. Cree una especificación JSON para `sorafs_manifest_stub capacity dispute`:
 
    ```json
    {
@@ -58,7 +58,7 @@ Ce runbook guide les opérateurs de gouvernance dans la création de litiges de 
    }
    ```
 
-2. Lancez la CLI :
+2. Lanza la CLI :
 
    ```bash
    sorafs_manifest_stub capacity dispute \
@@ -71,38 +71,34 @@ Ce runbook guide les opérateurs de gouvernance dans la création de litiges de 
      --private-key=ed25519:<key>
    ```
 
-3. Vérifiez `dispute_summary.json` (confirmez le type, le digest des preuves, les timestamps).
-4. Soumettez le JSON de requête à Torii `/v1/sorafs/capacity/dispute` via la file de transactions de gouvernance. Capturez la valeur de réponse `dispute_id_hex` ; elle ancre les actions de révocation suivantes et les rapports d’audit.
+3. Verifique `dispute_summary.json` (confirme el tipo, el resumen de las etiquetas anteriores y las marcas de tiempo).
+4. Soumettez le JSON de requête à Torii `/v1/sorafs/capacity/dispute` a través del archivo de transacciones de gobierno. Capture el valor de respuesta `dispute_id_hex`; elle ancre les actiones de révocation suivantes et les rapports d’audit.
 
-## 4. Évacuation et révocation
-
-1. **Fenêtre de grâce :** avertissez le fournisseur de la révocation imminente ; autorisez l’évacuation des données épinglées lorsque la politique le permet.
+## 4. Evacuación y revocación1. **Fenêtre de grâce :** avertissez le fournisseur de la révocation imminente ; autorisez l’évacuation des données épinglées lorsque la politique le permet.
 2. **Générez `ProviderAdmissionRevocationV1` :**
-   - Utilisez `sorafs_manifest_stub provider-admission revoke` avec la raison approuvée.
-   - Vérifiez les signatures et le digest de révocation.
-3. **Publiez la révocation :**
-   - Soumettez la requête de révocation à Torii.
-   - Assurez-vous que les adverts du fournisseur sont bloqués (attendez une hausse de `torii_sorafs_admission_total{result="rejected",reason="admission_missing"}`).
-4. **Mettez à jour les dashboards :** signalez le fournisseur comme révoqué, référencez l’ID du litige et liez le bundle de preuves.
+   - Utilice `sorafs_manifest_stub provider-admission revoke` con la razón aprobada.
+   - Verifique las firmas y el resumen de revocación.
+3. **Publiez the révocation :**
+   - Soumettez la solicitud de revocación a Torii.
+   - Asegúrese de que los anuncios del proveedor estén bloqueados (atienda una casa de `torii_sorafs_admission_total{result="rejected",reason="admission_missing"}`).
+4. **Mettez à jour les Dashboards:** señalez le fournisseur comme révoqué, référencez l’ID du litige et liez le bundle de preuves.
 
-## 5. Post-mortem et suivi
+## 5. Post-mortem y siguientes
 
-- Enregistrez la chronologie, la cause racine et les actions de remédiation dans le tracker d’incidents de gouvernance.
-- Déterminez la restitution (slashing du stake, clawbacks de frais, remboursements clients).
-- Documentez les leçons ; mettez à jour les seuils SLA ou les alertes de monitoring si nécessaire.
+- Registrez la cronología, la causa racine y las acciones de remediación en el rastreador de incidentes de gobierno.
+- Determinación de la restitución (recorte de la participación, reembolsos de gastos, reembolsos a los clientes).
+- Documentez les leçons; Configure cada día las alertas SLA o las alertas de monitoreo si es necesario.
 
-## 6. Documents de référence
+## 6. Documentos de referencia
 
 - `sorafs_manifest_stub capacity dispute --help`
-- `docs/source/sorafs/storage_capacity_marketplace.md` (section litiges)
-- `docs/source/sorafs/provider_admission_policy.md` (workflow de révocation)
-- Dashboard d’observabilité : `SoraFS / Capacity Providers`
+- `docs/source/sorafs/storage_capacity_marketplace.md` (sección litigios)
+- `docs/source/sorafs/provider_admission_policy.md` (flujo de trabajo de revocación)
+- Panel de observación: `SoraFS / Capacity Providers`
 
-## Checklist
-
-- [ ] Bundle de preuves capturé et haché.
-- [ ] Payload de litige validé localement.
-- [ ] Transaction de litige Torii acceptée.
-- [ ] Révocation exécutée (si approuvée).
-- [ ] Dashboards/runbooks mis à jour.
-- [ ] Post-mortem déposé auprès du conseil de gouvernance.
+## Lista de verificación- [ ] Bundle de preuves capturé et haché.
+- [ ] Carga útil de litigio válido localmente.
+- [ ] Transacción de litigio Torii aceptada.
+- [ ] Révocación ejecutada (si aprobada).
+- [] Paneles/runbooks actualizados.
+- [ ] Declaración post-mortem auprès du conseil de gouvernance.

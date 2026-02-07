@@ -4,29 +4,31 @@ direction: ltr
 source: docs/portal/docs/sorafs/orchestrator-ops.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: orchestrator-ops
-title: Runbook de operações do orquestrador SoraFS
-sidebar_label: Runbook do orquestrador
-description: Guia operacional passo a passo para implantar, monitorar e reverter o orquestrador multi-origem.
+идентификатор: оркестратор-опс
+title: Runbook deoperacões do orquestrador SoraFS
+Sidebar_label: Runbook для orquestrador
+описание: Руководство по эксплуатации, переход для имплантации, мониторинга и возврата к мульти-оригинальному устройству.
 ---
 
-:::note Fonte canônica
-Esta página espelha `docs/source/sorafs/runbooks/sorafs_orchestrator_ops.md`. Mantenha ambas as copias sincronizadas.
+:::примечание Fonte canônica
+Эта страница написана `docs/source/sorafs/runbooks/sorafs_orchestrator_ops.md`. Мантенья представился как копиас синхронизадас.
 :::
 
-Este runbook orienta os SREs na preparação, no rollout e na operação do orquestrador de fetch multi-origem. Ele complementa o guia de desenvolvimento com procedimentos ajustados para rollouts em produção, incluindo habilitação em fases e bloqueio de peers.
+Этот Runbook ориентирован на SRE на подготовку, не развертывание и работу с организатором выборки из нескольких источников. Он дополняет или помогает адаптировать процедуры для развертывания в производстве, включая подготовку на этапах и блокировку коллег.
 
-> **Veja também:** O [Runbook de rollout multi-origem](./multi-source-rollout.md) foca em ondas de rollout em toda a frota e na negação emergencial de provedores. Consulte-o para coordenação de governança / staging enquanto usa este documento para as operações diárias do orquestrador.
+> **Важно также:** O [Runbook de развертывания multi-origem](./multi-source-rollout.md) фокусируется на моментах развертывания на всех участках и в непредвиденных ситуациях. Проконсультируйтесь по поводу координации управления/постановки в США этого документа для ежедневных операций, выполняемых оркестратором.
 
-## 1. Checklist pré-voo
+## 1. Предварительный контрольный список
 
-1. **Coletar insumos de provedores**
-   - Últimos anúncios de provedores (`ProviderAdvertV1`) e o snapshot de telemetria da frota alvo.
-   - Plano de payload (`plan.json`) derivado do manifesto em teste.
-2. **Gerar um scoreboard determinístico**
+1. **Coletar insumos deprovores**
+   - Последние объявления о проверке (`ProviderAdvertV1`) и снимок телеметрии из каждого кадра.
+   - План полезной нагрузки (`plan.json`) получен из манифеста при тестировании.
+2. **Как определить табло**
 
    ```bash
    sorafs_fetch \
@@ -39,30 +41,30 @@ Este runbook orienta os SREs na preparação, no rollout e na operação do orqu
      --json-out artifacts/session.summary.json
    ```
 
-   - Valide se `artifacts/scoreboard.json` lista cada provedor de produção como `eligible`.
-   - Arquive o JSON de resumo junto ao scoreboard; auditores dependem dos contadores de retry de chunks ao certificar a solicitação de mudança.
-3. **Dry-run com fixtures** — Execute o mesmo comando contra os fixtures públicos em `docs/examples/sorafs_ci_sample/` para garantir que o binário do orquestrador corresponde à versão esperada antes de tocar em payloads de produção.
+   - Включите `artifacts/scoreboard.json` в список каждого подтверждения производства как `eligible`.
+   - Архив или JSON резюме для табло; Аудиторы зависят от контрадоров повторной попытки получения фрагментов или сертификата запроса на получение информации.
+3. **Пробный запуск com-фикстур** — выполните команду против общедоступных светильников в `docs/examples/sorafs_ci_sample/`, чтобы гарантировать, что бинарный файл соответствует версии, прежде чем передать полезные нагрузки в производство.
 
-## 2. Procedimento de rollout em fases
+## 2. Процедура поэтапного развертывания
 
-1. **Fase canário (≤2 provedores)**
-   - Recrie o scoreboard e execute com `--max-peers=2` para restringir o orquestrador a um subconjunto pequeno.
-   - Monitore:
+1. **Канарский этап (≤2 проверяющих)**
+   - Запишите табло и выполните команду `--max-peers=2`, чтобы остановить или организовать вложенное соединение.
+   - Монитор:
      - `sorafs_orchestrator_active_fetches`
      - `sorafs_orchestrator_fetch_failures_total{reason!="retry"}`
      - `sorafs_orchestrator_retries_total`
-   - Prossiga quando as taxas de retry permanecerem abaixo de 1% para um fetch completo do manifesto e nenhum provedor acumular falhas.
-2. **Fase de rampa (50% dos provedores)**
-   - Aumente `--max-peers` e execute novamente com um snapshot de telemetria recente.
-   - Persista cada execução com `--provider-metrics-out` e `--chunk-receipts-out`. Retenha os artefatos por ≥7 dias.
-3. **Rollout completo**
-   - Remova `--max-peers` (ou defina para a contagem total de elegíveis).
-   - Ative o modo orquestrador nos deployments de clientes: distribua o scoreboard persistido e o JSON de configuração via seu sistema de gerenciamento de configuração.
-   - Atualize os dashboards para exibir `sorafs_orchestrator_fetch_duration_ms` p95/p99 e histogramas de retry por região.
+   - Просьба о том, чтобы налоги постоянно повторялись в течение 1% для полной выборки манифеста и отсутствия каких-либо подтверждений накопленных ошибок.
+2. **Fase de Rampa (50% доплат)**
+   - Добавьте `--max-peers` и выполните новый снимок с помощью недавнего снимка телеметрии.
+   - Постоянное выполнение с `--provider-metrics-out` и `--chunk-receipts-out`. Retenha os artefatos ≥7 диам.
+3. **Внедрение завершено**
+   - Удалить `--max-peers` (или определить для общего заражения).
+   - Активный или модный организатор развертывания клиентов: постоянное распространение или табло и JSON конфигурации через свою систему создания конфигурации.
+   - Настройте информационные панели для показа `sorafs_orchestrator_fetch_duration_ms` p95/p99 и гистограмм повторных попыток по региону.
 
-## 3. Bloqueio e reforço de peers
+## 3. Блокировка и реформа сверстников
 
-Use os overrides de política de pontuação do CLI para triagem de provedores não saudáveis sem esperar atualizações de governança.
+Используйте переопределения политики в интерфейсе командной строки для сортировки ненадежных средств, чтобы быстро настроить управление.
 
 ```bash
 sorafs_fetch \
@@ -74,36 +76,34 @@ sorafs_fetch \
   --deny-provider=beta \
   --boost-provider=gamma=5 \
   --json-out artifacts/override.summary.json
-```
+```- `--deny-provider` удалите псевдоним, указанный для рассмотрения на текущем сеансе.
+- `--boost-provider=<alias>=<weight>` увеличение или песо до проверки или без повестки дня. Наши ценности, как нормализованные песо, табло и приложение доступны для локального выполнения.
+- Зарегистрируйте отменяющие заявки об инцидентах и ​​приложениях, как указано в формате JSON, чтобы люди, ответственные за них, могли примирить или решить возникшую или возникшую проблему.
 
-- `--deny-provider` remove o alias indicado da consideração na sessão atual.
-- `--boost-provider=<alias>=<weight>` aumenta o peso do provedor no agendador. Os valores são somados ao peso normalizado do scoreboard e se aplicam apenas à execução local.
-- Registre os overrides no ticket de incidente e anexe as saídas JSON para que a equipe responsável possa reconciliar o estado quando o problema subjacente for resolvido.
+Для постоянного изменения настройте исходную телеметрию (отметку о нарушении в качестве штрафа) или настройте объявление с помощью автоматических настроек перед очисткой или переопределением CLI.
 
-Para mudanças permanentes, ajuste a telemetria de origem (marque o infrator como penalizado) ou atualize o anúncio com orçamentos de fluxo atualizados antes de limpar os overrides do CLI.
+## 4. Триагем де фалхас
 
-## 4. Triagem de falhas
+Когда я принесу тебе это:
 
-Quando um fetch falha:
-
-1. Capture os seguintes artefatos antes de executar novamente:
+1. Захватите следующие артефакты перед новым выполнением:
    - `scoreboard.json`
    - `session.summary.json`
    - `chunk_receipts.json`
    - `provider_metrics.json`
-2. Inspecione `session.summary.json` para a string de erro legível:
-   - `no providers were supplied` → verifique os caminhos dos provedores e os anúncios.
-   - `retry budget exhausted ...` → aumente `--retry-budget` ou remova peers instáveis.
-   - `no compatible providers available ...` → audite os metadados de capacidade de faixa do provedor infrator.
-3. Correlacione o nome do provedor com `sorafs_orchestrator_provider_failures_total` e abra um ticket de acompanhamento se a métrica disparar.
-4. Reproduza o fetch offline com `--scoreboard-json` e a telemetria capturada para reproduzir a falha de forma determinística.
+2. Проверьте `session.summary.json` на наличие ошибки:
+   - `no providers were supplied` → проверяйте имена проверенных пользователей и объявления.
+   - `retry budget exhausted ...` → увеличить `--retry-budget` или удалить одноранговые узлы.
+   - `no compatible providers available ...` → проверьте метаданные о возможностях проверки работоспособности инфра- тора.
+3. Корреляция имени проверяющего с `sorafs_orchestrator_provider_failures_total` и билетом сопровождения имеет разные метрики.
+4. Воспроизведение или выборка в автономном режиме через `--scoreboard-json` и захват телеметрии для воспроизведения детерминированной формы.
 
-## 5. Rollback
+## 5. Откат
 
-Para reverter um rollout do orquestrador:
+Чтобы вернуться к развертыванию ордера:
 
-1. Distribua uma configuração que defina `--max-peers=1` (desabilita efetivamente o agendamento multi-origem) ou retorne os clientes ao caminho de fetch de fonte única.
-2. Remova quaisquer overrides `--boost-provider` para que o scoreboard volte a uma ponderação neutra.
-3. Continue coletando as métricas do orquestrador por pelo menos um dia para confirmar que não há fetches residuais em andamento.
+1. Распространите конфигурацию, определённую `--max-peers=1` (эффективная или мульти-оригинальная повестка дня), или отправьте клиентов на место получения уникального шрифта.
+2. Удалите запрос, переопределяющий `--boost-provider`, чтобы табло стало нейтральным.
+3. Продолжайте работать с метриками, выполняемыми в течение нескольких минут, чтобы подтвердить, что вы не извлекаете остатки в неизменном виде.
 
-Manter a captura disciplinada de artefatos e rollouts em fases garante que o orquestrador multi-origem possa ser operado com segurança em frotas heterogêneas de provedores, mantendo os requisitos de observabilidade e auditoria intactos.
+Способ захвата дисциплины артефатов и развертывания в фазах гарантирует, что оратор из нескольких источников может работать с безопасностью среди разнородных объектов, сохраняя все необходимые условия для наблюдения и зрительные залы в целости и сохранности.

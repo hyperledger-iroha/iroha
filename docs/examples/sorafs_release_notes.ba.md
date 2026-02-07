@@ -7,39 +7,40 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 303a947895c10c7673b98e9187c3431c4012093c69d899252c121b53f9c48bb1
 source_last_modified: "2026-01-05T09:28:11.823299+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# SoraFS CLI & SDK — Release Notes (v0.1.0)
+# SoraFS CLI & SDK — Релиз иҫкәрмәләр (v0.1.0)
 
-## Highlights
-- `sorafs_cli` now wraps the entire packaging pipeline (`car pack`, `manifest build`,
-  `proof verify`, `manifest sign`, `manifest verify-signature`) so CI runners invoke a
-  single binary instead of bespoke helpers. The new keyless signing flow defaults to
-  `SIGSTORE_ID_TOKEN`, understands GitHub Actions OIDC providers, and emits deterministic
-  summary JSON alongside the signature bundle.
-- The multi-source fetch *scoreboard* ships as part of `sorafs_car`: it normalises
-  provider telemetry, enforces capability penalties, persists JSON/Norito reports, and
-  feeds the orchestrator simulator (`sorafs_fetch`) through the shared registry handle.
-  Fixtures under `fixtures/sorafs_manifest/ci_sample/` demonstrate the deterministic
-  inputs and outputs that CI/CD is expected to diff against.
-- Release automation is codified in `ci/check_sorafs_cli_release.sh` and
-  `scripts/release_sorafs_cli.sh`. Every release now archives the manifest bundle,
-  signature, `manifest.sign/verify` summaries, and the scoreboard snapshot so governance
-  reviewers can trace artefacts without re-running the pipeline.
+##
+- `sorafs_cli` хәҙер бөтә упаковка торбаһын урап ала (I18NI0000008X, `manifest build`,
+  `proof verify`, `manifest sign`, `manifest verify-signature`) шулай CI йүгерселәрҙе өндәшергә саҡыра
+  бер бинар урынына заказ буйынса ярҙамсылар. Яңы асҡысһыҙ ҡул ҡуйыу ағымы ғәҙәттәгесә 1990 й.
+  `SIGSTORE_ID_TOKEN`, аңлай GitHub ғәмәлдәре I18NT00000000003Х провайдерҙары, һәм детерминистик сығара
+  йыйылма JSON менән бер рәттән ҡултамға өйөмө.
+- I18NI000000014X өлөшө булараҡ күп сығанаҡлы фетч *сканер* караптары: ул нормалаша
+  провайдер телеметрия, мөмкинлек штрафтары, һаҡлана JSON/I18NT0000000000X отчеттар, һәм
+  оркестрлы тренажерҙы (I18NI000000015X) дөйөм реестр тотҡаһы аша туҡландыра.
+  I18NI000000016X буйынса фикстуралар детерминистик күрһәтә
+  индереүҙәр һәм сығыштар, тип CI/CD ҡаршы дифф көтөлә.
+- автоматлаштырыуҙы сығарыу I18NI000000017X һәм
+  `scripts/release_sorafs_cli.sh`. Һәр релиз хәҙер архивлай манифест өйөм,
+  ҡултамғаһы, I18NI000000019X резюме, һәм табло снимок шулай идара итеү
+  рецензенттар торба үткәргесте яңынан эшләтмәйенсә артефакттарҙы эҙләй ала.
 
-## Upgrade Steps
-1. Update the aligned crates in your workspace:
+## Яңыртыу аҙымдары
+1. Эш урынын тура килтерелгән йәшниктәрҙе яңыртыу:
    ```bash
    cargo update -p sorafs_car@0.1.0 --precise 0.1.0
    cargo update -p sorafs_manifest@0.1.0 --precise 0.1.0
    cargo update -p sorafs_chunker@0.1.0 --precise 0.1.0
    ```
-2. Re-run the release gate locally (or in CI) to confirm fmt/clippy/test coverage:
+2. Ҡабул итеү ҡапҡаһы сығарыу ҡапҡаһы локаль (йәки CI) раҫлау өсөн fmt/клип/тест ҡаплау:
    ```bash
    CARGO_TARGET_DIR=.target ci/check_sorafs_cli_release.sh \
      | tee artifacts/sorafs_cli_release/v0.1.0/ci-check.log
    ```
-3. Regenerate signed artefacts and summaries with the curated config:
+3. Регенерация ҡул ҡуйылған артефакттар һәм резюме менән курированный конфиг:
    ```bash
    scripts/release_sorafs_cli.sh \
      --config docs/examples/sorafs_cli_release.conf \
@@ -47,40 +48,40 @@ translation_last_reviewed: 2026-02-07
      --chunk-plan fixtures/sorafs_manifest/ci_sample/chunk_plan.json \
      --chunk-summary fixtures/sorafs_manifest/ci_sample/car_summary.json
    ```
-   Copy refreshed bundles/proofs into `fixtures/sorafs_manifest/ci_sample/` if the
-   release updates canonical fixtures.
+   Күсерелгән яңыртылған өйөмдәр/приздар I18NI0000000020X әгәр ҙә
+   канонлы ҡорамалдарҙы яңыртыуҙы сығара.
 
-## Verification
-- Release gate commit: `c6cc192ac3d83dadb0c80d04ea975ab1fd484113`
-  (`git rev-parse HEAD` immediately after the gate succeeded).
-- `ci/check_sorafs_cli_release.sh` output: archived in
-  `artifacts/sorafs_cli_release/v0.1.0/ci-check.log` (attached to the release bundle).
-- Manifest bundle digest: `SHA256 084fa37ebcc4e8c0c4822959d6e93cd63e524bb7abf4a184c87812ce665969be`
+## Тикшереү
+- Ҡапҡаларҙы сығарыу: I18NI000000021X
+  (`git rev-parse HEAD` ҡапҡаһы уңышлы үткәндән һуң шунда уҡ).
+- I18NI000000023X сығыш: 2012 йылда архивланған.
+  `artifacts/sorafs_cli_release/v0.1.0/ci-check.log` (релиз өйөмөнә беркетелгән).
+- Манифест өйөмдәре һеңдереүҙең: I18NI000000025X
   (`fixtures/sorafs_manifest/ci_sample/manifest.bundle.json`).
-- Proof summary digest: `SHA256 51f4c8d9b28b370c828998d9b5c87b9450d6c50ac6499b817ac2e8357246a223`
+- Дәлилдәр резюмеһы: I18NI000000027X
   (`fixtures/sorafs_manifest/ci_sample/proof.json`).
-- Manifest digest (for downstream attestation cross-checks):
-  `BLAKE3 0d4b88b8f95e0cff5a8ea7f9baac91913f32768fc514ce69c6d91636d552559d`
-  (from `manifest.sign.summary.json`).
+- Манифест disist (аҫҡы аттестация өсөн кросс-тикшерелгән):
+  `BLAKE3 0d4b88b8f95e0cff5a8ea7f9baac91913f32768fc514ce69c6d91636d552559d` X.
+  (I18NI0000000300X-тан).
 
-## Notes for Operators
-- The Torii gateway now enforces the `X-Sora-Chunk-Range` capability header. Update
-  allowlists so clients presenting the new stream token scopes are admitted; older tokens
-  without the range claim will be throttled.
-- `scripts/sorafs_gateway_self_cert.sh` integrates manifest verification. When running
-  the self-cert harness, supply the freshly generated manifest bundle so the wrapper can
-  fail fast on signature drift.
-- Telemetry dashboards should ingest the new scoreboard export (`scoreboard.json`) to
-  reconcile provider eligibility, weight assignments, and refusal reasons.
-- Archive the four canonical summaries with every rollout:
-  `manifest.bundle.json`, `manifest.sig`, `manifest.sign.summary.json`,
-  `manifest.verify.summary.json`. Governance tickets reference these exact files during
-  approval.
+## Операторҙар өсөн иҫкәрмәләр
+- Torii шлюз хәҙер I18NI0000000031X мөмкинлектәре башын үтәй. Яңыртыу
+  рөхсәт исемлектәре, шулай клиенттар тәҡдим итеү яңы ағым токен даирәләр ҡабул ителә; иҫке жетондар
+  диапазоны дәғүәһе булмаһа, дроссель буласаҡ.
+- `scripts/sorafs_gateway_self_cert.sh` асыҡ тикшерелеүҙе берләштерә. Йүгергәндә
+  үҙ-үҙен сертификат жгут, тәьмин итеү яңы генерацияланған манифест өйөмө шулай урау мөмкин
+  ҡултамға дрейфында тиҙ уңышһыҙлыҡҡа осрай.
+- Телеметрия приборҙар таҡталары яңы табло экспортын (I18NI000000033X) 2012 йылға тиклем ҡосаҡларға тейеш.
+  яраштырыу провайдер хоҡуғы, ауырлыҡ йөкләмәләр, һәм баш тартыу сәбәптәре.
+- Һәр йәйелдерелгән дүрт канон резюмеһын архивлау:
+  I18NI000000034X, I18NI000000035X, I18NI000000036X,
+  `manifest.verify.summary.json`. Идара итеү билеттары был теүәл файлдарҙы 2012 йыл ваҡытында һылтанма яһай.
+  хуплау.
 
-## Acknowledgements
-- Storage Team — end-to-end CLI consolidation, chunk-plan renderer, and scoreboard
-  telemetry plumbing.
-- Tooling WG — release pipeline (`ci/check_sorafs_cli_release.sh`,
-  `scripts/release_sorafs_cli.sh`) and deterministic fixture bundle.
-- Gateway Operations — capability gating, stream-token policy review, and updated
-  self-certification playbooks.
+## Рәхмәт .
+- Һаҡлау командаһы — CLI консолидацияһы, өлөш-план рендерлауы һәм табло
+  телеметрия сантехникаһы.
+- Ҡораллы WG — сығарыу торбаһы (I18NI000000038X,
+  `scripts/release_sorafs_cli.sh`) һәм детерминистик ҡоролма өйөмө.
+- Ҡапҡа операциялары — мөмкинлектәр ҡапҡаһы, ағым-токен сәйәсәте тикшерелгән, һәм яңыртылған
+  үҙ-үҙен сертификациялау плейбуктары.

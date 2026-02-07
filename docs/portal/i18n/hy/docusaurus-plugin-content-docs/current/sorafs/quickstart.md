@@ -4,44 +4,46 @@ direction: ltr
 source: docs/portal/docs/sorafs/quickstart.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# SoraFS Quickstart
+# SoraFS Արագ մեկնարկ
 
-This hands-on guide walks through the deterministic SF-1 chunker profile,
-manifest signing, and multi-provider fetch flow that underpin the SoraFS
-storage pipeline. Pair it with the [manifest pipeline deep dive](manifest-pipeline.md)
-for design notes and CLI flag reference material.
+Այս գործնական ուղեցույցը անցնում է որոշիչ SF-1 chunker պրոֆիլի միջով,
+մանիֆեստի ստորագրում և բազմաթիվ մատակարարների առբերման հոսք, որը հիմնված է SoraFS-ի վրա
+պահեստային խողովակաշար: Զուգակցել այն [մանիֆեստ խողովակաշարի խորը սուզման] հետ (manifest-pipeline.md)
+դիզայնի նշումների և CLI դրոշի տեղեկատու նյութի համար:
 
-## Prerequisites
+## Նախադրյալներ
 
-- Rust toolchain (`rustup update`), workspace cloned locally.
-- Optional: [OpenSSL-generated Ed25519 keypair](https://github.com/hyperledger-iroha/iroha/tree/master/defaults/dev-keys#readme)
-  for signing manifests.
-- Optional: Node.js ≥ 18 if you plan to preview the Docusaurus portal.
+- Rust գործիքների շղթա (`rustup update`), տեղական կլոնավորված աշխատանքային տարածք:
+- Լրացուցիչ՝ [OpenSSL-ի կողմից ստեղծված Ed25519 ստեղնային զույգ] (https://github.com/hyperledger-iroha/iroha/tree/master/defaults/dev-keys#readme)
+  մանիֆեստների ստորագրման համար։
+- Լրացուցիչ. Node.js ≥ 18, եթե նախատեսում եք նախադիտել Docusaurus պորտալը:
 
-Set `export RUST_LOG=info` while experimenting to surface helpful CLI messages.
+Փորձարկելիս սահմանեք `export RUST_LOG=info` օգտակար CLI հաղորդագրությունները:
 
-## 1. Refresh the deterministic fixtures
+## 1. Թարմացրեք դետերմինիստական հարմարանքները
 
-Regenerate the canonical SF-1 chunking vectors. The command also emits signed
-manifest envelopes when `--signing-key` is supplied; use `--allow-unsigned`
-during local development only.
+Վերականգնեք կանոնական SF-1 բեկորային վեկտորները: Հրամանատարությունը թողարկում է նաև ստորագրված
+մանիֆեստի ծրարներ, երբ մատակարարվում է `--signing-key`; օգտագործել `--allow-unsigned`
+միայն տեղական զարգացման ընթացքում:
 
 ```bash
 cargo run -p sorafs_chunker --bin export_vectors -- --allow-unsigned
 ```
 
-Outputs:
+Արդյունքներ:
 
 - `fixtures/sorafs_chunker/sf1_profile_v1.{json,rs,ts,go}`
 - `fixtures/sorafs_chunker/manifest_blake3.json`
-- `fixtures/sorafs_chunker/manifest_signatures.json` (if signed)
+- `fixtures/sorafs_chunker/manifest_signatures.json` (եթե ստորագրված է)
 - `fuzz/sorafs_chunker/sf1_profile_v1_{input,backpressure}.json`
 
-## 2. Chunk a payload and inspect the plan
+## 2. Կտրեք օգտակար բեռը և ստուգեք պլանը
 
-Use `sorafs_chunker` to chunk an arbitrary file or archive:
+Օգտագործեք `sorafs_chunker` կամայական ֆայլը կամ արխիվը բաժանելու համար.
 
 ```bash
 echo "SoraFS deterministic chunking" > /tmp/docs.txt
@@ -49,23 +51,23 @@ cargo run -p sorafs_chunker --bin sorafs-chunk-dump -- /tmp/docs.txt \
   > /tmp/docs.chunk-plan.json
 ```
 
-Key fields:
+Հիմնական դաշտերը.
 
-- `profile` / `break_mask` – confirms the `sorafs.sf1@1.0.0` parameters.
-- `chunks[]` – ordered offsets, lengths, and chunk BLAKE3 digests.
+- `profile` / `break_mask` – հաստատում է `sorafs.sf1@1.0.0` պարամետրերը:
+- `chunks[]` – պատվիրված հաշվանցումներ, երկարություններ և BLAKE3-ի մասնաբաժիններ:
 
-For larger fixtures, run the proptest-backed regression to ensure streaming and
-batch chunking stay in sync:
+Ավելի մեծ հարմարանքների համար գործարկեք ռեգրեսիա՝ հիմնված պրոտեստի վրա՝ ապահովելու հոսքը և
+խմբաքանակի մասնատումը համաժամեցված է.
 
 ```bash
 cargo test -p sorafs_chunker streaming_backpressure_fuzz_matches_batch
 ```
 
-## 3. Build and sign a manifest
+## 3. Կառուցեք և ստորագրեք մանիֆեստ
 
-Wrap the chunk plan, aliases, and governance signatures into a manifest using
-`sorafs-manifest-stub`. The command below showcases a single-file payload; pass
-a directory path to package a tree (the CLI walks it lexicographically).
+Հատված պլանը, անունները և կառավարման ստորագրությունները փաթեթավորեք մանիֆեստի մեջ՝ օգտագործելով
+`sorafs-manifest-stub`. Ստորև բերված հրամանը ցուցադրում է մեկ ֆայլի ծանրաբեռնվածություն. անցնել
+գրացուցակի ուղի` ծառ փաթեթավորելու համար (CLI-ն քայլում է այն բառարանագրորեն):
 
 ```bash
 cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
@@ -77,21 +79,21 @@ cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
   --allow-unsigned
 ```
 
-Review `/tmp/docs.report.json` for:
+Վերանայեք `/tmp/docs.report.json`-ը հետևյալի համար.
 
-- `chunking.chunk_digest_sha3_256` – SHA3 digest of offsets/lengths, matches the
-  chunker fixtures.
-- `manifest.manifest_blake3` – BLAKE3 digest signed in the manifest envelope.
-- `chunk_fetch_specs[]` – ordered fetch instructions for orchestrators.
+- `chunking.chunk_digest_sha3_256` – SHA3 շեղումների/երկարությունների ամփոփում, համապատասխանում է
+  chunker հարմարանքներ.
+- `manifest.manifest_blake3` – BLAKE3 digest ստորագրված մանիֆեստի ծրարում:
+- `chunk_fetch_specs[]` – պատվիրել են բեռնելու հրահանգներ նվագախմբի համար:
 
-When ready to supply real signatures, add `--signing-key` and `--signer`
-arguments. The command verifies every Ed25519 signature before writing the
-envelope.
+Երբ պատրաստ եք իրական ստորագրություններ տրամադրել, ավելացրեք `--signing-key` և `--signer`
+փաստարկներ. Հրամանը ստուգում է յուրաքանչյուր Ed25519 ստորագրությունը՝ նախքան այն գրելը
+ծրար.
 
-## 4. Simulate multi-provider retrieval
+## 4. Մոդելավորել բազմապրովայդերների որոնումը
 
-Use the developer fetch CLI to replay the chunk plan against one or more
-providers. This is ideal for CI smoke tests and orchestrator prototyping.
+Օգտագործեք ծրագրավորողի առբերման CLI-ն՝ մեկ կամ մի քանիսի հետ միավորի պլանը վերարտադրելու համար
+մատակարարներ. Սա իդեալական է CI ծխի թեստերի և նվագախմբի նախատիպերի համար:
 
 ```bash
 cargo run -p sorafs_car --bin sorafs_fetch -- \
@@ -101,27 +103,27 @@ cargo run -p sorafs_car --bin sorafs_fetch -- \
   --json-out=/tmp/docs.fetch-report.json
 ```
 
-Assertions:
+Պնդումներ.
 
-- `payload_digest_hex` must match the manifest report.
-- `provider_reports[]` surfaces success/failure counts per provider.
-- Non-zero `chunk_retry_total` highlights back-pressure adjustments.
-- Pass `--max-peers=<n>` to limit the number of providers scheduled for a run
-  and keep CI simulations focused on the primary candidates.
-- `--retry-budget=<n>` overrides the default per-chunk retry count (3) so you
-  can surface orchestrator regressions faster when injecting failures.
+- `payload_digest_hex`-ը պետք է համապատասխանի մանիֆեստի հաշվետվությանը:
+- `provider_reports[]` մակերեսների հաջողություն/ձախողում հաշվարկվում է յուրաքանչյուր մատակարարի համար:
+- Ոչ զրոյական `chunk_retry_total`-ը կարևորում է հետևի ճնշման ճշգրտումները:
+- Անցեք `--max-peers=<n>`՝ սահմանափակելու համար նախատեսված պրովայդերների թիվը
+  և պահել CI սիմուլյացիաները՝ կենտրոնացած առաջնային թեկնածուների վրա:
+- `--retry-budget=<n>`-ը անտեսում է յուրաքանչյուր կտորի համար կրկնվող փորձի կանխադրված թիվը (3), որպեսզի դուք
+  կարող է ավելի արագ երևալ նվագախմբի ռեգրեսիաները ձախողումներ ներարկելիս:
 
-Add `--expect-payload-digest=<hex>` and `--expect-payload-len=<bytes>` to fail
-fast when the reconstructed payload deviates from the manifest.
+Չհաջողվելու համար ավելացրեք `--expect-payload-digest=<hex>` և `--expect-payload-len=<bytes>`
+արագ, երբ վերակառուցված օգտակար բեռը շեղվում է մանիֆեստից:
 
-## 5. Next steps
+## 5. Հաջորդ քայլերը
 
-- **Governance integration** – pipe the manifest digest and
-  `manifest_signatures.json` into the council workflow so the Pin Registry can
-  advertise availability.
-- **Registry negotiation** – consult [`sorafs/chunker_registry.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/chunker_registry.md)
-  before registering new profiles. Automation should prefer canonical handles
-  (`namespace.name@semver`) over numeric IDs.
-- **CI automation** – add the commands above to release pipelines so docs,
-  fixtures, and artifacts publish deterministic manifests alongside signed
-  metadata.
+- **Կառավարման ինտեգրում** – շարադրել մանիֆեստը և
+  `manifest_signatures.json` մուտքագրեք խորհրդի աշխատանքային հոսքը, որպեսզի Pin Registry-ը կարողանա
+  գովազդել մատչելիությունը:
+- **Ռեգիստրի բանակցություններ** – խորհրդակցեք [`sorafs/chunker_registry.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/chunker_registry.md)
+  նախքան նոր պրոֆիլներ գրանցելը: Ավտոմատացումը պետք է նախընտրի կանոնական բռնակներ
+  (`namespace.name@semver`) թվային ID-ների նկատմամբ:
+- **CI ավտոմատացում** – ավելացրեք վերը նշված հրամանները՝ խողովակաշարերը թողարկելու համար, որպեսզի փաստաթղթերը,
+  հարմարանքները և արտեֆակտները ստորագրված կողքին հրապարակում են դետերմինիստական մանիֆեստներ
+  մետատվյալներ.

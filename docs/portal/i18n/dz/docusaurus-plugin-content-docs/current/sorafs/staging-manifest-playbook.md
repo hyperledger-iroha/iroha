@@ -8,82 +8,65 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: Staging Manifest Playbook
 sidebar_label: Staging Manifest Playbook
 description: Checklist for enabling the Parliament-ratified chunker profile on staging Torii deployments.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
+:::དྲན་ཐོའི་འབྱུང་ཁུངས།
 :::
 
-## Overview
+## སྤྱི་མཐོང་།
 
-This playbook walks through enabling the Parliament-ratified chunker profile on a staging Torii deployment before promoting the change to production. It assumes the SoraFS governance charter has been ratified and the canonical fixtures are available in the repository.
+འདི་ཡང་ བཟོ་བསྐྲུན་གྱི་བསྒྱུར་བཅོས་འདི་ ཁྱབ་སྤེལ་མ་འབད་བའི་ཧེ་མ་ I18NT0000004X བཀོལ་སྤྱོད་འབད་དེ་ སྤྱི་ཚོགས་ཀྱི་ཆ་འཇོག་འབད་དེ་ཡོད་པའི་ ཆ་ཤས་གསལ་སྡུད་འདི་ ལྕོགས་ཅན་བཟོ་སྟེ་ རྩེད་དེབ་འདི་གིས་ འགྱོཝ་ཨིན། འདི་གིས་ I18NT0000002X གཞུང་སྐྱོང་བཅའ་ཁྲིམས་འདི་ ཆ་འཇོག་འབད་ཡོདཔ་དང་ མཛོད་ཁང་ནང་ལུ་ ཁྲིམས་མཐུན་གྱི་ བརྟན་ཏོག་ཏོ་ཚུ་ འཐོབ་ཚུགསཔ་ཨིན།
 
-## 1. Prerequisites
+## 1. སྔོན་འགྲོ།
 
-1. Sync the canonical fixtures and signatures:
+1. ཚད་ལྡན་གྱི་སྒྲིག་བཀོད་དང་མིང་རྟགས་ཚུ་མཉམ་འབྱུང་འབད།
 
-   ```bash
-   cargo xtask sorafs-fetch-fixture \
-     --signatures https://nexus.example/api/sorafs/manifest_signatures.json \
-     --out fixtures/sorafs_chunker
-   ci/check_sorafs_fixtures.sh
-   ```
+   I18NF0000008X
 
-2. Prepare the admission envelope directory that Torii will read at startup (example path): `/var/lib/iroha/admission/sorafs`.
-3. Ensure the Torii config enables the discovery cache and admission enforcement:
+༢ Torii གིས་ འགོ་བཙུགས་པའི་སྐབས་ (དཔེ་ཚད་ཀྱི་འགྲུལ་ལམ་): `/var/lib/iroha/admission/sorafs`.
+3. I18NT000000006X རིམ་སྒྲིག་འདི་གིས་ གསར་ཐོབ་ཀྱི་འདྲ་མཛོད་དང་ འཛུལ་ཞུགས་བཀག་དམ་ཚུ་ ལྕོགས་ཅན་བཟོཝ་ཨིན།
 
-   ```toml
-   [torii.sorafs.discovery]
-   discovery_enabled = true
-   known_capabilities = ["torii_gateway", "chunk_range_fetch", "vendor_reserved"]
+   I18NF0000009X
 
-   [torii.sorafs.discovery.admission]
-   envelopes_dir = "/var/lib/iroha/admission/sorafs"
+## 2. འཛུལ་ཞུགས་ཡིག་ཆ།
 
-   [torii.sorafs.storage]
-   enabled = true
-
-   [torii.sorafs.gateway]
-   enforce_admission = true
-   enforce_capabilities = true
-   ```
-
-## 2. Publish Admission Envelopes
-
-1. Copy the approved provider admission envelopes into the directory referenced by `torii.sorafs.discovery.admission.envelopes_dir`:
+༡ ཆ་འཇོག་འབད་ཡོད་པའི་ བྱིན་མི་འཛུལ་ཞུགས་ཡིག་ཆ་ཚུ་ `torii.sorafs.discovery.admission.envelopes_dir` གིས་ རྒྱབ་རྟེན་འབད་མི་ སྣོད་ཐོ་ནང་ འདྲ་བཤུས་རྐྱབས།
 
    ```bash
    install -m 0644 fixtures/sorafs_manifest/provider_admission/*.json \
      /var/lib/iroha/admission/sorafs/
    ```
 
-2. Restart Torii (or send a SIGHUP if you wrapped the loader with on-the-fly reload).
-3. Tail the logs for admission messages:
+2. ཁྱོད་ཀྱིས་ མངོན་གསལ་འབད་མི་འདི་ འཕུར་ལྡིང་ནང་ལུ་ བསྐྱར་མངོན་གསལ་འབད་དེ་ བཀབ་བཞག་པ་ཅིན་ ཨེསི་ཨའི་ཇི་ཨེཆ་ཨཔ་ཅིག་ སླར་གཏང་འབད།)
+༣ འཛུལ་ཞུགས་འཕྲིན་དོན་ཚུ་གི་དོན་ལུ་ དྲན་ཐོ་ཚུ་ མཇུག་བསྡུ།
 
    ```bash
    torii | grep "loaded provider admission envelope"
    ```
 
-## 3. Validate Discovery Propagation
+## 3. བདེན་པའི་གསལ་བསྒྲགས་དར་ཁྱབ་
 
-1. Post the signed provider advert payload (Norito bytes) produced by your
-   provider pipeline:
+1. མཚན་རྟགས་བཀོད་པའི་བརྡ་ཁྱབ་སྤྲོད་ལེན་པ་ (I18NT0000001X bytes) གིས་ཁྱོད་ཀྱིས་བཏོན་ཡོད།
+   བྱིན་མི་ ཆུ་མཛོད་ཀྱི་ :
 
    ```bash
    curl -sS -X POST --data-binary @provider_advert.to \
      http://staging-torii:8080/v1/sorafs/provider/advert
    ```
 
-2. Query the discovery endpoint and confirm the advert appears with canonical aliases:
+2. གསར་རྙེད་ཀྱི་མཇུག་སྣོད་འདི་འདྲི་དཔྱད་འབད་དེ་ ཁྱབ་བསྒྲགས་འདི་ ཀེ་ནོ་ནིག་མིང་གཞན་ཚུ་དང་གཅིག་ཁར་ འབྱུངམ་ཨིན་ ངེས་གཏན་བཟོ།
 
    ```bash
    curl -sS http://staging-torii:8080/v1/sorafs/providers | jq .
    ```
 
-   Ensure `profile_aliases` includes `"sorafs.sf1@1.0.0"` as the first entry.
+   I18NI000000018X ནང་ འཛུལ་ཞུགས་འགོ་དང་པ་སྦེ་ `"sorafs.sf1@1.0.0"` ཚུ་ཚུདཔ་ཨིན།
 
-## 4. Exercise Manifest & Plan Endpoints
+## 4. ལུས་སྦྱོང་མངོན་གསལ་དང་འཆར་གཞི་མཇུག་བསྡུ།
 
-1. Fetch the manifest metadata (requires a stream token if admission is enforced):
+༡ གསལ་སྟོན་མེ་ཊ་ཌེ་ཊ་ལུ་ལེན་ (འཛུལ་ཞུགས་བསྟར་སྤྱོད་འབད་བ་ཅིན་ རྒྱུན་ལམ་བརྡ་མཚོན་དགོཔ་ཨིན་):
 
    ```bash
    sorafs-fetch \
@@ -94,25 +77,25 @@ This playbook walks through enabling the Parliament-ratified chunker profile on 
      --json-out=reports/staging_manifest.json
    ```
 
-2. Inspect the JSON output and verify:
-   - `chunk_profile_handle` is `sorafs.sf1@1.0.0`.
-   - `manifest_digest_hex` matches the determinism report.
-   - `chunk_digests_blake3` align with the regenerated fixtures.
+2. JSON ཐོན་འབྲས་འདི་བརྟག་དཔྱད་འབད་དེ་ བདེན་དཔྱད་འབད།
+   - `chunk_profile_handle` ནི་ `sorafs.sf1@1.0.0` ཡིན།
+   - I18NI000000022X གིས་ གཏན་འབེབས་སྙན་ཞུ་དང་མཐུན་སྒྲིག་འབདཝ་ཨིན།
+   - I18NI000000023X བསྐྱར་བཟོ་འབད་ཡོད་པའི་སྒྲིག་བཀོད་ཚུ་དང་མཐུན་སྒྲིག་འབདཝ་ཨིན།
 
-## 5. Telemetry Checks
+## 5. བརྒྱུད་འཕྲིན་བརྟག་དཔྱད།
 
-- Confirm Prometheus exposes the new profile metrics:
+- I18NT000000000X གིས་གསལ་སྡུད་མེ་ཊིག་གསརཔ་ཚུ་ གསལ་སྟོན་འབདཝ་ཨིན།
 
   ```bash
   curl -sS http://staging-torii:8080/metrics | grep torii_sorafs_chunk_range_requests_total
   ```
 
-- Dashboards should show the staging provider under the expected alias and keep brownout counters at zero while the profile is active.
+- ཌེཤ་བོརཌི་ཚུ་གིས་ རེ་བ་བསྐྱེད་མི་ མིང་གཞན་གྱི་འོག་ལུ་ གནས་རིམ་བྱིན་མི་འདི་སྟོན་དགོཔ་དང་ གསལ་སྡུད་འདི་ཤུགས་ལྡན་སྦེ་ཡོད་པའི་སྐབས་ བཱརའོན་ཨའུཊི་གྱངས་ཁ་ཚུ་ ཀླད་ཀོར་ནང་བཞག་དགོ།
 
-## 6. Rollout Readiness
+## 6. འགྲེམས་སྒྲུབ།
 
-1. Capture a short report with the URLs, manifest ID, and telemetry snapshot.
-2. Share the report in the Nexus rollout channel alongside the planned production activation window.
-3. Proceed to the production checklist (Section 4 in `chunker_registry_rollout_checklist.md`) once stakeholders sign off.
+༡ ཡུ་ཨར་ཨེལ་ཚུ་དང་གཅིག་ཁར་ སྙན་ཞུ་ཐུང་ཀུ་ཅིག་ བཟུང་ཞིནམ་ལས་ ཨའི་ཌི་ གསལ་སྟོན་འབད་ནི་ དེ་ལས་ ཊེ་ལི་མི་ཊི་པར་ཚུ་ པར་ལེན་འབད།
+2. འཆར་གཞིའི་ཐོན་སྐྱེད་ཤུགས་ལྡན་སྒོ་སྒྲིག་མཉམ་དུ་ Nexus བསྐོར་ཐེངས་ནང་སྙན་ཞུ་འདི་བགོ་བཤའ་རྐྱབས།
+༣ ཐོན་སྐྱེད་བརྟག་ཞིབ་ཐོ་ཡིག་ནང་ འགྱོ། (`chunker_registry_rollout_checklist.md` ནང་ དོན་ཚན་༤)
 
-Keeping this playbook updated ensures every chunker/admission rollout follows the same deterministic steps across staging and production.
+རྩེད་དེབ་འདི་དུས་མཐུན་བཟོ་སྟེ་བཞག་མི་འདི་གིས་ ཆ་ཤས་ག་ར་/འཛུལ་ཞུགས་འགོ་བཙུགས་པའི་སྐབས་ལུ་ གོ་རིམ་དང་ཐོན་སྐྱེད་ནང་ལུ་ གོ་རིམ་ཅོག་འཐདཔ་ཚུ་ ངེས་གཏན་བཟོཝ་ཨིན།

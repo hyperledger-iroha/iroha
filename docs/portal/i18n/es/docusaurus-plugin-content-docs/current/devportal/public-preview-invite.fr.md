@@ -4,69 +4,69 @@ direction: ltr
 source: docs/portal/docs/devportal/public-preview-invite.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Playbook d'invitation preview public
+# Vista previa pública del libro de jugadas de invitación
 
-## Objectifs du programme
+## Objetivos del programa
 
-Ce playbook explique comment annoncer et faire tourner le preview public une fois que le
-workflow d'onboarding des reviewers est actif. Il garde la roadmap DOCS-SORA honnete en
-s'assurant que chaque invitation part avec des artefacts verifiables, des consignes de securite
+Ce playbook comentario explique annoncer et faire tourner le previa public une fois que le
+El flujo de trabajo de incorporación de revisores está activo. Guarde la hoja de ruta DOCS-SORA honnete es
+s'assurant que cada invitación parte avec des artefactos verificables, des consignas de seguridad
 et un chemin clair pour le feedback.
 
-- **Audience:** liste curee de membres de la communaute, partners et maintainers qui ont
-  signe la politique d'usage acceptable du preview.
-- **Plafonds:** taille de vague par defaut <= 25 reviewers, fenetre d'acces de 14 jours,
-  reponse aux incidents sous 24 h.
+- **Audiencia:** liste curae de membres de la communaute, partners et mantenedores qui ont
+  Firme la política de uso aceptable de la vista previa.
+- **Plafones:** taille de vague par defaut <= 25 reseñas, acceso de 14 días,
+  respuesta aux incidencias sous 24 h.
 
-## Checklist de gate de lancement
+## Lista de verificación de puerta de lanzamiento
 
-Terminez ces taches avant d'envoyer une invitation:
+Terminez ces taches avant d'envoyer una invitación:
 
-1. Derniers artefacts de preview charges en CI (`docs-portal-preview`,
-   manifest de checksum, descriptor, bundle SoraFS).
-2. `npm run --prefix docs/portal serve` (gate par checksum) teste sur le meme tag.
-3. Tickets d'onboarding des reviewers approuves et lies a la vague d'invitation.
-4. Docs securite, observabilite et incidents valides
+1. Derniers artefactos de cargos previos en CI (`docs-portal-preview`,
+   manifiesto de suma de comprobación, descriptor, paquete SoraFS).
+2. `npm run --prefix docs/portal serve` (puerta por suma de comprobación) prueba la etiqueta meme.
+3. Los boletos de incorporación de los revisores aprueban y se encuentran a la vaga invitación.
+4. Documentos de seguridad, observabilité e incidentes válidos
    ([`security-hardening`](./security-hardening.md),
    [`observability`](./observability.md),
    [`incident-runbooks`](./incident-runbooks.md)).
-5. Formulaire de feedback ou template d'issue prepare (inclure des champs de severite,
-   etapes de reproduction, screenshots et info d'environnement).
-6. Copy d'annonce revise par Docs/DevRel + Governance.
+5. Formulario de comentarios o plantilla de preparación de emisión (incluye los campos de gravedad,
+   etapas de reproducción, capturas de pantalla e información medioambiental).
+6. Copia del anuncio de revisión de Docs/DevRel + Governance.## Paquete de invitación
 
-## Paquet d'invitation
+Cada invitación incluye:
 
-Chaque invitation doit inclure:
-
-1. **Artefacts verifies** - Fournir les liens vers le manifest/plan SoraFS ou les artefacts
-   GitHub, plus le manifest de checksum et le descriptor. Referencer explicitement la commande
-   de verification pour que les reviewers puissent l'executer avant de lancer le site.
-2. **Instructions de serve** - Inclure la commande preview gatee par checksum:
+1. **Artefactos verifica** - Fournir les gravámenes vers le manifest/plan SoraFS ou les artefactos
+   GitHub, además del manifiesto de suma de comprobación y el descriptor. Referencia explícita a la orden
+   de verificación para que los revisores puedan ejecutar el ejecutor antes de iniciar el sitio.
+2. **Instrucciones de servicio** - Incluir la puerta de vista previa del comando por suma de verificación:
 
    ```bash
    DOCS_RELEASE_TAG=preview-<stamp> npm run --prefix docs/portal serve
    ```
 
-3. **Rappels securite** - Indiquer que les tokens expirent automatiquement, que les liens
-   ne doivent pas etre partages, et que les incidents doivent etre signales immediatement.
-4. **Canal de feedback** - Lier la template/formulaire et clarifier les attentes de temps de reponse.
-5. **Dates du programme** - Fournir les dates de debut/fin, office hours ou syncs, et la prochaine
-   fenetre de refresh.
+3. **Rappels securite** - Indica que los tokens expiran automáticamente, que los gravámenes
+   ne doivent pas etre partages, et que les incidents doivent etre signales inmediatamente.
+4. **Canal de retroalimentación** - Lier the template/formulaire and clarifier les attentes de temps de reponse.
+5. **Dates du program** - Seleccione las fechas de debut/fin, horarios de oficina o sincronizaciones y la cadena
+   ventana de refresco.
 
-L'email exemple dans
+El ejemplo de correo electrónico en
 [`docs/examples/docs_preview_invite_template.md`](../../../examples/docs_preview_invite_template.md)
-couvre ces exigences. Mettre a jour les placeholders (dates, URLs, contacts)
-avant l'envoi.
+cubra estas exigencias. Mettre a jour les placeholders (fechas, URL, contactos)
+antes del envío.
 
-## Exposer l'hote preview
+## Vista previa del hotel Exposer
 
-Ne promouvoir l'hote preview qu'une fois l'onboarding termine et le ticket de changement approuve.
-Voir le [guide d'exposition de l'hote preview](./preview-host-exposure.md) pour les etapes end-to-end
-de build/publish/verify utilisees dans cette section.
+Ne promouvoir l'hote vista previa qu'une fois l'onboarding termine et le ticket de changement approuve.
+Vea la [guía de exposición del hotel vista previa](./preview-host-exposure.md) para las etapas de un extremo a otro
+Los usuarios de compilación/publicación/verificación en esta sección.
 
-1. **Build et packaging:** Marquer le release tag et produire des artefacts deterministes.
+1. **Construcción y embalaje:** Marque la etiqueta de liberación y produzca los artefactos determinados.
 
    ```bash
    cd docs/portal
@@ -83,19 +83,17 @@ de build/publish/verify utilisees dans cette section.
      --manifest artifacts/checksums.sha256 \
      --archive artifacts/sorafs/portal.tar.gz \
      --out artifacts/sorafs/preview-descriptor.json
-   ```
+   ```El script de pin ecrit `portal.car`, `portal.manifest.*`, `portal.pin.proposal.json`,
+   y `portal.dns-cutover.json` en `artifacts/sorafs/`. Joindre ces fichiers a la vague
+   Invitación para que cada revisor pueda verificar los memes bits.
 
-   Le script de pin ecrit `portal.car`, `portal.manifest.*`, `portal.pin.proposal.json`,
-   et `portal.dns-cutover.json` sous `artifacts/sorafs/`. Joindre ces fichiers a la vague
-   d'invitation afin que chaque reviewer puisse verifier les memes bits.
+2. **Vista previa del alias del editor:** Relancer el comando sin `--skip-submit`
+   (fournir `TORII_URL`, `AUTHORITY`, `PRIVATE_KEY[_FILE]`, y la preuve d'alias emise
+   par la gobernancia). El script se encuentra en el manifiesto `docs-preview.sora` y emet
+   `portal.manifest.submit.summary.json` plus `portal.pin.report.json` para el paquete de preuves.
 
-2. **Publier l'alias preview:** Relancer la commande sans `--skip-submit`
-   (fournir `TORII_URL`, `AUTHORITY`, `PRIVATE_KEY[_FILE]`, et la preuve d'alias emise
-   par la gouvernance). Le script lie le manifest a `docs-preview.sora` et emet
-   `portal.manifest.submit.summary.json` plus `portal.pin.report.json` pour le bundle de preuves.
-
-3. **Prober le deploiement:** Confirmer que l'alias se resout et que le checksum correspond au tag
-   avant d'envoyer les invitations.
+3. **Probar la implementación:** Confirme que el alias tiene resultados y que la suma de comprobación corresponde a la etiqueta
+   avant d'envoyer les invitaciones.
 
    ```bash
    npm run probe:portal -- \
@@ -103,26 +101,24 @@ de build/publish/verify utilisees dans cette section.
      --expect-release="$DOCS_RELEASE_TAG"
    ```
 
-   Garder `npm run serve` (`scripts/serve-verified-preview.mjs`) sous la main comme fallback pour
-   que les reviewers puissent lancer une copie locale si le edge preview flanche.
+   Garder `npm run serve` (`scripts/serve-verified-preview.mjs`) sous la main como respaldo para
+   Para que los revisores puedan realizar una copia local si la vista previa del borde está abierta.
 
-## Timeline de communication
-
-| Jour | Action | Owner |
+## Cronograma de comunicación| Diario | Acción | Propietario |
 | --- | --- | --- |
-| D-3 | Finaliser la copy d'invitation, rafraichir les artefacts, dry-run de verification | Docs/DevRel |
-| D-2 | Sign-off gouvernance + ticket de changement | Docs/DevRel + Governance |
-| D-1 | Envoyer les invitations via le template, mettre a jour le tracker avec la liste des destinataires | Docs/DevRel |
-| D | Kickoff call / office hours, monitorer les dashboards de telemetrie | Docs/DevRel + On-call |
-| D+7 | Digest de feedback a mi-vague, triage des issues bloquantes | Docs/DevRel |
-| D+14 | Clore la vague, revoquer l'acces temporaire, publier un resume dans `status.md` | Docs/DevRel |
+| D-3 | Finalizar la copia de invitación, sacar los artefactos, realizar un simulacro de verificación | Documentos/DevRel |
+| D-2 | Gobernanza de aprobación + cambio de ticket | Documentos/DevRel + Gobernanza |
+| D-1 | Envíe las invitaciones a través de la plantilla, realice un seguimiento diario con la lista de destinos | Documentos/DevRel |
+| D | Llamada inicial/horario de oficina, monitor de paneles de telemetría | Documentos/DevRel + De guardia |
+| D+7 | Digest de feedback a mi-vague, triage des issues bloquantes | Documentos/DevRel |
+| D+14 | Clore la vague, revoquer l'acces temporaire, publier un resume dans `status.md` | Documentos/DevRel |
 
 ## Suivi d'acces et telemetrie
 
-1. Enregistrer chaque destinataire, timestamp d'invitation et date de revocation avec le
-   preview feedback logger (voir
+1. Registrar cada destino, marca de tiempo de invitación y fecha de revocación con le
+   registrador de comentarios de vista previa (ver
    [`preview-feedback-log`](./preview-feedback-log)) afin que chaque vague partage la meme
-   trace de preuves:
+   rastro de preuves:
 
    ```bash
    # Ajouter un nouvel evenement d'invitation a artifacts/docs_portal_preview/feedback_log.json
@@ -133,41 +129,37 @@ de build/publish/verify utilisees dans cette section.
      --notes "wave-01 seed"
    ```
 
-   Les evenements pris en charge sont `invite-sent`, `acknowledged`,
-   `feedback-submitted`, `issue-opened`, et `access-revoked`. Le log se trouve a
-   `artifacts/docs_portal_preview/feedback_log.json` par defaut; joignez-le au ticket de
-   vague d'invitation avec les formulaires de consentement. Utilisez l'helper de summary
-   pour produire un roll-up auditable avant la note de cloture:
+   Los eventos cargados son `invite-sent`, `acknowledged`,
+   `feedback-submitted`, `issue-opened` y `access-revoked`. Le log se trouve a
+   `artifacts/docs_portal_preview/feedback_log.json` por defecto; joignez-le au ticket de
+   vague d'invitation avec les formulaires de consentement. Utilice el ayudante de resumen
+   Para producir un roll-up auditable antes de la nota de cierre:
 
    ```bash
    npm run --prefix docs/portal preview:summary -- --summary-json \
      > artifacts/docs_portal_preview/preview-20250303-summary.json
-   ```
-
-   Le summary JSON enumere les invitations par vague, les destinataires ouverts, les
-   compteurs de feedback et le timestamp du dernier evenement. L'helper repose sur
+   ```El resumen JSON enumera las invitaciones vagas, los destinos abiertos, los
+   contadores de retroalimentación y la marca de tiempo del último evento. El ayudante de reposo sobre
    [`scripts/preview-feedback-log.mjs`](../../scripts/preview-feedback-log.mjs),
-   donc le meme workflow peut tourner localement ou en CI. Utiliser le template de digest
-   dans [`docs/examples/docs_preview_feedback_digest.md`](../../../examples/docs_preview_feedback_digest.md)
-   lors de la publication du recap de la vague.
-2. Tagger les dashboards de telemetrie avec le `DOCS_RELEASE_TAG` utilise pour la vague afin que
+   Donc le meme flowflow puede girar localmente o en CI. Utilizar la plantilla de resumen
+   en [`docs/examples/docs_preview_feedback_digest.md`](../../../examples/docs_preview_feedback_digest.md)
+   Lors de la publicación du recap de la vague.
+2. Etiquetar los paneles de telemetría con el `DOCS_RELEASE_TAG` utilizar para la vaga después que
    les pics puissent etre correles aux cohortes d'invitation.
-3. Executer `npm run probe:portal -- --expect-release=<tag>` apres le deploy pour confirmer que
-   l'environnement preview annonce la bonne metadata de release.
+3. Ejecutor `npm run probe:portal -- --expect-release=<tag>` después del despliegue para confirmar que
+   La vista previa del entorno anuncia los buenos metadatos de lanzamiento.
 4. Consigner tout incident dans le template de runbook et le lier a la cohorte.
 
-## Feedback et cloture
-
-1. Agreger le feedback dans un doc partage ou un board d'issues. Tagger les items avec
-   `docs-preview/<wave>` pour que les owners du roadmap puissent les retrouver facilement.
-2. Utiliser la sortie summary du preview logger pour remplir le rapport de vague, puis
-   resumer la cohorte dans `status.md` (participants, principaux constats, fixes prevus) et
-   mettre a jour `roadmap.md` si le jalon DOCS-SORA a change.
+## Comentarios y cierre1. Agregue sus comentarios en un documento compartido o en una junta de temas. Etiquetar elementos con
+   `docs-preview/<wave>` para que los propietarios de la hoja de ruta puedan retroceder fácilmente.
+2. Utilice la salida de resumen del registrador de vista previa para completar la relación vaga, luego
+   resumer la cohorte dans `status.md` (participantes, principaux constats, fixes prevus) et
+   Mettre a jour `roadmap.md` si le jalon DOCS-SORA un cambio.
 3. Suivre les etapes d'offboarding depuis
    [`reviewer-onboarding`](./reviewer-onboarding.md): revoquer l'acces, archiver les demandes et
-   remercier les participants.
-4. Preparer la prochaine vague en rafraichissant les artefacts, en relancant les gates de checksum
-   et en mettant a jour le template d'invitation avec de nouvelles dates.
+   remercier les participantes.
+4. Preparer la prochaine vague en rafraichissant les artefactos, en relancant les gates de checksum
+   et en mettant a jour le template d'invitation avec de nouvelles date.
 
-Appliquer ce playbook de facon consistente garde le programme preview auditable et donne a
-Docs/DevRel un moyen repetable de faire grandir les invitations a mesure que le portail approche de GA.
+Aplicar este libro de jugadas de facon consistente garde le programa de vista previa auditable et donne a
+Docs/DevRel es un medio repetible de hacer grandes invitaciones a medida que el portal se acerca a GA.

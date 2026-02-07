@@ -8,108 +8,110 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: Security hardening & pen-test checklist
 sidebar_label: Security hardening
 description: Harden the developer portal before exposing the Try it sandbox outside the lab.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-## Overview
+## སྤྱི་མཐོང་།
 
-Roadmap item **DOCS-1b** requires OAuth device-code login, strong content
-security policies, and repeatable penetration tests before the preview portal
-can run on non-lab networks. This appendix explains the threat model, the
-controls implemented in the repo, and the go-live checklist that gate reviews
-must execute.
+ལམ་སྟོན་རྣམ་གྲངས་ **DOCS-1b** ལུ་ ཨོ་ཨའུ་ཐི་ཐབས་འཕྲུལ་ཨང་རྟགས་ནང་བསྐྱོད་དགོཔ་ ནང་དོན་ཤུགས་ཅན་དགོཔ་ཨིན།
+བདེ་འཇགས་སྲིད་བྱུས་དང་ སྔོན་ལྟའི་ དྲྭ་ཚིགས་ཀྱི་ཧེ་མར་ བསྐྱར་ལོག་འབད་བཏུབ་པའི་ འཛུལ་ཞུགས་བརྟག་དཔྱད་ཚུ།
+བརྟག་དཔྱད་མེན་པའི་ཡོངས་འབྲེལ་ཚུ་གུ་གཡོག་བཀོལ་ཚུགས། ཟུར་ཐོ་འདི་གིས་ ཉེན་ཁ་གི་དཔེ་ཚད་འདི་ འགྲེལ་བཤད་རྐྱབ་ཨིན།
+རི་པོ་ནང་ལག་ལེན་འཐབ་ཡོད་པའི་ཚད་འཛིན་ཚུ་དང་ གཱེཊི་གི་སྒོ་སྒྲིག་བསྐྱར་ཞིབ་འབད་མི་ གོ-གཡག་ཞིབ་དཔྱད་ཐོ་ཡིག་ཚུ།
+འབད་དགོ།
 
-- **Scope:** the Try it proxy, embedded Swagger/RapiDoc panels, and the custom
-  Try it console rendered by `docs/portal/src/components/TryItConsole.jsx`.
-- **Out-of-scope:** Torii itself (covered by Torii readiness reviews) and SoraFS
-  publishing (covered by DOCS-3/7).
+- **Scope:** དེ་པོརོག་སི་དང་ བཙུགས་ཡོད་པའི་ སཝ་གར་/རེ་པི་ཌོག་པེ་ནཱལ་ཚུ་དང་ ལུགས་སྲོལ་འདི་ འབད་རྩོལ་བསྐྱེད།
+  `docs/portal/src/components/TryItConsole.jsx` གིས་ བཀོད་སྒྲིག་འབད་མི་ མཐུད་མཚམས་ལུ་བལྟ།
+- **Out-of-གོ་སྐབས་:** Torii རང་གིས་རང་ (Torii གྲ་སྒྲིག་བསྐྱར་ཞིབ་) དང་ I18NT0000002X གིས་ བཀབ་ཡོདཔ་ཨིན།
+  དཔེ་སྐྲུན་ (DOCS-3/7 གིས་ཁ་བསྡམས།)
 
-## Threat model
+## ཐེབས་པ།
 
-| Asset | Risk | Mitigation |
+| རྒྱུ་དངོས་ | ཉེན་ཁ། མར་ཕབ་ |
 | --- | --- | --- |
-| Torii bearer tokens | Theft or reuse outside the docs sandbox | Device-code login (`DOCS_OAUTH_*`) mints short-lived tokens, the proxy redacts headers, and the console auto-expires cached credentials. |
-| Try it proxy | Abuse as an open relay or bypass of Torii rate limits | `scripts/tryit-proxy*.mjs` enforce origin allowlists, rate limiting, health probes, and explicit `X-TryIt-Auth` forwarding; no credentials are persisted. |
-| Portal runtime | Cross-site scripting or malicious embeds | `docusaurus.config.js` injects Content-Security-Policy, Trusted Types, and Permissions-Policy headers; inline scripts are restricted to the Docusaurus runtime. |
-| Observability data | Missing telemetry or tampering | `docs/portal/docs/devportal/observability.md` documents the probes/dashboards; `scripts/portal-probe.mjs` runs in CI before publishing. |
+| Torii བེ་རི་ཊོ་ཀེན་ཚུ་ | ཨརཝ་བརྐུ་ཡང་ན་ ལོག་ལག་ལེན་འཐབ། ཐབས་འཕྲུལ་ཨང་རྟགས་ནང་བསྐྱོད་ (`DOCS_OAUTH_*`) མིན་ཊི་ཚུ་ ཡུན་ཐུང་སྦེ་སྡོད་མི་ ཊོ་ཀེན་ཚུ་དང་ པོརོག་སི་ བཅོས་སྒྱུར་གྱི་མགོ་ཡིག་ཚུ་ དེ་ལས་ ཀོན་སོའི་རང་བཞིན་ ཡར་འཕེལ་ཚུ་ འདྲ་མཛོད་ཀྱི་ ཡིག་ཆ་ཚུ་ བཏོན་ཡོདཔ་ཨིན། |
+| ཚོད་བརྟག་འབད་ ངོ་ཚབ་ | ཁ་ཕྱེ་ཡོད་པའི་ རི་ལེ་ཡང་ན་ བཱའི་པ་སི་ I18NT0000007X ཚད་གཞི་ཚད་གཞི་ཚུ་ ལོག་སྤྱོད་འབད་ | I18NI00000000012X གིས་ འབྱུང་ཁུངས་ཐོ་ཡིག་དང་ ཚད་གཞི་ཚད་འཛིན་ གསོ་བའི་འཚོལ་ཞིབ་ དེ་ལས་ གསལ་ཏོག་ཏོ་སྦེ་ I18NI000000013X ཕོརཝརཌ་ཚུ་ འབད་བཅུགཔ་ཨིན། ངོ་རྟགས་ག་ནི་ཡང་ མ་བསྐྱལ། |
+| ཕོརཊ་ཊལ་ རན་ཊའིམ་ | ས་ཁོངས་བརྒལ་བའི་ཡིག་གཟུགས་ཡང་ན་ གནོདཔ་ཅན་གྱི་བཙུགས་ཆས་ཚུ་ | I18NI00000000014X ནང་དོན་ཉེན་སྲུང་-སྲིད་བྱུས། བློ་གཏད་ཅན་གྱི་དབྱེ་བ་ དེ་ལས་ ཆོག་ཐམ་-སྲིད་བྱུས་མགོ་ཡིག་ཚུ་ བཙུགས་དགོ། inline ཡིག་ཚུགས་ཚུ་ Docusaurus རན་ཊའིམ་ལུ་བཀག་ཆ་འབད་ཡོདཔ་ཨིན། |
+| བལྟ་རྟོག་འབད་བཏུབ་པའི་གནས་སྡུད་ | བརྡ་འཕྲིན་རིག་པ་ཡང་ན་ བརྡབ་གསིག་འབད་ནི། | `docs/portal/docs/devportal/observability.md` གིས་ འཚོལ་ཞིབ་/ཐིག་ཁྲམ་ཚུ་ཡིག་ཆ་བཟོཝ་ཨིན། I18NI000000016X འདི་དཔར་བསྐྲུན་མ་འབད་བའི་ཧེ་མ་ CI ནང་འགྱོཝ་ཨིན། |
 
-Adversaries include curious users viewing the public preview, malicious actors
-testing stolen links, and compromised browsers attempting to scrape stored
-credentials. All controls must work on commodity browsers without trusted
-networks.
+བྱང་ཕྱད་ཚུ་ མི་མང་སྔོན་ལྟ་དང་ གནོདཔ་ཅན་གྱི་འཁྲབ་རྩེདཔ་ཚུ་བལྟ་མི་ ཤེས་འདོད་ཡོད་མི་ལག་ལེན་པ་ཚུ་ཚུདཔ་ཨིན།
+ཨརཝ་བརྐུ་ཡོད་པའི་བརྟག་དཔྱད་དང་ བརའུ་ཟར་ཚུ་ བརྡབ་ནི་གི་དཔའ་བཅམ་མི་ བརྡལ་བཤིག་གཏང་ཡོདཔ།
+ཡིད་ཆེས་ཡོད་པའི་ བདེན་དཔང་། ཚད་འཛིན་ཆ་མཉམ་རང་ བློ་གཏད་མེད་པའི་ དངོས་རྫས་བརའུ་ཟར་ཚུ་གུ་ལཱ་འབད་དགོ།
+ཡོངས་འབྲེལ་.
 
-## Required controls
+## དགོས་མཁོའི་ཚོད་འཛིན།
 
-1. **OAuth device-code login**
-   - Configure `DOCS_OAUTH_DEVICE_CODE_URL`, `DOCS_OAUTH_TOKEN_URL`,
-     `DOCS_OAUTH_CLIENT_ID`, and related knobs in the build environment.
-   - The Try it card renders a sign-in widget (`OAuthDeviceLogin.jsx`) that
-     fetches the device code, polls the token endpoint, and auto-clears tokens
-     once they expire. Manual Bearer overrides remain available for emergency
-     fallback.
-   - Builds now fail when the OAuth configuration is missing or when the
-     fallback TTLs drift outside the 300 s–900 s window mandated by DOCS-1b;
-     set `DOCS_OAUTH_ALLOW_INSECURE=1` only for disposable local previews.
-2. **Proxy guardrails**
-   - `scripts/tryit-proxy.mjs` enforces allowed origins, rate limits, request
-     size caps, and upstream timeouts while tagging traffic with
-     `X-TryIt-Client` and redacting tokens from logs.
-   - `scripts/tryit-proxy-probe.mjs` plus `docs/portal/docs/devportal/observability.md`
-     define the liveness probe and dashboard rules; run them before every
-     rollout.
-3. **CSP, Trusted Types, Permissions-Policy**
-   - `docusaurus.config.js` now exports deterministic security headers:
-     `Content-Security-Policy` (default-src self, strict connect/img/script
-     lists, Trusted Types requirements), `Permissions-Policy`, and
+1. **OAuth ཐབས་འཕྲུལ་ཨང་རྟགས་ནང་བསྐྱོད་**
+   - `DOCS_OAUTH_DEVICE_CODE_URL`, `DOCS_OAUTH_TOKEN_URL`, རིམ་སྒྲིག་འབད།,
+     I18NI000000019X, དང་འབྲེལ་བའི་མཛུབ་མོ་བསྐྲུན་པའི་མཐའ་འཁོར་ནང་།
+   - དེ་གིས་ ཤོག་བྱང་འདི་ ནང་བསྐྱོད་འབད་མི་ ཝིཌི་གེཊི་ (I18NI0000020X) ཅིག་ བརྡ་སྟོནམ་ཨིན།
+     ཐབས་འཕྲུལ་གྱི་ཨང་རྟགས་དང་ ཊོ་ཀེན་མཇུག་ཐིག་ དེ་ལས་ རང་བཞིན་གསལ་ཏོག་ཏོ་ཚུ་ རྟགས་བཀལ་ཡོདཔ་ཨིན།
+     ཚར་གཅིག་ཁོང་ཚུ་དུས་ཚོད་རྫོགས་ཡོདཔ། གློ་བུར་གྱི་དོན་ལུ་ ལག་དེབ་འབག་མི་ བརྒལ་ལེན་ཚུ་ ལུས་ཡོདཔ།
+     ལོག.
+   - ཨོ་ཨའུཊི་རིམ་སྒྲིག་འདི་མེད་པའི་སྐབས་དང་ ཡང་ན་ ཡང་ན་ ནམ་དུས་ལུ་ བཟོ་བསྐྲུན་ཚུ་འཐུས་ཤོར་འབྱུང་འོང་།
+     300s–900s DOCS-1b གིས་ walleback TTLs གིས་ སྒོ་སྒྲིག་ཚུ་ འཕྱེལ་འགྱོ་དོ་ཡོདཔ་ཨིན།
+     གཞི་སྒྲིག་འབད་ `DOCS_OAUTH_ALLOW_INSECURE=1` བཀོ་བཞག་བཏུབ་པའི་ཉེ་གནས་སྔོན་ལྟ་ཚུ་གི་དོན་ལུ་རྐྱངམ་ཅིག་ཨིན།
+2. **པྲོཀ་སི་སྲུང་སྐྱོབ་པ་**
+   - `scripts/tryit-proxy.mjs` བཙན་ཤུགས་ཀྱིས་ འབྱུང་ཁུངས་དང་ གོང་ཚད་ཚད་གཞི་ ཞུ་བ་ཚུ་ གནང་བ་བྱིན་ཡོདཔ་ཨིན།
+     ཚད་གཞིའི་ཀེབ་ཚུ་དང་ ཡར་རྒྱུན་དུས་ཚོད་ཚུ་ དང་ཅིག་ཁར་ འགྲུལ་སྐྱོད་བཀག་བཞག་པའི་སྐབས་
+     `X-TryIt-Client` དང་དྲན་ཐོ་ཚུ་ལས་ བསྒྱུར་བཅོས་འབད་མི་ཊོ་ཀེན་ཚུ།
+   - I18NI0000024X དང་ I18NI0000025X
+     ཚེ་སྲོག་འཚོལ་ཞིབ་དང་ བརྡ་དོན་བཀོད་སྒྲིག་ལམ་ལུགས་ཚུ་ ངེས་ཚིག་བརྗོདཔ་ཨིན། དེ་ཚུ་ ག་ར་གི་ཧེ་མ་ལས་ གཡོག་བཀོལ།
+     བསྐོར་བ།
+3. **CSP, བློ་གཏད་ཅན་གྱི་དབྱེ་བ་, གནང་བ་-སྲིད་བྱུས།**
+   - I18NI000000026X ད་ལྟ་ གཏན་འབེབས་ཉེན་སྲུང་མགོ་ཡིག་ཚུ་ ཕྱིར་འདྲེན་འབདཝ་ཨིན།
+     I18NI000000027X (སྔོན་སྒྲིག་-src རང་ཉིད་, དམ་དམ་སྦེ་མཐུད་/ཨིམ་ཇི་/ཡིག་ཆ།
+     ཐོ་ཡིག་ཚུ་ བློ་གཏད་ཅན་གྱི་དབྱེ་བ་དགོས་མཁོ་), `Permissions-Policy`, དང་།
      `Referrer-Policy: no-referrer`.
-   - The CSP connect list whitelists the OAuth device-code and token endpoints
-     (HTTPS only unless `DOCS_SECURITY_ALLOW_INSECURE=1`) so device login works
-     without relaxing the sandbox for other origins.
-   - The headers are embedded directly in the generated HTML so static hosts do
-     not need extra configuration. Keep inline scripts limited to the
-     Docusaurus bootstrap.
-4. **Runbooks, observability, and rollback**
-   - `docs/portal/docs/devportal/observability.md` describes the probes and
-     dashboards that watch login failures, proxy response codes, and request
-     budgets.
-   - `docs/portal/docs/devportal/incident-runbooks.md` covers the escalation
-     path if the sandbox is abused; combine it with
-     `scripts/tryit-proxy-rollback.mjs` to flip endpoints safely.
+   - སི་ཨེསི་པི་གིས་ ཐོ་ཡིག་དཀརཔོ་ཐོ་ཡིག་ཚུ་ ཨོ་ཨའུཊི་ ཐབས་འཕྲུལ་གྱི་ཨང་རྟགས་དང་ ཊོ་ཀེན་མཐའ་ཐིག་ཚུ་ མཐུདཔ་ཨིན།
+     (HTTPS འདི་ `DOCS_SECURITY_ALLOW_INSECURE=1` གིས་ལཱ་མ་འབད་ཚུན་ཚོད་རྐྱངམ་ཅིག་ཨིན།
+     འབྱུང་ཁུངས་གཞན་ཚུ་གི་དོན་ལུ་ བྱེམ་སྒྲོམ་འདི་ མ་བདེ་བར་བཞག་དགོ།
+   - མགོ་ཡིག་ཚུ་ ཐད་ཀར་དུ་ བཟོ་བཏོན་འབད་ཡོད་པའི་ ཨེཆ་ཊི་ཨེམ་ཨེལ་ནང་ བཙུགས་ཡོདཔ་ལས་ གནས་སྟངས་དེ་ ཧོསིཊི་གིས་ འབདཝ་ཨིན།
+     རིམ་སྒྲིག་ཁ་སྐོང་དགོཔ་མེད། ནང་ཐིག་ཡིག་ཚུགས་ཚུ་ ལུ་ཚད་འཛིན་འབད།
+     Docusaurus བུཊི་སི་ཊར།
+༤ **Runbooks བལྟ་རྟོག་འབད་ཚུགསཔ་དང་ བསྐོར་རྒྱབ་**
+   - I18NI000000031X གིས་ འཚོལ་ཞིབ་དང་ འཚོལ་ཞིབ་དང་།
+     ནང་བསྐྱོད་འཐུས་ཤོར་ཚུ་བལྟ་མི་ dashboards, ངོ་ཚབ་ལན་གསལ་ཨང་རྟགས་དང་ ཞུ་བ་ཚུ།
+     འཆར་དངུལ་ .
+   - `docs/portal/docs/devportal/incident-runbooks.md` གིས་ ཡར་འཕར་གྱི་ཁྱབ་ཁོངས།
+     བྱེམ་སྒྲོམ་འདི་ལོག་སྤྱོད་འབད་བ་ཅིན་ ལམ། འདི་དང་གཅིག་ཁར་མཉམ་སྡེབ་འབད།
+     `scripts/tryit-proxy-rollback.mjs` ཉེན་སྲུང་དང་ལྡནམ་སྦེ་ མཐའ་མཇུག་གི་སྲུང་སྐྱོབ་ཚུ་ གཡོག་བཀོལ།
 
-## Pen-test & release checklist
+## པེན་ཊེས་དང་ གསར་བཏོན་ཞིབ་དཔྱད་ཐོ་ཡིག་།
 
-Complete this list for every preview promotion (attach results to the release
-ticket):
+ཐོ་ཡིག་འདི་ སྔོན་ལྟ་རྒྱ་སྐྱེད་ཀྱི་དོན་ལུ་ མཇུག་བསྡུ།
+ཤོག་འཛིན་༽།
 
-1. **Verify OAuth wiring**
-   - Run `npm run start` locally with the production `DOCS_OAUTH_*` exports.
-   - From a clean browser profile, open the Try it console and confirm the
-     device-code flow mints a token, counts down the lifetime, and clears the
-     field after expiry or sign-out.
-2. **Probe the proxy**
-   - `npm run tryit-proxy` against staging Torii, then execute
-     `npm run probe:tryit-proxy` with the configured sample path.
-   - Check logs for `authSource=override` entries and confirm rate limiting
-     increments counters when you exceed the window.
-3. **Confirm CSP/Trusted Types**
-   - `npm run build` and open `build/index.html`. Ensure the `<meta
-     http-equiv="Content-Security-Policy">` tag matches the expected directives
-     and that DevTools shows no CSP violations when loading the preview.
-   - Use `npm run probe:portal` (or curl) to fetch the deployed HTML; the probe
-     now fails when the `Content-Security-Policy`, `Permissions-Policy`, or
-     `Referrer-Policy` meta tags are missing or differ from the values declared
-     in `docusaurus.config.js`, so governance reviewers can rely on the exit
-     code instead of eyeballing curl output.
-4. **Review observability**
-   - Verify the Try it proxy dashboard is green (rate limits, error ratios,
-     health probe metrics).
-   - Run the incident drill in `docs/portal/docs/devportal/incident-runbooks.md`
-     if the host changed (new Netlify/SoraFS deployment).
-5. **Document the results**
-   - Attach screenshots/logs to the release ticket.
-   - Capture each finding in the remediation report template
-     ([`docs/examples/pentest_remediation_report_template.md`](../../../examples/pentest_remediation_report_template.md))
-     so owners, SLAs, and retest evidence are easy to audit later.
-   - Link back to this checklist so the DOCS-1b roadmap item stays auditable.
+1. **བདེན་བཤད་ OAuth གློག་ཐག་འདི་**
+   - I18NI000000034X གིས་ ས་གནས་ནང་ བཟོ་བསྐྲུན་ `DOCS_OAUTH_*` ཕྱིར་འདྲེན་ཚུ་དང་གཅིག་ཁར་ གཡོག་བཀོལ།
+   - བརྡ་འཚོལ་གྱི་གསལ་སྡུད་གཙང་མ་ཅིག་ལས་ དེ་ མཉམ་མཐུད་འབད་རྩོལ་བསྐྱེད་ཞིནམ་ལས་ ངེས་དཔྱད་འབད།
+     ཐབས་འཕྲུལ་གྱི་ཨང་རྟགས་རྒྱུན་འབབ་ཀྱི་ རྟགས་མཚན་ཅིག་ ཊོ་ཀེན་ཅིག་ ཚེ་སྲོག་ལུ་ རྩིས་རྐྱབ་ཞིནམ་ལས་ འདི་བསལཝ་ཨིན།
+     field ཡང་ན་ མིང་རྟགས་བཀོད་པའི་ཤུལ་ལུ།
+2. **ངོ་ཚབ་ཀྱི་རྫུས་མ།**
+   - I18NI000000036X ལུ་འགོག་པའི་ I18NT0000008X དང་ དེ་ལས་ ལག་ལེན་འཐབ་ཨིན།
+     རིམ་སྒྲིག་འབད་ཡོད་པའི་དཔེ་ཚད་འགྲུལ་ལམ་དང་གཅིག་ཁར་ I18NI000000037X.
+   - `authSource=override` ཐོ་བཀོད་ཚུ་གི་དོན་ལུ་ དྲན་ཐོ་ཚུ་ཞིབ་དཔྱད་འབད་ཞིནམ་ལས་ ཚད་གཞི་ཚད་འཛིན་ངེས་གཏན་བཟོ།
+     ཁྱོད་ཀྱིས་སྒོ་སྒྲིག་ལས་བརྒལ་བའི་སྐབས་ ཡར་འཕར་གྱི་གྱངས་ཁ་ཚུ།
+3. ** CSP/བློ་གཏད་ཅན་གྱི་དབྱེ་བ་** ངེས་གཏན་བཟོ།
+   - `npm run build` དང་ཁ་ཕྱེ། I18NI0000004X. `<meta འདི་ངེས་པར་དག །
+     http-quiv="ནང་དོན་-བདེ་འཇགས་-Polici">` ངོ་རྟགས་བཀོད་ཡོད་པའི་བཀོད་རྒྱ་དང་མཐུན་སྒྲིག་འབདཝ་ཨིན།
+     དང་ ཌེབ་ཊོལ་ཚུ་གིས་ སྔོན་ལྟ་མངོན་གསལ་འབད་བའི་སྐབས་ སི་ཨེསི་པི་འགལ་བ་ཚུ་སྟོནམ་ཨིན།
+   - བཀྲམ་སྤེལ་འབད་ཡོད་པའི་ཨེཆ་ཊི་ཨེམ་ཨེལ་འདི་ལེན་ནིའི་དོན་ལུ་ `npm run probe:portal` (ཡང་ན་ curl) ལག་ལེན་འཐབ། ཞིབ་དཔྱད་པ་
+     ད་ལྟ་`Content-Security-Policy`, I18NI000000043X, ཡང་ན་
+     `Referrer-Policy` མེ་ཊ་ངོ་རྟགས་ཚུ་ བརླག་སྟོར་ཞུགས་ཡོདཔ་ ཡང་ན་ གནས་གོང་ཚུ་གསལ་བསྒྲགས་འབད་མི་ལས་སོ་སོ་ཨིན།
+     in `docusaurus.config.js`, དེ་འབདཝ་ལས་ གཞུང་སྐྱོང་བསྐྱར་ཞིབ་འབད་མི་ཚུ་གིས་ ཕྱིར་ཐོན་ལུ་བརྟེན་ཚུགས།
+     མིག་ཏོ་གི་ཚབ་མ་ ཀར་ལི་ཨའུཊི་པུཊི་གི་ཚབ་ལུ་ ཨང་རྟགས།
+༤. **བསྐྱར་ཞིབ་ལྟ་རྟོག་འབད་ཚུགསཔ་**
+   - བདེན་དཔྱད་འབད་ དེ་ པོརོག་སི་ ཌེཤ་བོརཌི་ ལྗང་ཁུ་ཨིན་ (གནས་རིམ་ཚད་ཚུ་ འཛོལ་བའི་ཆ་ཚད་ཚུ་ འབད་རྩོལ་བསྐྱེད།
+     གསོ་བའི་འཚོལ་ཞིབ་མེ་ཊིག)།
+   - བྱུང་རྐྱེན་བྱུང་རིམ་འདི་ `docs/portal/docs/devportal/incident-runbooks.md` ནང་གཡོག་བཀོལ།
+     གལ་སྲིད་ ཧོསིཊི་འདི་བསྒྱུར་བཅོས་འབད་བ་ཅིན་ (Netlify/I18NT0000003X བཀྲམ་སྤེལ་གསརཔ་)།
+5. **གྲུབ་འབྲས་** ཡིག་ཐོག་བཀོད་ཡོད།
+   - གསལ་སྟོན་གྱི་ ཤོག་འཛིན་ལུ་ གསལ་གཞི་པར་ཆས་/ནང་བསྐྱོད་འབདཝ་ཨིན།
+   - འཚོལ་ཞིབ་རེ་རེ་བཞིན་ བཅོ་ཁ་སྙན་ཞུའི་སྙན་ཞུ་ཊེམ་པེལེཊི་ནང་ བཟུང་།
+     ([I 18NI00000047X](I18NU0000009X)།
+     དེ་འབདཝ་ལས་ ཇོ་བདག་དང་ ཨེསི་ཨེལ་ཨེ་ དེ་ལས་ བསྐྱར་ཞིབ་སྒྲུབ་བྱེད་ཚུ་ ཤུལ་ལས་ རྩིས་ཞིབ་འབད་ནི་ལུ་ འཇམ་ཏོང་ཏོ་ཡོདཔ་ཨིན།
+   - ཞིབ་དཔྱད་ཐོ་ཡིག་འདི་ལུ་ལོག་ཅིག་འབྲེལ་མཐུད་འབད་ནི་ཨིནམ་ལས་ DOCS-1b ལམ་གྱི་སབ་ཁྲ་འདི་ རྩིས་ཞིབ་འབད་བཏུབ་སྦེ་སྡོད་དགོ།
 
-If any step fails, halt the promotion, file a blocking issue, and note the
-remediation plan in `status.md`.
+གལ་སྲིད་ གོམ་པ་གང་རུང་ཅིག་ འཐུས་ཤོར་བྱུང་པ་ཅིན་ ཁྱབ་སྤེལ་འདི་ བཀག་ཆ་འབད་དེ་ བཀག་ཆ་འབད་ནི་གི་གནད་དོན་ཅིག་ ཕུལ་ཞིནམ་ལས་ དྲན་འཛིན་འབད།
+`status.md` ནང་ བཅོ་ཐབས་འཆར་གཞི་།

@@ -7,28 +7,30 @@ status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
 title: Java ledger flow recipe
 description: Drive the register → mint → transfer demo using the IrohaAndroid JVM library.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-import SampleDownload from '@site/src/components/SampleDownload';
+SampleDownload-г '@site/src/components/SampleDownload'-аас импортлох;
 
-This recipe targets the desktop/JVM variant of the `java/iroha_android` module.
-It mirrors the CLI walkthrough by registering an asset definition, minting into
-the admin account, transferring to a second account, and printing the resulting
-balance.
+Энэхүү жор нь `java/iroha_android` модулийн ширээний/JVM хувилбарт зориулагдсан болно.
+Энэ нь хөрөнгийн тодорхойлолтыг бүртгэх замаар CLI-ийн танилцуулгыг тусгадаг
+админ данс, хоёр дахь данс руу шилжүүлж, үр дүнг хэвлэх
+тэнцвэр.
 
-<SampleDownload
+<Жишээ татаж авах
   href="/sdk-recipes/java/src/main/java/ledger/LedgerFlow.java"
   filename="src/main/java/ledger/LedgerFlow.java"
-  description="Download the complete Java example to import into your IDE or project template."
+  description="Өөрийн IDE эсвэл төслийн загварт импортлохын тулд Java-ийн бүрэн жишээг татаж авна уу."
 />
 
-## 1. Register the asset definition (CLI)
+## 1. Хөрөнгийн тодорхойлолтыг (CLI) бүртгэх
 
 ```bash
 iroha --config defaults/client.toml asset definition register --id coffee#wonderland
 ```
 
-## 2. Export credentials
+## 2. Итгэмжлэлийг экспортлох
 
 ```bash
 # raw 32-byte Ed25519 private key in hex (without multicodec prefix)
@@ -37,10 +39,10 @@ export ADMIN_ACCOUNT="ih58..."
 export RECEIVER_ACCOUNT="ih58..."
 ```
 
-> Use `iroha_cli tools crypto private-key export --raw --private-key <multihash>` if you
-> need to strip the multihash prefix from the default config.
+> Хэрэв та `iroha_cli tools crypto private-key export --raw --private-key <multihash>` ашиглана уу
+> анхдагч тохиргооноос multihash угтварыг хасах хэрэгтэй.
 
-## 3. Add dependencies
+## 3. Хамаарал нэмэх
 
 ```kts title="build.gradle.kts"
 dependencies {
@@ -49,7 +51,7 @@ dependencies {
 }
 ```
 
-## 4. Example program
+## 4. Жишээ програм
 
 ```java title="src/main/java/ledger/LedgerFlow.java"
 package ledger;
@@ -175,10 +177,10 @@ public final class LedgerFlow {
 }
 ```
 
-Compile with your preferred build tool (`./gradlew :java:iroha_android:assemble && ./gradlew run`).
+Өөрийн сонгосон бүтээх хэрэгслээр (`./gradlew :java:iroha_android:assemble && ./gradlew run`) эмхэтгэ.
 
-## 5. Verify parity
+## 5. Паритетийг шалгана уу
 
-- Inspect the transaction hashes via `iroha --config defaults/client.toml transaction get --hash <hash>`.
-- Fetch balances with the CLI (`asset list filter '{"id":"coffee#wonderland##<account>"}'`).
-- Compare results with the Rust/Python/JavaScript/Swift recipes to ensure every SDK produces identical Norito payloads for the demo flow.
+- `iroha --config defaults/client.toml transaction get --hash <hash>`-ээр дамжуулан гүйлгээний хэшийг шалгана уу.
+- CLI (`asset list filter '{"id":"coffee#wonderland##<account>"}'`) ашиглан үлдэгдлийг татах.
+- Үр дүнг Rust/Python/JavaScript/Swift жортой харьцуулж, SDK бүр демо урсгалын хувьд ижил Norito ачааллыг гаргадаг эсэхийг шалгаарай.

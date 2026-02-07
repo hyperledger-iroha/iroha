@@ -6,29 +6,30 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 1f2dd6b790ce0252c355db5218b64ca9a15f4200879fe874499df079ae168872
 source_last_modified: "2026-01-30T12:29:51+00:00"
-translation_last_reviewed: 2026-01-30
+translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Python SDK Quickstart
+# התחלה מהירה של Python SDK
 
-The Python SDK (`iroha-python`) mirrors the Rust client helpers so you can
-interact with Torii from scripts, notebooks, or web backends. This quickstart
-covers installation, transaction submission, and event streaming. For deeper
-coverage see `python/iroha_python/README.md` in the repository.
+Python SDK (`iroha-python`) משקף את עוזרי הלקוח Rust כך שתוכל
+לקיים אינטראקציה עם Torii מסקריפטים, מחברות או מקצה עורפי אינטרנט. ההתחלה המהירה הזו
+מכסה התקנה, הגשת עסקאות והזרמת אירועים. ליותר עמוק
+כיסוי ראה `python/iroha_python/README.md` במאגר.
 
-## 1. Install
+## 1. התקן
 
 ```bash
 pip install iroha-python
 ```
 
-Optional extras:
+תוספות אופציונליות:
 
-- `pip install aiohttp` if you plan to run the asynchronous variants of the
-  streaming helpers.
-- `pip install pynacl` when you need Ed25519 key derivation outside of the SDK.
+- `pip install aiohttp` אם אתה מתכנן להפעיל את הגרסאות האסינכרוניות של
+  עוזרי סטרימינג.
+- `pip install pynacl` כאשר אתה צריך גזירת מפתח Ed25519 מחוץ ל-SDK.
 
-## 2. Create a client and signers
+## 2. צור לקוח וחותמים
 
 ```python
 from iroha_python import (
@@ -46,14 +47,14 @@ client = ToriiClient(
 )
 ```
 
-`ToriiClient` accepts additional keyword arguments such as `timeout_ms`,
-`max_retries`, and `tls_config`. The helper `resolve_torii_client_config`
-parses a JSON configuration payload if you want parity with the Rust CLI.
+`ToriiClient` מקבל ארגומנטים נוספים של מילות מפתח כגון `timeout_ms`,
+`max_retries`, ו-`tls_config`. העוזר `resolve_torii_client_config`
+מנתח מטען תצורת JSON אם אתה רוצה זוגיות עם Rust CLI.
 
-## 3. Submit a transaction
+## 3. שלח עסקה
 
-The SDK ships instruction builders and transaction helpers so you rarely build
-Norito payloads by hand:
+ה-SDK שולח בוני הוראות ועוזרים לעסקאות, כך שאתה בונה לעתים רחוקות
+מטענים Norito ביד:
 
 ```python
 from iroha_python import Instruction
@@ -72,15 +73,15 @@ envelope, status = client.build_and_submit_transaction(
 print("Final status:", status)
 ```
 
-`build_and_submit_transaction` returns both the signed envelope and the last
-observed status (e.g., `Committed`, `Rejected`). If you already have a signed
-transaction envelope use `client.submit_transaction_envelope(envelope)` or the
+`build_and_submit_transaction` מחזירה גם את המעטפה החתומה וגם את האחרונה
+מצב נצפה (לדוגמה, `Committed`, `Rejected`). אם כבר יש לך חתום
+במעטפת העסקה השתמש ב-`client.submit_transaction_envelope(envelope)` או ב-
 JSON-centric `submit_transaction_json`.
 
-## 4. Query state
+## 4. מצב שאילתה
 
-All REST endpoints have JSON helpers and many expose typed dataclasses. For
-example, listing domains:
+לכל נקודות הקצה של REST יש עוזרי JSON ורבים חושפים מחלקות נתונים מוקלדות. עבור
+לדוגמה, רישום דומיינים:
 
 ```python
 domains = client.list_domains_typed()
@@ -88,11 +89,11 @@ for domain in domains.items:
     print(domain.name)
 ```
 
-Pagination-aware helpers (e.g., `list_accounts_typed`) return an object that
-contains both `items` and `next_cursor`.
+עוזרים המודעים לעידון (למשל, `list_accounts_typed`) מחזירים אובייקט
+מכיל גם `items` וגם `next_cursor`.
 
-Account inventory helpers accept an optional `asset_id` filter when you only
-care about a specific asset:
+עוזרי מלאי חשבונות מקבלים מסנן `asset_id` אופציונלי כאשר אתה רק
+אכפת מנכס מסוים:
 
 ```python
 asset_id = "rose#wonderland#alice@test"
@@ -102,11 +103,11 @@ holders = client.list_asset_holders("rose#wonderland", asset_id=asset_id, limit=
 print(assets, txs, holders)
 ```
 
-## 5. Offline allowances
+## 5. קצבאות לא מקוונות
 
-Use the offline allowance endpoints to issue wallet certificates and register
-them on-ledger. `top_up_offline_allowance` chains the issue + register steps
-(there is no single top-up endpoint):
+השתמש בנקודות הקצה של הקצבה הלא מקוונת כדי להנפיק אישורי ארנק ולהירשם
+אותם בפנקס. `top_up_offline_allowance` משרשרת את הנושא + שלבי רישום
+(אין נקודת קצה אחת להעלאה):
 
 ```python
 from iroha_python import ToriiClient
@@ -132,7 +133,7 @@ top_up = client.top_up_offline_allowance(
 print("registered", top_up.registration.certificate_id_hex)
 ```
 
-For renewals, call `top_up_offline_allowance_renewal` with the current certificate id:
+לחידושים, התקשר ל-`top_up_offline_allowance_renewal` עם מזהה האישור הנוכחי:
 
 ```python
 renewed = client.top_up_offline_allowance_renewal(
@@ -144,14 +145,14 @@ renewed = client.top_up_offline_allowance_renewal(
 print("renewed", renewed.registration.certificate_id_hex)
 ```
 
-If you need to split the flow, call `issue_offline_certificate` (or
-`issue_offline_certificate_renewal`) followed by `register_offline_allowance`
-or `renew_offline_allowance`.
+אם אתה צריך לפצל את הזרימה, התקשר ל-`issue_offline_certificate` (או
+`issue_offline_certificate_renewal`) ואחריו `register_offline_allowance`
+או `renew_offline_allowance`.
 
-## 6. Stream events
+## 6. הזרם אירועים
 
-Torii SSE endpoints are exposed via generators. The SDK automatically resumes
-when `resume=True` and you provide an `EventCursor`.
+Torii נקודות קצה SSE נחשפות באמצעות גנרטורים. ה-SDK מתחדש אוטומטית
+כאשר `resume=True` ואתה מספק `EventCursor`.
 
 ```python
 from iroha_python import PipelineEventFilterBox, EventCursor
@@ -167,28 +168,26 @@ for event in client.stream_pipeline_blocks(
     print("Block height", event.data.block.height)
 ```
 
-Other convenience methods include `stream_pipeline_transactions`,
-`stream_events` (with typed filter builders), and `stream_verifying_key_events`.
+שיטות נוחות אחרות כוללות `stream_pipeline_transactions`,
+`stream_events` (עם בוני מסננים מודפסים), ו-`stream_verifying_key_events`.
 
-## 7. Next steps
+## 7. השלבים הבאים
 
-- Explore the examples under `python/iroha_python/src/iroha_python/examples/`
-  for end-to-end flows covering governance, ISO bridge helpers, and Connect.
-- Use `create_torii_client` / `resolve_torii_client_config` when you want to
-  bootstrap the client from an `iroha_config` JSON file or environment.
-- For Norito RPC or Connect-specific APIs, check the specialised modules such as
-  `iroha_python.norito_rpc` and `iroha_python.connect`.
+- חקור את הדוגמאות תחת `python/iroha_python/src/iroha_python/examples/`
+  עבור זרימות מקצה לקצה המכסות ממשל, עוזרי גשר ISO ו-Connect.
+- השתמש ב-`create_torii_client` / `resolve_torii_client_config` כאשר אתה רוצה
+  אתחול את הלקוח מקובץ JSON או סביבה `iroha_config`.
+- עבור Norito RPC או ממשקי API ספציפיים ל-Connect, בדוק את המודולים המיוחדים כגון
+  `iroha_python.norito_rpc` ו-`iroha_python.connect`.
 
-## Related Norito examples
+## דוגמאות Norito קשורות- [שלד נקודת כניסה של האג'ימארי](../norito/examples/hajimari-entrypoint) - משקף את ההידור/הרצה
+  זרימת עבודה מההתחלה המהירה הזו כדי שתוכל לפרוס את אותו חוזה מתחיל מ-Python.
+- [רישום דומיין ונכסי מנטה](../norito/examples/register-and-mint) - מתאים לדומיין +
+  נכס זורם למעלה והוא שימושי כאשר אתה רוצה את היישום בצד החשבונות במקום בוני SDK.
+- [העברת נכס בין חשבונות](../norito/examples/transfer-asset) - מציגה את `transfer_asset`
+  syscall כדי שתוכל להשוות העברות מונחות חוזים עם שיטות העזר של Python.
 
-- [Hajimari entrypoint skeleton](../norito/examples/hajimari-entrypoint) — mirrors the compile/run
-  workflow from this quickstart so you can deploy the same starter contract from Python.
-- [Register domain and mint assets](../norito/examples/register-and-mint) — matches the domain +
-  asset flows above and is useful when you want the ledger-side implementation instead of SDK builders.
-- [Transfer asset between accounts](../norito/examples/transfer-asset) — showcases the `transfer_asset`
-  syscall so you can compare contract-driven transfers with the Python helper methods.
-
-With these building blocks you can exercise Torii from Python without writing
-your own HTTP glue or Norito codecs. As the SDK matures, additional high-level
-builders will be added; consult the README in the `python/iroha_python`
-directory for the latest status and migration notes.
+עם אבני הבניין האלה אתה יכול לממש את Torii מ-Python מבלי לכתוב
+דבק HTTP משלך או Norito קודקים. ככל שה-SDK מתבגר, רמה גבוהה נוספת
+יתווספו בונים; עיין ב-README ב-`python/iroha_python`
+מדריך לסטטוס והערות הגירה העדכניות ביותר.

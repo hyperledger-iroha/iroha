@@ -4,25 +4,27 @@ direction: ltr
 source: docs/portal/docs/sorafs/developer-ci.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: developer-ci
-title: SoraFS CI recipes
-sidebar_label: CI recipes
-description: GitHub اور GitLab pipelines میں keyless signing کے ساتھ SoraFS CLI چلائیں۔
+ID: desarrollador-ci
+título: SoraFS recetas CI
+sidebar_label: recetas de CI
+descripción: GitHub y GitLab pipelines firma sin llave کے ساتھ SoraFS CLI چلائیں۔
 ---
 
-:::note مستند ماخذ
+:::nota مستند ماخذ
 :::
 
-# SoraFS CI recipes
+# SoraFS Recetas de CI
 
-SoraFS pipelines deterministic chunking، manifest signing اور proof verification سے فائدہ اٹھاتے ہیں۔
-`sorafs_cli` command surface ان steps کو CI providers کے درمیان portable رکھتا ہے۔ یہ صفحہ canonical
-recipes highlight کرتا ہے اور ready-to-use templates کی طرف اشارہ کرتا ہے۔
+SoraFS fragmentación determinista de canalizaciones, firma de manifiesto y verificación de prueba سے فائدہ اٹھاتے ہیں۔
+`sorafs_cli` Superficie de comando y pasos کو proveedores de CI کے درمیان portátiles رکھتا ہے۔ یہ صفحہ canónico
+recetas destacadas کرتا ہے اور plantillas listas para usar کی طرف اشارہ کرتا ہے۔
 
-## GitHub Actions (keyless)
+## Acciones de GitHub (sin clave)
 
 ```yaml
 name: sorafs-artifacts
@@ -95,11 +97,11 @@ jobs:
           path: artifacts/
 ```
 
-Key points:
+Puntos clave:
 
-- Static signing keys store نہیں ہوتے؛ OIDC tokens on-demand fetch ہوتے ہیں۔
-- Artifacts (CAR, manifest, bundle, proof summaries) review کے لیے upload ہوتے ہیں۔
-- Job وہی Norito schemas reuse کرتا ہے جو production rollouts میں استعمال ہوتے ہیں۔
+- Tienda de claves de firma estática نہیں ہوتے؛ OIDC recuperación de tokens bajo demanda ہوتے ہیں۔
+- Revisión de artefactos (CAR, manifiesto, paquete, resúmenes de pruebas) کے لیے subir ہوتے ہیں۔
+- Reutilización de esquemas de trabajo y Norito کرتا ہے جو implementaciones de producción میں استعمال ہوتے ہیں۔
 
 ## GitLab CI
 
@@ -135,12 +137,12 @@ sorafs:publish:
       - artifacts/
 ```
 
-- `SIGSTORE_ID_TOKEN` کو GitLab workload identity federation یا sealed secret کے ذریعے provision کریں، publish stage چلانے سے پہلے۔
-- CLI کے کسی بھی step کی failure pipeline کو halt کر دیتی ہے، اور consistent artifacts محفوظ رہتے ہیں۔
+- `SIGSTORE_ID_TOKEN` کو Federación de identidad de carga de trabajo de GitLab یا secreto sellado کے ذریعے provisión کریں، etapa de publicación چلانے سے پہلے۔
+- CLI کے کسی بھی paso کی falla en la canalización کو detener کر دیتی ہے، اور artefactos consistentes محفوظ رہتے ہیں۔
 
-## Additional resources
+## Recursos adicionales
 
-- End-to-end templates (Bash helpers، federated identity configuration، اور clean-up steps شامل ہیں): `docs/examples/sorafs_ci.md`
-- CLI reference جو ہر option cover کرتا ہے: `docs/source/sorafs_cli.md`
-- Submission سے پہلے governance/alias requirements:
+- Plantillas de un extremo a otro (ayudantes de Bash, configuración de identidad federada, pasos de limpieza adicionales): `docs/examples/sorafs_ci.md`
+- Referencia CLI جو ہر cubierta de opción کرتا ہے: `docs/source/sorafs_cli.md`
+- Requisitos de gobernanza/alias de presentación:
   `docs/source/sorafs/provider_admission_policy.md`

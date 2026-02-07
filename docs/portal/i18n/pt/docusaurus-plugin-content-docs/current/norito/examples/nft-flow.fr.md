@@ -4,30 +4,32 @@ direction: ltr
 source: docs/portal/docs/norito/examples/nft-flow.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
 slug: /norito/examples/nft-flow
-title: Frapper, transférer et brûler un NFT
-description: Parcourt le cycle de vie d'un NFT de bout en bout : frappe au propriétaire, transfert, ajout de métadonnées et destruction.
-source: crates/ivm/docs/examples/12_nft_flow.ko
+título: Frapper, transferir e quebrar um NFT
+descrição: Parcourt o ciclo de vida de um NFT de luta em luta: frappe au propriétaire, transfert, ajout de métadonnées et destruição.
+fonte: crates/ivm/docs/examples/12_nft_flow.ko
 ---
 
-Parcourt le cycle de vie d'un NFT de bout en bout : frappe au propriétaire, transfert, ajout de métadonnées et destruction.
+Parcourt o ciclo de vida de um NFT de luta em luta: frappe au propriétaire, transfert, ajout de métadonnées et destruição.
 
 ## Parcours du registre
 
-- Assurez-vous que la définition du NFT (par exemple `n0#wonderland`) existe avec les comptes propriétaire/destinataire utilisés dans le snippet (`ih58...`, `ih58...`).
-- Invoquez le point d'entrée `nft_issue_and_transfer` pour frapper le NFT, le transférer d'Alice vers Bob et attacher un indicateur de métadonnées décrivant l'émission.
-- Inspectez l'état du registre NFT avec `iroha_cli ledger nfts list --account <id>` ou les équivalents SDK pour vérifier le transfert, puis confirmez que l'actif est supprimé une fois que l'instruction de burn s'exécute.
+- Certifique-se de que a definição de NFT (por exemplo, `n0#wonderland`) existe com as contas proprietárias/destinatárias utilizadas no snippet (`ih58...`, `ih58...`).
+- Invoque o ponto de entrada `nft_issue_and_transfer` para frapper o NFT, transfira Alice para Bob e anexe um indicador de metadonées que descreva a emissão.
+- Inspecione o estado do registro NFT com `iroha_cli ledger nfts list --account <id>` ou os SDKs equivalentes para verificar a transferência e depois confirme se o ativo foi suprimido quando a instrução de gravação foi executada.
 
-## Guides SDK associés
+## Guias SDK associados
 
-- [Quickstart SDK Rust](/sdks/rust)
-- [Quickstart SDK Python](/sdks/python)
-- [Quickstart SDK JavaScript](/sdks/javascript)
+- [Início rápido do SDK Rust](/sdks/rust)
+- [Início rápido do SDK Python](/sdks/python)
+- [Início rápido do SDK JavaScript](/sdks/javascript)
 
-[Télécharger la source Kotodama](/norito-snippets/nft-flow.ko)
+[Baixe a fonte Kotodama](/norito-snippets/nft-flow.ko)
 
 ```text
 // Mint an NFT, transfer it, update metadata, and burn it using typed IDs.

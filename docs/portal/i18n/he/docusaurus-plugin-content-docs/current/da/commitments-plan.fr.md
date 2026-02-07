@@ -4,51 +4,53 @@ direction: rtl
 source: docs/portal/docs/da/commitments-plan.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Source canonique
-Reflete `docs/source/da/commitments_plan.md`. Gardez les deux versions en sync
+:::הערה מקור קנוניק
+Reflete `docs/source/da/commitments_plan.md`. גרסאות גרדז לסינכרון
 :::
 
-# Plan des engagements Data Availability Sora Nexus (DA-3)
+# Plan des engagements זמינות נתונים Sora Nexus (DA-3)
 
-_Redige: 2026-03-25 -- Responsables: Core Protocol WG / Smart Contract Team / Storage Team_
+_Redige: 2026-03-25 -- אחראים: Core Protocol WG / צוות חוזה חכם / צוות אחסון_
 
 DA-3 etend le format de bloc Nexus pour que chaque lane integre des enregistrements
-deterministes decrivant les blobs acceptes par DA-2. Cette note capture les
+deterministes decrivant les blobs מקבל את תקן DA-2. Cette הערות לכידת les
 structures de donnees canoniques, les hooks du pipeline de blocs, les preuves de
 client leger, et les surfaces Torii/RPC qui doivent arriver avant que les
 validateurs puissent s'appuyer sur les engagements DA lors des checks
-d'admission ou de gouvernance. Tous les payloads sont encodes en Norito; pas de
-SCALE ni de JSON ad hoc.
+d'admission ou de governance. Tous les payloads sont codes en Norito; pas de
+SCALE ב-JSON אד-הוק.
 
-## Objectifs
+## אובייקטים
 
-- Porter des engagements par blob (chunk root + manifest hash + commitment KZG
+- Porter des engagements par blob (שורש נתח + חשיש מניפסט + התחייבות KZG
   optionnel) dans chaque bloc Nexus afin que les pairs puissent reconstruire
-  l'etat d'availability sans consulter le stockage hors ledger.
+  l'etat d'availability sans consulter le Stockage Hors Ledger.
 - Fournir des preuves de membership deterministes afin que les clients legers
-  verifient qu'un manifest hash a ete finalise dans un bloc donne.
+  אימות qu'un manifest hash a ete finalize dans un bloc donne.
 - Exposer des requetes Torii (`/v1/da/commitments/*`) et des preuves permettant
-  aux relays, SDKs et automatisations de gouvernance d'auditer l'availability
-  sans rejouer chaque bloc.
+  ממסרי עזר, ערכות SDK ואוטומציות של ניהול הביקורת לזמינות
+  sans rejouer chaque blok.
 - Conserver l'enveloppe `SignedBlockWire` canonique en transmettant les nouvelles
-  structures via le header de metadata Norito et la derivation du hash de bloc.
+  מבנים באמצעות le header de metadata Norito et la derivation du hash de bloc.
 
 ## Vue d'ensemble du scope
 
-1. **Ajouts au data model** dans `iroha_data_model::da::commitment` plus
-   modifications du header de bloc dans `iroha_data_model::block`.
+1. **Ajouts au data model** ב-`iroha_data_model::da::commitment` plus
+   שינויים בכותרת דה בלוק ב-`iroha_data_model::block`.
 2. **Hooks d'executor** pour que `iroha_core` ingeste les receipts DA emis par
    Torii (`crates/iroha_core/src/queue.rs` et `crates/iroha_core/src/block.rs`).
-3. **Persistence/indexes** afin que le WSV reponde rapidement aux requetes de
-   commitments (`iroha_core/src/wsv/mod.rs`).
-4. **Ajouts RPC Torii** pour les endpoints de liste/lecture/proof sous
+3. **התמדה/מדדים** afin que le WSV reponde rapidement aux requetes de
+   התחייבויות (`iroha_core/src/wsv/mod.rs`).
+4. **Ajouts RPC Torii** pour les endpoints de list/הרצאה/הוכחה
    `/v1/da/commitments`.
-5. **Tests d'integration + fixtures** validant le wire layout et le flux de proof
+5. **בדיקות אינטגרציה + מתקנים** תקף פריסת תיל ו-le flux de proof
    dans `integration_tests/tests/da/commitments.rs`.
 
-## 1. Ajouts au data model
+## 1. מודל הנתונים של Ajouts au
 
 ### 1.1 `DaCommitmentRecord`
 
@@ -70,19 +72,19 @@ pub struct DaCommitmentRecord {
 }
 ```
 
-- `KzgCommitment` reutilise le point 48 octets utilise dans `iroha_crypto::kzg`.
-  Quand il est absent, on retombe sur des preuves Merkle uniquement.
-- `proof_scheme` derive du catalog de lanes; les lanes Merkle rejettent les
-  payloads KZG tandis que les lanes `kzg_bls12_381` exigent des commitments KZG
-  non nuls. Torii ne produit actuellement que des commitments Merkle et rejette
+- `KzgCommitment` השתמש מחדש בנקודה 48 אוקטטים ב-`iroha_crypto::kzg`.
+  Quand il est נעדר, על retombe sur des preuves מרקל ייחודיות.
+- `proof_scheme` נובעים מקטלוג הנתיבים; les lanes Merkle דוחה les
+  מטענים KZG tandis que les lanes `kzg_bls12_381` דרושות התחייבויות KZG
+  לא נולים. Torii ne produit actuellement que des התחייבויות Merkle et rejette
   les lanes configurees en KZG.
-- `KzgCommitment` reutilise le point 48 octets utilise dans `iroha_crypto::kzg`.
-  Quand il est absent sur les lanes Merkle on retombe sur des preuves Merkle
-  uniquement.
+- `KzgCommitment` השתמש מחדש בנקודה 48 אוקטטים ב-`iroha_crypto::kzg`.
+  Quand il est נעדר sur les lanes Merkle על retombe sur des preuves Merkle
+  ייחודיות.
 - `proof_digest` anticipe l'integration DA-5 PDP/PoTR afin que le meme record
-  enumere le schedule de sampling utilise pour maintenir les blobs en vie.
+  למנות את לוח הזמנים של דגימה לנצל את התחזוקה של הכתמים.
 
-### 1.2 Extension du header de bloc
+### 1.2 הרחבה du header de bloc
 
 ```
 pub struct BlockHeader {
@@ -94,122 +96,116 @@ pub struct DaCommitmentBundle {
     pub version: u16,                // start with 1
     pub commitments: Vec<DaCommitmentRecord>,
 }
-```
-
-Le hash du bundle entre a la fois dans le hash de bloc et dans la metadata de
+```Le hash du bundle entre a la fois dans le hash de bloc et dans la metadata de
 `SignedBlockWire`. Quand un bloc ne transporte pas de donnees DA, le champ reste
 
-Note d'implementation: `BlockPayload` et le `BlockBuilder` transparent exposent
-maintenant des setters/getters `da_commitments` (voir
+הערה ליישום: `BlockPayload` et le `BlockBuilder` חשיפה שקופה
+Maintenant des setters/getters `da_commitments` (voir
 `BlockBuilder::set_da_commitments` et `SignedBlock::set_da_commitments`), donc
-les hosts peuvent attacher un bundle preconstruit avant de sceller un bloc. Tous
+les hosts peuvent attacher un bundle preconstruit avant de sceller un bloc. טוס
 les helpers laissent le champ a `None` tant que Torii ne fournit pas de bundles
-reels.
+סלילים.
 
-### 1.3 Encodage wire
+### 1.3 חוט קידוד
 
 - `SignedBlockWire::canonical_wire()` ajoute le header Norito pour
-  `DaCommitmentBundle` immediatement apres la liste de transactions existante.
+  `DaCommitmentBundle` מיידי לפני רשימת העסקאות הקיימות.
   Le byte de version est `0x01`.
 - `SignedBlockWire::decode_wire()` rejette les bundles dont `version` est
   inconnue, en ligne avec la politique Norito decrite dans `norito.md`.
 - Les mises a jour de derivation du hash vivent uniquement dans `block::Hasher`;
   les clients legers qui decodent le wire format existant gagnent le nouveau
-  champ automatiquement car le header Norito annonce sa presence.
+  champ automatiquement car le header Norito מודעה נוכחות.
 
-## 2. Flux de production de blocs
+## 2. Flux de production de blocks
 
-1. L'ingest DA Torii finalise un `DaIngestReceipt` et le publie sur la queue
-   interne (`iroha_core::gossiper::QueueMessage::DaReceipt`).
-2. `PendingBlocks` collecte tous les receipts dont `lane_id` correspond au bloc
+1. L'ingest DA Torii finalize un `DaIngestReceipt` et le publie sur la queue
+   אינטרנט (`iroha_core::gossiper::QueueMessage::DaReceipt`).
+2. `PendingBlocks` לאסוף כל קבלות שלא מתאימות `lane_id`
    en construction, en dedupliquant par `(lane_id, client_blob_id,
    manifest_hash)`.
-3. Juste avant le scellage, le builder trie les commitments par `(lane_id, epoch,
-   sequence)` pour garder le hash deterministe, encode le bundle avec le codec
+3. Juste avant le scellage, le builder trye les commitments par `(lane_id, epoch,
+   sequence)` pour garder le hash deterministe, coded le bundle avec le codec
    Norito, et met a jour `da_commitments_hash`.
 4. Le bundle complet est stocke dans le WSV et emis avec le bloc dans
    `SignedBlockWire`.
 
 Si la creation du bloc echoue, les receipts restent dans la queue pour que la
-prochaine tentative les reprenne; le builder enregistre le dernier `sequence`
-inclus par lane afin d'eviter les attaques de replay.
+prochaine tentative les reprenne; le Builder רשם את le dernier `sequence`
+כולל par lane afin d'eviter les attaques de replay.
 
-## 3. Surface RPC et requetes
+## 3. RPC משטח ובקשות
 
-Torii expose trois endpoints:
+Torii חושפים את נקודות הקצה של הטרואס:
 
-| Route | Methode | Payload | Notes |
-|-------|--------|---------|-------|
-| `/v1/da/commitments` | `POST` | `DaCommitmentQuery` (filtre de range lane/epoch/sequence, pagination) | Renvoie `DaCommitmentPage` avec total, commitments et hash de bloc. |
-| `/v1/da/commitments/prove` | `POST` | `DaCommitmentProofRequest` (lane + manifest hash ou tuple `(epoch, sequence)`). | Repond avec `DaCommitmentProof` (record + chemin Merkle + hash de bloc). |
-| `/v1/da/commitments/verify` | `POST` | `DaCommitmentProof` | Helper stateless qui rejoue le calcul du hash de bloc et valide l'inclusion; utilise par les SDKs qui ne peuvent pas lier directement `iroha_crypto`. |
+| מסלול | מתודה | מטען | הערות |
+|-------|--------|--------|-------|
+| `/v1/da/commitments` | `POST` | `DaCommitmentQuery` (מסנן טווח נתיב/תקופה/רצף, עימוד) | Renvoie `DaCommitmentPage` עם סך הכל, התחייבויות ו-hash de bloc. |
+| `/v1/da/commitments/prove` | `POST` | `DaCommitmentProofRequest` (מסלול + מניפסט hash ou tuple `(epoch, sequence)`). | Repond avec `DaCommitmentProof` (תקליט + chemin Merkle + hash de bloc). |
+| `/v1/da/commitments/verify` | `POST` | `DaCommitmentProof` | עוזר חסר אזרחות qui rejoue le calcul du hash de bloc et valide l'inclusion; השתמש ב-SDKs qui ne peuvent pas lier direction `iroha_crypto`. |
 
-Tous les payloads vivent sous `iroha_data_model::da::commitment`. Les routeurs
+Tous les payloads vivent sous `iroha_data_model::da::commitment`. Les routers
 Torii montent les handlers a cote des endpoints d'ingest DA existants pour
-reutiliser les politiques token/mTLS.
+שימוש מחדש ב-les politiques token/mTLS.
 
-## 4. Preuves d'inclusion et clients legers
-
-- Le producteur de bloc construit un arbre Merkle binaire sur la liste
+## 4. Preuves d'inclusion and clients legers- Le producteur de bloc construit un arbre Merkle binaire sur la list
   serialisee des `DaCommitmentRecord`. La racine alimente `da_commitments_hash`.
 - `DaCommitmentProof` emballe le record cible plus un vecteur de
   `(sibling_hash, position)` afin que les verificateurs puissent reconstruire la
   racine. Les preuves incluent aussi le hash de bloc et le header signe pour que
   les clients legers puissent verifier la finalite.
-- Les helpers CLI (`iroha_cli app da prove-commitment`) enveloppent le cycle
-  request/verify et exposent des sorties Norito/hex pour les operateurs.
+- Les helpers CLI (`iroha_cli app da prove-commitment`) מחזור מקיף
+  בקשה/אמת וחשיפה של מיונים Norito/hex pour les operators.
 
-## 5. Storage et indexation
+## 5. אחסון ואינדקס
 
-Le WSV stocke les commitments dans une column family dediee, cle par
+Le WSV stocke les Commitments dans une column family dediee, cle par
 `manifest_hash`. Des indexes secondaires couvrent `(lane_id, epoch)` et
 `(lane_id, sequence)` afin que les requetes eviten de scanner des bundles
-complets. Chaque record suit la hauteur de bloc qui l'a scelle, permettant aux
-noeuds en rattrapage de reconstruire l'index rapidement a partir du block log.
+משלים. חליפת צ'אק תקליט la hauteur de bloc qui l'a scelle, permettant aux
+nouds en rattrapage de reconstruire l'index rapidement a partir du block log.
 
 ## 6. Telemetrie et observabilite
 
 - `torii_da_commitments_total` incremente des qu'un bloc scelle au moins un
-  record.
-- `torii_da_commitment_queue_depth` suit les receipts en attente de bundle
-  (par lane).
-- Le dashboard Grafana `dashboards/grafana/da_commitments.json` visualise
+  להקליט.
+- `torii_da_commitment_queue_depth` חליפת קבלות
+  (נתיב נקוב).
+- לוח המחוונים Grafana `dashboards/grafana/da_commitments.json` להמחיש
   l'inclusion de blocs, la profondeur de queue, et le throughput de preuve pour
   que les gates de release DA-3 puissent auditer le comportement.
 
-## 7. Strategie de tests
+## 7. אסטרטגיית בדיקות
 
-1. **Tests unitaires** pour l'encoding/decoding de `DaCommitmentBundle` et les
+1. **מבחן יחידות** pour l'encoding/פענוח de `DaCommitmentBundle` et les
    mises a jour de derivation de hash de bloc.
-2. **Fixtures golden** sous `fixtures/da/commitments/` capturant les bytes
+2. **מתקן זהוב** sous `fixtures/da/commitments/` לכידת לסיביות
    canoniques du bundle et les preuves Merkle.
-3. **Tests d'integration** demarrant deux validateurs, ingestant des blobs de
+3. **מבדקי אינטגרציה** demarrant deux validateurs, ingestant des blobs de
    test, et verifiant que les deux noeuds concordent sur le contenu du bundle et
    les reponses de query/proof.
-4. **Tests light-client** dans `integration_tests/tests/da/commitments.rs`
+4. **בודק קל-לקוח** ב-`integration_tests/tests/da/commitments.rs`
    (Rust) qui appellent `/prove` et verifient la preuve sans parler a Torii.
-5. **Smoke CLI** avec `scripts/da/check_commitments.sh` pour garder l'outillage
-   operateur reproductible.
+5. **עשן CLI** avec `scripts/da/check_commitments.sh` pour garder l'outillage
+   ניתן לשחזור מפעיל.
 
-## 8. Plan de rollout
+## 8. תוכנית השקה
 
-| Phase | Description | Exit Criteria |
-|-------|-------------|---------------|
-| P0 - Merge du data model | Integrer `DaCommitmentRecord`, mises a jour du header de bloc et codecs Norito. | `cargo test -p iroha_data_model` vert avec nouvelles fixtures. |
-| P1 - Wiring Core/WSV | Cablage logique de queue + block builder, persister les indexes et exposer les handlers RPC. | `cargo test -p iroha_core`, `integration_tests/tests/da/commitments.rs` passent avec assertions de bundle proof. |
-| P2 - Tooling operateur | Livrer helpers CLI, dashboard Grafana, et mises a jour des docs de verification de proof. | `iroha_cli app da prove-commitment` fonctionne sur devnet; le dashboard affiche des donnees live. |
-| P3 - Gate de gouvernance | Activer le validateur de blocs requerant les commitments DA sur les lanes signalees dans `iroha_config::nexus`. | Entree de status + update de roadmap marquent DA-3 comme TERMINE. |
+| שלב | תיאור | קריטריוני יציאה |
+|-------|-------------|------------|
+| P0 - מיזוג מודל נתונים | אינטגרר `DaCommitmentRecord`, חסר לך כותרת קודקים Norito. | `cargo test -p iroha_data_model` מתקנים vert avec nouvelles. |
+| P1 - ליבת חיווט/WSV | לוגיקה של תור + בונה בלוקים, מתמידים באינדקסים וחושפים את המטפלים RPC. | `cargo test -p iroha_core`, `integration_tests/tests/da/commitments.rs` נוסעים עם הוכחות חבילה. |
+| P2 - מפעיל כלי עבודה | ספר עוזרי CLI, לוח מחוונים Grafana, et mises a jour des docs de verification de proof. | `iroha_cli app da prove-commitment` fonctionne sur devnet; le dashboard affiche des donnees בשידור חי. |
+| P3 - שער שלטון | Activer le validateur de blocs requerant les התחייבויות DA sur les lanes signalees dans `iroha_config::nexus`. | כניסה לסטטוס + עדכון מפת הדרכים של DA-3 comme TERMINE. |
 
-## Questions ouvertes
+## שאלות אוברטיות1. **ברירת המחדל של KZG נגד מרקל** - המשך פעולות מתעלם מההתחייבויות KZG pour
+   les petits blobs afin de reduire la taille des blocs? הצעה: גארדר
+   `kzg_commitment` optionnel et le gater דרך `iroha_config::da.enable_kzg`.
+2. **פערים ברצף** - Autorise-t-on des lanes hors order? Le plan actuel rejette
+   les gaps sauf si la governance active `allow_sequence_skips` pour un replay
+   דחוף.
+3. **מטמון קל לקוח** - L'equipe SDK דורש מטמון SQLite leger pour les
+   הוכחות; suivi en attente sous DA-8.
 
-1. **KZG vs Merkle defaults** - Doit-on toujours ignorer les commitments KZG pour
-   les petits blobs afin de reduire la taille des blocs? Proposition: garder
-   `kzg_commitment` optionnel et le gater via `iroha_config::da.enable_kzg`.
-2. **Sequence gaps** - Autorise-t-on des lanes hors ordre? Le plan actuel rejette
-   les gaps sauf si la gouvernance active `allow_sequence_skips` pour un replay
-   d'urgence.
-3. **Light-client cache** - L'equipe SDK a demande un cache SQLite leger pour les
-   proofs; suivi en attente sous DA-8.
-
-Repondre a ces questions dans les PRs d'implementation fera passer DA-3 de
-BROUILLON (ce document) a EN COURS des que le travail de code commence.
+ענה על שאלות ב-PRs d'implementation fera passer DA-3 de
+BROUILLON (ce document) a EN COURS des que le travail de code מתחילים.

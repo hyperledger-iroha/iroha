@@ -4,43 +4,37 @@ direction: rtl
 source: docs/portal/docs/reference/address-safety.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: Seguranca e acessibilidade de enderecos
-description: Requisitos de UX para apresentar e compartilhar enderecos Iroha com seguranca (ADDR-6c).
+العنوان: Seguranca e Accessibilidade de enderecos
+الوصف: متطلبات تجربة المستخدم لعرض ومشاركة العناصر Iroha مع الأمان (ADDR-6c).
 ---
 
-Esta pagina captura o entregavel de documentacao ADDR-6c. Aplique estas restricoes a wallets, explorers, ferramentas de SDK e qualquer superficie do portal que renderize ou aceite enderecos voltados para pessoas. O modelo de dados canonico vive em `docs/account_structure.md`; a checklist abaixo explica como expor esses formatos sem comprometer seguranca ou acessibilidade.
+تلتقط هذه الصفحة أو تقوم بتوسيع المستندات ADDR-6c. يقيد هذا التطبيق المحافظ والمستكشفين وأدوات SDK وأي سطح للبوابة يعرض أو يزود الأشخاص بأشياء رائعة. نموذج البيانات الكنسي يعيش في `docs/account_structure.md`؛ قائمة مرجعية موضحة أدناه مثل عرض هذه التنسيقات بدون ضمان الأمان أو إمكانية الوصول.
 
-## Fluxos seguros de compartilhamento
+## تدفقات المشاركة الآمنة- بالنسبة للشاشة، يجب استخدام كل النسخ/المشاركة عبر endereco IH58. قم بإظهار نطاق الحل كسياق الدعم للحفاظ على سلسلة مع المجموع الاختباري لحذفها.
+- نقدم لك مشاركة "مشاركة" تتضمن نصًا خالصًا ورمز الاستجابة السريعة المشتق من نفس الحمولة. اسمح للأشخاص باستخدام التفتيش قبل التأكيد.
+- عندما تقوم بتوسيع نطاق اقتطاع (البطاقات الصغيرة والإشعارات)، احتفظ بالبادئة القانونية الأولية، استخدم التحفظات واحتفظ بآخر 4-6 أحرف حتى يظل المجموع الاختباري على قيد الحياة. قم بتمكين إيماءة اللمس/لوحة المفاتيح لنسخ سلسلة كاملة دون اقتطاعها.
+- تجنب إلغاء المزامنة مع عرض الحافظة لنخب التأكيد الذي يتم نسخه تمامًا من سلسلة IH58. عند إجراء القياس عن بعد، قم بإجراء تجارب النسخ مقابل نقاط المشاركة لاكتشاف تراجعات تجربة المستخدم بسرعة.
 
-- Por padrao, toda acao de copiar/compartilhar deve usar o endereco IH58. Exiba o dominio resolvido como contexto de apoio para manter a string com checksum em destaque.
-- Ofereca um atalho de "Compartilhar" que inclua o endereco em texto puro e um QR code derivados do mesmo payload. Permita que a pessoa usuaria inspecione ambos antes de confirmar.
-- Quando o espaco exigir truncagem (cards pequenos, notificacoes), mantenha o prefixo legivel inicial, use reticencias e preserve os ultimos 4-6 caracteres para que a ancora do checksum sobreviva. Disponibilize um gesto de toque/atalho de teclado para copiar a string completa sem truncagem.
-- Evite desincronizacao com o clipboard exibindo um toast de confirmacao que mostre exatamente a string IH58 copiada. Quando houver telemetria, conte tentativas de copy versus acoes de share para detectar regressoes de UX rapidamente.
+## Salvaguardas para IME e intrada- أدخل حرف غير ASCII في مجال البحث. عندما تقوم بإدخال أدوات IME (عرض كامل، كانا، علامات توم)، قم بتقديم نصيحة مضمنة موضحة مثل تمرير أو لوحة مفاتيح لإدخال اللغة اللاتينية قبل التجربة الجديدة.
+- احصل على منطقة لصق في النص تمامًا لإزالة العلامات المجمعة واستبدال المساحات الفارغة بمساحات ASCII قبل التحقق من صحتها. هذا يتجنب فقدان التقدم عند عدم استخدام المستخدم أو IME أثناء التدفق.
+- Fortaleca وvalidacao ضد النجارين ذات العرض الصفري ومحددات التباين ونقاط الكود الأخرى Unicode furtivos. قم بتسجيل فئة نقطة الكود التي تم تسجيلها بحيث تحتوي مجموعات التشويش على قياس عن بعد.
 
-## Salvaguardas para IME e entrada
-
-- Rejeite entrada non-ASCII em campos de endereco. Quando surgirem artefatos de IME (full width, Kana, marcas de tom), mostre um aviso inline explicando como trocar o teclado para entrada latina antes de tentar novamente.
-- Forneca uma area de paste em texto puro que remova marcas combinatorias e substitua espacos em branco por espacos ASCII antes da validacao. Isso evita perda de progresso quando o usuario desativa o IME no meio do fluxo.
-- Fortaleca a validacao contra zero-width joiners, variation selectors e outros code points Unicode furtivos. Registre a categoria de code point rejeitada para que suites de fuzzing possam incorporar a telemetria.
-
-## Expectativas para tecnologias assistivas
-
-- Anote cada bloco de endereco com `aria-label` ou `aria-describedby` que detalhe o prefixo legivel e agrupe o payload em blocos de 4-8 caracteres ("ih dash b three two ..."). Isso impede que leitores de tela produzam um fluxo ininteligivel de caracteres.
-- Anuncie eventos de copy/share bem-sucedidos por meio de uma live region "polite". Inclua o destino (clipboard, share sheet, QR) para que a pessoa usuaria saiba que a acao foi concluida sem mover o foco.
-- Forneca texto `alt` descritivo para pre-visualizacoes de QR (por exemplo, "Endereco IH58 para `<account>` na chain `0x1234`"). Coloque ao lado do canvas do QR um botao "Copiar endereco em texto" para pessoas com baixa visao.
+## توقعات للتكنولوجيات المساعدة- قم بملاحظة كل كتلة من endereco com `aria-label` أو `aria-describedby` que detalhe o prefixolegivel e agrupe o payload em blocos de 4-8 caracteres ("ih Dash b three two..."). وهذا يعيق القراء عن إنتاج تدفق غير ذكي من الشخصيات.
+- الإعلان عن أحداث النسخ/المشاركة الناجحة من أجل منطقة حية "مهذبة". قم بتضمين الوجهة (الحافظة، ورقة المشاركة، QR) حتى يتمكن الأشخاص من الاستفادة من معرفة ما إذا كانوا قد حسموا الأمر دون تحريك الصورة.
+- للحصول على النص `alt` الموضح لصور QR المرئية مسبقًا (على سبيل المثال، "Endereco IH58 لـ `<account>` في السلسلة `0x1234`"). قم برسم لوحة QR على القماش باستخدام زر "نسخ النص بالكامل" للأشخاص من خلال الحصول على تأشيرة إضافية.
 
 ## Enderecos comprimidos somente Sora
 
-- Gating: oculte a string comprimida `sora...` atras de uma confirmacao explicita. A confirmacao deve deixar claro que esse formato so funciona em chains Sora Nexus.
-- Rotulagem: toda ocorrencia deve incluir um badge visivel "Somente Sora" e um tooltip explicando por que outras redes exigem o formato IH58.
-- Protecoes: se o discriminante de chain ativo nao for a alocacao Nexus, recuse gerar o endereco comprimido e redirecione o usuario de volta para IH58.
-- Telemetria: registre quantas vezes o formato comprimido e solicitado e copiado para que o playbook de incidentes consiga detectar picos de compartilhamento acidental.
+- البوابات: قم بإخفاء سلسلة مكونة من `sora...` من تأكيد صريح. لقد تم التأكيد على أن التنسيق يعمل بهذه السلاسل Sora Nexus.
+- التدوير: يجب أن يتضمن كل حدث شارة مرئية "Somente Sora" وتلميح أداة موضحًا لما تتطلبه الألوان الأخرى من تنسيق IH58.
+- الحماية: إذا تم تمييز السلسلة غير المخصصة لـ Nexus، أو إعادة تدويرها أو إعادة توجيهها، أو استخدام الطاقة لـ IH58.
+- القياس عن بعد: قم بتسجيل الكميات مرة واحدة أو تنسيق تم تجميعه وطلبه ونسخه حتى يتمكن دليل الحوادث من اكتشاف صور المشاركة الحمضية.##بوابات الجودة
 
-## Gates de qualidade
-
-- Estenda testes de UI automatizados (ou suites de acessibilidade no storybook) para garantir que os componentes de endereco exponham a metadata ARIA necessaria e que mensagens de rejeicao de IME aparecam.
-- Inclua cenarios de QA manual para entrada via IME (kana, pinyin), passagem com leitor de tela (VoiceOver/NVDA) e copia via QR em temas de alto contraste antes de lancar.
-- Torne esses checks visiveis nas checklists de release, juntamente com os testes de paridade IH58, para que regressoes continuem bloqueadas ate serem corrigidas.
+- قم بنشر اختبارات واجهة المستخدم الآلية (أو مجموعات الوصول إلى القصص القصيرة) لضمان أن تعرض مكونات البحث البيانات الوصفية اللازمة لـ ARIA وأن تظهر رسائل طلب IME.
+- تضمين سيناريوهات دليل ضمان الجودة للدخول عبر IME (كانا، بينيين)، والتمرير مع مؤلف الشاشة (VoiceOver/NVDA) والنسخ عبر QR على مواضيع عالية التباين مسبقًا.
+- قم بتمزيق عمليات التحقق المرئية في قوائم المراجعة للإصدار، جنبًا إلى جنب مع خصيتي جدار IH58، حتى تستمر عمليات التراجع في الغلق بشكل متواصل.

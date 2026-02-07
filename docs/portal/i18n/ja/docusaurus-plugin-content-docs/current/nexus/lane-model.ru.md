@@ -4,50 +4,52 @@ direction: ltr
 source: docs/portal/docs/nexus/lane-model.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: nexus-lane-model
-title: Модель lanes Nexus
-description: Логическая таксономия lanes, геометрия конфигурации и правила слияния world-state для Sora Nexus.
+ID: ネクサスレーンモデル
+タイトル: Модель レーン Nexus
+説明: Логическая таксономия レーン、геометрия конфигурации и правила слияния 世界国家ソラ Nexus。
 ---
 
-# Модель lanes Nexus и партиционирование WSV
+# レーン Nexus と WSV の組み合わせ
 
-> **Статус:** поставка NX-1 - таксономия lanes, геометрия конфигурации и раскладка хранения готовы к внедрению.  
-> **Owners:** Nexus Core WG, Governance WG  
-> **Ссылка в roadmap:** NX-1 в `roadmap.md`
+> **Статус:** поставка NX-1 - таксономия レーン、геометрия конфигурации и раскладка хранения готовы к внедрению.  
+> **所有者:** Nexus コア WG、ガバナンス WG  
+> **ロードマップのロードマップ:** NX-1 `roadmap.md`
 
-Эта страница портала зеркалирует канонический brief `docs/source/nexus_lanes.md`, чтобы операторы Sora Nexus, owners SDK и ревьюеры могли читать руководство по lanes без погружения в дерево mono-repo. Целевая архитектура сохраняет детерминизм world state, при этом позволяя отдельным data spaces (lanes) запускать публичные или частные наборы валидаторов с изолированными workloads.
+説明書 `docs/source/nexus_lanes.md`、Sora Nexus、所有者 SDK と説明レーン数、モノリポジトリ数が表示されます。データ スペース (レーン) のデータ スペース (レーン) の世界状態、データ スペース (レーン) を表示します。多くのワークロードを必要とします。
 
-## Concepts
+## 概念
 
-- **Lane:** логический shard ledger Nexus со своим набором валидаторов и backlog выполнения. Идентифицируется стабильным `LaneId`.
-- **Data Space:** governance bucket, группирующий одну или несколько lanes с общими политиками compliance, routing и settlement.
-- **Lane Manifest:** governance-контролируемая metadata, описывающая валидаторов, DA policy, gas token, правила settlement и routing permissions.
-- **Global Commitment:** proof, выпускаемая lane и суммирующая новые state roots, settlement data и опциональные cross-lane transfers. Глобальное кольцо NPoS упорядочивает commitments.
+- **レーン:** シャード台帳 Nexus とバックログ。 Идентифицируется стабильным `LaneId`。
+- **データ スペース:** ガバナンス バケット、コンプライアンス、ルーティング、決済などのレーンを管理します。
+- **レーン マニフェスト:** ガバナンス メタデータ、アクセス許可、DA ポリシー、ガス トークン、決済、ルーティング許可。
+- **グローバルな取り組み:** 証拠、レーン間のルート、州のルート、決済データ、レーン間の転送。 NPoS のコミットメントを確認してください。
 
-## Таксономия lanes
+## Таксономия レーン
 
-Типы lanes канонически описывают видимость, governance surface и settlement hooks. Геометрия конфигурации (`LaneConfig`) фиксирует эти атрибуты, чтобы узлы, SDKs и tooling могли понимать layout без bespoke логики.
+レーン、ガバナンス サーフェス、決済フックを備えています。 Геометрия конфигурации (`LaneConfig`) фиксирует эти атрибуты、чтобы узлы、SDK、ツーリング、レイアウト、ビスポークлогики。
 
-| Тип lane | Видимость | Membership валидаторов | Экспозиция WSV | Governance по умолчанию | Политика settlement | Типичное применение |
-|-----------|------------|----------------------|--------------|--------------------|-------------------|-------------|
-| `default_public` | public | Permissionless (global stake) | Full state replica | SORA Parliament | `xor_global` | Базовый публичный ledger |
-| `public_custom` | public | Permissionless or stake-gated | Full state replica | Stake weighted module | `xor_lane_weighted` | Публичные приложения с высоким throughput |
-| `private_permissioned` | restricted | Фиксированный набор валидаторов (одобрен governance) | Commitments & proofs | Federated council | `xor_hosted_custody` | CBDC, консорциумные workloads |
-| `hybrid_confidential` | restricted | Смешанная membership; оборачивает ZK proofs | Commitments + selective disclosure | Programmable money module | `xor_dual_fund` | Privacy-preserving programmable money |
+| Тип レーン | Видимость |メンバーシップ | WSV をダウンロード |ガバナンスについて | Политика 和解 | Типичное применение |
+|----------|-----------|---------------|--------------|---------|--------|-------------|
+| `default_public` |パブリック |パーミッションレス (グローバルステーク) |完全な状態のレプリカ | SORA 議会 | `xor_global` | Базовый публичный 元帳 |
+| `public_custom` |パブリック |パーミッションレスまたはステークゲート |完全な状態のレプリカ |ステーク加重モジュール | `xor_lane_weighted` |スループットを向上させる |
+| `private_permissioned` |制限付き | Фиксированный набор валидаторов (одобрен ガバナンス) |コミットメントと証明 |連邦評議会 | `xor_hosted_custody` | CBDC、ワークロードの定義 |
+| `hybrid_confidential` |制限付き |メンバーシップ; ZK プルーフ | оборачиваетコミットメント + 選択的開示 |プログラム可能なマネーモジュール | `xor_dual_fund` |プライバシーを保護するプログラム可能なお金 |
 
-Все типы lane обязаны объявлять:
+レーンの名前:
 
-- Dataspace alias - человекочитаемая группировка, связывающая политики compliance.
-- Governance handle - идентификатор, разрешаемый через `Nexus.governance.modules`.
-- Settlement handle - идентификатор, потребляемый settlement router для списания XOR buffers.
-- Опциональная telemetry metadata (description, contact, business domain), отображаемая через `/status` и dashboards.
+- データスペース エイリアス - человекочитаемая группировка、связывающая политики コンプライアンス。
+- ガバナンス ハンドル - идентификатор、разрезаемый через `Nexus.governance.modules`。
+- 決済ハンドル - 決済ルーター、XOR バッファー。
+- テレメトリ メタデータ (説明、連絡先、ビジネス ドメイン)、`/status` およびダッシュボードを参照します。
 
-## Геометрия конфигурации lanes (`LaneConfig`)
+## Геометрия конфигурации レーン (`LaneConfig`)
 
-`LaneConfig` - runtime геометрия, выводимая из валидированного каталога lanes. Она не заменяет governance manifests; вместо этого предоставляет детерминированные storage identifiers и telemetry hints для каждой сконфигурированной lane.
+`LaneConfig` - ランタイム、レーン、レーン。ガバナンスが明示されます。ストレージ識別子とテレメトリ ヒントを確認し、レーンを確認します。
 
 ```text
 LaneConfigEntry {
@@ -64,61 +66,57 @@ LaneConfigEntry {
 }
 ```
 
-- `LaneConfig::from_catalog` пересчитывает геометрию при загрузке конфигурации (`State::set_nexus`).
-- Aliases санитизируются в нижний регистр slug; последовательности неалфавитно-цифровых символов схлопываются в `_`. Если alias дает пустой slug, используем `lane{id}`.
-- `shard_id` выводится из metadata key `da_shard_id` (по умолчанию `lane_id`) и управляет журналом shard cursor, чтобы DA replay оставался детерминированным между restarts/resharding.
-- Key prefixes гарантируют, что WSV сохраняет раздельные key ranges по lane, даже если backend общий.
-- Имена Kura segment детерминированы между hosts; аудиторы могут сопоставлять директории сегментов и manifests без bespoke tooling.
-- Merge segments (`lane_{id:03}_merge`) хранят последние merge-hint roots и global state commitments для этой lane.
+- `LaneConfig::from_catalog` は、 геометрию при загрузке конфигурации (`State::set_nexus`) です。
+- 別名 санитизируются в нижний регистр slug; `_` を確認してください。別名 дает пустой slug、используем `lane{id}`。
+- `shard_id` メタデータ キー `da_shard_id` (`lane_id`) シャード カーソル、DA リプレイоставался детерминированным между が再起動/リシャーディングします。
+- キー プレフィックス гарантируют、что WSV сохраняет раздельные キー範囲 по lane、даже если backend общий。
+- クラセグメントのホスト。これは、オーダーメイドのツールをマニフェストします。
+- セグメントのマージ (`lane_{id:03}_merge`) マージ ヒント ルートとグローバル ステート コミットメントをレーンに表示します。
 
-## Партиционирование world-state
+## 世界国家- Логический 世界状態 Nexus - 状態空間のレーン。公共レーンは完全な状態です。プライベート/機密レーンとマークル/コミットメント ルートとマージ元帳。
+- MV ストレージは каждый ключ 4-байтовым префиксом `LaneConfigEntry::key_prefix`、получая ключи вида `[00 00 00 01] ++ PackedKey` です。
+- 共有テーブル (アカウント、アセット、トリガー、ガバナンス レコード) 、レーン プレフィックス、範囲スキャン。
+- マージ元帳メタデータのレイアウト: レーンのマージ ヒント ルートと削減されたグローバル状態ルート、`lane_{id:03}_merge`、対象の保持/削除レーンを表示します。
+- クロスレーンインデックス (アカウントエイリアス、資産レジストリ、ガバナンスマニフェスト) とレーンプレフィックス、調整。
+- **保持ポリシー** - パブリック レーンはブロック本体を構成します。コミットメント専用レーンは、ボディとチェックポイント、コミットメントを区別します。機密レーンは、暗号文ジャーナルとワークロードを管理します。
+- **ツール** - утилиты обслуживания (`kagami`、CLI 管理コマンド) 、スラッグされた名前空間、メトリクス、Prometheus ラベルクラセグメント。
 
-- Логический world state Nexus - это объединение state spaces по lane. Public lanes сохраняют full state; private/confidential lanes экспортируют Merkle/commitment roots в merge ledger.
-- MV storage префиксирует каждый ключ 4-байтовым префиксом `LaneConfigEntry::key_prefix`, получая ключи вида `[00 00 00 01] ++ PackedKey`.
-- Shared tables (accounts, assets, triggers, governance records) хранят записи, сгруппированные по lane prefix, сохраняя детерминизм range scans.
-- Merge-ledger metadata зеркалирует тот же layout: каждая lane пишет merge-hint roots и reduced global state roots в `lane_{id:03}_merge`, что позволяет делать targeted retention/eviction при выводе lane.
-- Cross-lane indexes (account aliases, asset registries, governance manifests) хранят явные lane prefixes, чтобы операторы могли быстро выполнять reconciliation.
-- **Retention policy** - public lanes сохраняют полные block bodies; commitment-only lanes могут компактизировать старые bodies после checkpoints, потому что commitments авторитетны. Confidential lanes хранят ciphertext journals в выделенных сегментах, чтобы не блокировать другие workloads.
-- **Tooling** - утилиты обслуживания (`kagami`, CLI admin commands) должны ссылаться на slugged namespace при экспонировании metrics, Prometheus labels или архивировании Kura segments.
+## ルーティングと API
 
-## Routing & APIs
+- Torii REST/gRPC エンドポイント принимают опциональный `lane_id`; отсутствие означает `lane_default`。
+- SDK は、レーン セレクターと使いやすいエイリアス、`LaneId` レーンを備えています。
+- ルーティング ルール、レーン、データスペースなどのルーティング ルール。 `LaneConfig` ダッシュボードとログのテレメトリに適したエイリアスです。
 
-- Torii REST/gRPC endpoints принимают опциональный `lane_id`; отсутствие означает `lane_default`.
-- SDKs показывают lane selectors и маппят user-friendly aliases в `LaneId` через каталог lanes.
-- Routing rules работают по валидированному каталогу и могут выбирать и lane, и dataspace. `LaneConfig` предоставляет telemetry-friendly aliases для dashboards и logs.
+## 決済と手数料
 
-## Settlement & fees
+- レーンの XOR 手数料がかかります。レーンはネイティブ ガス トークン、エスクロー XOR と同等のコミットメントを表します。
+- 決済金額、変換メタデータ、プルーフエスクロー (手数料保管庫) の決済証明。
+- 決済ルーター (NX-3) は、レーン プレフィックス、決済テレメトリ、ストレージのバッファーを提供します。
 
-- Каждая lane платит XOR fees глобальному набору валидаторов. Lanes могут собирать native gas tokens, но обязаны escrow XOR equivalents вместе с commitments.
-- Settlement proofs включают amount, conversion metadata и proof escrow (например, перевод в глобальный fee vault).
-- Единый settlement router (NX-3) дебетует buffers теми же lane prefixes, поэтому settlement telemetry совпадает со storage геометрией.
+## ガバナンス
 
-## Governance
+- レーンはガバナンス モジュールを表示します。 `LaneConfigEntry` は、エイリアス、スラッグ、テレメトリ、監査証跡を記録します。
+- Nexus レジストリ レーン マニフェスト、`LaneId`、データスペース バインディング、ガバナンス ハンドル、決済ハンドル、メタデータ。
+- ランタイム アップグレード フックとガバナンス ポリシー (`gov_upgrade_id` と умолчанию) および diff とテレメトリ ブリッジ (イベント `nexus.config.diff`)。
 
-- Lanes объявляют свой governance module через каталог. `LaneConfigEntry` несет оригинальные alias и slug, чтобы telemetry и audit trails оставались читаемыми.
-- Nexus registry распространяет подписанные lane manifests, включающие `LaneId`, dataspace binding, governance handle, settlement handle и metadata.
-- Runtime-upgrade hooks продолжают применять governance policies (`gov_upgrade_id` по умолчанию) и логируют diffs через telemetry bridge (events `nexus.config.diff`).
+## テレメトリーとステータス
 
-## Telemetry & status
+- `/status` は、レーン エイリアス、データスペース バインディング、ガバナンス ハンドル、決済プロファイル、`LaneConfig` です。
+- スケジューラ メトリクス (`nexus_scheduler_lane_teu_*`) エイリアス/スラッグ、バックログ、TEU プレッシャーなど。
+- `nexus_lane_configured_total` は、レーン エントリと пересчитывается при изменении конфигурации を表示します。テレメトリとレーン ジオメトリの差分。
+- データスペース バックログ ゲージは、エイリアス/説明メタデータ、キュー圧力を確認します。
 
-- `/status` показывает lane aliases, dataspace bindings, governance handles и settlement profiles, производные от каталога и `LaneConfig`.
-- Scheduler metrics (`nexus_scheduler_lane_teu_*`) отображают aliases/slugs, чтобы операторы быстро связывали backlog и TEU pressure.
-- `nexus_lane_configured_total` считает количество выведенных lane entries и пересчитывается при изменении конфигурации. Telemetry испускает подписанные diffs при изменении lane geometry.
-- Dataspace backlog gauges включают alias/description metadata, помогая операторам связывать queue pressure с бизнес-доменами.
+## 構成と Norito タイプ
 
-## Configuration & Norito types
+- `LaneCatalog`、`LaneConfig`、`DataSpaceCatalog`、`iroha_data_model::nexus`、Norito-совместимыеマニフェストと SDK を参照してください。
+- `LaneConfig` と `iroha_config::parameters::actual::Nexus` および автоматически выводится из каталога; Norito エンコード не требуется、так как это внутренний ランタイム ヘルパー。
+- 説明 (`iroha_config::parameters::user::Nexus`) 記述子レーンとデータスペース。レーン ID とエイリアスが表示されます。
 
-- `LaneCatalog`, `LaneConfig`, и `DataSpaceCatalog` находятся в `iroha_data_model::nexus` и предоставляют Norito-совместимые структуры для manifests и SDKs.
-- `LaneConfig` находится в `iroha_config::parameters::actual::Nexus` и автоматически выводится из каталога; Norito encoding не требуется, так как это внутренний runtime helper.
-- Пользовательская конфигурация (`iroha_config::parameters::user::Nexus`) продолжает принимать декларативные descriptors lane и dataspace; парсинг теперь выводит геометрию и отклоняет невалидные aliases или дублирующиеся lane IDs.
+## Оставлаяся работа
 
-## Оставшаяся работа
+- 決済ルーターのアップデート (NX-3) は、スラッグ レーンの XOR バッファ デビットと領収書をサポートします。
+- 列ファミリー、廃止されたレーン、レーンごとのブロック ログ、スラッグされた名前空間などの管理ツールを提供します。
+- マージ (順序付け、枝刈り、競合検出) と回帰フィクスチャ、クロス レーン リプレイを実行します。
+- コンプライアンス フック、ホワイトリスト/ブラックリスト、プログラマブル マネー ポリシー (NX-12 など)。
 
-- Интегрировать settlement router updates (NX-3) с новой геометрией, чтобы XOR buffer debits и receipts помечались slug lane.
-- Расширить admin tooling для списка column families, компакта retired lanes и проверки per-lane block logs через slugged namespace.
-- Финализировать merge алгоритм (ordering, pruning, conflict detection) и добавить regression fixtures для cross-lane replay.
-- Добавить compliance hooks для whitelists/blacklists и programmable-money policies (трекится под NX-12).
-
----
-
-*Эта страница продолжит отслеживать NX-1 follow-ups по мере посадки NX-2 до NX-18. Пожалуйста, поднимайте открытые вопросы в `roadmap.md` или governance tracker, чтобы портал оставался синхронизированным с каноническими документами.*
+---* NX-1 のフォローアップと NX-2 と NX-18 を比較します。 Пожалуйста、поднимайте открытые вопросы в `roadmap.md` およびガバナンス トラッカー、чтобы портал оставался синхронизированным с каноническими документами.*

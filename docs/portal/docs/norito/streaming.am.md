@@ -7,80 +7,81 @@ generator: scripts/sync_docs_i18n.py
 source_hash: f9df713c3e078ac2ccbd74eb215b91bb80d08306d0ca455dc122fde535601ce8
 source_last_modified: "2026-01-18T10:42:52.828202+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-# Norito Streaming
+# Norito ዥረት
 
-Norito Streaming defines the wire format, control frames, and reference codec
-used for live media flows across Torii and SoraNet. The canonical spec lives in
-`norito_streaming.md` at the workspace root; this page distills the pieces that
-operators and SDK authors need alongside the configuration touch points.
+Norito ዥረት የሽቦ ቅርጸቱን፣ የቁጥጥር ፍሬሞችን እና የማጣቀሻ ኮዴክን ይገልጻል።
+ለቀጥታ ሚዲያ ፍሰቶች በI18NT0000002X እና SoraNet ላይ ጥቅም ላይ ይውላል። ቀኖናዊው ዝርዝር ውስጥ ይኖራል
+`norito_streaming.md` በስራ ቦታ ስር; ይህ ገጽ ቁርጥራጮቹን ያስወግዳል
+ኦፕሬተሮች እና የኤስዲኬ ደራሲዎች ከውቅረት ንክኪ ነጥቦች ጎን ለጎን ያስፈልጋቸዋል።
 
-## Wire format and control plane
+## ሽቦ ቅርጸት እና መቆጣጠሪያ አውሮፕላን
 
-- **Manifests & frames.** `ManifestV1` and `PrivacyRoute*` describe the segment
-  timeline, chunk descriptors, and route hints. Control frames (`KeyUpdate`,
-  `ContentKeyUpdate`, and cadence feedback) live alongside the manifest so
-  viewers can validate commitments before decoding.
-- **Baseline codec.** `BaselineEncoder`/`BaselineDecoder` enforce monotonic
-  chunk ids, timestamp arithmetic, and commitment verification. Hosts must call
-  `EncodedSegment::verify_manifest` before serving viewers or relays.
-- **Feature bits.** Capability negotiation advertises `streaming.feature_bits`
-  (default `0b11` = baseline feedback + privacy route provider) so relays and
-  clients can reject peers without matching capabilities deterministically.
+- ** መግለጫዎች እና ክፈፎች።** `ManifestV1` እና I18NI0000005X ክፍሉን ይገልፃሉ።
+  የጊዜ መስመር፣ ቁርጥራጭ ገላጭ እና የመንገድ ፍንጭ። የመቆጣጠሪያ ክፈፎች (`KeyUpdate`፣
+  `ContentKeyUpdate`፣ እና የcadence ግብረመልስ) ከማኒፌሽኑ ጋር ይኖራሉ
+  ተመልካቾች ከመግባታቸው በፊት ቃል ኪዳኖችን ማረጋገጥ ይችላሉ።
+- **ቤዝላይን ኮድ
+  ቸንክ መታወቂያዎች፣ የጊዜ ማህተም አርቲሜቲክ እና የቁርጠኝነት ማረጋገጫ። አስተናጋጆች መደወል አለባቸው
+  `EncodedSegment::verify_manifest` ተመልካቾችን ወይም ቅብብሎሾችን ከማገልገልዎ በፊት።
+- ** የባህሪ ቢት።** የአቅም ድርድር `streaming.feature_bits` ያስተዋውቃል
+  (ነባሪ I18NI0000012X = የመነሻ ግብረመልስ + የግላዊነት መስመር አቅራቢ) ስለዚህ ቅብብሎሽ እና
+  ደንበኞቻቸው ችሎታቸውን ሳይዛመዱ እኩዮችን ውድቅ ማድረግ ይችላሉ።
 
-## Keys, suites, and cadence
+## ቁልፎች፣ ስብስቦች እና ቃላቶች
 
-- **Identity requirements.** Streaming control frames are always signed with
-  Ed25519. Dedicated keys can be supplied via
-  `streaming.identity_public_key`/`streaming.identity_private_key`; otherwise
-  the node identity is reused.
-- **HPKE suites.** `KeyUpdate` selects the lowest common suite; suite #1 is
-  mandatory (`AuthPsk`, `Kyber768`, `HKDF-SHA3-256`, `ChaCha20-Poly1305`), with
-  an optional `Kyber1024` upgrade path. Suite selection is stored on the
-  session and validated on every update.
-- **Rotation.** Publishers emit a signed `KeyUpdate` every 64 MiB or 5 minutes.
-  `key_counter` must increase strictly; regression is a hard error.
-  `ContentKeyUpdate` distributes the rolling Group Content Key, wrapped under
-  the negotiated HPKE suite, and gates segment decryption by ID + validity
-  window.
-- **Snapshots.** `StreamingSession::snapshot_state` and
-  `restore_from_snapshot` persist `{session_id, key_counter, suite, sts_root,
-  cadence state}` under `streaming.session_store_dir` (default
-  `./storage/streaming`). Transport keys are re-derived on restore so crashes
-  do not leak session secrets.
+- ** የማንነት መስፈርቶች።** የዥረት መቆጣጠሪያ ፍሬሞች ሁል ጊዜ የተፈረሙ ናቸው።
+  ኢድ25519. የወሰኑ ቁልፎች በ በኩል ሊቀርቡ ይችላሉ
+  `streaming.identity_public_key`/`streaming.identity_private_key`; አለበለዚያ
+  የመስቀለኛ መለያው እንደገና ጥቅም ላይ ይውላል.
+- ** HPKE suites.** `KeyUpdate` ዝቅተኛውን የጋራ ስብስብ ይመርጣል; ስብስብ #1 ነው።
+  አስገዳጅ (`AuthPsk`፣ `Kyber768`፣ `HKDF-SHA3-256`፣ I18NI0000019X)፣ ከ ጋር
+  አማራጭ `Kyber1024` ማሻሻያ መንገድ. የ Suite ምርጫ በ ላይ ተከማችቷል።
+  ክፍለ ጊዜ እና በእያንዳንዱ ዝመና ላይ የተረጋገጠ።
+- **ማሽከርከር።** አታሚዎች የተፈረመ I18NI0000021X በየ64ሚቢ ወይም 5ደቂቃ ይለቃሉ።
+  `key_counter` በጥብቅ መጨመር አለበት; እንደገና መመለስ ከባድ ስህተት ነው።
+  `ContentKeyUpdate` የተጠቀለለ የቡድን ይዘት ቁልፍ ያሰራጫል።
+  የተደራደረው የHPKE ስብስብ፣ እና የጌት ክፍል ዲክሪፕት በ ID + ትክክለኛነት
+  መስኮት.
+- ** ቅጽበታዊ ገጽ እይታዎች።** `StreamingSession::snapshot_state` እና
+  `restore_from_snapshot` `{የክፍለ-ጊዜ_መታወቂያ፣ቁልፍ_ቆጣሪ፣ስብስብ፣ sts_root፣
+  cadence ሁኔታ}I18NI0000026Xstreaming.session_store_dir` (ነባሪ
+  `./storage/streaming`)። የማጓጓዣ ቁልፎች ወደነበረበት ሲመለሱ ይከሰታሉ
+  የክፍለ ጊዜ ሚስጥሮችን አታፍስሱ.
 
-## Runtime configuration
+## Runtime ውቅር
 
-- **Key material.** Supply dedicated keys with
+- **ቁልፍ ቁሳቁስ።** የተሰጡ ቁልፎችን ያቅርቡ
   `streaming.identity_public_key`/`streaming.identity_private_key` (Ed25519
-  multihash) and optional Kyber material via
-  `streaming.kyber_public_key`/`streaming.kyber_secret_key`. All four must be
-  present when overriding defaults; `streaming.kyber_suite` accepts
-  `mlkem512|mlkem768|mlkem1024` (aliases `kyber512/768/1024`, default
+  multihash) እና አማራጭ Kyber ቁሳዊ በኩል
+  `streaming.kyber_public_key`/`streaming.kyber_secret_key`. አራቱም መሆን አለባቸው
+  ነባሪዎችን በሚሽርበት ጊዜ መገኘት; `streaming.kyber_suite` ይቀበላል
+  `mlkem512|mlkem768|mlkem1024` (ተለዋጭ ስም `kyber512/768/1024`፣ ነባሪ
   `mlkem768`).
-- **Codec guardrails.** CABAC stays disabled unless the build enables it;
-  bundled rANS requires `ENABLE_RANS_BUNDLES=1`. Enforce via
-  `streaming.codec.{entropy_mode,bundle_width,bundle_accel}` and optional
-  `streaming.codec.rans_tables_path` when supplying custom tables. Bundled
-- **SoraNet routes.** `streaming.soranet.*` controls anonymous transport:
-  `exit_multiaddr` (default `/dns/torii/udp/9443/quic`), `padding_budget_ms`
-  (default 25 ms), `access_kind` (`authenticated` vs `read-only`), optional
-  `channel_salt`, `provision_spool_dir` (default
-  `./storage/streaming/soranet_routes`), `provision_spool_max_bytes` (default 0,
-  unlimited), `provision_window_segments` (default 4), and
-  `provision_queue_capacity` (default 256).
-- **Sync gate.** `streaming.sync` toggles drift enforcement for audiovisual
-  streams: `enabled`, `observe_only`, `ewma_threshold_ms`, and `hard_cap_ms`
-  govern when segments are rejected for timing drift.
+- **የኮዴክ መከላከያ መንገዶች** ግንባታው እስካልቻለው ድረስ CABAC እንደተሰናከለ ይቆያል።
+  የተጠቀለለ RANS `ENABLE_RANS_BUNDLES=1` ያስፈልገዋል። በ በኩል ማስፈጸም
+  `streaming.codec.{entropy_mode,bundle_width,bundle_accel}` እና አማራጭ
+  ብጁ ጠረጴዛዎችን ሲያቀርብ `streaming.codec.rans_tables_path`። የተጠቀለለ
+- **የሶራኔት መንገዶች።** `streaming.soranet.*` የማይታወቅ መጓጓዣን ይቆጣጠራል።
+  `exit_multiaddr` (ነባሪ `/dns/torii/udp/9443/quic`)፣ `padding_budget_ms`
+  (ነባሪ 25ms)፣ `access_kind` (`authenticated` vs `read-only`)፣ አማራጭ
+  `channel_salt`፣ `provision_spool_dir` (ነባሪ
+  `./storage/streaming/soranet_routes`)፣ `provision_spool_max_bytes` (ነባሪ 0፣
+  ያልተገደበ)፣ I18NI0000050X (ነባሪ 4) እና
+  `provision_queue_capacity` (ነባሪ 256)።
+- ** አመሳስል በር።** `streaming.sync` ተንሸራታች ማስፈጸሚያ ለኦዲዮቪዥዋል ይቀይራል።
+  ዥረቶች፡ I18NI0000053X፣ `observe_only`፣ `ewma_threshold_ms`፣ እና `hard_cap_ms`
+  ክፍሎች በጊዜ መንሸራተት ውድቅ ሲደረግ ያስተዳድሩ።
 
-## Validation and fixtures
+## ማረጋገጫ እና መጫዎቻዎች
 
-- Canonical type definitions and helpers live in
+- ቀኖናዊ ዓይነት ትርጓሜዎች እና ረዳቶች ይኖራሉ
   `crates/iroha_crypto/src/streaming.rs`.
-- Integration coverage exercises the HPKE handshake, content-key distribution,
-  and snapshot lifecycle (`crates/iroha_crypto/tests/streaming_handshake.rs`).
-  Run `cargo test -p iroha_crypto streaming_handshake` to verify the streaming
-  surface locally.
-- For a deep dive into layout, error handling, and future upgrades, read
-  `norito_streaming.md` in the repository root.
+- የውህደት ሽፋን የ HPKE እጅ መጨባበጥን፣ የይዘት ቁልፍ ስርጭትን፣
+  እና ቅጽበታዊ የህይወት ዑደት (`crates/iroha_crypto/tests/streaming_handshake.rs`)።
+  ዥረቱን ለማረጋገጥ `cargo test -p iroha_crypto streaming_handshake`ን ያሂዱ
+  ላዩን በአካባቢው.
+- ወደ አቀማመጥ፣ የስህተት አያያዝ እና የወደፊት ማሻሻያዎችን በጥልቀት ለመጥለቅ ያንብቡ
+  `norito_streaming.md` በማከማቻ ስር.

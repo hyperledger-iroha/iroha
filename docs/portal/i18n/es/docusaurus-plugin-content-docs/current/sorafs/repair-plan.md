@@ -8,29 +8,31 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraFS Repair Automation & Auditor API
 sidebar_label: Repair Automation
 description: Governance policy, escalation lifecycle, and API expectations for SoraFS repair automation.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
-Mirrors `docs/source/sorafs_repair_plan.md`. Keep both versions in sync until the Sphinx set is retired.
+:::nota Fuente canónica
+Espejos `docs/source/sorafs_repair_plan.md`. Mantenga ambas versiones sincronizadas hasta que se retire el conjunto Sphinx.
 :::
 
-## Governance Decision Lifecycle
-1. Escalated repairs create a slash proposal draft and open the dispute window.
-2. Governance voters submit approve/reject votes during the dispute window.
-3. At `escalated_at_unix + dispute_window_secs` the decision is computed deterministically: minimum voters, approvals exceed rejections, and the approval ratio meets the quorum threshold.
-4. Approved decisions open an appeal window; appeals recorded before `approved_at_unix + appeal_window_secs` mark the decision as appealed.
-5. Penalty caps apply to all proposals; submissions above the cap are rejected.
+## Ciclo de vida de las decisiones de gobernanza
+1. Las reparaciones escaladas crean un borrador de propuesta de barra diagonal y abren la ventana de disputa.
+2. Los votantes de gobernanza envían votos de aprobación/rechazo durante el período de disputa.
+3. En `escalated_at_unix + dispute_window_secs` la decisión se calcula de manera determinista: votantes mínimos, las aprobaciones superan los rechazos y el índice de aprobación alcanza el umbral de quórum.
+4. Las decisiones aprobadas abren una ventana de apelación; Las apelaciones registradas antes de `approved_at_unix + appeal_window_secs` marcan la decisión como apelada.
+5. Se aplican límites a las sanciones a todas las propuestas; las presentaciones que superen el límite se rechazan.
 
-## Governance Escalation Policy
-The escalation policy is sourced from `governance.sorafs_repair_escalation` in `iroha_config` and is enforced for every repair slash proposal.
+## Política de escalada de gobernanza
+La política de escalada tiene su origen en `governance.sorafs_repair_escalation` en `iroha_config` y se aplica para cada propuesta de barra diagonal de reparación.
 
-| Setting | Default | Meaning |
+| Configuración | Predeterminado | Significado |
 |---------|---------|---------|
-| `quorum_bps` | 6667 | Minimum approval ratio (basis points) among counted votes. |
-| `minimum_voters` | 3 | Minimum number of distinct voters required to resolve a decision. |
-| `dispute_window_secs` | 86400 | Time after escalation before votes are finalized (seconds). |
-| `appeal_window_secs` | 604800 | Time after approval during which appeals are accepted (seconds). |
-| `max_penalty_nano` | 1,000,000,000 | Maximum slash penalty allowed for repair escalations (nano-XOR). |
+| `quorum_bps` | 6667 | Ratio mínimo de aprobación (puntos básicos) entre los votos escrutados. |
+| `minimum_voters` | 3 | Número mínimo de votantes distintos necesarios para resolver una decisión. |
+| `dispute_window_secs` | 86400 | Tiempo después de la escalada antes de que finalicen las votaciones (segundos). |
+| `appeal_window_secs` | 604800 | Tiempo después de la aprobación durante el cual se aceptan apelaciones (segundos). |
+| `max_penalty_nano` | 1.000.000.000 | Penalización máxima permitida para escaladas de reparación (nano-XOR). |
 
-- Scheduler-generated proposals are capped at `max_penalty_nano`; auditor submissions above the cap are rejected.
-- Vote records are stored in `repair_state.to` with deterministic ordering (`voter_id` sorting) so all nodes derive the same decision timestamp and outcome.
+- Las propuestas generadas por el programador tienen un límite de `max_penalty_nano`; Las presentaciones del auditor por encima del límite se rechazan.
+- Los registros de votación se almacenan en `repair_state.to` con orden determinista (clasificación `voter_id`) para que todos los nodos obtengan la misma marca de tiempo y resultado de decisión.

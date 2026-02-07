@@ -4,28 +4,30 @@ direction: ltr
 source: docs/portal/docs/norito/examples/nft-flow.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-slug: /norito/examples/nft-flow
-title: سك ونقل وحرق NFT
-description: يسرد دورة حياة NFT من البداية إلى النهاية: السك للمالك، النقل، ووسم بيانات التعريف، والحرق.
-source: crates/ivm/docs/examples/12_nft_flow.ko
+пуля: /norito/examples/nft-flow
+титул: Сэнсэй Уоррен NFT
+Описание: Создано в NFT в честь события: السك للمالك، النقل, ووسم بيانات التعريف, والحرق.
+источник: crates/ivm/docs/examples/12_nft_flow.ko
 ---
 
-يسرد دورة حياة NFT من البداية إلى النهاية: السك للمالك، النقل، ووسم بيانات التعريف، والحرق.
+Создан для NFT в Новом году: Стоун-Луи, Нью-Йорк, Нью-Йорк التعريف, والحرق.
 
 ## جولة دفتر الأستاذ
 
-- تأكد من وجود تعريف NFT (مثل `n0#wonderland`) إلى جانب حسابات المالك/المستلم المستخدمة في المقتطف (`ih58...`, `ih58...`).
-- استدعِ نقطة الدخول `nft_issue_and_transfer` لسك NFT ونقله من Alice إلى Bob وإرفاق علامة بيانات تعريف تصف الإصدار.
-- افحص حالة دفتر NFT باستخدام `iroha_cli ledger nfts list --account <id>` أو مكافئات SDK للتحقق من النقل، ثم أكد إزالة الأصل بعد تنفيذ تعليمة الحرق.
+- Создано для NFT (с кодом `n0#wonderland`) и используется для восстановления/разгрузки. Установите флажок (`ih58...`, `ih58...`).
+- استدعِ نقطة الدخول `nft_issue_and_transfer` لسك NFT ونقله من من من إلى Bob علامة بيانات تعريف تصف الإصدار.
+- Создайте NFT-файл `iroha_cli ledger nfts list --account <id>` и установите SDK в нужном месте. Он сказал, что хочет сделать это.
 
-## أدلة SDK ذات صلة
+## Использование SDK
 
-- [البدء السريع لـ Rust SDK](/sdks/rust)
-- [البدء السريع لـ Python SDK](/sdks/python)
-- [البدء السريع لـ JavaScript SDK](/sdks/javascript)
+- [Загрузка в Rust SDK](/sdks/rust)
+- [Просмотр Python SDK](/sdks/python)
+- [Загрузка JavaScript SDK](/sdks/javascript)
 
 [نزّل مصدر Kotodama](/norito-snippets/nft-flow.ko)
 

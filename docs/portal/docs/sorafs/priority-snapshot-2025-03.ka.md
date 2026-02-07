@@ -10,29 +10,30 @@ translation_last_reviewed: 2026-02-07
 id: priority-snapshot-2025-03
 title: Priority Snapshot — March 2025 (Beta)
 description: Mirror of the 2025-03 Nexus steering snapshot; pending ACKs before public rollout.
+translator: machine-google-reviewed
 ---
 
-> Canonical source: `docs/source/sorafs/priority_snapshot_2025-03.md`
+> კანონიკური წყარო: `docs/source/sorafs/priority_snapshot_2025-03.md`
 >
-> Status: **Beta / awaiting steering ACKs** (Networking, Storage, Docs leads).
+> სტატუსი: **ბეტა / ელოდება მართვის ACK-ებს** (ქსელი, შენახვა, Docs ლიდერები).
 
-## Overview
+## მიმოხილვა
 
-The March snapshot keeps the docs/content-network initiatives aligned with the
-SoraFS delivery tracks (SF‑3, SF‑6b, SF‑9). Once all leads acknowledge the
-snapshot in the Nexus steering channel, remove the “Beta” note above.
+მარტის სნეპშოტი ინახავს დოკუმენტების/კონტენტის ქსელის ინიციატივებს შესაბამისობაში
+SoraFS მიწოდების ტრასები (SF‑3, SF‑6b, SF‑9). მას შემდეგ რაც ყველა წამყვანი აღიარებს ამას
+სნეპშოტი Nexus საჭის არხში, ამოიღეთ „ბეტა“ შენიშვნა ზემოთ.
 
-### Focus threads
+### ძაფების ფოკუსირება
 
-1. **Circulate priority snapshot** — collect acknowledgements and log them in the
-   2025-03-05 council minutes.
-2. **Gateway/DNS kickoff close-out** — rehearse the new facilitation kit (Section 6
-   in the runbook) before the 2025-03-03 workshop.
-3. **Operator runbook migration** — portal `Runbook Index` is live; expose the beta
-   preview URL after reviewer onboarding sign-off.
-4. **SoraFS delivery threads** — align SF‑3/6b/9 remaining work with the plan/roadmap:
-   - `sorafs-node` PoR ingestion worker + status endpoint.
-   - CLI/SDK binding polish across Rust/JS/Swift orchestrator integrations.
-   - PoR coordinator runtime wiring and GovernanceLog events.
+1. **გაავრცელეთ პრიორიტეტული სნეპშოტი** — შეაგროვეთ მადლიერებები და დაარეგისტრირეთ ისინი
+   2025-03-05 საბჭოს ოქმი.
+2. **Gateway/DNS kickoff close-out** — გაიმეორეთ ახალი ფასილიტაციის ნაკრები (ნაწილი6
+   runbook) 2025-03-03 სახელოსნომდე.
+3. **ოპერატორის runbook მიგრაცია** — პორტალი `Runbook Index` არის ცოცხალი; გამოავლინეთ ბეტა
+   წინასწარ გადახედეთ URL-ს მიმომხილველის ბორტზე შესვლის შემდეგ.
+4. **SoraFS მიწოდების ძაფები** — გაასწორეთ დარჩენილი სამუშაოები SF‑3/6b/9 გეგმასთან/საგზაო რუქასთან:
+   - `sorafs-node` PoR გადაყლაპვის მუშაკი + სტატუსის საბოლოო წერტილი.
+   - CLI/SDK სავალდებულო გაპრიალება Rust/JS/Swift ორკესტრის ინტეგრაციაში.
+   - PoR კოორდინატორი Runtime გაყვანილობა და GovernanceLog ღონისძიებები.
 
-See the source file for the full table, distribution checklist, and log entries.
+იხილეთ წყარო ფაილი სრული ცხრილისთვის, განაწილების სიის და ჟურნალის ჩანაწერებისთვის.

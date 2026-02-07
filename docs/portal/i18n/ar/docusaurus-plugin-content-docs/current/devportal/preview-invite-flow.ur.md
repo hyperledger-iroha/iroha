@@ -4,92 +4,94 @@ direction: rtl
 source: docs/portal/docs/devportal/preview-invite-flow.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# پریویو دعوتی فلو
+# پریویو دعوةی فلو
 
-## مقصد
+## القصد
 
-روڈ میپ آئٹم **DOCS-SORA** ریویور آن بورڈنگ اور پبلک پریویو دعوتی پروگرام کو وہ آخری رکاوٹیں قرار دیتا ہے جن کے بعد پورٹل بیٹا سے باہر جا سکتا ہے۔ یہ صفحہ بیان کرتا ہے کہ ہر دعوتی ویو کیسے کھولی جائے، کون سے artifacts دعوتیں بھیجنے سے پہلے لازمی ہیں، اور فلو کی auditability کیسے ثابت کی جائے۔ اسے ساتھ استعمال کریں:
+قم بالتسجيل عبر الإنترنت **DOCS-SORA** قم بالتسجيل في بورنغ والمراجعة العامة لدعوة البرامج التي تم إعدادها وأخيرًا بعد إصدار برنامج الكمبيوتر المحمول ہے۔ تحتوي إحدى الصفحات على دعوة إلى دعوة جديدة، وهي دعوة مطلوبة دائمًا، بالإضافة إلى إمكانية التدقيق بشكل ثابت. يتم استخدامه كـ:
 
-- [`devportal/reviewer-onboarding`](./reviewer-onboarding.md) ہر ریویور کی ہینڈلنگ کے لئے۔
-- [`devportal/preview-integrity-plan`](./preview-integrity-plan.md) checksum ضمانتوں کے لئے۔
-- [`devportal/observability`](./observability.md) ٹیلی میٹری exports اور alerting hooks کے لئے۔
+- [`devportal/reviewer-onboarding`](./reviewer-onboarding.md) تم تحديث هذا الرابط.
+- [`devportal/preview-integrity-plan`](./preview-integrity-plan.md) المجموع الاختباري ضمانتوں کے لئے۔
+- [`devportal/observability`](./observability.md) تصدير خطافات التنبيه والتنبيه.
 
-## ویو پلان
+## خطة ويو
 
-| ویو | سامعین | انٹری معیار | ایگزٹ معیار | نوٹس |
+| ویو | سامعين | الانترنت معاير | ايجزٹ معاير | أخبار |
 | --- | --- | --- | --- | --- |
-| **W0 - Core maintainers** | Docs/SDK maintainers جو day-one مواد validate کرتے ہیں۔ | GitHub ٹیم `docs-portal-preview` آباد ہو، `npm run serve` checksum gate سبز ہو، Alertmanager 7 دن خاموش رہے۔ | تمام P0 docs ریویو، backlog ٹیگ شدہ، کوئی blocking incident نہ ہو۔ | فلو validate کرنے کے لئے؛ دعوتی ای میل نہیں، صرف preview artifacts شیئر کریں۔ |
-| **W1 - Partners** | SoraFS آپریٹرز، Torii integrators، اور NDA کے تحت governance reviewers۔ | W0 ختم، قانونی شرائط منظور، Try-it proxy staging پر۔ | پارٹنر sign-off جمع (issue یا signed form)، ٹیلی میٹری میں <=10 concurrent reviewers، 14 دن تک کوئی security regression نہیں۔ | invitation template + request tickets لازم۔ |
-| **W2 - Community** | کمیونٹی ویٹ لسٹ سے منتخب contributors۔ | W1 ختم، incident drills rehearsed، public FAQ اپ ڈیٹ۔ | فیڈبیک ہضم، >=2 documentation releases preview pipeline سے بغیر rollback گزر چکی ہوں۔ | concurrent invites محدود (<=25) اور ہفتہ وار بیچ۔ |
+| **W0 - المشرفون الأساسيون** | يقوم مشرفو المستندات/SDK بالتحقق من صحة المحتوى في اليوم الأول. | GitHub ٹیم `docs-portal-preview` آباد، `npm run serve` بوابة المجموع الاختباري سبز، Alertmanager 7 دن خاموش رہے۔ | تمام P0 docs ريويو، الأعمال المتراكمة، لا يوجد حادث حظر. | فلو التحقق من صحة کرنے کے لئے؛ لا داعي للقلق بشأن معاينة القطع الأثرية فقط. |
+| **W1 - الشركاء** | SoraFS آپریٹرز، Torii المتكاملون، و NDA تحت مراجعي الحوكمة. | W0 ختم، قانون قطاعي الصيد، Try-it proxy staging پر۔ | جمع تسجيل خروج الشريك (نموذج الإصدار أو الموقع)، 10 مراجعين متزامنين، 14 يومًا من الانحدار الأمني. | قالب الدعوة + طلب التذاكر ضروري۔ |
+| **W2 - المجتمع** | کمیونٹی ويٹ لٹ سے المساهمين المنتخبين. | ختم W1، التدريبات على الحوادث، الأسئلة الشائعة العامة. | يتضمن المنتج، >=2 إصدارات وثائقية، معاينة خط الأنابيب، والتراجع مرة أخرى. | الدعوات المتزامنة نطاق (<=25) و ہفتہ حرب بیچ۔ |
 
-`status.md` اور preview request tracker میں فعال ویو درج کریں تاکہ governance فوری طور پر پروگرام کی حالت دیکھ سکے۔
+يعمل `status.md` ومتعقب طلبات المعاينة على تنشيط نطاق التحكم في الحوكمة بشكل فوري في البرامج الحالية.
 
-## Preflight checklist
+## قائمة التحقق المبدئية
 
-ان اقدامات کو **دعوتیں شیڈول کرنے سے پہلے** مکمل کریں:
+الإجراءات التي **تتخذها قراراتك** مكملة:
 
-1. **CI artifacts دستیاب**
-   - تازہ ترین `docs-portal-preview` + descriptor `.github/workflows/docs-portal-preview.yml` کے ذریعے اپ لوڈ ہو۔
-   - SoraFS pin `docs/portal/docs/devportal/deploy-guide.md` میں نوٹ ہو (cutover descriptor موجود ہو).
-2. **Checksum enforcement**
-   - `docs/portal/scripts/serve-verified-preview.mjs` `npm run serve` کے ذریعے invoke ہو۔
-   - `scripts/preview_verify.sh` ہدایات macOS + Linux پر ٹیسٹ ہوں۔
-3. **Telemetry baseline**
-   - `dashboards/grafana/docs_portal.json` صحت مند Try it ٹریفک دکھائے اور `docs.preview.integrity` الرٹ سبز ہو۔
-   - `docs/portal/docs/devportal/observability.md` کا تازہ appendix Grafana لنکس کے ساتھ اپ ڈیٹ ہو۔
-4. **Governance artifacts**
-   - invite tracker issue تیار ہو (ہر ویو کے لئے ایک issue). 
-   - reviewer registry template کاپی ہو (دیکھیں [`docs/examples/docs_preview_request_template.md`](../../../examples/docs_preview_request_template.md)).
-   - قانونی اور SRE approvals issue کے ساتھ منسلک ہوں۔
+1. ** التحف CI دستیاب **
+   - أحدث `docs-portal-preview` + الواصف `.github/workflows/docs-portal-preview.yml` تم تنزيله.
+   - SoraFS pin `docs/portal/docs/devportal/deploy-guide.md` جديد (واصف القطع موجود).
+2. **تنفيذ المجموع الاختباري**
+   - `docs/portal/scripts/serve-verified-preview.mjs` `npm run serve` ذریعے استدعاء ہو۔
+   - `scripts/preview_verify.sh` لأنظمة macOS + Linux.
+3. **خط الأساس للقياس عن بعد**
+   - `dashboards/grafana/docs_portal.json` صحة جربها ٹریفک دکھائے و `docs.preview.integrity` الرٹ سبز ہو.
+   - `docs/portal/docs/devportal/observability.md` ملحق حديث Grafana لنكز كل هذا.
+4. **أدوات الحوكمة**
+   - قضية تعقب الدعوة تیار ہو (قضية ہر ویو کے لئے ایک). 
+   - قالب تسجيل المراجع کاپی ہو (دیکھیں [`docs/examples/docs_preview_request_template.md`](../../../examples/docs_preview_request_template.md)).
+   - إصدار الموافقات القانونية وSRE ہوں.
 
-دعوت بھیجنے سے پہلے invite tracker میں preflight مکمل ہونے کا اندراج کریں۔
+يمكن للدعوة المستمرة أن تقوم بدعوة متتبع الرحلة المبدئية مرة أخرى من إندراج كريت.
 
-## فلو کے مراحل
+## فلو کے المراحل
 
-1. **امیدوار منتخب کریں**
-   - ویٹ لسٹ شیٹ یا پارٹنر کیو سے نکالیں۔
-   - ہر امیدوار کے پاس مکمل request template ہونا یقینی بنائیں۔
-2. **رسائی کی منظوری**
-   - invite tracker issue پر approver اسائن کریں۔
-   - prerequisites چیک کریں (CLA/contract, acceptable use, security brief).
+1. **أميدوار منتخب كريں**
+   - لا يوجد أي شيء أو شريك.
+   - قم بإنشاء قالب طلب كامل هنا.
+2. ** رساله للطعن **
+   - مشكلة تعقب الدعوة للموافق عليها اسائن کریں۔
+   - المتطلبات الأساسية (CLA/العقد، الاستخدام المقبول، ملخص الأمان).
 3. **دعوتیں ارسال کریں**
-   - [`docs/examples/docs_preview_invite_template.md`](../../../examples/docs_preview_invite_template.md) کے placeholders (`<preview_tag>`, `<request_ticket>`, contacts) بھریں۔
-   - descriptor + archive hash، Try it staging URL، اور support channels منسلک کریں۔
-   - فائنل ای میل (یا Matrix/Slack transcript) issue میں محفوظ کریں۔
-4. **Onboarding ٹریک کریں**
-   - invite tracker کو `invite_sent_at`, `expected_exit_at`, اور status (`pending`, `active`, `complete`, `revoked`) کے ساتھ اپ ڈیٹ کریں۔
-   - auditability کے لئے reviewer intake request کو لنک کریں۔
-5. **Telemetry مانیٹر کریں**
-   - `docs.preview.session_active` اور `TryItProxyErrors` alerts پر نظر رکھیں۔
-   - اگر ٹیلی میٹری baseline سے ہٹے تو incident کھولیں اور نتیجہ invitation entry کے ساتھ نوٹ کریں۔
-6. **فیڈبیک جمع کریں اور خارج ہوں**
-   - فیڈبیک آنے پر یا `expected_exit_at` گزرنے پر دعوتیں بند کریں۔
-   - اگلی cohort پر جانے سے پہلے ویو issue میں مختصر خلاصہ (findings, incidents, next actions) اپ ڈیٹ کریں۔
+   - [`docs/examples/docs_preview_invite_template.md`](../../../examples/docs_preview_invite_template.md) والعناصر النائبة (`<preview_tag>`، `<request_ticket>`، جهات الاتصال) ھریژ۔
+   - واصف + تجزئة الأرشيف، جربه التدريج URL، ودعم القنوات منسلک کریں۔
+   - تم نشر مشكلة فينيل ميل (أو Matrix/Slack Transcript).
+4. **تأهيل اللاعبين**
+   - متتبع الدعوة `invite_sent_at`, `expected_exit_at`, والحالة (`pending`, `active`, `complete`, `revoked`)
+   - قابلية التدقيق لطلب كمية المراجع کو لنک کریں.
+5. **طريقة القياس عن بعد**
+   - تنبيهات `docs.preview.session_active` و`TryItProxyErrors` للنظر فيها.
+   - إذا كان خط الأساس الخاص بـ ميليتر سيكون بمثابة حادثة وتسجيل دخول للدعوة سيستمر مرة أخرى.
+6. **جمعية فيبائية وخارجية **
+   - قم بإجراء دعوة إلى `expected_exit_at` للدعوة.
+   - ملخص مختصر لإصدار الفوج الأخير من جانفي (النتائج، والحوادث، والإجراءات التالية) في هذا الشأن.
 
-## Evidence & reporting
+## الأدلة والتقارير
 
-| Artifact | کہاں محفوظ کریں | اپ ڈیٹ cadence |
+| قطعة أثرية | كہاں محفوظ كریں | اپ ڈيٹ إيقاع |
 | --- | --- | --- |
-| invite tracker issue | GitHub پروجیکٹ `docs-portal-preview` | ہر دعوت کے بعد اپ ڈیٹ کریں۔ |
-| reviewer roster export | `docs/portal/docs/devportal/reviewer-onboarding.md` میں linked registry | ہفتہ وار۔ |
-| telemetry snapshots | `docs/source/sdk/android/readiness/dashboards/<date>/` (telemetry bundle reuse کریں) | ہر ویو + incidents کے بعد۔ |
-| feedback digest | `docs/portal/docs/devportal/preview-feedback/<wave>/summary.md` (ہر ویو کیلئے فولڈر بنائیں) | ویو exit کے 5 دن کے اندر۔ |
-| governance meeting note | `docs/portal/docs/devportal/preview-invite-notes/<date>.md` | ہر DOCS-SORA governance sync سے پہلے بھریں۔ |
+| قضية تعقب الدعوة | جيثب پروجیکٹ `docs-portal-preview` | قم بالدعوة بعد هذه الرسالة. |
+| تصدير قائمة المراجعين | `docs/portal/docs/devportal/reviewer-onboarding.md` سجل مرتبط | ہفتہ حرب۔ |
+| لقطات القياس عن بعد | `docs/source/sdk/android/readiness/dashboards/<date>/` (إعادة استخدام حزمة القياس عن بعد) | ہر ویو + حوادث بعد ۔ |
+| ملخص ردود الفعل | `docs/portal/docs/devportal/preview-feedback/<wave>/summary.md` (مجلد الفيديو) | ویو الخروج من 5 دن کے اندر۔ |
+| مذكرة اجتماع الحوكمة | `docs/portal/docs/devportal/preview-invite-notes/<date>.md` | تم إنشاء مزامنة إدارة DOCS-SORA. |
 
-ہر بیچ کے بعد `cargo xtask docs-preview summary --wave <wave_label> --json artifacts/docs_portal_preview/<wave_label>_summary.json`
-چلائیں تاکہ مشین ریڈایبل digest بنے۔ رینڈر شدہ JSON کو ویو issue کے ساتھ منسلک کریں تاکہ governance reviewers پوری لاگ دوبارہ چلائے بغیر دعوتی تعداد کی تصدیق کر سکیں۔
+تم ذلك بعد `cargo xtask docs-preview summary --wave <wave_label> --json artifacts/docs_portal_preview/<wave_label>_summary.json`
+كل ما عليك فعله هو هضم هذه المادة. تم تحديث ملف JSON الذي أصدره مراجعو الحوكمة بشكل موحد من منسل بعد إعادة إصداره مرة أخرى، وذلك من خلال دعوة عدد من تصويبات البرامج.
 
-ہر ویو ختم ہونے پر evidence کی فہرست `status.md` کے ساتھ منسلک کریں تاکہ روڈ میپ انٹری جلدی اپ ڈیٹ ہو سکے۔
+لقد تم ختم اليويو مرة واحدة على الأدلة التي تثبت `status.md` والتي خلصت إلى كل ما يتعلق بشبكة الإنترنت العالمية.
 
-## Rollback اور pause معیار
+## التراجع والإيقاف المؤقت معیار
 
-جب درج ذیل میں سے کوئی ہو تو دعوتی فلو روک دیں (اور governance کو مطلع کریں):
+فيما يتعلق بكيفية القيام بذلك، يمكنك دعوة فلو روك دي (وحوكمة الحوكمة):
 
-- Try it proxy incident جس میں rollback کرنا پڑا (`npm run manage:tryit-proxy`).
-- Alert fatigue: 7 دن کے اندر preview-only endpoints کے لئے >3 alert pages.
-- Compliance gap: دعوت بغیر signed terms یا request template لاگ کئے بھیجی گئی۔
-- Integrity risk: `scripts/preview_verify.sh` سے checksum mismatch پکڑا گیا۔
+- جرب حادثة الوكيل جس میں التراجع کرنا پڑا (`npm run manage:tryit-proxy`).
+- إرهاق التنبيه: 7 نقاط نهاية للمعاينة فقط >3 صفحات تنبيه.
+- فجوة الامتثال: دعوة للشروط الموقعة أو قالب طلب لاگ کئے بھیجی گئی۔
+- خطر السلامة: `scripts/preview_verify.sh` عدم تطابق المجموع الاختباري.
 
-invite tracker میں remediation دستاویز کرنے اور کم از کم 48 گھنٹے تک ٹیلی میٹری ڈیش بورڈ مستحکم ہونے کی تصدیق کے بعد ہی دوبارہ شروع کریں۔
+تقوم أداة تعقب الدعوة بإصلاح المشكلة وبعد 48 دقيقة فقط من إجراء عملية البحث الجديدة في المرة التالية التي تبدأ فيها اللعبة.

@@ -4,26 +4,28 @@ direction: rtl
 source: docs/portal/docs/sorafs/staging-manifest-playbook.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: staging-manifest-playbook
-title: Playbook de manifest em staging
-sidebar_label: Playbook de manifest em staging
-description: Checklist para habilitar o perfil de chunker ratificado pelo Parlamento em deployments Torii de staging.
+المعرف: دليل التدريج
+العنوان: قواعد اللعب في البيان المرحلي
+Sidebar_label: دليل التشغيل للبيان المرحلي
+الوصف: قائمة مرجعية لتأهيل ملف التقطيع المعتمد من قبل البرلمان في عمليات النشر المرحلية Torii.
 ---
 
-:::note Fonte canonica
-Esta pagina espelha `docs/source/sorafs/runbooks/staging_manifest_playbook.md`. Mantenha ambas as copias sincronizadas.
+:::ملاحظة فونتي كانونيكا
+هذه الصفحة تحمل عنوان `docs/source/sorafs/runbooks/staging_manifest_playbook.md`. Mantenha ambas as copias sincronzadas.
 :::
 
-## Visao geral
+## فيساو جيرال
 
-Este playbook descreve como habilitar o perfil de chunker ratificado pelo Parlamento em um deployment Torii de staging antes de promover a mudanca para producao. Ele assume que a carta de governanca da SoraFS foi ratificada e que os fixtures canonicos estao disponiveis no repositorio.
+يشرح هذا الدليل كيفية تأهيل ملف القطع المعتمد من قبل البرلمان لنشر Torii للتدريج المسبق للترويج لتعديل الإنتاج. يفترض أنه تم التصديق على المذكرة الحاكمة لـ SoraFS وأن التركيبات Canonicos متاحة في المستودع.
 
-## 1. Prerequisitos
+## 1. المتطلبات الأساسية
 
-1. Sincronize os fixtures canonicos e as assinaturas:
+1. مزامنة التركيبات الكنسيه والمثبتة:
 
    ```bash
    cargo xtask sorafs-fetch-fixture \
@@ -32,8 +34,8 @@ Este playbook descreve como habilitar o perfil de chunker ratificado pelo Parlam
    ci/check_sorafs_fixtures.sh
    ```
 
-2. Prepare o diretorio de admission envelopes que o Torii lera no startup (caminho exemplo): `/var/lib/iroha/admission/sorafs`.
-3. Garanta que o config do Torii habilite o discovery cache e o enforcement de admission:
+2. قم بإعداد دليل مظاريف القبول الذي يوضح Torii عند عدم بدء التشغيل (مثال: `/var/lib/iroha/admission/sorafs`).
+3. ضمان إمكانية تكوين Torii لاكتشاف ذاكرة التخزين المؤقت وتنفيذ القبول:
 
    ```toml
    [torii.sorafs.discovery]
@@ -51,42 +53,40 @@ Este playbook descreve como habilitar o perfil de chunker ratificado pelo Parlam
    enforce_capabilities = true
    ```
 
-## 2. Publicar admission envelopes
+## 2. مظاريف القبول العامة
 
-1. Copie os provider admission envelopes aprovados para o diretorio referenciado por `torii.sorafs.discovery.admission.envelopes_dir`:
+1. انسخ مظاريف قبول موفر نظام التشغيل المعتمدة للدليل المرجعي لـ `torii.sorafs.discovery.admission.envelopes_dir`:
 
    ```bash
    install -m 0644 fixtures/sorafs_manifest/provider_admission/*.json \
      /var/lib/iroha/admission/sorafs/
    ```
 
-2. Reinicie o Torii (ou envie um SIGHUP se voce embrulhou o loader com hot reload).
-3. Acompanhe os logs para mensagens de admission:
+2. قم بالتحديث إلى Torii (أو ترحب بـ SIGHUP إذا قمت بتحميل أداة التحميل من خلال hot reload).
+3. مرافقة سجلات رسائل القبول:
 
    ```bash
    torii | grep "loaded provider admission envelope"
    ```
 
-## 3. Validar a propagacao de discovery
-
-1. Publique o payload assinado de provider advert (bytes Norito) produzido pelo pipeline do provedor:
+## 3. التحقق من صحة نشر الاكتشاف1. نشر إعلان الموفر الذي تم تحميله (بايت Norito) من خلال خط الأنابيب المنتج:
 
    ```bash
    curl -sS -X POST --data-binary @provider_advert.to \
      http://staging-torii:8080/v1/sorafs/provider/advert
    ```
 
-2. Consulte o endpoint de discovery e confirme que o advert aparece com aliases canonicos:
+2. راجع نقطة نهاية الاكتشاف وتأكد من ظهور الإعلان باستخدام الأسماء المستعارة لـ Canon:
 
    ```bash
    curl -sS http://staging-torii:8080/v1/sorafs/providers | jq .
    ```
 
-   Garanta que `profile_aliases` inclua `"sorafs.sf1@1.0.0"` como a primeira entrada.
+   ضمان أن `profile_aliases` يتضمن `"sorafs.sf1@1.0.0"` كمدخل أول.
 
-## 4. Exercitar endpoints de manifest e plan
+## 4. تمرين على نقاط النهاية للخطة
 
-1. Busque a metadata do manifest (exige stream token se admission estiver enforced):
+1. البحث عن البيانات الوصفية (يتم فرض رمز الدفق exige مع فرض القبول):
 
    ```bash
    sorafs-fetch \
@@ -97,25 +97,25 @@ Este playbook descreve como habilitar o perfil de chunker ratificado pelo Parlam
      --json-out=reports/staging_manifest.json
    ```
 
-2. Inspecione o JSON e verifique:
-   - `chunk_profile_handle` e `sorafs.sf1@1.0.0`.
-   - `manifest_digest_hex` corresponde ao relatorio de determinismo.
-   - `chunk_digests_blake3` alinham com os fixtures regenerados.
+2. فحص JSON والتحقق:
+   - `chunk_profile_handle` و `sorafs.sf1@1.0.0`.
+   - `manifest_digest_hex` يتوافق مع علاقة التحديد.
+   - `chunk_digests_blake3` alinham com os Installations regenerados.
 
-## 5. Checks de telemetria
+## 5. فحوصات القياس عن بعد
 
-- Confirme que o Prometheus expoe as novas metricas do perfil:
+- تأكد من عرض Prometheus كما تفعل المقاييس الجديدة:
 
   ```bash
   curl -sS http://staging-torii:8080/metrics | grep torii_sorafs_chunk_range_requests_total
   ```
 
-- Dashboards devem mostrar o provider de staging sob o alias esperado e manter os contadores de brownout em zero enquanto o perfil estiver ativo.
+- يجب أن تعرض لوحات المعلومات مزود التدريج أو الأسماء المستعارة المنتظرة وتدير متحكمات التوقف عن التشغيل عند الصفر أثناء الملف الشخصي.
 
-## 6. Rollout readiness
+## 6. الاستعداد للطرح
 
-1. Capture um relatorio curto com URLs, manifest ID e telemetry snapshot.
-2. Compartilhe o relatorio no canal de rollout do Nexus com a janela planejada de ativacao em producao.
-3. Prossiga para o checklist de producao (Section 4 em `chunker_registry_rollout_checklist.md`) quando as partes interessadas aprovarem.
+1. التقط رابطًا قصيرًا لعناوين URL ومعرف البيان ولقطة القياس عن بعد.
+2. قم بمشاركة رابط قناة الطرح Nexus مع مخطط التنشيط المنتج.
+3. معالجة قائمة التحقق من المنتج (القسم 4 في `chunker_registry_rollout_checklist.md`) عندما تتم الموافقة على جزء من الاهتمام.
 
-Manter este playbook atualizado garante que cada rollout de chunker/admission siga os mesmos passos deterministas entre staging e producao.
+بالإضافة إلى ذلك، يضمن تحديث قواعد اللعبة هذه أن كل عملية نشر للقطع/القبول ستتبع نفس الخطوات التي يتم تحديدها بين مرحلة الإنتاج والإنتاج.

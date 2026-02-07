@@ -4,222 +4,193 @@ direction: rtl
 source: docs/portal/docs/sns/governance-playbook.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Source canonique
-Cette page reflete `docs/source/sns/governance_playbook.md` et sert maintenant de
-copie canonique du portail. Le fichier source persiste pour les PRs de traduction.
+:::ملاحظة المصدر الكنسي
+هذه الصفحة تعكس `docs/source/sns/governance_playbook.md` وهي مستمرة
+انسخ Canonique du portail. يستمر مصدر الملف في الحصول على نتائج البيع.
 :::
 
-# Playbook de gouvernance du Sora Name Service (SN-6)
+# دليل إدارة خدمة اسم Sora (SN-6)
 
-**Statut:** Redige 2026-03-24 - reference vivante pour la preparation SN-1/SN-6  
-**Liens du roadmap:** SN-6 "Compliance & Dispute Resolution", SN-7 "Resolver & Gateway Sync", politique d'adresses ADDR-1/ADDR-5  
-**Prerequis:** Schema du registre dans [`registry-schema.md`](./registry-schema.md), contrat d'API du registrar dans [`registrar-api.md`](./registrar-api.md), guide UX d'adresses dans [`address-display-guidelines.md`](./address-display-guidelines.md), et regles de structure de comptes dans [`docs/account_structure.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/account_structure.md).
+**الحالة:** Redige 2026-03-24 - مرجع حيوي للتحضير SN-1/SN-6  
+**امتيازات خريطة الطريق:** SN-6 "الامتثال وحل النزاعات"، SN-7 "Resolver & Gateway Sync"، سياسة العناوين ADDR-1/ADDR-5  
+**المتطلبات المسبقة:** مخطط التسجيل في [`registry-schema.md`](./registry-schema.md)، عقد واجهة برمجة التطبيقات للمسجل في [`registrar-api.md`](./registrar-api.md)، دليل عناوين تجربة المستخدم في [`address-display-guidelines.md`](./address-display-guidelines.md)، ويتم تنظيم بنية الحسابات في [`docs/account_structure.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/account_structure.md).
 
-Ce playbook decrit comment les organes de gouvernance du Sora Name Service (SNS)
-adoptent des chartes, approuvent des enregistrements, escaladent les litiges, et
-prouvent que les etats du resolver et du gateway restent synchronises. Il satisfait
-l'exigence du roadmap selon laquelle la CLI `sns governance ...`, les manifestes
-Norito et les artefacts d'audit partagent une reference unique cote operateur
-avant N1 (lancement public).
+يشير هذا الدليل إلى أجهزة إدارة خدمة Sora Name Service (SNS)
+اعتماد المخططات، والموافقة على التسجيلات، وتصعيد الدعاوى، وما إلى ذلك
+تأكد من مزامنة حالات وحدة الحل والبوابة. يرضي
+يتم تحديد متطلبات خريطة الطريق من خلال CLI `sns governance ...`، والبيانات
+Norito وعناصر التدقيق جزء من مرجع فريد من نوعه للمشغل
+أفانت N1 (الرمح العام).
 
-## 1. Portee et public
+## 1. بورتي وآخرون
 
-Le document cible:
+نوع الوثيقة:- أعضاء مجلس الحوكمة الذين يصوتون على المخططات والسياسات
+  لاحقة ونتائج التقاضي.
+- أعضاء مجلس الأوصياء الذين يصدرون طلبات الاستعجال والفحص
+  الإرتدادات.
+- مشرفو اللاحقة الذين يديرون ملفات المسجل، يوافقون على الإدخالات
+  وإدارة مشاركات العائدات.
+- مشغلو الحلول/البوابات المسؤولون عن نشر SoraDNS، من المهام
+  jour GAR, et des garde-fous de telemetry.
+- معدات المطابقة والخزانة والدعم التي تساعد في توضيح كل شيء
+  إجراءات الحوكمة للسماح بالتدقيق Norito القابلة للتدقيق.
 
-- Membres du Conseil de gouvernance qui votent sur les chartes, les politiques de
-  suffixe et les resultats de litige.
-- Membres du conseil des guardians qui emettent des gels d'urgence et examinent
-  les reversions.
-- Stewards de suffixe qui gerent les files du registrar, approuvent les encheres
-  et gerent les partages de revenus.
-- Operateurs resolver/gateway responsables de la propagation SoraDNS, des mises a
-  jour GAR, et des garde-fous de telemetrie.
-- Equipes de conformite, tresorerie et support qui doivent demontrer que chaque
-  action de gouvernance a laisse des artefacts Norito auditables.
+يغطي مراحل البيتا (N0)، والانطلاق العام (N1) والتوسع (N2)
+enumerees dans `roadmap.md` en reliant chaque Workflow aux preuves requises،
+لوحات العدادات وأصوات التصعيد.
 
-Il couvre les phases de beta fermee (N0), lancement public (N1) et expansion (N2)
-enumerees dans `roadmap.md` en reliant chaque workflow aux preuves requises,
-dashboards et voies d'escalade.
+## 2. الأدوار وقائمة الاتصال| الدور | مبادئ المسؤولية | المصنوعات اليدوية ومبادئ القياس عن بعد | إسكاليد |
+|------|--------------------------------------------|----|---------|
+| مجلس الحكم | قم بتحرير وتصديق المخططات والسياسات اللاحقة وأحكام التقاضي وتناوب المشرفين. | `docs/source/sns/governance_addenda/`، `artifacts/sns/governance/*`، نشرات مجلس الأسهم عبر `sns governance charter submit`. | رئيس المجلس + تابع لجدول الحوكمة. |
+| مجلس الأوصياء | Emet des gels soft/hard، canons d'urgence، et revues 72 h. | تذاكر الوصي emis الاسمية `sns governance freeze`، بيانات التجاوز المرسلة من `artifacts/sns/guardian/*`. | حارس التناوب عند الطلب (<= 15 دقيقة ACK). |
+| مضيفو اللاحقة | إدارة ملفات المسجل والملفات المخزنة ومستويات السعر وعميل الاتصال؛ استطلاع ليه المطابقات. | سياسات المضيف في `SuffixPolicyV1`، وأوراق الجائزة المرجعية، وإقرارات المضيف، بالإضافة إلى مجموعة من المذكرات التنظيمية. | قائد البرنامج + لاحقة PagerDuty. |
+| عمليات التسجيل والتجميع | قم بتشغيل نقاط النهاية `/v1/sns/*`، ومطابقة المدفوعات، وإصدار القياس عن بعد، والحفاظ على لقطات CLI. | مسجل واجهة برمجة التطبيقات ([`registrar-api.md`](./registrar-api.md))، المقاييس `sns_registrar_status_total`، إمكانية أرشفة الدفع من خلال `artifacts/sns/payments/*`. | المدير المناوب للمسجل وخزينة الاتصال. || مشغلي الحل والبوابة | صيانة SoraDNS وGAR ومحاذاة حالة البوابة مع أحداث المسجل؛ نشر مقاييس الشفافية. | [`docs/source/soradns/deterministic_hosts.md`](../../../source/soradns/deterministic_hosts.md)، [`docs/source/reports/soradns_transparency.md`](../../../source/reports/soradns_transparency.md)، `dashboards/alerts/soradns_transparency_rules.yml`. | محلل SRE عند الطلب + بوابة عمليات الجسر. |
+| الخزينة والتمويل | قم بتطبيق إعادة التقسيم 70/30، ومنحوتات الإحالة، ومستودعات الأوراق المالية/الخزانة، وشهادات SLA. | بيانات تراكم الإيرادات، تصدير الشريط/الخزانة، ملاحق مؤشرات الأداء الرئيسية الثلاثة إلى `docs/source/sns/regulatory/`. | تمويل كونترولور + الالتزام المسؤول. |
+| الاتصال المطابق والتنظيمي | تتناسب مع الالتزامات العالمية (الاتحاد الأوروبي DSA، وما إلى ذلك)، وتتوافق مع jour les covenants KPI et depose des divulgations. | المذكرات التنظيمية في `docs/source/sns/regulatory/`، والمجموعات المرجعية، والمدخلات `ops/drill-log.md` من أجل التدريبات على سطح الطاولة. | قيادة برنامج المطابقة. |
+| الدعم / SRE عند الطلب | معالجة الحوادث (الاصطدامات، استخلاص التجزئة، لوحات الحل)، وتنسيق عميل الاتصال، وامتلاك دفاتر التشغيل. | نماذج الأحداث، `ops/drill-log.md`، إجراءات العمل في المشهد، النسخ Slack/war-room archives sous `incident/`. | التناوب عند الطلب SNS + إدارة SRE. |
 
-## 2. Roles et carte de contact
+## 3. المصنوعات اليدوية ومصادر البيانات| قطعة أثرية | التمركز | موضوعي |
+|----------|------------|---------|
+| الرسم البياني + الإضافات KPI | `docs/source/sns/governance_addenda/` | تم التوقيع على المخططات مع التحكم في الإصدار، واتفاقيات مؤشرات الأداء الرئيسية، وقرارات الحوكمة المرجعية من خلال أصوات CLI. |
+| مخطط التسجيل | [`registry-schema.md`](./registry-schema.md) | الهياكل Norito canoniques (`NameRecordV1`، `SuffixPolicyV1`، `RevenueAccrualEventV1`). |
+| عقد المسجل | [`registrar-api.md`](./registrar-api.md) | الحمولات النافعة REST/gRPC، تقيس `sns_registrar_status_total` وتراقب خطافات الإدارة. |
+| دليل عناوين تجربة المستخدم | [`address-display-guidelines.md`](./address-display-guidelines.md) | يتم إنتاج Rendus canoniques IH58 (المفضل) والضغطات (الخيار الثاني) بواسطة المحافظ/المستكشفين. |
+| مستندات SoraDNS / GAR | [`docs/source/soradns/deterministic_hosts.md`](../../../source/soradns/deterministic_hosts.md)، [`docs/source/reports/soradns_transparency.md`](../../../source/reports/soradns_transparency.md) | يتم تحديد الاشتقاق من قبل المضيفين وسير العمل من خلال تخصيص الشفافية وقواعد التنبيه. |
+| المذكرات التنظيمية | `docs/source/sns/regulatory/` | Notes d'accueil par Judiction (على سبيل المثال الاتحاد الأوروبي DSA)، إقرارات الإقرارات، المرفقات النموذجية. |
+| مجلة الحفر | `ops/drill-log.md` | تتطلب Journal des rehearsals Chaos et IR طلعات جوية مسبقة. |
+| مخزون التحف | `artifacts/sns/` | إجراءات الدفع، وحارس التذاكر، ومحلل الفروق، وتصدير مؤشرات الأداء الرئيسية، وإخراج علامة CLI المنتجة على أساس `sns governance ...`. |جميع إجراءات الحوكمة يجب أن تشير إلى حد ما إلى شيء ما
+هذا يعني أن المدققين يمكنهم إعادة بناء الأثر
+القرار خلال 24 ساعة
 
-| Role | Responsabilites principales | Artefacts et telemetrie principaux | Escalade |
-|------|-----------------------------|------------------------------------|---------|
-| Conseil de gouvernance | Redige et ratifie les chartes, politiques de suffixe, verdicts de litige et rotations de stewards. | `docs/source/sns/governance_addenda/`, `artifacts/sns/governance/*`, bulletins du conseil stockes via `sns governance charter submit`. | President du conseil + suivi du docket de gouvernance. |
-| Conseil des guardians | Emet des gels soft/hard, canons d'urgence, et revues 72 h. | Tickets guardian emis par `sns governance freeze`, manifestes d'override consignes sous `artifacts/sns/guardian/*`. | Rotation guardian on-call (<=15 min ACK). |
-| Stewards de suffixe | Gerent les files du registrar, les encheres, les niveaux de prix et la communication client; reconnaissent les conformites. | Politiques de steward dans `SuffixPolicyV1`, fiches de reference de prix, acknowledgements de steward stockes a cote des memos reglementaires. | Lead du programme steward + PagerDuty par suffixe. |
-| Ops registrar et facturation | Operent les endpoints `/v1/sns/*`, reconciliant les paiements, emettent la telemetrie et maintiennent des snapshots CLI. | API registrar ([`registrar-api.md`](./registrar-api.md)), metriques `sns_registrar_status_total`, preuves de paiement archivees sous `artifacts/sns/payments/*`. | Duty manager du registrar et liaison tresorerie. |
-| Operateurs resolver et gateway | Maintiennent SoraDNS, GAR et l'etat du gateway aligne avec les evenements du registrar; diffusent les metriques de transparence. | [`docs/source/soradns/deterministic_hosts.md`](../../../source/soradns/deterministic_hosts.md), [`docs/source/reports/soradns_transparency.md`](../../../source/reports/soradns_transparency.md), `dashboards/alerts/soradns_transparency_rules.yml`. | SRE resolver on-call + bridge ops gateway. |
-| Tresorerie et finance | Appliquent la repartition 70/30, les carve-outs de referral, les depots fiscaux/tresorerie et les attestations SLA. | Manifestes d'accumulation de revenus, exports Stripe/tresorerie, appendices KPI trimestriels sous `docs/source/sns/regulatory/`. | Controleur finance + responsable conformite. |
-| Liaison conformite et reglementaire | Suit les obligations globales (EU DSA, etc.), met a jour les covenants KPI et depose des divulgations. | Memos reglementaires dans `docs/source/sns/regulatory/`, decks de reference, entrees `ops/drill-log.md` pour les rehearsals tabletop. | Lead du programme de conformite. |
-| Support / SRE on-call | Gere les incidents (collisions, derive de facturation, pannes de resolver), coordonne la communication client, et possede les runbooks. | Modeles d'incident, `ops/drill-log.md`, preuves de labo mises en scene, transcriptions Slack/war-room archivees sous `incident/`. | Rotation on-call SNS + management SRE. |
+## 4. قواعد اللعبة في دورة الحياة
 
-## 3. Artefacts canoniques et sources de donnees
+### 4.1 حركات التفويض والإشراف| إيتاب | مالك | CLI / Preuve | ملاحظات |
+|-------|------------|--------------|-------|
+| قم بإعادة صياغة الإضافة ودلتا مؤشرات الأداء الرئيسية | مقرر المجلس + المضيف الرئيسي | قالب تخفيض السعر الأسهم `docs/source/sns/governance_addenda/YY/` | قم بتضمين معرفات ميثاق KPI وخطافات القياس عن بعد وشروط التنشيط. |
+| Sometre la proposition | رئيس المجلس | `sns governance charter submit --input SN-CH-YYYY-NN.md` (المنتج `CharterMotionV1`) | أصدر La CLI بيانًا Norito مخزنًا في `artifacts/sns/governance/<id>/charter_motion.json`. |
+| التصويت والاعتراف الوصي | كونسيل + أولياء الأمور | `sns governance ballot cast --proposal <id>` و`sns governance guardian-ack --proposal <id>` | قم بضم الدقائق والأجزاء السابقة للنصاب القانوني. |
+| وكيل القبول | مشرف البرنامج | `sns governance steward-ack --proposal <id> --signature <file>` | يتطلب التغيير المسبق لسياسة اللاحقة؛ قم بتسجيل المغلف Sous `artifacts/sns/governance/<id>/steward_ack.json`. |
+| التنشيط | عمليات التسجيل | Mettre a jour `SuffixPolicyV1`, rafraichir lesذاكر التخزين المؤقت للمسجل ونشر ملاحظة في `status.md`. | سجل التنشيط للطابع الزمني في `sns_governance_activation_total`. |
+| مجلة التدقيق | مطابق | أضف إدخالاً إلى `docs/source/sns/regulatory/<jurisdiction>/<cycle>.md` ومجلة الحفر مع تأثير سطح الطاولة. | قم بتضمين مراجع ولوحات القياس عن بعد والاختلافات السياسية. |
 
-| Artefact | Emplacement | Objectif |
-|----------|-------------|---------|
-| Charte + addenda KPI | `docs/source/sns/governance_addenda/` | Chartes signees avec controle de version, covenants KPI et decisions de gouvernance referencees par les votes CLI. |
-| Schema du registre | [`registry-schema.md`](./registry-schema.md) | Structures Norito canoniques (`NameRecordV1`, `SuffixPolicyV1`, `RevenueAccrualEventV1`). |
-| Contrat du registrar | [`registrar-api.md`](./registrar-api.md) | Payloads REST/gRPC, metriques `sns_registrar_status_total` et attentes des hooks de gouvernance. |
-| Guide UX d'adresses | [`address-display-guidelines.md`](./address-display-guidelines.md) | Rendus canoniques IH58 (prefere) et compresses (second choix) reproduits par les wallets/explorers. |
-| Docs SoraDNS / GAR | [`docs/source/soradns/deterministic_hosts.md`](../../../source/soradns/deterministic_hosts.md), [`docs/source/reports/soradns_transparency.md`](../../../source/reports/soradns_transparency.md) | Derivation deterministe des hosts, workflow du tailer de transparence et regles d'alerte. |
-| Memos reglementaires | `docs/source/sns/regulatory/` | Notes d'accueil par juridiction (ex. EU DSA), acknowledgements steward, annexes de modele. |
-| Journal de drill | `ops/drill-log.md` | Journal des rehearsals chaos et IR requis avant sorties de phase. |
-| Stockage d'artefacts | `artifacts/sns/` | Preuves de paiement, tickets guardian, diffs resolver, exports KPI et sortie CLI signee produite par `sns governance ...`. |
+### 4.2 موافقات التسجيل والتسجيل والسعر1. **الاختبار المبدئي:** يقوم المسجل بالاستفسار `SuffixPolicyV1` لتأكيد المستوى
+   من الجائزة، والشروط المتاحة، ونوافذ النعمة/الفداء. غاردر ليه
+   تتم مزامنة ملفات الجائزة مع لوحة المستويات 3/4/5/6-9/10+ (المستوى
+   القاعدة + معاملات اللاحقة) الموثقة في خريطة الطريق.
+2. **Encheres مختوم العطاء:** Pour les Pools premium، المنفذ le دورة 72 ساعة التزام /
+   كشف على مدار 24 ساعة عبر `sns governance auction commit` / `... reveal`. ناشر القائمة
+   الالتزامات (التجزئة الفريدة) sous `artifacts/sns/auctions/<name>/commit.json`
+   حتى يتمكن المدققون من التحقق من المكان.
+3. **التحقق من الدفع:** المسجلون صالحون `PaymentProofV1` الاسمية
+   إعادة تقسيم الخزانة (70% خزانة / 30% مضيف مع اقتطاع
+   الإحالة <=10%). Stocker لو JSON Norito سو `artifacts/sns/payments/<tx>.json`
+   et le lier dans la reponse du المسجل (`RevenueAccrualEventV1`).
+4. **خطاف الإدارة:** المرفق `GovernanceHookV1` pour les noms premium/guarded
+   بالإشارة إلى معرفات اقتراح المشورة وتوقيعات المضيف.
+   الخطافات تتقلص `sns_err_governance_missing`.
+5. **محلل التنشيط والمزامنة:** مرة واحدة Torii ستحدث حدث التسجيل،
+   قم بإلغاء تحديد جزء الشفافية من المحلل لتأكيد الجديد
+   حالة GAR/المنطقة الأكثر انتشارًا (الصورة 4.5).
+6. **عميل الإفصاح:** Mettre a jour le ledger oriente client (المحفظة/المستكشف)عبر أجزاء التركيبات في [`address-display-guidelines.md`](./address-display-guidelines.md)،
+   En s'assurant que les rendus IH58 et المضغوطات تتوافق مع أدلة النسخ/QR.
 
-Toutes les actions de gouvernance doivent referencer au moins un artefact du
-tableau ci-dessus afin que les auditeurs puissent reconstruire la trace de
-decision en 24 heures.
-
-## 4. Playbooks de cycle de vie
-
-### 4.1 Motions de charte et steward
-
-| Etape | Proprietaire | CLI / Preuve | Notes |
-|-------|-------------|--------------|-------|
-| Rediger l'addendum et les deltas KPI | Rapporteur du conseil + lead steward | Template Markdown stocke sous `docs/source/sns/governance_addenda/YY/` | Inclure les IDs de covenant KPI, hooks de telemetrie et conditions d'activation. |
-| Soumettre la proposition | President du conseil | `sns governance charter submit --input SN-CH-YYYY-NN.md` (produit `CharterMotionV1`) | La CLI emet un manifeste Norito stocke sous `artifacts/sns/governance/<id>/charter_motion.json`. |
-| Vote et acknowledgement guardian | Conseil + guardians | `sns governance ballot cast --proposal <id>` et `sns governance guardian-ack --proposal <id>` | Joindre les minutes hashs et les preuves de quorum. |
-| Acceptation steward | Programme steward | `sns governance steward-ack --proposal <id> --signature <file>` | Requis avant changement des politiques de suffixe; enregistrer l'enveloppe sous `artifacts/sns/governance/<id>/steward_ack.json`. |
-| Activation | Ops du registrar | Mettre a jour `SuffixPolicyV1`, rafraichir les caches du registrar, publier une note dans `status.md`. | Timestamp d'activation logge dans `sns_governance_activation_total`. |
-| Journal d'audit | Conformite | Ajouter une entree a `docs/source/sns/regulatory/<jurisdiction>/<cycle>.md` et au journal de drill si tabletop effectue. | Inclure des references aux dashboards de telemetrie et aux diffs de politique. |
-
-### 4.2 Approbations d'enregistrement, d'enchere et de prix
-
-1. **Preflight:** Le registrar interroge `SuffixPolicyV1` pour confirmer le niveau
-   de prix, les termes disponibles et les fenetres de grace/redemption. Garder les
-   fiches de prix synchronisees avec le tableau de niveaux 3/4/5/6-9/10+ (niveau
-   de base + coefficients de suffixe) documente dans le roadmap.
-2. **Encheres sealed-bid:** Pour les pools premium, executer le cycle 72 h commit /
-   24 h reveal via `sns governance auction commit` / `... reveal`. Publier la liste
-   des commits (hashes uniquement) sous `artifacts/sns/auctions/<name>/commit.json`
-   afin que les auditeurs puissent verifier l'aleatoire.
-3. **Verification de paiement:** Les registrars valident `PaymentProofV1` par rapport
-   aux repartitions de tresorerie (70% tresorerie / 30% steward avec carve-out de
-   referral <=10%). Stocker le JSON Norito sous `artifacts/sns/payments/<tx>.json`
-   et le lier dans la reponse du registrar (`RevenueAccrualEventV1`).
-4. **Hook de gouvernance:** Attacher `GovernanceHookV1` pour les noms premium/guarded
-   en referencant les ids de proposition du conseil et les signatures de steward.
-   Les hooks manquants declenchent `sns_err_governance_missing`.
-5. **Activation + sync resolver:** Une fois que Torii emet l'evenement de registre,
-   declencher le tailer de transparence du resolver pour confirmer que le nouvel
-   etat GAR/zone s'est propage (voir 4.5).
-6. **Divulgation client:** Mettre a jour le ledger oriente client (wallet/explorer)
-   via les fixtures partages dans [`address-display-guidelines.md`](./address-display-guidelines.md),
-   en s'assurant que les rendus IH58 et compresses correspondent aux guides copy/QR.
-
-### 4.3 Renouvellements, facturation et reconciliation tresorerie
-
-- **Workflow de renouvellement:** Les registrars appliquent la fenetre de grace de
-  30 jours + la fenetre de redemption de 60 jours specifiees dans `SuffixPolicyV1`.
-  Apres 60 jours, la sequence de reouverture hollandaise (7 jours, frais 10x
-  decroissant de 15%/jour) se declenche automatiquement via `sns governance reopen`.
-- **Repartition des revenus:** Chaque renouvellement ou transfert cree un
-  `RevenueAccrualEventV1`. Les exports de tresorerie (CSV/Parquet) doivent
-  reconciler ces evenements quotidiennement; joindre les preuves a
+### 4.3 خزينة التجديد والتفتيت والمصالحة- **سير العمل للتجديد:** يزين المسجلون نافذة نعمة
+  30 يومًا + نافذة الاسترداد لمدة 60 يومًا محددة في `SuffixPolicyV1`.
+  أبريل 60 يوم، تسلسل التجديد الهولندي (7 أيام، 10 مرات إضافية)
+  يتم إلغاء غلق الخبز بنسبة 15%/اليوم تلقائيًا عبر `sns governance reopen`.
+- **Repartition des revenus:** Chaque renouvellement ou Transfert cree un
+  `RevenueAccrualEventV1`. يتم تنفيذ صادرات الخزانة (CSV/Parquet).
+  التوفيق بين هذه الأحداث اليومية ؛ انضم إلى Preuves أ
   `artifacts/sns/treasury/<date>.json`.
-- **Carve-outs de referral:** Les pourcentages de referral optionnels sont suivis
-  par suffixe en ajoutant `referral_share` a la politique steward. Les registrars
-  emettent le split final et stockent les manifestes de referral a cote de la
+- **اقتطاعات الإحالة:** نسب خيارات الإحالة هي فريدة من نوعها
+  باللاحقة والإضافة `referral_share` إلى المضيف السياسي. المسجلين
+  قم بتحرير الانقسام النهائي وتخزين بيانات الإحالة في الجزء السفلي من الصفحة
   preuve de paiement.
-- **Cadence de reporting:** La finance publie des annexes KPI mensuelles
-  (enregistrements, renouvellements, ARPU, utilisation des litiges/bonds) sous
-  `docs/source/sns/regulatory/<suffix>/YYYY-MM.md`. Les dashboards doivent
-  s'appuyer sur les memes tables exportees afin que les chiffres Grafana
-  correspondent aux preuves du ledger.
-- **Revue KPI mensuelle:** Le checkpoint du premier mardi associe le lead finance,
-  le steward de service et le PM programme. Ouvrir le [SNS KPI dashboard](./kpi-dashboard.md)
-  (embed portail de `sns-kpis` / `dashboards/grafana/sns_suffix_analytics.json`),
-  exporter les tables de throughput + revenus du registrar, consigner les deltas
-  dans l'annexe, et joindre les artefacts au memo. Declencher un incident si la
-  revue trouve des breaches SLA (fenetres de freeze >72 h, pics d'erreurs du
-  registrar, derive ARPU).
+- **إيقاع إعداد التقارير:** نشر مرفقات مؤشرات الأداء الرئيسية بشكل منتظم
+  (التسجيلات، التجديدات، متوسط العائد لكل مستخدم، الاستفادة من الدعاوى/السندات)
+  `docs/source/sns/regulatory/<suffix>/YYYY-MM.md`. لوحات المعلومات مهمة
+  اضغط على الميمات الجداول المصدرة لتتمكن من الكتابة Grafana
+  مراسل aux preuves du دفتر الأستاذ.
+- **مراجعة مؤشرات الأداء الرئيسية الشهرية:** نقطة تفتيش دو بريمير ماردي أسوسيه لو ليد فاينانس،
+  برنامج مضيف الخدمة وبرنامج PM. افتح [لوحة معلومات SNS KPI](./kpi-dashboard.md)
+  (تضمين البوابة `sns-kpis` / `dashboards/grafana/sns_suffix_analytics.json`)،تصدير جداول الإنتاجية + إعادة تسجيل البيانات وإرسال الدلتا
+  في الملحق، قم بضم القطع الأثرية إلى مذكرة. قم بفك الحادث إذا حدث ذلك
+  اكتشاف مخالفات SLA (نوافذ التجميد > 72 ساعة، صور أخطاء
+  المسجل، اشتقاق ARPU).
 
-### 4.4 Gels, litiges et appels
-
-| Phase | Proprietaire | Action et preuve | SLA |
-|-------|--------------|------------------|-----|
-| Demande de gel soft | Steward / support | Deposer un ticket `SNS-DF-<id>` avec preuves de paiement, reference de bond de litige et selecteur(s) affecte(s). | <=4 h apres l'entree. |
-| Ticket guardian | Conseil guardian | `sns governance freeze --selector <IH58> --reason <text> --until <ts>` produit `GuardianFreezeTicketV1`. Stocker le JSON du ticket sous `artifacts/sns/guardian/<id>.json`. | <=30 min ACK, <=2 h execution. |
-| Ratification du conseil | Conseil de gouvernance | Approuver ou rejeter les gels, documenter la decision avec lien vers le ticket guardian et le digest du bond de litige. | Prochaine session du conseil ou vote asynchrone. |
-| Panel d'arbitrage | Conformite + steward | Convoquer un panel de 7 jurors (selon roadmap) avec des bulletins hashes via `sns governance dispute ballot`. Joindre les recus de vote anonymises au paquet d'incident. | Verdict <=7 jours apres depot du bond. |
-| Appel | Guardian + conseil | Les appels doublent le bond et repetent le processus des jurors; enregistrer le manifeste Norito `DisputeAppealV1` et referencer le ticket primaire. | <=10 jours. |
-| Degel et remediation | Registrar + ops resolver | Executer `sns governance unfreeze --selector <IH58> --ticket <id>`, mettre a jour le statut du registrar, et propager les diffs GAR/resolver. | Immediatement apres le verdict. |
-
-Les canons d'urgence (gels declenches par guardian <=72 h) suivent le meme flux
-mais exigent une revue retroactive du conseil et une note de transparence sous
+### 4.4 المواد الهلامية والقضايا والطعون| المرحلة | مالك | العمل والسبق | جيش تحرير السودان |
+|-------|-------------|------------------|-----|
+| الطلب على الجل الناعم | ستيوارد / دعم | قم بإيداع تذكرة `SNS-DF-<id>` مع إجراءات الدفع ومرجع سند التقاضي وحدد التأثير (التأثيرات). | <=4 ساعات بعد الدخول. |
+| حارس التذاكر | حارس المجلس | `sns governance freeze --selector <IH58> --reason <text> --until <ts>` المنتج `GuardianFreezeTicketV1`. Stocker le JSON du Ticket sous `artifacts/sns/guardian/<id>.json`. | <=30 دقيقة ACK، <=2 ساعة تنفيذ. |
+| تصديق المجلس | مجلس الحكم | الموافقة على المواد الهلامية أو رفضها، وتوثيق القرار الخاص بالامتياز مقابل تذكرة الوصي وملخص سند التقاضي. | قم بإجراء جلسة مشورة أو التصويت بشكل غير متزامن. |
+| لوحة التحكيم | مطابق + ستيوارد | قم بتكوين لجنة مكونة من 7 محلفين (خارطة طريق محددة) باستخدام النشرات عبر `sns governance dispute ballot`. انضم إلى قائمة التصويت المجهولة المصدر في حزمة الحوادث. | الحكم <= 7 أيام بعد مستودع السندات. |
+| نداء | الجارديان + المجلس | تضاعف الطلبات السند وتتكرر عملية المحلفين؛ قم بتسجيل البيان Norito `DisputeAppealV1` وقم بالإشارة إلى التذكرة الأولى. | <=10 يوم. |
+| ديجل والعلاج | المسجل + محلل العمليات | قم بتنفيذ `sns governance unfreeze --selector <IH58> --ticket <id>`، ومتابعة حالة المسجل، ونشر اختلافات GAR/resolver. | فورًا بعد صدور الحكم. |Les canons d'urgence (الجل المخفف من قبل الوصي <= 72 ساعة) يتبع تدفق الميم
+ولكن من الضروري إجراء مراجعة بأثر رجعي للمشورة ومذكرة شفافة للغاية
 `docs/source/sns/regulatory/`.
 
-### 4.5 Propagation resolver et gateway
+### 4.5 محلل الانتشار وبوابته
 
-1. **Hook d'evenement:** Chaque evenement de registre emet vers le flux d'evenements
-   resolver (`tools/soradns-resolver` SSE). Les ops resolver s'abonnent et
-   enregistrent les diffs via le tailer de transparence
+1. **خطاف الحدث:** كل حدث يتم تسجيله مقابل تدفق الأحداث
+   محلل (`tools/soradns-resolver` SSE). يتم حل العمليات أيضًا
+   قم بتسجيل الاختلافات عبر أداة الشفافية
    (`scripts/telemetry/run_soradns_transparency_tail.sh`).
-2. **Mise a jour du template GAR:** Les gateways doivent mettre a jour les templates
-   GAR references par `canonical_gateway_suffix()` et re-signer la liste
+2. **صمم قالب GAR يوميًا:** يجب أن تعمل البوابات على القوالب يوميًا
+   مراجع GAR على أساس `canonical_gateway_suffix()` وأعد تسجيل القائمة
    `host_pattern`. Stocker les diffs dans `artifacts/sns/gar/<date>.patch`.
-3. **Publication de zonefile:** Utiliser le squelette de zonefile decrit dans
-   `roadmap.md` (name, ttl, cid, proof) et le pousser vers Torii/SoraFS. Archiver
-   le JSON Norito sous `artifacts/sns/zonefiles/<name>/<version>.json`.
-4. **Verification de transparence:** Executer `promtool test rules dashboards/alerts/tests/soradns_transparency_rules.test.yml`
-   pour s'assurer que les alertes restent vertes. Joindre la sortie texte
-   Prometheus au rapport de transparence hebdomadaire.
-5. **Audit gateway:** Enregistrer des echantillons d'en-tetes `Sora-*` (policy cache,
-   CSP, digest GAR) et les joindre au journal de gouvernance afin que les
-   operateurs puissent prouver que le gateway a servi le nouveau nom avec les
+3. **نشر ملف المنطقة:** استخدم ضغط ملف المنطقة الموجود في
+   `roadmap.md` (الاسم، ttl، cid، الإثبات) والضغط على Torii/SoraFS. أرشيفي
+   لو JSON Norito سو `artifacts/sns/zonefiles/<name>/<version>.json`.
+4. **التحقق من الشفافية:** المنفذ `promtool test rules dashboards/alerts/tests/soradns_transparency_rules.test.yml`
+   للتأكد من أن التنبيهات تبقى في مكانها الصحيح. انضم إلى النص الذي قمت بإخراجه
+   Prometheus au تقرير الشفافية hebdomadaire.
+5. **بوابة التدقيق:** Enregistrer des echantillons d'en-tetes `Sora-*` (ذاكرة التخزين المؤقت للسياسة،
+   CSP، ملخص GAR) والانضمام إلى مجلة الحوكمة من أجل تحقيق ذلك
+   المشغلون قادرون على إثبات أن البوابة تخدم الاسم الجديد مع
    garde-fous prevus.
 
-## 5. Telemetrie et reporting
+## 5. القياس عن بعد وإعداد التقارير| إشارة | المصدر | الوصف / العمل |
+|--------|--------|---------------------|
+| `sns_registrar_status_total{result,suffix}` | مسجل الإدارات Torii | قياس النجاح/الخطأ في التسجيلات والتجديدات والمواد الهلامية والتحويلات؛ تنبيه عند زيادة `result="error"` حسب اللاحقة. |
+| `torii_request_duration_seconds{route="/v1/sns/*"}` | ميتريكس Torii | SLO زمن الاستجابة لواجهة برمجة تطبيقات المعالجات؛ تم إصدار لوحات المعلومات `torii_norito_rpc_observability.json`. |
+| `soradns_bundle_proof_age_seconds` و`soradns_bundle_cid_drift_total` | خياط محلل الشفافية | اكتشاف التجاوزات المسبقة أو مشتقات GAR؛ تم تحديده بعناية في `dashboards/alerts/soradns_transparency_rules.yml`. |
+| `sns_governance_activation_total` | حوكمة CLI | قم بحساب زيادة كل تفعيل للمخطط/الإضافة; استخدم للتوفيق بين قرارات المجلس والإضافات المنشورة. |
+| مقياس `guardian_freeze_active` | ولي الأمر CLI | تناسب نوافذ الجل الناعمة/الصلبة؛ صفحة SRE si la valeur Reste `1` au-dela du SLA تعلن. |
+| لوحات المعلومات الخاصة بمرفقات KPI | المالية / مستندات | يتم نشر مجموعات البيانات الشهرية مع المذكرات التنظيمية؛ يتم دمج البوابة عبر [لوحة معلومات SNS KPI](./kpi-dashboard.md) حتى يتمكن المشرفون والمنظمون من الوصول إلى الصورة Grafana. |
 
-| Signal | Source | Description / Action |
-|--------|--------|----------------------|
-| `sns_registrar_status_total{result,suffix}` | Gestionnaires registrar Torii | Compteur succes/erreur pour enregistrements, renouvellements, gels, transferts; alerte lorsque `result="error"` augmente par suffixe. |
-| `torii_request_duration_seconds{route="/v1/sns/*"}` | Metriques Torii | SLO de latence pour les handlers API; alimente des dashboards issus de `torii_norito_rpc_observability.json`. |
-| `soradns_bundle_proof_age_seconds` & `soradns_bundle_cid_drift_total` | Tailer de transparence resolver | Detecte des preuves perimees ou des derives GAR; garde-fous definis dans `dashboards/alerts/soradns_transparency_rules.yml`. |
-| `sns_governance_activation_total` | CLI gouvernance | Compteur incremente a chaque activation de charte/addendum; utilise pour reconciler les decisions du conseil vs addenda publies. |
-| `guardian_freeze_active` gauge | CLI guardian | Suit les fenetres de gel soft/hard par selecteur; page SRE si la valeur reste `1` au-dela du SLA declare. |
-| Dashboards d'annexes KPI | Finance / Docs | Rollups mensuels publies avec les memos reglementaires; le portail les integre via [SNS KPI dashboard](./kpi-dashboard.md) pour que stewards et regulateurs accedent a la meme vue Grafana. |
-
-## 6. Exigences d'evidence et d'audit
-
-| Action | Evidence a archiver | Stockage |
+## 6. متطلبات الأدلة والتدقيق| العمل | دليل أرشيفي | المخزون |
 |--------|---------------------|----------|
-| Changement de charte / politique | Manifeste Norito signe, transcript CLI, diff KPI, acknowledgement steward. | `artifacts/sns/governance/<proposal-id>/` + `docs/source/sns/governance_addenda/`. |
-| Enregistrement / renouvellement | Payload `RegisterNameRequestV1`, `RevenueAccrualEventV1`, preuve de paiement. | `artifacts/sns/payments/<tx>.json`, logs API du registrar. |
-| Enchere | Manifestes commit/reveal, graine d'aleatoire, tableur de calcul du gagnant. | `artifacts/sns/auctions/<name>/`. |
-| Gel / degel | Ticket guardian, hash de vote du conseil, URL de log d'incident, modele de communication client. | `artifacts/sns/guardian/<ticket>/`, `incident/<date>-sns-*.md`. |
-| Propagation resolver | Diff zonefile/GAR, extrait JSONL du tailer, snapshot Prometheus. | `artifacts/sns/resolver/<date>/` + rapports de transparence. |
-| Intake reglementaire | Memo d'accueil, tracker de deadlines, acknowledgement steward, resume des changements KPI. | `docs/source/sns/regulatory/<jurisdiction>/<cycle>.md`. |
+| تغيير الميثاق / السياسة | بيان Norito التوقيع، نص CLI، فرق KPI، مضيف الإقرار. | `artifacts/sns/governance/<proposal-id>/` + `docs/source/sns/governance_addenda/`. |
+| التسجيل / التجديد | الحمولة `RegisterNameRequestV1`، `RevenueAccrualEventV1`، مسبقة الدفع. | `artifacts/sns/payments/<tx>.json`، واجهة برمجة تطبيقات سجلات المسجل. |
+| انشر | إظهار الالتزام/الكشف، تفاصيل التفاصيل، جدول حساب الجاجنانت. | `artifacts/sns/auctions/<name>/`. |
+| جل / ديجيل | حارس التذكرة، تجزئة التصويت للمشورة، عنوان URL لسجل الحادث، نموذج اتصال العميل. | `artifacts/sns/guardian/<ticket>/`، `incident/<date>-sns-*.md`. |
+| محلل الانتشار | ملف منطقة الاختلاف/GAR، ملحق JSONL للخياط، لقطة Prometheus. | `artifacts/sns/resolver/<date>/` + تقارير الشفافية. |
+| كمية تنظيمية | المذكرة الرئيسية، وتعقب المواعيد النهائية، ومشرف الإقرار، واستئناف تغييرات مؤشرات الأداء الرئيسية. | `docs/source/sns/regulatory/<jurisdiction>/<cycle>.md`. |
 
-## 7. Checklist de gate de phase
-
-| Phase | Criteres de sortie | Bundle d'evidence |
+## 7. قائمة التحقق من بوابة المرحلة| المرحلة | معايير الطلعة | حزمة الأدلة |
 |-------|--------------------|------------------|
-| N0 - Beta fermee | Schema de registre SN-1/SN-2, CLI registrar manuel, drill guardian complete. | Motion de charte + ACK steward, logs de dry-run du registrar, rapport de transparence resolver, entree dans `ops/drill-log.md`. |
-| N1 - Lancement public | Encheres + tiers de prix fixes actifs pour `.sora`/`.nexus`, registrar self-service, auto-sync resolver, dashboards de facturation. | Diff de feuille de prix, resultats CI du registrar, annexe paiement/KPI, sortie du tailer de transparence, notes de rehearsal incident. |
-| N2 - Expansion | `.dao`, APIs reseller, portail de litige, scorecards steward, dashboards analytiques. | Captures ecran du portail, metriques SLA de litige, exports de scorecards steward, charte de gouvernance mise a jour avec politiques reseller. |
+| N0 - بيتا فيرمي | مخطط التسجيل SN-1/SN-2، دليل مسجل CLI، حارس الحفر مكتمل. | حركة الرسم البياني + مضيف ACK، سجلات التشغيل الجاف للمسجل، تقرير حل الشفافية، الدخول إلى `ops/drill-log.md`. |
+| N1 - الرمح العام | المزيد + مستويات إصلاح الأسعار النشطة لـ `.sora`/`.nexus`، والخدمة الذاتية للمسجل، ومحلل المزامنة التلقائية، ولوحات المعلومات. | فرق السعر، نتائج CI للمسجل، الدفعة الملحقة/مؤشر الأداء الرئيسي، نوع تخصيص الشفافية، ملاحظات حول حادثة التدريب. |
+| N2 - التوسع | `.dao`، موزع واجهات برمجة التطبيقات، وبوابة التقاضي، ومشرف بطاقات الأداء، وتحليلات لوحات المعلومات. | يلتقط شاشة الباب، ويقيس SLA للتقاضي، ويصدر بطاقات الأداء، وميثاق الحوكمة في اليوم مع الموزعين السياسيين. |
 
-Les sorties de phase exigent des drills tabletop enregistres (parcours registre
-happy path, gel, panne resolver) avec artefacts attaches dans `ops/drill-log.md`.
+Lesطلعات المرحلة المطلوبة لتدريبات الطاولة المسجلة (سجلات الباركور
+مسار سعيد، هلام، محلل Panne) مع المصنوعات اليدوية المرفقة في `ops/drill-log.md`.
 
-## 8. Reponse aux incidents et escalade
-
-| Declencheur | Severite | Proprietaire immediat | Actions obligatoires |
-|-------------|----------|-----------------------|----------------------|
-| Derive resolver/GAR ou preuves perimees | Sev 1 | SRE resolver + conseil guardian | Pager l'on-call resolver, capturer la sortie tailer, decider si les noms affectes doivent etre geles, poster un statut toutes les 30 min. |
-| Panne registrar, echec de facturation, ou erreurs API generalisees | Sev 1 | Duty manager du registrar | Arreter les nouvelles encheres, basculer sur CLI manuel, notifier stewards/tresorerie, joindre les logs Torii au doc d'incident. |
-| Litige sur un seul nom, mismatch de paiement, ou escalation client | Sev 2 | Steward + lead support | Collecter les preuves de paiement, determiner si un gel soft est necessaire, repondre au demandeur dans le SLA, consigner le resultat dans le tracker de litige. |
-| Constat d'audit de conformite | Sev 2 | Liaison conformite | Rediger un plan de remediation, deposer un memo sous `docs/source/sns/regulatory/`, planifier une session de conseil de suivi. |
-| Drill ou rehearsal | Sev 3 | PM programme | Executer le scenario scripte depuis `ops/drill-log.md`, archiver les artefacts, etiqueter les gaps comme taches du roadmap. |
-
-Tous les incidents doivent creer `incident/YYYY-MM-DD-sns-<slug>.md` avec des
-tables de propriete, des logs de commandes et des references aux preuves
+## 8. الاستجابة للحوادث والتصعيد| ديكلينشر | شديد | الملكية فورية | واجبات الإجراءات |
+|-------------|----------|----------------------|----------------------|
+| اشتقاق المحلل/GAR أو preuves perimees | سيف 1 | محلل SRE + ولي الأمر | استدعاء محلل عند الاتصال، والتقاط الترتيب المخصص، وتحديد ما إذا كانت الأسماء تؤثر على ما هو مطلوب وما إلى ذلك، ثم نشر حالة لمدة 30 دقيقة. |
+| مسجل Panne، فحص التخصيب، أو أخطاء تعميمات API | سيف 1 | المدير المناوب للمسجل | قم بإيقاف الإدخالات الجديدة، بعد استخدام CLI يدويًا، ومشرفي الإخطار/الخزانة، وضم السجلات Torii إلى مستند الحادث. |
+| دعوى قضائية حول اسم واحد أو عدم تطابق الدفع أو عميل التصعيد | سيف 2 | ستيوارد + دعم الرصاص | اجمع مدفوعات الدفع، وحدد ما إذا كان الجل الناعم ضروريًا، والرد على الطلب في اتفاقية مستوى الخدمة (SLA)، وإرسال النتائج إلى متتبع التقاضي. |
+| قانون تدقيق المطابقة | سيف 2 | الاتصال المطابق | قم بإعادة وضع خطة إصلاح، وإيداع مذكرة Sous `docs/source/sns/regulatory/`، وتخطيط جلسة مشورة للمتابعة. |
+| تدريب أو بروفة | سيف 3 | برنامج PM | قم بتنفيذ السيناريو النصي من `ops/drill-log.md`، وأرشفة العناصر، وتصحيح الفجوات كأجزاء من خريطة الطريق. |يجب إنشاء جميع الأحداث `incident/YYYY-MM-DD-sns-<slug>.md` مع
+جداول الملكية وسجلات الأوامر والمراجع المسبقة
 produites tout au long de ce playbook.
 
-## 9. References
+## 9. المراجع
 
 - [`registry-schema.md`](./registry-schema.md)
 - [`registrar-api.md`](./registrar-api.md)
@@ -227,10 +198,10 @@ produites tout au long de ce playbook.
 - [`docs/account_structure.md`](../../../account_structure.md)
 - [`docs/source/soradns/deterministic_hosts.md`](../../../source/soradns/deterministic_hosts.md)
 - [`docs/source/reports/soradns_transparency.md`](../../../source/reports/soradns_transparency.md)
-- `ops/drill-log.md`
-- `roadmap.md` (sections SNS, DG, ADDR)
+-`ops/drill-log.md`
+- `roadmap.md` (الأقسام SNS، DG، ADDR)
 
-Garder ce playbook a jour chaque fois que le texte des chartes, les surfaces CLI
-ou les contrats de telemetrie changent; les entrees du roadmap qui referencent
-`docs/source/sns/governance_playbook.md` doivent toujours correspondre a la
-derniere revision.
+قم بحفظ هذا الدليل في كل يوم من نص المخططات وأسطح CLI
+تتغير عقود القياس عن بعد؛ مداخل خريطة الطريق التي تشير إليها
+`docs/source/sns/governance_playbook.md` doivent toujours matcher a la
+المراجعة الأخيرة.

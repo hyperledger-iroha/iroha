@@ -4,31 +4,33 @@ direction: ltr
 source: docs/portal/docs/sorafs/node-storage.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: node-storage
-title: SoraFS node storage design
-sidebar_label: node storage design
-description: SoraFS data host کرنے والے Torii nodes کے لیے storage architecture، quotas اور lifecycle hooks۔
+ID: ノードストレージ
+title: SoraFS ノード ストレージ設計
+Sidebar_label: ノードのストレージ設計
+説明: SoraFS データ ホスト Torii ノード ストレージ アーキテクチャ クォータ ライフサイクル フック
 ---
 
-:::note مستند ماخذ
+:::note メモ
 :::
 
-## SoraFS node storage design (Draft)
+## SoraFS ノードのストレージ設計 (ドラフト)
 
-یہ نوٹ واضح کرتا ہے کہ Iroha (Torii) node کس طرح SoraFS data availability layer میں opt-in کر سکتا ہے اور local disk کا ایک حصہ chunks ذخیرہ/سرو کرنے کے لیے مختص کر سکتا ہے۔ یہ `sorafs_node_client_protocol.md` discovery spec اور SF-1b fixture کام کی تکمیل کرتا ہے، اور storage-side architecture، resource controls، اور configuration plumbing بیان کرتا ہے جو node اور gateway code paths میں شامل ہونا ضروری ہے۔ عملی آپریشنل drills
-[Node Operations Runbook](./node-operations) میں موجود ہیں۔
+Iroha (Torii) ノード SoraFS データ可用性レイヤーのオプトインローカル ディスク、チャンク、チャンク、チャンク、およびチャンクの数。 `sorafs_node_client_protocol.md` ディスカバリ仕様 SF-1b フィクスチャ ストレージ側アーキテクチャ リソース制御 構成配管 ノード ゲートウェイ コード パスمیں شامل ہونا ضروری ہے۔訓練
+[ノード操作ランブック](./node-operations) میں موجود ہیں۔
 
-### Goals
+### 目標
 
-- کسی بھی validator یا auxiliary Iroha process کو spare disk بطور SoraFS provider expose کرنے دینا بغیر core ledger ذمہ داریاں متاثر کیے۔
-- storage module کو deterministic اور Norito-driven رکھنا: manifests، chunk plans، Proof-of-Retrievability (PoR) roots، اور provider adverts ہی source of truth ہیں۔
-- operator-defined quotas enforce کرنا تاکہ node بہت زیادہ pin/fetch requests قبول کر کے اپنے resources ختم نہ کر لے۔
-- health/telemetry (PoR sampling، chunk fetch latency، disk pressure) کو governance اور clients تک واپس پہنچانا۔
+- 補助 Iroha プロセス スペア ディスク SoraFS プロバイダーの公開 コア元帳の管理੩یے۔
+- ストレージ モジュール、決定論的 Norito 駆動型、マニフェスト、チャンク プラン、Proof-of-Retrievability (PoR) ルート、プロバイダー広告、真実のソース、
+- オペレータ定義のクォータにより、ノードのピン/フェッチ リクエストが強制され、リソースが制限されます。
+- ヘルス/テレメトリ (PoR サンプリング、チャンク フェッチ レイテンシー、ディスク プレッシャー)、ガバナンス、クライアントの管理
 
-### High-level architecture
+### 高レベルのアーキテクチャ
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
@@ -57,16 +59,16 @@ description: SoraFS data host کرنے والے Torii nodes کے لیے storage 
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
-Key modules:
+主要なモジュール:
 
-- **Gateway**: Norito HTTP endpoints expose کرتا ہے pin proposals، chunk fetch requests، PoR sampling اور telemetry کے لیے۔ Norito payloads validate کرتا ہے اور requests کو chunk store میں marshal کرتا ہے۔ نیا daemon بنانے کے بجائے Torii HTTP stack reuse کرتا ہے۔
-- **Pin Registry**: manifest pin state جو `iroha_data_model::sorafs` اور `iroha_core` میں track ہوتی ہے۔ Manifest accept ہونے پر registry manifest digest، chunk plan digest، PoR root اور provider capability flags record کرتا ہے۔
-- **Chunk Storage**: disk-backed `ChunkStore` implementation جو signed manifests ingest کرتی ہے، `ChunkProfile::DEFAULT` سے chunk plans materialize کرتی ہے، اور chunks کو deterministic layout میں persist کرتی ہے۔ ہر chunk content fingerprint اور PoR metadata کے ساتھ associate ہوتا ہے تاکہ sampling بغیر پورا فائل دوبارہ پڑھنے کے re-validate ہو سکے۔
-- **Quota/Scheduler**: operator-configured limits (max disk bytes، max outstanding pins، max parallel fetches، chunk TTL) enforce کرتا ہے اور IO کو coordinate کرتا ہے تاکہ node کے ledger duties starve نہ ہوں۔ Scheduler PoR proofs اور sampling requests کو bounded CPU کے ساتھ serve بھی کرتا ہے۔
+- **ゲートウェイ**: Norito HTTP エンドポイントは、ピン プロポーザル、チャンク フェッチ リクエスト、PoR サンプリング、テレメトリを公開します。 Norito ペイロードは、リクエストを検証し、チャンク ストアとマーシャルを検証します。デーモン デーモン Torii HTTP スタックの再利用 ہے۔
+- **ピン レジストリ**: マニフェスト ピンの状態 جو `iroha_data_model::sorafs` اور `iroha_core` میں track ہوتی ہے۔マニフェスト受け入れ レジストリ マニフェスト ダイジェスト チャンク プラン ダイジェスト PoR ルート プロバイダー機能フラグ レコード
+- **チャンク ストレージ**: ディスク バックアップの `ChunkStore` 実装、署名されたマニフェストの取り込み、`ChunkProfile::DEFAULT` およびチャンク プランの具体化、チャンク、決定論的レイアウト、永続化ありがとうございますチャンク コンテンツ フィンガープリント PoR メタデータ アソシエイト サンプリング サンプリング 再検証 再検証
+- **クォータ/スケジューラ**: オペレータが設定した制限 (最大ディスクバイト数、最大未処理ピン数、最大並列フェッチ数、チャンク TTL) により、IO 座標、ノード、台帳義務が強制されます。スケジューラ PoR 証明、サンプリング リクエスト、制限付き CPU の提供、サービスの提供
 
-### Configuration
+### 構成
 
-`iroha_config` میں نیا section شامل کریں:
+`iroha_config` セクション番号:
 
 ```toml
 [sorafs.storage]
@@ -84,23 +86,23 @@ adverts:
   topics = ["sorafs.sf1.primary:global"]
 ```
 
-- `enabled`: participation toggle۔ false ہو تو gateway storage endpoints پر 503 دیتا ہے اور node discovery میں advertise نہیں کرتا۔
-- `data_dir`: chunk data، PoR trees اور fetch telemetry کے لیے root directory۔ Default `<iroha.data_dir>/sorafs` ہے۔
-- `max_capacity_bytes`: pinned chunk data کے لیے hard limit۔ background task limit پر پہنچنے پر نئے pins reject کرتی ہے۔
-- `max_parallel_fetches`: scheduler کا concurrency cap جو bandwidth/disk IO کو validator workload کے ساتھ balance کرتا ہے۔
-- `max_pins`: manifest pins کی maximum تعداد جو node قبول کرتا ہے اس سے پہلے eviction/back pressure apply ہو۔
-- `por_sample_interval_secs`: automatic PoR sampling jobs کی cadence۔ ہر job `N` leaves sample کرتا ہے (per manifest configurable) اور telemetry events emit کرتا ہے۔ Governance `profile.sample_multiplier` metadata key (integer `1-4`) سے `N` کو deterministically scale کر سکتی ہے۔ Value ایک single number/string یا per-profile overrides والا object ہو سکتا ہے، مثلاً `{"default":2,"sorafs.sf2@1.0.0":3}`۔
-- `adverts`: structure جو provider advert generator `ProviderAdvertV1` fields (stake pointer, QoS hints, topics) بھرنے کے لیے استعمال کرتا ہے۔ اگر omit ہو تو node governance registry defaults استعمال کرتا ہے۔
+- `enabled`: 参加切り替えfalse ゲートウェイ ストレージ エンドポイント 503 ノード検出 広告 宣伝 広告
+- `data_dir`: チャンク データ、PoR ツリー、フェッチ テレメトリ、ルート ディレクトリデフォルト `<iroha.data_dir>/sorafs` ہے۔
+- `max_capacity_bytes`: ピン留めされたチャンク データ (ハード リミット)バックグラウンド タスクの制限 پر پہنچنے پر نئے ピンの拒否 ہے۔
+- `max_parallel_fetches`: スケジューラの同時実行上限、帯域幅/ディスク IO、バリデータのワークロード、バランスの調整
+- `max_pins`: マニフェスト ピンの最大数とノード数の最大数と、エビクション/バック プレッシャーの適用数。
+- `por_sample_interval_secs`: 自動 PoR サンプリング ジョブの頻度ジョブ `N` はサンプルを残します (マニフェストごとに構成可能) テレメトリ イベントが出力しますガバナンス `profile.sample_multiplier` メタデータ キー (整数 `1-4`) `N` 決定論的なスケール値 単一の数値/文字列 プロファイルごとのオーバーライド オブジェクト オブジェクト `{"default":2,"sorafs.sf2@1.0.0":3}`۔
+- `adverts`: 構造体プロバイダー広告ジェネレーター `ProviderAdvertV1` フィールド (ステーク ポインター、QoS ヒント、トピック)ノード ガバナンス レジストリのデフォルトを省略します。
 
-Config plumbing:
+構成配管:
 
-- `[sorafs.storage]` `iroha_config` میں `SorafsStorage` کے طور پر define ہے اور node config file سے load ہوتا ہے۔
-- `iroha_core` اور `iroha_torii` storage config کو startup پر gateway builder اور chunk store میں thread کرتے ہیں۔
-- Dev/test env overrides موجود ہیں (`SORAFS_STORAGE_*`, `SORAFS_STORAGE_PIN_*`)، مگر production deployments کو config file پر rely کرنا چاہیے۔
+- `[sorafs.storage]` `iroha_config` میں `SorafsStorage` کے طور پر 定義 ہے اور ノード構成ファイル سے 読み込み ہوتا ہے۔
+- `iroha_core` `iroha_torii` ストレージ構成 スタートアップ ゲートウェイ ビルダー チャンク ストア スレッド ہیں۔
+- 開発/テスト環境のオーバーライド (`SORAFS_STORAGE_*`、`SORAFS_STORAGE_PIN_*`)、運用環境のデプロイメント、構成ファイルのオーバーライド
 
-### CLI utilities
+### CLI ユーティリティ
 
-جب تک Torii کی HTTP surface wire ہو رہی ہے، `sorafs_node` crate ایک thin CLI فراہم کرتا ہے تاکہ operators persistent backend کے خلاف ingestion/export drills script کر سکیں۔【crates/sorafs_node/src/bin/sorafs-node.rs:1】
+Torii HTTP サーフェス ワイヤー `sorafs_node` クレート Thin CLI の演算子 永続的なバックエンドの演算子取り込み/エクスポート ドリル スクリプト [crates/sorafs_node/src/bin/sorafs-node.rs:1]
 
 ```bash
 cargo run -p sorafs_node --bin sorafs-node ingest \
@@ -108,54 +110,50 @@ cargo run -p sorafs_node --bin sorafs-node ingest \
   --manifest ./fixtures/manifest.to \
   --payload ./fixtures/payload.bin \
   --plan-json-out ./plan.json
-```
+```- `ingest` Norito でエンコードされたマニフェスト `.to` 一致するペイロード バイトが期待されます。マニフェスト チャンク プロファイル チャンク プランの再構築 ダイジェスト パリティの強制 チャンク ファイルの永続化 オプションで `chunk_fetch_specs` JSON BLOB の発行下流のツーリングレイアウトの健全性チェック
+- `export` マニフェスト ID 保存されたマニフェスト/ペイロード ディスク (オプションのプラン JSON イメージ) フィクスチャ環境 再現可能な環境
 
-- `ingest` Norito-encoded manifest `.to` اور matching payload bytes expect کرتا ہے۔ یہ manifest کے chunking profile سے chunk plan rebuild کرتا ہے، digest parity enforce کرتا ہے، chunk files persist کرتا ہے، اور optionally `chunk_fetch_specs` JSON blob emit کرتا ہے تاکہ downstream tooling layout sanity-check کر سکے۔
-- `export` manifest ID قبول کرتا ہے اور stored manifest/payload کو disk پر لکھتا ہے (optional plan JSON کے ساتھ) تاکہ fixtures environments میں reproducible رہیں۔
+コマンド stdout پر Norito JSON 概要 پرنٹ کرتے ہیں، جسے スクリプト میں パイプ کرنا آسان ہے۔ CLI 統合テストの対象範囲 マニフェスト/ペイロードの往復のテスト Torii API のテスト [crates/sorafs_node/tests/cli.rs:1]
 
-دونوں commands stdout پر Norito JSON summary پرنٹ کرتے ہیں، جسے scripts میں pipe کرنا آسان ہے۔ CLI integration test سے covered ہے تاکہ manifests/payloads round-trip درست رہیں جب تک Torii APIs نہ آئیں۔【crates/sorafs_node/tests/cli.rs:1】
-
-> HTTP parity
+> HTTPパリティ
 >
-> Torii gateway اب read-only helpers expose کرتا ہے جو اسی `NodeHandle` پر based ہیں:
+> Torii ゲートウェイ読み取り専用ヘルパーは、`NodeHandle` ベースのデータを公開します。
 >
-> - `GET /v1/sorafs/storage/manifest/{manifest_id_hex}` — stored Norito manifest (base64) digest/metadata کے ساتھ واپس کرتا ہے۔【crates/iroha_torii/src/sorafs/api.rs:1207】
-> - `GET /v1/sorafs/storage/plan/{manifest_id_hex}` — deterministic chunk plan JSON (`chunk_fetch_specs`) downstream tooling کے لیے واپس کرتا ہے۔【crates/iroha_torii/src/sorafs/api.rs:1259】
+> - `GET /v1/sorafs/storage/manifest/{manifest_id_hex}` — 保存された Norito マニフェスト (base64) ダイジェスト/メタデータ کے ساتھ واپس کرتا ہے۔【crates/iroha_torii/src/sorafs/api.rs:1207】
+> - `GET /v1/sorafs/storage/plan/{manifest_id_hex}` — 決定論的チャンク プラン JSON (`chunk_fetch_specs`) ダウンストリーム ツール
 >
-> یہ endpoints CLI output کو mirror کرتے ہیں تاکہ pipelines local scripts سے HTTP probes پر بغیر parser بدلے منتقل ہو سکیں۔【crates/iroha_torii/src/sorafs/api.rs:1207】【crates/iroha_torii/src/sorafs/api.rs:1259】
+> エンドポイント CLI 出力 ミラーリング パイプライン ローカル スクリプト HTTP プローブ パーサー パーサーسکیں۔【crates/iroha_torii/src/sorafs/api.rs:1207】【crates/iroha_torii/src/sorafs/api.rs:1259】
 
-### Node lifecycle
+### ノードのライフサイクル
 
-1. **Startup**:
-   - storage enabled ہو تو node configured directory اور capacity کے ساتھ chunk store initialize کرتا ہے۔ اس میں PoR manifest database verify/create کرنا اور pinned manifests replay کر کے caches warm کرنا شامل ہے۔
-   - SoraFS gateway routes register کریں (Norito JSON POST/GET endpoints for pin, fetch, PoR sample, telemetry)۔
-   - PoR sampling worker اور quota monitor spawn کریں۔
-2. **Discovery / Adverts**:
-3. **Pin workflow**:
-   - Gateway signed manifest وصول کرتا ہے (chunk plan، PoR root، council signatures شامل)۔ alias list validate کریں (`sorafs.sf1@1.0.0` required) اور chunk plan کو manifest metadata سے match کریں۔
-   - Quotas check کریں۔ اگر capacity/pin limits exceed ہوں تو policy error (structured Norito) دیں۔
-   - Chunk data کو `ChunkStore` میں stream کریں اور ingest کے دوران digests verify کریں۔ PoR trees update کریں اور manifest metadata registry میں store کریں۔
-4. **Fetch workflow**:
-   - Disk سے chunk range requests serve کریں۔ Scheduler `max_parallel_fetches` enforce کرتا ہے اور saturated ہونے پر `429` واپس کرتا ہے۔
-   - Structured telemetry (Norito JSON) emit کریں جس میں latency، bytes served اور error counts ہوں تاکہ downstream monitoring ہو۔
-5. **PoR sampling**:
-   - Worker manifests کو weight (مثلاً stored bytes) کے تناسب سے select کرتا ہے اور chunk store کے PoR tree سے deterministic sampling کرتا ہے۔
-   - Results کو governance audits کے لیے persist کریں اور provider adverts/telemetry endpoints میں summaries شامل کریں۔
-6. **Eviction / quota enforcement**:
-   - Capacity پہنچنے پر node default طور پر نئے pins reject کرتا ہے۔ Optional طور پر operators eviction policies (مثلاً TTL، LRU) configure کر سکتے ہیں جب governance model طے ہو جائے؛ فی الحال design strict quotas اور operator-initiated unpin operations فرض کرتا ہے۔
+1. **起動**:
+   - ストレージの有効化 ノードの構成済みディレクトリの容量 チャンク ストアの初期化PoR マニフェスト データベースの検証/作成 固定マニフェストの再生 ウォーム キャッシュ ウォーム キャッシュ
+   - SoraFS ゲートウェイ ルート レジスタ (ピン、フェッチ、PoR サンプル、テレメトリ用の Norito JSON POST/GET エンドポイント)
+   - PoR サンプリング ワーカーのクォータ モニターのスポーン
+2. **発見/広告**:
+3. **ピンのワークフロー**:
+   - ゲートウェイ署名マニフェスト (チャンク計画、PoR ルート、評議会署名) (チャンク計画、PoR ルート、評議会署名)エイリアス リストの検証 (`sorafs.sf1@1.0.0` が必要) チャンク プランの確認 マニフェスト メタデータの一致の確認
+   - 割り当てのチェック容量/ピン制限がポリシー エラー (構造化 Norito) を超えています。
+   - チャンク データ `ChunkStore` ストリーム 取り込み ダイジェスト検証PoR ツリーの更新 マニフェスト メタデータ レジストリ ストアの保存
+4. **フェッチワークフロー**:
+   - ディスクのチャンク範囲リクエストを処理しますスケジューラ `max_parallel_fetches` は飽和状態を強制します `429` واپس کرتا ہے۔
+   - 構造化テレメトリ (Norito JSON) は、レイテンシ、処理されたバイト数、エラー数、ダウンストリーム監視を出力します。
+5. **PoR サンプリング**:
+   - ワーカー マニフェストの重み (保存されたバイト数) 選択、チャンク ストア、PoR ツリー、決定論的サンプリング
+   - 結果、ガバナンス監査、継続、プロバイダーの広告/テレメトリ エンドポイント、概要の確認
+6. **エビクション/クォータの強制**:
+   - キャパシティ ノードのデフォルト ピンの拒否オプションのオペレーターエビクションポリシー (TTLLRU) ガバナンスモデルの構成厳格なクォータの設計 オペレータによる固定解除操作の設計
 
-### Capacity declaration & scheduling integration
+### キャパシティ宣言とスケジュールの統合- Torii `/v1/sorafs/capacity/declare` `CapacityDeclarationRecord` 埋め込まれた更新 `CapacityManager` リレー ノード コミットされたチャンカー/レーン割り当てインメモリビューマネージャー テレメトリ 読み取り専用スナップショット (`GET /v1/sorafs/capacity/state`) の公開 注文 プロファイルごと レーンごとの予約の強制ہے۔【crates/sorafs_node/src/capacity.rs:1】【crates/sorafs_node/src/lib.rs:60】
+- `/v1/sorafs/capacity/schedule` エンドポイント ガバナンスによって発行された `ReplicationOrderV1` ペイロードローカルプロバイダーの注文 ターゲットの管理 マネージャーの重複スケジューリング チャンカー/レーンの容量の確認 スライスリザーブの確認 `ReplicationPlan` の確認残りの容量、オーケストレーション ツールの取り込み、および残りの容量プロバイダー 注文 `ignored` 応答 承認 承認 マルチオペレーター ワークフロー [crates/iroha_torii/src/routing.rs:4845]
+- 完了フック (مثلاً ingestion کامیاب ہونے کے بعد) `POST /v1/sorafs/capacity/complete` کو hit کرتے ہیں تاکہ `CapacityManager::complete_order` کے ذریعے 予約リリースوں۔応答 `ReplicationRelease` スナップショット (残りの合計、チャンカー/レーンの残差) を表示 オーケストレーション ツールのポーリングを表示 注文キューを表示یہ بعد میں チャンク ストア パイプライン کے ساتھ ワイヤー ہوگا جب インジェスト ロジック ランド ہو جائے۔【crates/iroha_torii/src/routing.rs:4885】【crates/sorafs_node/src/capacity.rs:90】
+- 埋め込み `TelemetryAccumulator` `NodeHandle::update_telemetry` 突然変異、バックグラウンド ワーカー、PoR/稼働時間サンプルの記録正規の `CapacityTelemetryV1` ペイロードは、スケジューラーの内部構造を派生します。 چھیڑے۔【crates/sorafs_node/src/lib.rs:142】【crates/sorafs_node/src/telemetry.rs:1】
 
-- Torii اب `/v1/sorafs/capacity/declare` سے `CapacityDeclarationRecord` updates embedded `CapacityManager` تک relay کرتا ہے، تاکہ ہر node اپنی committed chunker/lane allocations کا in-memory view بنائے۔ Manager telemetry کے لیے read-only snapshots (`GET /v1/sorafs/capacity/state`) expose کرتا ہے اور نئے orders قبول کرنے سے پہلے per-profile یا per-lane reservations enforce کرتا ہے۔【crates/sorafs_node/src/capacity.rs:1】【crates/sorafs_node/src/lib.rs:60】
-- `/v1/sorafs/capacity/schedule` endpoint governance-issued `ReplicationOrderV1` payloads قبول کرتا ہے۔ جب order local provider کو target کرے تو manager duplicate scheduling چیک کرتا ہے، chunker/lane capacity verify کرتا ہے، slice reserve کرتا ہے، اور `ReplicationPlan` واپس کرتا ہے جو remaining capacity بیان کرے تاکہ orchestration tooling ingestion جاری رکھ سکے۔ دوسرے providers کے orders کو `ignored` response سے acknowledge کیا جاتا ہے تاکہ multi-operator workflows آسان ہوں۔【crates/iroha_torii/src/routing.rs:4845】
-- Completion hooks (مثلاً ingestion کامیاب ہونے کے بعد) `POST /v1/sorafs/capacity/complete` کو hit کرتے ہیں تاکہ `CapacityManager::complete_order` کے ذریعے reservations release ہوں۔ Response میں `ReplicationRelease` snapshot (remaining totals, chunker/lane residuals) شامل ہوتا ہے تاکہ orchestration tooling polling کے بغیر اگلا order queue کر سکے۔ یہ بعد میں chunk store pipeline کے ساتھ wire ہوگا جب ingestion logic land ہو جائے۔【crates/iroha_torii/src/routing.rs:4885】【crates/sorafs_node/src/capacity.rs:90】
-- Embedded `TelemetryAccumulator` کو `NodeHandle::update_telemetry` کے ذریعے mutate کیا جا سکتا ہے، جس سے background workers PoR/uptime samples record کرتے ہیں اور مستقبل میں canonical `CapacityTelemetryV1` payloads derive کر سکتے ہیں بغیر scheduler internals چھیڑے۔【crates/sorafs_node/src/lib.rs:142】【crates/sorafs_node/src/telemetry.rs:1】
+### 統合と今後の取り組み
 
-### Integrations & future work
+- **ガバナンス**: `sorafs_pin_registry_tracker.md` ストレージ テレメトリ (PoR 成功率、ディスク使用率) 拡張機能アドミッション ポリシーの広告を受け入れます。 最小キャパシティ 最小 PoR 成功率が必要です。
+- **クライアント SDK**: ストレージ構成 (ディスク制限、エイリアス) を公開し、管理ツールをプログラムでノードのブートストラップを公開します。
+- **テレメトリ**: メトリクス スタック (Prometheus / OpenTelemetry) ストレージ メトリクスの可観測性ダッシュボードの統合
+- **セキュリティ**: ストレージ モジュール、専用の非同期タスク プール、バック プレッシャー、チャンクの読み取り、io_uring、境界のある tokio プール、サンドボックス、バック プレッシャー悪意のあるクライアントのリソースが枯渇する
 
-- **Governance**: `sorafs_pin_registry_tracker.md` کو storage telemetry (PoR success rate، disk utilization) کے ساتھ extend کریں۔ Admission policies adverts accept کرنے سے پہلے minimum capacity یا minimum PoR success rate require کر سکتی ہیں۔
-- **Client SDKs**: نئی storage config (disk limits، alias) expose کریں تاکہ management tooling programmatically nodes bootstrap کر سکے۔
-- **Telemetry**: موجودہ metrics stack (Prometheus / OpenTelemetry) کے ساتھ integrate کریں تاکہ storage metrics observability dashboards میں نظر آئیں۔
-- **Security**: storage module کو dedicated async task pool میں back-pressure کے ساتھ چلائیں اور chunk reads کو io_uring یا bounded tokio pools کے ذریعے sandbox کرنے پر غور کریں تاکہ malicious clients resources exhaust نہ کر سکیں۔
-
-یہ design storage module کو optional اور deterministic رکھتا ہے جبکہ operators کو SoraFS data availability layer میں حصہ لینے کے لیے ضروری knobs فراہم کرتا ہے۔ اس پر عمل درآمد `iroha_config`, `iroha_core`, `iroha_torii` اور Norito gateway میں تبدیلیاں، ساتھ ہی provider advert tooling میں تبدیلیاں مانگتا ہے۔
+デザイン ストレージ モジュール オプションの決定論的演算子 SoraFS データ可用性レイヤー ノブありがとうございます`iroha_config`、`iroha_core`、`iroha_torii`、Norito ゲートウェイ プロバイダー広告ツール تبدیلیاں مانگتا ہے۔

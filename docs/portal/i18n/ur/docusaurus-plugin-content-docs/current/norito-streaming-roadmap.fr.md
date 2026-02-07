@@ -4,13 +4,15 @@ direction: rtl
 source: docs/portal/docs/norito-streaming-roadmap.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: Feuille de route Norito Streaming
+عنوان: روڈ میپ Norito اسٹریمنگ
 ---
 
-Le backlog suivant capture les elements de travail a court terme que le Streaming Working Group suit pour la diffusion audio/video Norito. Les valeurs sont mises a jour en meme temps que `status.md` et partagees ici pour les utilisateurs du portail qui preferent une vue exploitable par machine.
+مندرجہ ذیل بیک بلاگ نے قلیل مدتی کام کی اشیاء کو اپنی گرفت میں لے لیا ہے جسے اسٹریمنگ ورکنگ گروپ آڈیو/ویڈیو اسٹریمنگ Norito کے لئے ٹریک کررہا ہے۔ اقدار کو `status.md` کے ساتھ ساتھ اپ ڈیٹ کیا جاتا ہے اور پورٹل صارفین کے لئے یہاں مشترکہ کیا جاتا ہے جو مشین سے پڑھنے کے قابل نظارے کو ترجیح دیتے ہیں۔
 
 ```json
 [

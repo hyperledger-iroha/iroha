@@ -10,46 +10,47 @@ translation_last_reviewed: 2026-02-07
 title: GAR Operator Onboarding
 sidebar_label: GAR Operator Onboarding
 description: Checklist to activate SNNet-9 compliance policies with attestation digests and evidence capture.
+translator: machine-google-reviewed
 ---
 
-Use this brief to roll out the SNNet-9 compliance configuration with a repeatable,
-audit-friendly process. Pair it with the jurisdictional review so every operator
-uses the same digests and evidence layout.
+ထပ်ခါတလဲလဲလုပ်နိုင်သော SNNet-9 လိုက်လျောညီထွေမှုဖွဲ့စည်းပုံကို ထုတ်ပြရန် ဤအကျဉ်းကိုသုံးပါ၊
+စာရင်းစစ်ဖော်ရွေသောလုပ်ငန်းစဉ်။ အော်ပရေတာတိုင်းကို တရားစီရင်ရေးဆိုင်ရာ ပြန်လည်သုံးသပ်မှုဖြင့် တွဲလိုက်ပါ။
+တူညီသော digests နှင့် အထောက်အထား layout ကိုအသုံးပြုသည်။
 
-## Steps
+## ခြေလှမ်းများ
 
-1. **Assemble config**
-   - Import `governance/compliance/soranet_opt_outs.json`.
-   - Merge your `operator_jurisdictions` with the attestation digests published
-     in the [jurisdictional review](gar-jurisdictional-review).
-2. **Validate**
+1. **ဖွဲ့စည်းပုံကို စုစည်းပါ**
+   - `governance/compliance/soranet_opt_outs.json` ကို တင်သွင်းပါ။
+   - သင်၏ `operator_jurisdictions` ကို ထုတ်ပြန်ထားသော သက်သေခံချက်အချက်များကို ပေါင်းစပ်ပါ။
+     [တရားစီရင်ရေးဆိုင်ရာ သုံးသပ်ချက်](gar-jurisdictional-review) တွင်။
+2. **အတည်ပြုပါ**
    - `cargo test -p sorafs_orchestrator -- compliance_policy_parses_from_json`
    - `cargo test -p sorafs_orchestrator -- compliance_example_config_parses`
-   - Optional: `cargo xtask soranet-privacy-report --max-suppression-ratio 0.2 --ndjson <privacy-log.ndjson>`
-3. **Capture evidence**
-   - Store under `artifacts/soranet/compliance/<YYYYMMDD>/`:
-     - `config.json` (final compliance block)
+   - ရွေးချယ်နိုင်သော- `cargo xtask soranet-privacy-report --max-suppression-ratio 0.2 --ndjson <privacy-log.ndjson>`
+3. **အထောက်အထားများ ဖမ်းယူရန်**
+   - `artifacts/soranet/compliance/<YYYYMMDD>/` အောက်တွင် သိမ်းဆည်းပါ။
+     - `config.json` (နောက်ဆုံးလိုက်နာမှုပိတ်ဆို့)
      - `attestations.json` (URIs + digests)
-     - validation logs
-     - references to signed PDFs/Norito envelopes
-4. **Activate**
-   - Tag the rollout (`gar-opt-out-<date>`), redeploy orchestrator/SDK configs,
-     and confirm `compliance_*` events emit in logs where expected.
-5. **Close out**
-   - File the evidence bundle with Governance Council.
-   - Log the activation window + approvers in the GAR logbook.
-   - Schedule the next-review dates from the jurisdictional review table.
+     - တရားဝင်မှတ်တမ်းများ
+     - လက်မှတ်ထိုးထားသော PDFs/Norito စာအိတ်များအတွက် ကိုးကားချက်များ
+4. **အသက်သွင်းရန်**
+   - စတင်ဖြန့်ချိခြင်း (`gar-opt-out-<date>`)၊ တီးမှုတ်သူ/SDK စနစ်များကို ပြန်လည်အသုံးချရန်၊
+     နှင့် `compliance_*` ဖြစ်ရပ်များကို မျှော်လင့်ထားသည့် မှတ်တမ်းများတွင် ထုတ်လွှတ်ကြောင်း အတည်ပြုပါ။
+5. **ပိတ်ပါ**
+   - အထောက်အထားအစုအဝေးကို အုပ်ချုပ်ရေးကောင်စီထံ တင်ပြပါ။
+   - စဖွင့်ခြင်းဝင်းဒိုး + အတည်ပြုသူများကို GAR မှတ်တမ်းစာအုပ်တွင် မှတ်တမ်းတင်ပါ။
+   - တရားစီရင်ရေးဆိုင်ရာပြန်လည်သုံးသပ်ရေးဇယားမှ နောက်ပြန်လည်သုံးသပ်သည့်ရက်စွဲများကို အချိန်ဇယားဆွဲပါ။
 
-## Quick checklist
+## အမြန်စစ်ဆေးရန်
 
-- [ ] `jurisdiction_opt_outs` matches the canonical catalogue.
-- [ ] Attestation digests copied exactly.
-- [ ] Validation commands run and archived.
-- [ ] Evidence bundle stored in `artifacts/soranet/compliance/<date>/`.
-- [ ] Rollout tag + GAR logbook updated.
-- [ ] Next-review reminders set.
+- [ ] `jurisdiction_opt_outs` သည် canonical catalogue နှင့် ကိုက်ညီသည်။
+- [ ] အထောက်အထား အတိအကျကို ကူးယူထားသည်။
+- [ ] validation commands များ run ပြီး archived ။
+- [ ] `artifacts/soranet/compliance/<date>/` တွင် သိမ်းဆည်းထားသော အထောက်အထားအတွဲ။
+- [ ] လွှင့်တင် tag + GAR မှတ်တမ်းစာအုပ်ကို အပ်ဒိတ်လုပ်ထားသည်။
+- [ ] နောက်-သုံးသပ်ချက်သတိပေးချက်များကို သတ်မှတ်ထားသည်။
 
-## See also
+## ကိုလည်းကြည့်ပါ။
 
-- [GAR Jurisdictional Review](gar-jurisdictional-review)
-- [GAR Compliance Playbook (source)](../../../source/soranet/gar_compliance_playbook.md)
+- [GAR တရားစီရင်ရေးဆိုင်ရာ ပြန်လည်သုံးသပ်ခြင်း](gar-jurisdictional-review)
+- [GAR Compliance Playbook (အရင်းအမြစ်)](../../../source/soranet/gar_compliance_playbook.md)

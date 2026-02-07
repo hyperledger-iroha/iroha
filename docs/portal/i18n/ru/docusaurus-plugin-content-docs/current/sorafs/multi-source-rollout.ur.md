@@ -4,46 +4,48 @@ direction: ltr
 source: docs/portal/docs/sorafs/multi-source-rollout.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: multi-source-rollout
-title: ملٹی سورس رول آؤٹ اور پرووائیڈر بلیک لسٹنگ رن بک
-sidebar_label: ملٹی سورس رول آؤٹ رن بک
-description: مرحلہ وار ملٹی سورس رول آؤٹس اور ہنگامی پرووائیڈر بلیک لسٹنگ کے لیے آپریشنل چیک لسٹ۔
+идентификатор: развертывание с несколькими источниками
+Название: ملٹی سورس رول آؤٹ اور پرووائیڈر بلیک لسٹنگ رن بک
+Sidebar_label: Нажмите здесь, чтобы узнать больше.
+описание: مرحلہ وار ملٹی سورس رول آؤٹس اور ہنگامی پرووائیڈر بلیک لسٹنگ کے لیے آپریشنل چیک لسٹ۔
 ---
 
-:::note مستند ماخذ
-یہ صفحہ `docs/source/sorafs/runbooks/multi_source_rollout.md` کی عکاسی کرتا ہے۔ جب تک پرانا ڈاکیومنٹیشن سیٹ ریٹائر نہ ہو جائے، دونوں نقول کو ہم آہنگ رکھیں۔
+:::примечание
+یہ صفحہ `docs/source/sorafs/runbooks/multi_source_rollout.md` کی عکاسی کرتا ہے۔ جب تک پرانا ڈاکیومنٹیشن سیٹ ریٹائر نہ ہو جائے, دونوں نقول کو ہم آہنگ رکھیں۔
 :::
 
 ## مقصد
 
-یہ رن بک SRE اور آن کال انجینئرز کو دو اہم ورک فلو میں رہنمائی کرتی ہے:
+Если вы хотите использовать SRE, вы можете использовать следующие возможности:
 
-1. ملٹی سورس آرکسٹریٹر کو کنٹرولڈ ویوز میں رول آؤٹ کرنا۔
-2. موجودہ سیشنز کو غیر مستحکم کیے بغیر خراب کارکردگی والے پرووائیڈرز کو بلیک لسٹ کرنا یا ان کی ترجیح کم کرنا۔
+1. Если вы хотите, чтобы это произошло, вы можете сделать это самостоятельно.
+2. Как сделать так, чтобы в вашем распоряжении было несколько вариантов پرووائیڈرز کو بلیک لسٹ کرنا یا ان کی کم کرنا۔
 
-یہ فرض کرتی ہے کہ SF-6 کے تحت فراہم کردہ orchestration stack پہلے ہی ڈیپلائے ہے (`sorafs_orchestrator`, gateway chunk-range API، اور telemetry exporters).
+Если вам нужен стек оркестрации, например, SF-6 (`sorafs_orchestrator`, шлюз API фрагментов диапазона, а также экспортеры телеметрии).
 
-> **مزید دیکھیں:** [آرکسٹریٹر آپریشنز رن بک](./orchestrator-ops.md) فی رن طریقۂ کار (scoreboard capture، مرحلہ وار rollout toggles، اور rollback) میں تفصیل دیتی ہے۔ لائیو تبدیلیوں کے دوران دونوں حوالوں کو ساتھ استعمال کریں۔
+> **مزید دیکھیں:** [آرکسٹریٹر آپریشنز رن بک](./orchestrator-ops.md) فی رن طریقۂ کار (табло) захват, переключение развертывания и откат) لائیو تبدیلیوں کے دوران کریں۔
 
 ## 1. قبل از عمل توثیق
 
-1. **گورننس ان پٹس کی تصدیق کریں۔**
-   - تمام امیدوار پرووائیڈرز کو range capability payloads اور stream budgets کے ساتھ `ProviderAdvertV1` envelopes شائع کرنے چاہئیں۔ `/v1/sorafs/providers` سے ویلیڈیٹ کریں اور متوقع capability فیلڈز سے موازنہ کریں۔
-   - latency/failure rates فراہم کرنے والے telemetry snapshots ہر canary رن سے پہلے 15 منٹ سے کم پرانے ہونے چاہئیں۔
-2. **کنفیگریشن اسٹیج کریں۔**
-   - آرکسٹریٹر کی JSON کنفیگریشن کو layered `iroha_config` ٹری میں محفوظ کریں:
+1. **Как можно лучше использовать**
+   - Возможность выбора полезной нагрузки и бюджетов потоков, а также конверты `ProviderAdvertV1`. چاہئیں۔ `/v1/sorafs/providers` Возможности расширения возможностей
+   - Задержка/коэффициент сбоев. Доступны снимки телеметрии. Canary رن سے پہلے 15 минут назад. چاہئیں۔
+2. ** نفیگریشن اسٹیج کریں۔**
+   - Используйте JSON для многоуровневого `iroha_config` для создания многоуровневого файла:
 
      ```toml
      [torii.sorafs.orchestrator]
      config_path = "/etc/iroha/sorafs/orchestrator.json"
      ```
 
-     JSON میں rollout سے متعلق حدود (`max_providers`, retry budgets) اپڈیٹ کریں۔ staging/production میں وہی فائل دیں تاکہ فرق کم رہے۔
-3. **canonical fixtures چلائیں۔**
-   - manifest/token environment variables سیٹ کریں اور deterministic fetch چلائیں:
+     Развертывание JSON в режиме ожидания (`max_providers`, бюджеты повторных попыток) постановка/продюсирование
+3. **канонические светильники چلائیں۔**
+   - Переменные среды манифеста/токена и детерминированная выборка:
 
      ```bash
      sorafs_cli fetch \
@@ -58,55 +60,51 @@ description: مرحلہ وار ملٹی سورس رول آؤٹس اور ہنگا
        --json-out artifacts/canary.fetch.json
      ```
 
-     environment variables میں manifest payload digest (hex) اور ہر canary پرووائیڈر کے لیے base64-encoded stream tokens شامل ہونے چاہئیں۔
-   - `artifacts/canary.scoreboard.json` کو پچھلے release سے compare کریں۔ کوئی نیا غیر اہل پرووائیڈر یا وزن میں >10% تبدیلی review مانگتی ہے۔
-4. **ٹیلیمیٹری کی وائرنگ چیک کریں۔**
-   - `docs/examples/sorafs_fetch_dashboard.json` میں Grafana export کھولیں۔ آگے بڑھنے سے پہلے یقینی بنائیں کہ `sorafs_orchestrator_*` metrics staging میں populate ہو رہی ہیں۔
+     Переменные среды Дайджест полезной нагрузки манифеста (шестнадцатеричный) Канарский код Токены потока в кодировке Base64
+   - `artifacts/canary.scoreboard.json` کو پچھلے выпуск سے сравнить کریں۔ کوئی نیا غیر اہل پرووائیڈر یا وزن میں >10% تبدیلی обзор مانگتی ہے۔
+4. **Всё, что нужно знать**
+   - `docs/examples/sorafs_fetch_dashboard.json` экспорт Grafana экспорт `sorafs_orchestrator_*` метрики промежуточного заполнения ہو رہی ہیں۔
 
 ## 2. ہنگامی پرووائیڈر بلیک لسٹنگ
 
-جب کوئی پرووائیڈر خراب chunks فراہم کرے، مستقل timeouts دے، یا compliance checks میں فیل ہو تو یہ طریقہ کار اپنائیں۔
-
-1. **ثبوت محفوظ کریں۔**
-   - تازہ ترین fetch summary ایکسپورٹ کریں (`--json-out` کا output)۔ ناکام chunk indices، پرووائیڈر aliases، اور digest mismatches ریکارڈ کریں۔
-   - `telemetry::sorafs.fetch.*` targets سے متعلقہ لاگ excerpts محفوظ کریں۔
-2. **فوری override لگائیں۔**
-   - آرکسٹریٹر کو دیے گئے telemetry snapshot میں پرووائیڈر کو penalized مارک کریں (`penalty=true` سیٹ کریں یا `token_health` کو `0` پر clamp کریں)۔ اگلا scoreboard build خود بخود پرووائیڈر کو exclude کر دے گا۔
-   - ad-hoc smoke tests کے لیے `sorafs_cli fetch` میں `--deny-provider gw-alpha` پاس کریں تاکہ telemetry propagation کا انتظار کیے بغیر failure path exercise ہو۔
-   - متاثرہ ماحول میں اپڈیٹ شدہ telemetry/config bundle دوبارہ deploy کریں (staging → canary → production)۔ تبدیلی کو incident log میں دستاویز کریں۔
-3. **override ویلیڈیٹ کریں۔**
-   - canonical fixture fetch دوبارہ چلائیں۔ تصدیق کریں کہ scoreboard نے پرووائیڈر کو `policy_denied` وجہ کے ساتھ ineligible مارک کیا ہے۔
-   - `sorafs_orchestrator_provider_failures_total` چیک کریں تاکہ انکار شدہ پرووائیڈر کے لیے کاؤنٹر مزید نہ بڑھے۔
-4. **طویل مدتی پابندی بڑھائیں۔**
-   - اگر پرووائیڈر >24 h کے لیے بلاک رہے گا تو اس کے advert کو rotate یا suspend کرنے کے لیے governance ticket بنائیں۔ ووٹ پاس ہونے تک deny list برقرار رکھیں اور telemetry snapshots اپڈیٹ کرتے رہیں تاکہ پرووائیڈر دوبارہ scoreboard میں نہ آئے۔
+Использование чанков и тайм-аутов, а также проверки соответствия требованиям и время ожидания. طریقہ کار اپنائیں۔1. **Получить информацию**
+   - Вы можете получить сводку результатов (вывод `--json-out`). Индексы фрагментов, псевдонимы, несоответствия дайджестов и т. д.
+   - `telemetry::sorafs.fetch.*` нацелен на سے متعلقہ لاگ выдержки محفوظ کریں۔
+2. **Переопределить параметр**
+   - آرکسٹریٹر کو دیے گئے снимок телеметрии میں پرووائیڈر کو оштрафованный مارک کریں (`penalty=true` سیٹ `token_health` или `0` پر зажим کریں)۔ Создание табло خود بخود پرووائیڈر کو исключить
+   - специальные дымовые тесты `sorafs_cli fetch` или `--deny-provider gw-alpha` для распространения телеметрии и проверки пути отказа. ہو۔
+   - Создание пакета телеметрии/конфигурации для развертывания (промежуточный этап → canary → производство). Журнал инцидентов и журнал инцидентов
+3. **переопределить ویلیڈیٹ کریں۔**
+   - каноническое приспособление fetch دوبارہ چلائیں۔ Табло не соответствует требованиям `policy_denied` и не соответствует требованиям
+   - `sorafs_orchestrator_provider_failures_total` چیک کریں کاؤنٹر مزید نہ بڑھے۔
+4. ** طویل مدتی پابندی بڑھائیں۔**
+   - پرووائیڈر >24 часа в сутки, чтобы просмотреть рекламу, повернуть или приостановить управление билетом. بنائیں۔ Доступ к списку запретов Доступ к снимкам телеметрии и созданию снимков экрана Табло دوبارہ میں نہ آئے۔
 5. **رول بیک پروٹوکول۔**
-   - پرووائیڈر بحال کرنے کے لیے اسے deny list سے ہٹا دیں، دوبارہ deploy کریں، اور نیا scoreboard snapshot محفوظ کریں۔ تبدیلی کو incident postmortem کے ساتھ منسلک کریں۔
+   - Создайте список запрещенных объектов и разверните снимок табло محفوظ کریں۔ Вскрытие инцидента или посмертное исследование
 
 ## 3. مرحلہ وار رول آؤٹ پلان
 
-| مرحلہ | دائرہ کار | لازمی سگنلز | Go/No-Go معیار |
+| مرحلہ | دائرہ کار | لازمی سگنلز | Гоу/Нет Гоу |
 |-------|-----------|--------------|----------------|
-| **Lab** | مخصوص integration کلسٹر | fixtures payloads کے ساتھ دستی CLI fetch | تمام chunks کامیاب ہوں، provider failure counters صفر پر رہیں، retry ratio < 5%. |
-| **Staging** | مکمل control-plane staging | Grafana dashboard منسلک؛ alert rules صرف warning-only موڈ میں | `sorafs_orchestrator_active_fetches` ہر ٹیسٹ رن کے بعد صفر پر واپس آئے؛ کوئی `warn/critical` الرٹ نہ لگے۔ |
-| **Canary** | پروڈکشن ٹریفک کا ≤10% | pager خاموش مگر ٹیلیمیٹری real-time مانیٹر | retry ratio < 10%، provider failures صرف معلوم noisy peers تک محدود، latency histogram staging baseline ±20% کے مطابق۔ |
-| **General Availability** | 100% رول آؤٹ | pager rules فعال | 24 h تک `NoHealthyProviders` کی صفر errors، retry ratio مستحکم، dashboard SLA panels سبز۔ |
+| **Лаборатория** | Интеграция | приспособления полезные нагрузки Выборка CLI | Использование кусков Счётчики сбоев провайдера Частота повторных попыток < 5%. |
+| **Постановка** | Промежуточная подготовка плоскости управления | Grafana приборная панель منسلک؛ правила оповещений صرف только предупреждения موڈ میں | `sorafs_orchestrator_active_fetches` ہر ٹیسٹ رن کے بعد صفر پر واپس آئے؛ `warn/critical` الرٹ نہ لگے۔ |
+| **Канарейка** | Уровень дохода ≤10% | пейджер خاموش مگر ٹیلیمیٹری в реальном времени مانیٹر | коэффициент повторных попыток < 10%, сбои провайдера, шумные одноранговые узлы и задержка, гистограмма промежуточного уровня ±20%, процент повторных попыток |
+| **Общая доступность** | 100% رول آؤٹ | правила пейджера 24 ч. `NoHealthyProviders`, количество ошибок, коэффициент повторных попыток, панель мониторинга, панели SLA, данные. |
 
-ہر مرحلے میں:
+Дополнительные сведения:
 
-1. مطلوبہ `max_providers` اور retry budgets کے ساتھ آرکسٹریٹر JSON اپڈیٹ کریں۔
-2. canonical fixture اور ماحول کے نمائندہ manifest کے خلاف `sorafs_cli fetch` یا SDK integration tests چلائیں۔
-3. scoreboard + summary artifacts محفوظ کریں اور release record کے ساتھ منسلک کریں۔
-4. اگلے مرحلے پر جانے سے پہلے on-call انجینئر کے ساتھ telemetry dashboards ریویو کریں۔
+1. Введите `max_providers` и повторите бюджеты, чтобы просмотреть JSON-файл.
+2. Каноническое приспособление может быть использовано в манифесте `sorafs_cli fetch`. Интеграционные тесты SDK.
+3. Табло + сводные артефакты.
+4. Доступ к информационным панелям телеметрии для вызова по вызову.
 
-## 4. Observability اور Incident Hooks
+## 4. Наблюдаемость и крючки инцидентов- **Метрики:** Доступ к Alertmanager `sorafs_orchestrator_fetch_failures_total{reason="no_healthy_providers"}` и `sorafs_orchestrator_retries_total`, который можно использовать в любое время. اچانک اسپائک عام طور پر یہ بتاتا ہے کہ پرووائیڈر لوڈ میں деградировать ہو رہا ہے۔
+- **Журналы:** `telemetry::sorafs.fetch.*` нацелен на то, чтобы получить доступ к данным `event=complete status=failed` может быть использован для сортировки данных
+- **Таблио:** Артефакт табло, который можно использовать для отображения результатов. Проверка соответствия JSON и поэтапный откат, след доказательств بھی ہے۔
+- **Панели мониторинга:** каноническая плата Grafana (`docs/examples/sorafs_fetch_dashboard.json`) или `docs/examples/sorafs_fetch_alerts.yaml`. Правила оповещений شامل کریں۔
 
-- **Metrics:** یقینی بنائیں کہ Alertmanager `sorafs_orchestrator_fetch_failures_total{reason="no_healthy_providers"}` اور `sorafs_orchestrator_retries_total` کو مانیٹر کر رہا ہے۔ اچانک اسپائک عام طور پر یہ بتاتا ہے کہ پرووائیڈر لوڈ میں degrade ہو رہا ہے۔
-- **Logs:** `telemetry::sorafs.fetch.*` targets کو مشترکہ لاگ ایگریگیٹر پر روٹ کریں۔ `event=complete status=failed` کے لیے محفوظ تلاشیں بنائیں تاکہ triage تیز ہو۔
-- **Scoreboards:** ہر scoreboard artifact کو طویل مدتی اسٹوریج میں محفوظ کریں۔ JSON compliance reviews اور staged rollbacks کے لیے evidence trail بھی ہے۔
-- **Dashboards:** canonical Grafana board (`docs/examples/sorafs_fetch_dashboard.json`) کو پروڈکشن فولڈر میں کلون کریں اور `docs/examples/sorafs_fetch_alerts.yaml` کی alert rules شامل کریں۔
+## 5. Коммуникация и документация
 
-## 5. Communication اور Documentation
-
-- ہر deny/boost تبدیلی کو operations changelog میں timestamp، آپریٹر، وجہ اور متعلقہ incident کے ساتھ لاگ کریں۔
-- جب provider weights یا retry budgets بدلیں تو SDK ٹیموں کو مطلع کریں تاکہ کلائنٹ سائیڈ توقعات ہم آہنگ رہیں۔
-- GA مکمل ہونے کے بعد `status.md` میں rollout summary اپڈیٹ کریں اور اس رن بک ریفرنس کو release notes میں archive کریں۔
+- Запретить/ускорить операции, журнал изменений операций, временную метку, информацию о происшествии, а также информацию о происшествии.
+- Поставщик взвешивает бюджеты повторных попыток آہنگ رہیں۔
+- GA: Информация о `status.md`: Сводка развертывания, а также примечания к выпуску. Архив новостей

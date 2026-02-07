@@ -4,10 +4,12 @@ direction: rtl
 source: docs/portal/docs/sorafs/developer-index.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: developer-index
+מזהה: מפתח מפתח
 title: أدلة مطوري SoraFS
 description: صفحة البداية لتوثيق مطوري SoraFS والعينات ومراجع الأتمتة.
 sidebar_label: نظرة عامة للمطورين

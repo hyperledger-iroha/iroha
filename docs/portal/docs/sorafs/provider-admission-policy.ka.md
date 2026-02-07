@@ -7,116 +7,117 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 17fcb22d5be25f601d4096c3a3488b7be2dd92dcf27019b678634590cd3bdde4
 source_last_modified: "2025-12-29T18:16:35.197199+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-> Adapted from [`docs/source/sorafs/provider_admission_policy.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/provider_admission_policy.md).
+> ადაპტირებულია [`docs/source/sorafs/provider_admission_policy.md`]-დან (https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/provider_admission_policy.md).
 
-# SoraFS Provider Admission & Identity Policy (SF-2b Draft)
+# SoraFS პროვაიდერის დაშვებისა და პირადობის პოლიტიკა (SF-2b პროექტი)
 
-This note captures the actionable deliverables for **SF-2b**: defining and
-enforcing the admission workflow, identity requirements, and attestation
-payloads for SoraFS storage providers. It expands the high-level process
-outlined in the SoraFS Architecture RFC and breaks the remaining work into
-trackable engineering tasks.
+ეს ჩანაწერი ასახავს **SF-2b**-ის ქმედითუნარიან მიწოდებებს: განმსაზღვრელი და
+მისაღები სამუშაო პროცესის, პირადობის მოთხოვნების და ატესტაციის აღსრულება
+დატვირთვა SoraFS შენახვის პროვაიდერებისთვის. ის აფართოებს მაღალი დონის პროცესს
+ასახულია SoraFS Architecture RFC-ში და ყოფს დარჩენილ სამუშაოს
+თვალყურის დევნებადი საინჟინრო ამოცანები.
 
-## Policy Goals
+## პოლიტიკის მიზნები
 
-- Ensure only vetted operators can publish `ProviderAdvertV1` records that the
-  network will accept.
-- Bind every advertisement key to a governance-approved identity document,
-  attested endpoints, and minimum stake contribution.
-- Provide deterministic verification tooling so Torii, gateways, and
-  `sorafs-node` enforce the same checks.
-- Support renewal and emergency revocation without breaking determinism or
-  tooling ergonomics.
+- დარწმუნდით, რომ მხოლოდ შემოწმებულ ოპერატორებს შეუძლიათ გამოაქვეყნონ `ProviderAdvertV1` ჩანაწერები, რომ
+  ქსელი მიიღებს.
+- მიამაგრეთ ყველა სარეკლამო გასაღები მმართველობის მიერ დამტკიცებულ პირადობის დამადასტურებელ დოკუმენტთან,
+  დამოწმებული საბოლოო წერტილები და მინიმალური ფსონის წვლილი.
+- უზრუნველყოს განმსაზღვრელი გადამოწმების ხელსაწყოები, რათა Torii, კარიბჭეები და
+  `sorafs-node` ახორციელებს იგივე შემოწმებებს.
+- მხარი დაუჭირეთ განახლებას და საგანგებო გაუქმებას დეტერმინიზმის დარღვევის გარეშე ან
+  ხელსაწყოების ერგონომიკა.
 
-## Identity & Stake Requirements
+## პირადობის და ფსონის მოთხოვნები
 
-| Requirement | Description | Deliverable |
+| მოთხოვნა | აღწერა | მიწოდება |
 |-------------|-------------|-------------|
-| Advertisement key provenance | Providers must register an Ed25519 keypair that signs every advert. The admission bundle stores the public key alongside a governance signature. | Extend `ProviderAdmissionProposalV1` schema with `advert_key` (32 bytes) and reference it from the registry (`sorafs_manifest::provider_admission`). |
-| Stake pointer | Admission requires a non-zero `StakePointer` pointing at an active staking pool. | Add validation in `sorafs_manifest::provider_advert::StakePointer::validate()` and surface errors in CLI/tests. |
-| Jurisdiction tags | Providers declare jurisdiction + legal contact. | Extend proposal schema with a `jurisdiction_code` (ISO 3166-1 alpha-2) and optional `contact_uri`. |
-| Endpoint attestation | Each advertised endpoint must be backed by an mTLS or QUIC certificate report. | Define `EndpointAttestationV1` Norito payload and store per endpoint inside the admission bundle. |
+| სარეკლამო გასაღები წარმოშობის | პროვაიდერებმა უნდა დაარეგისტრირონ Ed25519 გასაღებების წყვილი, რომელიც ხელს აწერს ყველა რეკლამას. დაშვების პაკეტი ინახავს საჯარო გასაღებს მმართველობის ხელმოწერასთან ერთად. | გააფართოვეთ `ProviderAdmissionProposalV1` სქემა `advert_key`-ით (32 ბაიტი) და მიმართეთ მას რეესტრიდან (`sorafs_manifest::provider_admission`). |
+| ფსონების მაჩვენებელი | დასაშვებად საჭიროა არანულოვანი `StakePointer`, რომელიც მიუთითებს აქტიური ფსონის აუზზე. | დაამატეთ ვალიდაცია `sorafs_manifest::provider_advert::StakePointer::validate()`-ში და ზედაპირული შეცდომები CLI/ტესტებში. |
+| იურისდიქციის ტეგები | პროვაიდერები აცხადებენ იურისდიქციას + იურიდიულ კონტაქტს. | გააფართოვეთ წინადადების სქემა `jurisdiction_code` (ISO 3166-1 alpha-2) და სურვილისამებრ `contact_uri`. |
+| ბოლო წერტილის ატესტაცია | თითოეული რეკლამირებული საბოლოო წერტილი უნდა იყოს მხარდაჭერილი mTLS ან QUIC სერტიფიკატის ანგარიშით. | განსაზღვრეთ `EndpointAttestationV1` Norito ტვირთამწეობა და შეინახეთ თითო საბოლოო წერტილის დაშვების პაკეტში. |
 
-## Admission Workflow
+## მისაღები სამუშაო პროცესი
 
-1. **Proposal creation**
-   - CLI: add `cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission proposal …`
-     producing `ProviderAdmissionProposalV1` + attestation bundle.
-   - Validation: ensure required fields, stake > 0, canonical chunker handle in `profile_id`.
-2. **Governance endorsement**
-   - Council signs `blake3("sorafs-provider-admission-v1" || canonical_bytes)` using existing
-     envelope tooling (`sorafs_manifest::governance` module).
-   - Envelope is persisted to `governance/providers/<provider_id>/admission.json`.
-3. **Registry ingestion**
-   - Implement a shared verifier (`sorafs_manifest::provider_admission::validate_envelope`)
-     that Torii/gateways/CLI re-use.
-   - Update Torii admission path to reject adverts whose digest or expiry differs from the envelope.
-4. **Renewal & revocation**
-   - Add `ProviderAdmissionRenewalV1` with optional endpoint/stake updates.
-   - Expose a `--revoke` CLI path that records the revocation reason and pushes a governance event.
+1. **წინადადების შექმნა **
+   - CLI: დაამატეთ `cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission proposal …`
+     აწარმოებს `ProviderAdmissionProposalV1` + საატესტაციო პაკეტს.
+   - ვალიდაცია: უზრუნველყოს საჭირო ველები, ფსონი > 0, კანონიკური ცუნკერის სახელური `profile_id`-ში.
+2. **მმართველობის მოწონება **
+   - საბჭო ხელს აწერს `blake3("sorafs-provider-admission-v1" || canonical_bytes)` არსებულის გამოყენებით
+     კონვერტის ხელსაწყოები (`sorafs_manifest::governance` მოდული).
+   - კონვერტი შენარჩუნებულია `governance/providers/<provider_id>/admission.json`-მდე.
+3. ** რეესტრის გადაყლაპვა **
+   - გაზიარებული ვერიფიკატორის დანერგვა (`sorafs_manifest::provider_admission::validate_envelope`)
+     რომ Torii/Gateways/CLI ხელახლა გამოყენება.
+   - განაახლეთ Torii დაშვების გზა, რათა უარყოთ რეკლამები, რომელთა დაიჯესტი ან ვადა განსხვავდება კონვერტისგან.
+4. ** განახლება და გაუქმება **
+   - დაამატეთ `ProviderAdmissionRenewalV1` არჩევითი საბოლოო წერტილის/ფსონის განახლებით.
+   - გამოავლინეთ `--revoke` CLI ბილიკი, რომელიც ჩაწერს გაუქმების მიზეზს და უბიძგებს მმართველობით მოვლენას.
 
-## Implementation Tasks
+## განხორციელების ამოცანები
 
-| Area | Task | Owner(s) | Status |
+| ფართობი | ამოცანა | მფლობელ(ებ)ი | სტატუსი |
 |------|------|----------|--------|
-| Schema | Define `ProviderAdmissionProposalV1`, `ProviderAdmissionEnvelopeV1`, `EndpointAttestationV1` (Norito) under `crates/sorafs_manifest/src/provider_admission.rs`. Implemented in `sorafs_manifest::provider_admission` with validation helpers.【F:crates/sorafs_manifest/src/provider_admission.rs#L1】 | Storage / Governance | ✅ Completed |
-| CLI tooling | Extend `sorafs_manifest_stub` with subcommands: `provider-admission proposal`, `provider-admission sign`, `provider-admission verify`. | Tooling WG | ✅ |
+| სქემა | განსაზღვრეთ `ProviderAdmissionProposalV1`, `ProviderAdmissionEnvelopeV1`, `EndpointAttestationV1` (Norito) `crates/sorafs_manifest/src/provider_admission.rs`-ში. დანერგილია `sorafs_manifest::provider_admission`-ში ვალიდაციის დამხმარეებით.【F:crates/sorafs_manifest/src/provider_admission.rs#L1】 | შენახვა / მმართველობა | ✅ დასრულებული |
+| CLI ხელსაწყოები | გააფართოვეთ `sorafs_manifest_stub` ქვებრძანებებით: `provider-admission proposal`, `provider-admission sign`, `provider-admission verify`. | ინსტრუმენტები WG | ✅ |
 
-The CLI flow now accepts intermediate certificate bundles (`--endpoint-attestation-intermediate`), emits
-canonical proposal/envelope bytes, and validates council signatures during `sign`/`verify`. Operators can
-provide advert bodies directly, or reuse signed adverts, and signature files may be supplied by pairing
-`--council-signature-public-key` with `--council-signature-file` for automation friendliness.
+CLI ნაკადი ახლა იღებს სერთიფიკატების შუალედურ პაკეტებს (`--endpoint-attestation-intermediate`), ასხივებს
+კანონიკური წინადადება/კონვერტის ბაიტი და ამოწმებს საბჭოს ხელმოწერებს `sign`/`verify`-ის დროს. ოპერატორებს შეუძლიათ
+პირდაპირ მიაწოდეთ რეკლამის ტექსტები, ან ხელახლა გამოიყენოთ ხელმოწერილი რეკლამები და ხელმოწერის ფაილები შეიძლება მიწოდებული იყოს დაწყვილებით
+`--council-signature-public-key` `--council-signature-file`-ით ავტომატიზაციის კეთილგანწყობისთვის.
 
-### CLI Reference
+### CLI მითითება
 
-Run each command via `cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission …`.
+გაუშვით თითოეული ბრძანება `cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission …`-ის საშუალებით.
 
 - `proposal`
-  - Required flags: `--provider-id=<hex32>`, `--chunker-profile=<namespace.name@semver>`,
+  - საჭირო დროშები: `--provider-id=<hex32>`, `--chunker-profile=<namespace.name@semver>`,
     `--stake-pool-id=<hex32>`, `--stake-amount=<amount>`, `--advert-key=<hex32>`,
-    `--jurisdiction-code=<ISO3166-1>`, and at least one `--endpoint=<kind:host>`.
-  - Per-endpoint attestation expects `--endpoint-attestation-attested-at=<secs>`,
-    `--endpoint-attestation-expires-at=<secs>`, a certificate via
-    `--endpoint-attestation-leaf=<path>` (plus optional `--endpoint-attestation-intermediate=<path>`
-    for each chain element) and any negotiated ALPN IDs
-    (`--endpoint-attestation-alpn=<token>`). QUIC endpoints may supply transport reports with
+    `--jurisdiction-code=<ISO3166-1>` და მინიმუმ ერთი `--endpoint=<kind:host>`.
+  - საბოლოო წერტილის ატესტაცია მოელის `--endpoint-attestation-attested-at=<secs>`,
+    `--endpoint-attestation-expires-at=<secs>`, სერტიფიკატი მეშვეობით
+    `--endpoint-attestation-leaf=<path>` (პლუს სურვილისამებრ `--endpoint-attestation-intermediate=<path>`
+    თითოეული ჯაჭვის ელემენტისთვის) და ნებისმიერი შეთანხმებული ALPN ID
+    (`--endpoint-attestation-alpn=<token>`). QUIC საბოლოო წერტილებმა შეიძლება მიაწოდოს ტრანსპორტის ანგარიშები
     `--endpoint-attestation-report[-hex]=…`.
-  - Output: canonical Norito proposal bytes (`--proposal-out`) and a JSON summary
-    (default stdout or `--json-out`).
+  - გამომავალი: კანონიკური Norito წინადადების ბაიტი (`--proposal-out`) და JSON რეზიუმე
+    (ნაგულისხმევი stdout ან `--json-out`).
 - `sign`
-  - Inputs: a proposal (`--proposal`), a signed advert (`--advert`), optional advert body
-    (`--advert-body`), retention epoch, and at least one council signature. Signatures can be provided
-    inline (`--council-signature=<signer_hex:signature_hex>`) or via files by combining
-    `--council-signature-public-key` with `--council-signature-file=<path>`.
-  - Produces a validated envelope (`--envelope-out`) and JSON report indicating digest bindings,
-    signer count, and input paths.
+  - შეყვანები: წინადადება (`--proposal`), ხელმოწერილი რეკლამა (`--advert`), სურვილისამებრ რეკლამის ტექსტი
+    (`--advert-body`), შეკავების ეპოქა და მინიმუმ ერთი საბჭოს ხელმოწერა. ხელმოწერების მიწოდება შესაძლებელია
+    inline (`--council-signature=<signer_hex:signature_hex>`) ან ფაილების საშუალებით კომბინირებით
+    `--council-signature-public-key` `--council-signature-file=<path>`-თან ერთად.
+  - აწარმოებს დადასტურებულ კონვერტს (`--envelope-out`) და JSON ანგარიშს, რომელიც მიუთითებს დაიჯესტის შეკვრაზე,
+    ხელმომწერთა რაოდენობა და შეყვანის ბილიკები.
 - `verify`
-  - Validates an existing envelope (`--envelope`), optionally checking the matching proposal,
-    advert, or advert body. The JSON report highlights digest values, signature verification status,
-    and which optional artefacts matched.
+  - ამოწმებს არსებულ კონვერტს (`--envelope`), სურვილისამებრ ამოწმებს შესატყვის წინადადებას,
+    რეკლამა, ან რეკლამის სხეული. JSON ანგარიში ხაზს უსვამს დაიჯესტის მნიშვნელობებს, ხელმოწერის დადასტურების სტატუსს,
+    და რომელი არჩევითი არტეფაქტები ემთხვეოდა.
 - `renewal`
-  - Links a newly approved envelope to the previously ratified digest. Requires
-    `--previous-envelope=<path>` and the successor `--envelope=<path>` (both Norito payloads).
-    The CLI verifies that profile aliases, capabilities, and advert keys remain unchanged while
-    allowing stake, endpoints, and metadata updates. Outputs the canonical
-    `ProviderAdmissionRenewalV1` bytes (`--renewal-out`) plus a JSON summary.
+  - აკავშირებს ახლად დამტკიცებულ კონვერტს ადრე რატიფიცირებულ დაიჯესტთან. მოითხოვს
+    `--previous-envelope=<path>` და მემკვიდრე `--envelope=<path>` (ორივე Norito დატვირთვა).
+    CLI ადასტურებს, რომ პროფილის მეტსახელები, შესაძლებლობები და რეკლამის გასაღებები უცვლელი რჩება, სანამ
+    ფსონის, საბოლოო წერტილებისა და მეტამონაცემების განახლების დაშვების საშუალებას. გამოაქვს კანონიკური
+    `ProviderAdmissionRenewalV1` ბაიტი (`--renewal-out`) პლუს JSON რეზიუმე.
 - `revoke`
-  - Issues an emergency `ProviderAdmissionRevocationV1` bundle for a provider whose envelope must
-    be withdrawn. Requires `--envelope=<path>`, `--reason=<text>`, at least one
-    `--council-signature`, and optional `--revoked-at`/`--notes`. The CLI signs and validates the
-    revocation digest, writes the Norito payload via `--revocation-out`, and prints a JSON report
-    capturing the digest and signature count.
-| Verification | Implement shared verifier used by Torii, gateways, and `sorafs-node`. Provide unit + CLI integration tests.【F:crates/sorafs_manifest/src/provider_admission.rs#L1】【F:crates/iroha_torii/src/sorafs/admission.rs#L1】 | Networking TL / Storage | ✅ Completed |
-| Torii integration | Thread verifier into Torii advertisement ingestion, reject out-of-policy adverts, emit telemetry. | Networking TL | ✅ Completed | Torii now loads governance envelopes (`torii.sorafs.admission_envelopes_dir`), verifies digest/signature matches during ingestion, and surfaces admission telemetry.【F:crates/iroha_torii/src/sorafs/admission.rs#L1】【F:crates/iroha_torii/src/sorafs/discovery.rs#L1】【F:crates/iroha_torii/src/sorafs/api.rs#L1】 |
-| Renewal | Add renewal / revocation schema + CLI helpers, publish lifecycle guide in docs (see runbook below and CLI commands in `provider-admission renewal`/`revoke`).【crates/sorafs_car/src/bin/sorafs_manifest_stub/provider_admission.rs#L477】【docs/source/sorafs/provider_admission_policy.md:120】 | Storage / Governance | ✅ Completed |
-| Telemetry | Define `provider_admission` dashboards & alerts (missing renewal, envelope expiry). | Observability | 🟠 In progress | Counter `torii_sorafs_admission_total{result,reason}` exists; dashboards/alerts pending.【F:crates/iroha_telemetry/src/metrics.rs#L3798】【F:docs/source/telemetry.md#L614】 |
-### Renewal & Revocation Runbook
+  - გასცემს გადაუდებელ `ProviderAdmissionRevocationV1` პაკეტს პროვაიდერისთვის, რომლის კონვერტიც უნდა
+    ამოღებული იყოს. მოითხოვს `--envelope=<path>`, `--reason=<text>`, მინიმუმ ერთი
+    `--council-signature` და სურვილისამებრ `--revoked-at`/`--notes`. CLI ხელს აწერს და ადასტურებს
+    გაუქმების დაიჯესტი, წერს Norito დატვირთვას `--revocation-out`-ით და ბეჭდავს JSON ანგარიშს
+    დაიჯესტისა და ხელმოწერების რაოდენობის აღება.
+| გადამოწმება | Torii, კარიბჭეების და `sorafs-node`-ის მიერ გამოყენებული გაზიარებული ვერიფიკატორის დანერგვა. უზრუნველყოს ერთეული + CLI ინტეგრაციის ტესტები.【F:crates/sorafs_manifest/src/provider_admission.rs#L1】【F:crates/iroha_torii/src/sorafs/admission.rs#L1】 | ქსელის TL / შენახვა | ✅ დასრულებული |
+| Torii ინტეგრაცია | თემის დამადასტურებელი Torii რეკლამის გადაღებაში, უარი თქვით პოლიტიკის მიღმა რეკლამებზე, გამოუშვით ტელემეტრია. | ქსელის TL | ✅ დასრულებული | Torii ახლა იტვირთება მართვის კონვერტები (`torii.sorafs.admission_envelopes_dir`), ამოწმებს დაიჯესტს/ხელმოწერის შესაბამისობას გადაყლაპვისას და ზედაპირების დაშვებას ტელემეტრია.【F:crates/iroha_torii/src/sorafs/admission.rs#L1】【F:crates/iroha_torii/src/sorafs/discovery.rs#L1】【F:crates/iroha_torii/src/sorafs/api.rs
+| განახლება | დაამატეთ განახლების / გაუქმების სქემები + CLI დამხმარეები, გამოაქვეყნეთ სასიცოცხლო ციკლის სახელმძღვანელო დოკუმენტებში (იხილეთ ქვემოთ მოცემული Runbook და CLI ბრძანებები `provider-admission renewal`/`revoke`).【crates/sorafs_car/src/bin/sorafs_manifest_stub/provider_admission.rs#L477】【docs/source/sorafs/provider_admission_policy:120m | შენახვა / მმართველობა | ✅ დასრულებული |
+| ტელემეტრია | განსაზღვრეთ `provider_admission` დაფები და გაფრთხილებები (გამოტოვებული განახლება, კონვერტის ვადის გასვლა). | დაკვირვებადობა | 🟠 მიმდინარეობს | მრიცხველი `torii_sorafs_admission_total{result,reason}` არსებობს; დაფები/გაფრთხილებები ელოდება.【F:crates/iroha_telemetry/src/metrics.rs#L3798】【F:docs/source/telemetry.md#L614】 |
+### განახლება და გაუქმება Runbook
 
-#### Scheduled renewal (stake/topology updates)
-1. Build the successor proposal/advert pair with `provider-admission proposal` and `provider-admission sign`, increasing `--retention-epoch` and updating stake/endpoints as required.
-2. Execute  
+#### დაგეგმილი განახლება (ფსონის/ტოპოლოგიის განახლებები)
+1. შექმენით მემკვიდრე წინადადება/რეკლამის წყვილი `provider-admission proposal`-ით და `provider-admission sign`-ით, გაზარდეთ `--retention-epoch` და განაახლეთ ფსონი/ბოლო წერტილები საჭიროებისამებრ.
+2. შეასრულეთ  
    ```bash
    cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission \
      renewal \
@@ -126,15 +127,15 @@ Run each command via `cargo run -p sorafs_manifest --bin sorafs_manifest_stub --
      --json-out=governance/providers/<id>/renewal.json \
      --notes="stake top-up 2025-03"
    ```
-   The command validates unchanged capability/profile fields via
-   `AdmissionRecord::apply_renewal`, emits `ProviderAdmissionRenewalV1`, and prints digests for the
-   governance log.【crates/sorafs_car/src/bin/sorafs_manifest_stub/provider_admission.rs#L477】【F:crates/sorafs_manifest/src/provider_admission.rs#L422】
-3. Replace the previous envelope in `torii.sorafs.admission_envelopes_dir`, commit the renewal Norito/JSON to the governance repository, and append the renewal hash + retention epoch to `docs/source/sorafs/migration_ledger.md`.
-4. Notify operators that the new envelope is live and monitor `torii_sorafs_admission_total{result="accepted",reason="stored"}` to confirm ingestion.
-5. Regenerate and commit the canonical fixtures via `cargo run -p sorafs_car --bin provider_admission_fixtures --features cli`; CI (`ci/check_sorafs_fixtures.sh`) validates the Norito outputs stay stable.
+   ბრძანება ამოწმებს უცვლელი შესაძლებლობების/პროფილის ველებს მეშვეობით
+   `AdmissionRecord::apply_renewal`, გამოსცემს `ProviderAdmissionRenewalV1` და ბეჭდავს დაიჯესტს
+   მმართველობის ჟურნალი.【crates/sorafs_car/src/bin/sorafs_manifest_stub/provider_admission.rs#L477】【F:crates/sorafs_manifest/src/provider_admission.rs#L422】
+3. შეცვალეთ წინა კონვერტი `torii.sorafs.admission_envelopes_dir`-ში, განაახლეთ Norito/JSON მმართველობის საცავში და დაუმატეთ განახლების ჰეში + შეკავების ეპოქა `docs/source/sorafs/migration_ledger.md`-ს.
+4. შეატყობინეთ ოპერატორებს, რომ ახალი კონვერტი ცოცხალია და დააკვირდით `torii_sorafs_admission_total{result="accepted",reason="stored"}` გადაყლაპვის დასადასტურებლად.
+5. აღადგინეთ და ჩაატარეთ კანონიკური მოწყობილობები `cargo run -p sorafs_car --bin provider_admission_fixtures --features cli`-ის მეშვეობით; CI (`ci/check_sorafs_fixtures.sh`) ადასტურებს Norito გამომავლების სტაბილურობას.
 
-#### Emergency revocation
-1. Identify the compromised envelope and issue a revocation:
+#### გადაუდებელი გაუქმება
+1. დაადგინეთ კომპრომეტირებული კონვერტი და გააუქმეთ:
    ```bash
    cargo run -p sorafs_manifest --bin sorafs_manifest_stub -- provider-admission \
      revoke \
@@ -146,30 +147,28 @@ Run each command via `cargo run -p sorafs_manifest --bin sorafs_manifest_stub --
      --revocation-out=governance/providers/<id>/revocation.to \
      --json-out=governance/providers/<id>/revocation.json
    ```
-   The CLI signs the `ProviderAdmissionRevocationV1`, verifies the signature set via
-   `verify_revocation_signatures`, and reports the revocation digest.【crates/sorafs_car/src/bin/sorafs_manifest_stub/provider_admission.rs#L593】【F:crates/sorafs_manifest/src/provider_admission.rs#L486】
-2. Remove the envelope from `torii.sorafs.admission_envelopes_dir`, distribute the revocation Norito/JSON to admission caches, and record the reason hash in the governance minutes.
-3. Watch `torii_sorafs_admission_total{result="rejected",reason="admission_missing"}` to confirm caches drop the revoked advert; keep the revocation artefacts in incident retrospectives.
+   CLI ხელს აწერს `ProviderAdmissionRevocationV1`-ს, ამოწმებს ხელმოწერის კომპლექტს
+   `verify_revocation_signatures` და აცნობებს გაუქმების შეჯამებას.【crates/sorafs_car/src/bin/sorafs_manifest_stub/provider_admission.rs#L593】【F:crates/sorafs_manifest/src/provider_admission.rs#L
+2. ამოიღეთ კონვერტი `torii.sorafs.admission_envelopes_dir`-დან, გაავრცელეთ Norito/JSON გაუქმება დაშვების ქეშებში და ჩაწერეთ მიზეზი ჰეშის მართვის ოქმებში.
+3. უყურეთ `torii_sorafs_admission_total{result="rejected",reason="admission_missing"}`, რათა დაადასტუროთ, რომ ქეშმა გააუქმა გაუქმებული რეკლამა; შეინახეთ გაუქმების არტეფაქტები ინციდენტების რეტროსპექტებში.
 
-## Testing & Telemetry
-
-- Add golden fixtures for admission proposals and envelopes under
+## ტესტირება და ტელემეტრია- დაამატეთ ოქროს მოწყობილობები მისაღები წინადადებებისთვის და კონვერტებისთვის
   `fixtures/sorafs_manifest/provider_admission/`.
-- Extend CI (`ci/check_sorafs_fixtures.sh`) to regenerate proposals and verify envelopes.
-- Generated fixtures include `metadata.json` with canonical digests; downstream tests assert
+- გააფართოვეთ CI (`ci/check_sorafs_fixtures.sh`) წინადადებების რეგენერაციისა და კონვერტების შესამოწმებლად.
+- გენერირებული მოწყობილობები მოიცავს `metadata.json` კანონიკური დიჯესტებით; ქვედა დინების ტესტები ამტკიცებს
   `proposal_digest_hex` == `ca8e73a1f319ae83d7bd958ccb143f9b790c7e4d9c8dfe1f6ad37fa29facf936`.
-- Provide integration tests:
-  - Torii rejects adverts with missing or expired admission envelopes.
-  - CLI round-trips a proposal → envelope → verification.
-  - Governance renewal rotates endpoint attestation without changing provider ID.
-- Telemetry requirements:
-  - Emit `provider_admission_envelope_{accepted,rejected}` counters in Torii. ✅ `torii_sorafs_admission_total{result,reason}` now surfaces accepted/rejected outcomes.
-  - Add expiry warnings to observability dashboards (renewal due within 7 days).
+- მიაწოდეთ ინტეგრაციის ტესტები:
+  - Torii უარყოფს რეკლამებს დაკარგული ან ვადაგასული დაშვების კონვერტებით.
+  - CLI ორმხრივი მოგზაურობის შეთავაზებას → კონვერტს → გადამოწმებას.
+  - მმართველობის განახლება ახდენს საბოლოო წერტილის ატესტაციის როტაციას პროვაიდერის ID-ის შეცვლის გარეშე.
+- ტელემეტრიის მოთხოვნები:
+  - გამოუშვით `provider_admission_envelope_{accepted,rejected}` მრიცხველები Torii-ში. ✅ `torii_sorafs_admission_total{result,reason}` ახლა ასახავს მიღებულ/უარყოფილ შედეგებს.
+  - დაამატეთ ვადის გასვლის გაფრთხილებები დაკვირვებადობის დაფებს (განახლება 7 დღის განმავლობაში).
 
-## Next Steps
+## შემდეგი ნაბიჯები
 
-1. ✅ Finalised the Norito schema changes and landed validation helpers in
-   `sorafs_manifest::provider_admission`. No feature flags required.
-2. ✅ CLI workflows (`proposal`, `sign`, `verify`, `renewal`, `revoke`) are documented and exercised via integration tests; keep governance scripts in sync with the runbook.
-3. ✅ Torii admission/discovery ingest the envelopes and expose telemetry counters for acceptance/rejection.
-4. Focus on observability: finish the admission dashboards/alerts so renewals due within seven days raise warnings (`torii_sorafs_admission_total`, expiry gauges).
+1. ✅ დაასრულა Norito სქემის ცვლილებები და დაეშვა ვალიდაციის დამხმარეები
+   `sorafs_manifest::provider_admission`. არ არის საჭირო ფუნქციის დროშები.
+2. ✅ CLI სამუშაო ნაკადები (`proposal`, `sign`, `verify`, `renewal`, `revoke`) დოკუმენტირებულია და ხორციელდება ინტეგრაციის ტესტების საშუალებით; შეინახეთ მმართველობის სკრიპტები რენტაბელთან სინქრონში.
+3. ✅ Torii დაშვება/აღმოჩენა ჭამს კონვერტებს და გამოაშკარავებს ტელემეტრიის მრიცხველებს მიღება/უარყოფისთვის.
+4. ფოკუსირება დაკვირვებადობაზე: დაასრულეთ დაშვების დაფები/გაფრთხილებები, რათა შვიდი დღის განმავლობაში განახლებები გაფრთხილებდეს (`torii_sorafs_admission_total`, ვადის გასვლის ლიანდაგები).

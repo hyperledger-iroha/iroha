@@ -8,114 +8,116 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: Preview invite flow
 sidebar_label: Preview invite flow
 description: Sequencing, evidence, and communications plan for the docs portal public preview waves.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-## Purpose
+##ရည်ရွယ်ချက်
 
-Roadmap item **DOCS-SORA** calls out reviewer onboarding and the public preview
-invite program as the final blockers before the portal can exit beta. This page
-describes how to open each invite wave, which artefacts must ship before
-invites go out, and how to prove the flow is auditable. Use it alongside:
+လမ်းပြမြေပုံပါ အကြောင်းအရာ **DOCS-SORA** သည် ပြန်လည်သုံးသပ်သူ စတင်ဝင်ရောက်ခြင်းနှင့် အများသူငှာ အကြိုကြည့်ရှုခြင်းတို့ကို ခေါ်ဆိုသည်
+ပေါ်တယ်သည် beta မထွက်မီ နောက်ဆုံးပိတ်သမားများအဖြစ် ပရိုဂရမ်ကို ဖိတ်ခေါ်ပါ။ ဒီစာမျက်နှာ
+ဖိတ်ခေါ်လှိုင်းတစ်ခုစီကို မည်သို့ဖွင့်ရမည်ကို ဖော်ပြသည်၊ မည်သည့်အရာများ မတိုင်မီ ပို့ဆောင်ရမည်နည်း။
+ဖိတ်စာများ ထွက်သွားပြီး စီးဆင်းမှုမှာ စာရင်းစစ်ကြောင်း မည်သို့သက်သေပြနိုင်မည်နည်း။ ၎င်းကို တွဲသုံးပါ-
 
-- [`devportal/reviewer-onboarding`](./reviewer-onboarding.md) for
-  per-reviewer handling.
-- [`devportal/preview-integrity-plan`](./preview-integrity-plan.md) for checksum
-  guarantees.
-- [`devportal/observability`](./observability.md) for telemetry exports and
-  alerting hooks.
+- [`devportal/reviewer-onboarding`](./reviewer-onboarding.md) အတွက်
+  တစ်ဦးချင်း သုံးသပ်ချက် ကိုင်တွယ်ခြင်း။
+- checksum အတွက် [`devportal/preview-integrity-plan`](./preview-integrity-plan.md)
+  အာမခံချက်။
+- [`devportal/observability`](./observability.md) တယ်လီမီတာ တင်ပို့မှုနှင့်
+  သတိပေးချက်ချိတ်။
 
-## Wave plan
+## Wave အစီအစဉ်
 
-| Wave | Audience | Entry criteria | Exit criteria | Notes |
-| --- | --- | --- | --- | --- |
-| **W0 – Core maintainers** | Docs/SDK maintainers validating day-one content. | `docs-portal-preview` GitHub team populated, `npm run serve` checksum gate green, Alertmanager quiet for 7 days. | All P0 docs reviewed, backlog tagged, no blocking incidents. | Used to validate the flow; no invite email, just share the preview artefacts. |
-| **W1 – Partners** | SoraFS operators, Torii integrators, governance reviewers under NDA. | W0 exited, legal terms approved, Try-it proxy staged. | Collected partner sign-off (issue or signed form), telemetry shows ≤10 concurrent reviewers, no security regressions for 14 days. | Enforce invite template + request tickets. |
-| **W2 – Community** | Selected contributors from the community waitlist. | W1 exited, incident drills rehearsed, public FAQ updated. | Feedback digested, ≥2 documentation releases shipped via preview pipeline without rollback. | Cap concurrent invites (≤25) and batch weekly. |
+| လှိုင်း | ပရိသတ် | ဝင်ခွင့်သတ်မှတ်ချက် | သတ်မှတ်ချက် | ထွက်ရန် မှတ်စုများ |
+| ---| ---| ---| ---| ---|
+| **W0 – ပင်မထိန်းသိမ်းသူများ** | Docs/SDK ထိန်းသိမ်းသူများသည် နေ့စဥ်အကြောင်းအရာကို အတည်ပြုသည်။ | `docs-portal-preview` GitHub အဖွဲ့မှ ပြည့်နေသည်၊ `npm run serve` checksum gate အစိမ်းရောင်၊ Alertmanager သည် 7 ရက်ကြာ တိတ်ဆိတ်နေပါသည်။ | P0 စာရွက်စာတမ်းအားလုံးကို ပြန်လည်သုံးသပ်ပြီး၊ နောက်ကြောင်းပြန်တက်ဂ်လုပ်ထားသော၊ ပိတ်ဆို့သည့်ဖြစ်ရပ်များမရှိပါ။ | စီးဆင်းမှုကိုအတည်ပြုရန်အသုံးပြုသည်; ဖိတ်ကြားထားသော အီးမေးလ်မရှိပါ၊ အစမ်းကြည့်ရှုခြင်းဆိုင်ရာ ပစ္စည်းများကိုသာ မျှဝေပါ။ |
+| **W1 – မိတ်ဖက်များ** | SoraFS အော်ပရေတာများ၊ Torii ပေါင်းစည်းသူများ၊ NDA လက်အောက်ရှိ အုပ်ချုပ်မှုသုံးသပ်သူများ။ | W0 မှ ထွက်လိုက်သည်၊ တရားဝင် စည်းကမ်းချက်များကို အတည်ပြုပြီး၊ Try-it proxy အဆင့်သတ်မှတ်ထားသည်။ | စုဆောင်းထားသော ပါတနာ လက်မှတ်ထိုး-ပိတ်ခြင်း (ပြဿနာ သို့မဟုတ် လက်မှတ်ရေးထိုးထားသော ဖောင်)၊ တယ်လီမီတာမှ ≤10 တစ်ပြိုင်နက်တည်း သုံးသပ်သူများကို ပြသသည်၊ လုံခြုံရေး ဆုတ်ယုတ်မှု 14 ရက်မျှ မရှိပါ။ | ဖိတ်ကြားချက်ပုံစံပုံစံ + တောင်းဆိုမှုလက်မှတ်များကို အသုံးပြုပါ။ |
+| **W2 – အသိုင်းအဝိုင်း** | ရပ်ရွာစောင့်ဆိုင်းစာရင်းမှ ရွေးချယ်ထားသော ပံ့ပိုးကူညီသူများ။ | W1 မှ ထွက်လိုက်သည်၊ အခင်းဖြစ်လေ့ကျင့်မှုများကို အစမ်းလေ့ကျင့်ပြီး၊ အများသူငှာ FAQ ကို အပ်ဒိတ်လုပ်ထားသည်။ | အကြံပြုချက်ကို ကြေညက်ခဲ့ပြီး၊ ≥2 စာရွက်စာတမ်းထုတ်ဝေမှုများကို ပြန်မလှန်ဘဲ အကြိုကြည့်ရှုမှုပိုက်လိုင်းမှတစ်ဆင့် ပေးပို့ခဲ့သည်။ | အပတ်စဉ် တစ်ပြိုင်တည်း ဖိတ်ကြားချက်များ (≤25) နှင့် အသုတ်ထုပ်။ |
 
-Document which wave is active inside `status.md` and in the preview request
-tracker so governance can see where the program sits at a glance.
+`status.md` နှင့် အစမ်းကြည့်ရှုရန် တောင်းဆိုချက်တွင် မည်သည့်လှိုင်းကို လုပ်ဆောင်နေသည်
+tracker သည် အုပ်ချုပ်မှုပရိုဂရမ်သည် မည်သည့်နေရာတွင်ထိုင်သည်ကို တစ်ချက်ကြည့်နိုင်သည်။
 
-## Preflight checklist
+## ကြိုတင်စစ်ဆေးရန်စာရင်း
 
-Complete these actions **before** scheduling invites for a wave:
+လှိုင်းတစ်ခုအတွက် ဖိတ်ကြားချက်များကို အချိန်ဇယားဆွဲခြင်းမပြုမီ **ဤလုပ်ဆောင်ချက်များကို အပြီးသတ်ပါ-
 
-1. **CI artefacts available**
-   - Latest `docs-portal-preview` + descriptor uploaded by
-     `.github/workflows/docs-portal-preview.yml`.
-   - SoraFS pin noted in `docs/portal/docs/devportal/deploy-guide.md`
-     (cutover descriptor present).
-2. **Checksum enforcement**
-   - `docs/portal/scripts/serve-verified-preview.mjs` invoked through
-     `npm run serve`.
-   - `scripts/preview_verify.sh` instructions tested on macOS + Linux.
-3. **Telemetry baseline**
-   - `dashboards/grafana/docs_portal.json` shows healthy Try it traffic and
-     `docs.preview.integrity` alert is green.
-   - Latest `docs/portal/docs/devportal/observability.md` appendix updated with
-     Grafana links.
-4. **Governance artefacts**
-   - Invite tracker issue ready (one issue per wave).
-   - Reviewer registry template copied (see
-     [`docs/examples/docs_preview_request_template.md`](../../../examples/docs_preview_request_template.md)).
-   - Legal- and SRE-required approvals attached to the issue.
+1. **CI ပစ္စည်းများရရှိနိုင်သည်**
+   - နောက်ဆုံးထွက် `docs-portal-preview` + descriptor မှ အပ်လုဒ်လုပ်ထားသည်။
+     `.github/workflows/docs-portal-preview.yml`။
+   - SoraFS ပင်နံပါတ် `docs/portal/docs/devportal/deploy-guide.md`
+     (ဖြတ်တောက်ဖော်ပြချက်ပါရှိ)။
+2. **ငွေဖြည့်တင်းမှု**
+   - `docs/portal/scripts/serve-verified-preview.mjs` အား ဆင့်ခေါ်သည်။
+     `npm run serve`။
+   - `scripts/preview_verify.sh` လမ်းညွှန်ချက်များကို macOS + Linux တွင် စမ်းသပ်ထားသည်။
+3. ** တယ်လီမီတာအခြေခံ **
+   - `dashboards/grafana/docs_portal.json` သည် ကျန်းမာသောလမ်းကြောင်းကို စမ်းသုံးကြည့်သည်ကို ပြသသည်။
+     `docs.preview.integrity` သတိပေးချက်သည် အစိမ်းရောင်ဖြစ်သည်။
+   - နောက်ဆုံးထွက် `docs/portal/docs/devportal/observability.md` နှင့် နောက်ဆက်တွဲ မွမ်းမံထားသည်။
+     Grafana လင့်များ။
+4. **အုပ်ချုပ်မှုဆိုင်ရာအရာများ**
+   - ခြေရာခံကိရိယာကို ဖိတ်ခေါ်ရန် အဆင်သင့်ဖြစ်ပြီ (လှိုင်းတစ်ခုလျှင် ပြဿနာတစ်ခု)။
+   - သုံးသပ်သူ မှတ်ပုံတင်ပုံစံ နမူနာကို ကူးယူထားသည် (ကြည့်ပါ။
+     [`docs/examples/docs_preview_request_template.md`](../../../examples/docs_preview_request_template.md))။
+   - ပြဿနာနှင့် ပူးတွဲပါရှိသော တရားဝင်- နှင့် SRE- လိုအပ်သော ခွင့်ပြုချက်။
 
-Record preflight completion in the invite tracker before sending any mail.
+မည်သည့်မေးလ်ကိုမဆို မပေးပို့မီ ဖိတ်ကြားမှု ခြေရာခံစနစ်တွင် အကြိုပျံသန်းမှု ပြီးဆုံးကြောင်း မှတ်တမ်းတင်ပါ။
 
-## Flow steps
+## ခြေလှမ်းများ
 
-1. **Select candidates**
-   - Pull from the waitlist spreadsheet or partner queue.
-   - Ensure each candidate has a completed request template.
-2. **Approve access**
-   - Assign an approver to the invite tracker issue.
-   - Verify prerequisites (CLA/contract, acceptable use, security brief).
-3. **Send invites**
-   - Fill in the
+1. **ကိုယ်စားလှယ်လောင်းများကို ရွေးချယ်ပါ**
+   - စောင့်ဆိုင်းစာရင်းဇယား သို့မဟုတ် ပါတနာစာရင်းမှ ဆွဲထုတ်ပါ။
+   - ကိုယ်စားလှယ်လောင်းတစ်ဦးစီတွင် ပြီးပြည့်စုံသော တောင်းဆိုမှုပုံစံပုံစံတစ်ခုရှိကြောင်း သေချာပါစေ။
+2. **ဝင်ရောက်ခွင့်ကို အတည်ပြုပါ**
+   - ဖိတ်ကြားမှုခြေရာခံခြင်းပြဿနာအတွက် အတည်ပြုသူကို ခန့်အပ်ပါ။
+   - ကြိုတင်လိုအပ်ချက်များ (CLA/ စာချုပ်၊ လက်ခံနိုင်သောအသုံးပြုမှု၊ လုံခြုံရေးအကျဉ်း) ကို စစ်ဆေးပါ။
+3. **ဖိတ်စာများပေးပို့ပါ**
+   - ဖြည့်စွက်ပါ။
      [`docs/examples/docs_preview_invite_template.md`](../../../examples/docs_preview_invite_template.md)
-     placeholders (`<preview_tag>`, `<request_ticket>`, contacts).
-   - Attach the descriptor + archive hash, Try it staging URL, and support
-     channels.
-   - Store the final email (or Matrix/Slack transcript) in the issue.
-4. **Track onboarding**
-   - Update the invite tracker with `invite_sent_at`, `expected_exit_at`, and
-     status (`pending`, `active`, `complete`, `revoked`).
-   - Link to the reviewer’s intake request for auditability.
-5. **Monitor telemetry**
-   - Watch `docs.preview.session_active` and `TryItProxyErrors` alerts.
-   - File an incident if telemetry deviates from the baseline and record the
-     outcome next to the invite entry.
-6. **Collect feedback & exit**
-   - Close invites once feedback lands or `expected_exit_at` passes.
-   - Update the wave issue with a short summary (findings, incidents, next
-     actions) before moving to the next cohort.
+     နေရာယူသူများ (`<preview_tag>`၊ `<request_ticket>`၊ အဆက်အသွယ်များ)။
+   - ဖော်ပြချက် + မော်ကွန်းထိန်း hash ကို ပူးတွဲပါ၊ ၎င်းကို အဆင့်သတ်မှတ်ထားသော URL နှင့် ပံ့ပိုးမှုတို့ကို စမ်းကြည့်ပါ။
+     ချန်နယ်များ။
+   - နောက်ဆုံးအီးမေးလ် (သို့မဟုတ် Matrix/Slack စာသားမှတ်တမ်း) ကို စာစောင်တွင် သိမ်းဆည်းပါ။
+4. **ခြေရာခံစတင်ခြင်း**
+   - ဖိတ်ကြားထားသော ခြေရာခံကိရိယာကို `invite_sent_at`၊ `expected_exit_at`၊ နှင့် အပ်ဒိတ်လုပ်ပါ။
+     အခြေအနေ (`pending`၊ `active`၊ `complete`၊ `revoked`)။
+   - စာရင်းစစ်စစ်ဆေးသူ၏ ခံယူချက်တောင်းဆိုချက်သို့ လင့်ခ်ချိတ်ပါ။
+5. **တယ်လီမီတာ စောင့်ကြည့်ခြင်း**
+   - `docs.preview.session_active` နှင့် `TryItProxyErrors` သတိပေးချက်များကိုကြည့်ပါ။
+   - တယ်လီမီတာ၏ အခြေခံလိုင်းမှ သွေဖည်သွားပါက အဖြစ်အပျက်ကို မှတ်တမ်းတင်ပြီး မှတ်တမ်းတင်ပါ။
+     ဖိတ်ခေါ်ချက်၏ဘေးတွင် ရလဒ်။
+6. **တုံ့ပြန်ချက်စုဆောင်းပြီး ထွက်ပါ**
+   - တုံ့ပြန်ချက်ရောက်ရှိသည်နှင့် `expected_exit_at` အောင်မြင်ပြီးသည်နှင့် ဖိတ်ကြားချက်များကို ပိတ်ပါ။
+   - လှိုင်းပြဿနာကို တိုတိုအကျဉ်းချုပ် (တွေ့ရှိမှု၊ အဖြစ်အပျက်များ၊ နောက်တစ်ခုဖြင့် အပ်ဒိတ်လုပ်ပါ။
+     လုပ်ဆောင်ချက်များ) နောက်အုပ်စုသို့ မရွှေ့မီ။
 
-## Evidence & reporting
+## အထောက်အထားနှင့် အစီရင်ခံခြင်း။
 
-| Artefact | Where to store | Refresh cadence |
-| --- | --- | --- |
-| Invite tracker issue | `docs-portal-preview` GitHub project | Update after each invite. |
-| Reviewer roster export | `docs/portal/docs/devportal/reviewer-onboarding.md` linked registry | Weekly. |
-| Telemetry snapshots | `docs/source/sdk/android/readiness/dashboards/<date>/` (reuse telemetry bundle) | Per wave + after incidents. |
-| Feedback digest | `docs/portal/docs/devportal/preview-feedback/<wave>/summary.md` (create folder per wave) | Within 5 days of wave exit. |
-| Governance meeting note | `docs/portal/docs/devportal/preview-invite-notes/<date>.md` | Populate before each DOCS-SORA governance sync. |
+| Artefact | သိမ်းဆည်းရန်နေရာ | ပြန်လည်ဆန်းသစ် cadence |
+| ---| ---| ---|
+| Invite tracker issue | `docs-portal-preview` GitHub ပရောဂျက် | ဖိတ်ကြားချက်တစ်ခုစီပြီးနောက် အပ်ဒိတ်လုပ်ပါ။ |
+| ဝေဖန်သုံးသပ်သူစာရင်းကို တင်ပို့ခြင်း | `docs/portal/docs/devportal/reviewer-onboarding.md` လင့်ခ်ချိတ်ထားသော မှတ်ပုံတင်ခြင်း | အပတ်စဉ်။ |
+| Telemetry လျှပ်တစ်ပြက်များ | `docs/source/sdk/android/readiness/dashboards/<date>/` (တယ်လီမီတာ အတွဲလိုက်) | လှိုင်းအလိုက် + အဖြစ်အပျက်တွေပြီးရင်။ |
+| တုံ့ပြန်ချက် မှတ်တမ်း | `docs/portal/docs/devportal/preview-feedback/<wave>/summary.md` (လှိုင်းတစ်ခုလျှင် ဖိုဒါဖန်တီးပါ) | လှိုင်းထွက်ပြီး 5 ရက်အတွင်း |
+| အုပ်ချုပ်မှုအစည်းအေဝး မှတ်ချက် | `docs/portal/docs/devportal/preview-invite-notes/<date>.md` | DOCS-SORA တစ်ခုစီ၏ အုပ်ချုပ်မှုစင့်ခ်လုပ်ခြင်းမတိုင်မီ ဖြည့်သွင်းပါ။ |
 
-Run `cargo xtask docs-preview summary --wave <wave_label> --json artifacts/docs_portal_preview/<wave_label>_summary.json`
-after each batch to produce a machine-readable event digest. Attach the rendered
-JSON to the wave issue so governance reviewers can confirm invite counts without
-replaying the entire log.
+`cargo xtask docs-preview summary --wave <wave_label> --json artifacts/docs_portal_preview/<wave_label>_summary.json` ကိုဖွင့်ပါ။
+batch တစ်ခုစီပြီးနောက် machine-readable event digest ကိုထုတ်လုပ်ရန်။ ပြန်ဆိုထားတာကို ပူးတွဲပါ။
+အုပ်ချုပ်မှုပြန်လည်သုံးသပ်သူများသည် ဖိတ်ကြားချက်အရေအတွက်များကို မလိုအပ်ဘဲ အတည်ပြုနိုင်စေရန် လှိုင်းပြဿနာအတွက် JSON
+မှတ်တမ်းတစ်ခုလုံးကို ပြန်ဖွင့်သည်။
 
-Attach the evidence list to `status.md` whenever a wave ends so the roadmap
-entry can be updated quickly.
+လှိုင်းတစ်ခုပြီးဆုံးသည့်အခါတိုင်း အထောက်အထားစာရင်းကို `status.md` သို့ ပူးတွဲပါ
+entry ကို လျှင်မြန်စွာ update လုပ်နိုင်ပါသည်။
 
-## Rollback & pause criteria
+## နောက်ပြန်ဆွဲခြင်းနှင့် ခေတ္တရပ်ခြင်း သတ်မှတ်ချက်
 
-Pause the invite flow (and notify governance) when any of the following occur:
+အောက်ဖော်ပြပါများထဲမှ တစ်ခုခုပေါ်ပေါက်လာသောအခါ ဖိတ်ကြားလွှာစီးဆင်းမှုကို ခေတ္တရပ်ရန် (နှင့် အုပ်ချုပ်ရေးကို အကြောင်းကြားရန်)
 
-- A Try it proxy incident that required rollback (`npm run manage:tryit-proxy`).
-- Alert fatigue: >3 alert pages for preview-only endpoints within 7 days.
-- Compliance gap: invite sent without signed terms or without logging the
-  request template.
-- Integrity risk: checksum mismatch detected by `scripts/preview_verify.sh`.
+- နောက်ကြောင်းပြန်ရန် လိုအပ်သော (`npm run manage:tryit-proxy`) ကို စမ်းသုံးကြည့်ပါ ။
+- သတိပေးချက် ပင်ပန်းနွမ်းနယ်မှု- 7 ရက်အတွင်း အစမ်းကြည့်ရန်သာ အဆုံးမှတ်များအတွက် သတိပေးချက် စာမျက်နှာ 3 ခု။
+- လိုက်နာမှုကွာဟချက်- လက်မှတ်မထိုးဘဲ စည်းကမ်းချက်များမပါဘဲ သို့မဟုတ် မှတ်တမ်းမတင်ဘဲ ပေးပို့ခဲ့သည်။
+  တောင်းဆိုမှုပုံစံ။
+- Integrity risk- `scripts/preview_verify.sh` မှ စစ်ဆေးတွေ့ရှိထားသော checksum မကိုက်ညီမှု။
 
-Resume only after documenting the remediation in the invite tracker and
-confirming the telemetry dashboard is stable for at least 48 hours.
+ဖိတ်ကြားမှုခြေရာခံကိရိယာနှင့် ပြန်လည်ပြင်ဆင်မှုများကို မှတ်တမ်းတင်ပြီးမှသာ ပြန်လည်စတင်ပါ။
+တယ်လီမီတာ ဒက်ရှ်ဘုတ်သည် အနည်းဆုံး ၄၈ နာရီကြာ တည်ငြိမ်ကြောင်း အတည်ပြုသည်။

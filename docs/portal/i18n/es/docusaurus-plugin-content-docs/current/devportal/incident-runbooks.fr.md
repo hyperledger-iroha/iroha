@@ -4,65 +4,63 @@ direction: ltr
 source: docs/portal/docs/devportal/incident-runbooks.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Runbooks d'incident et drills de rollback
+# Runbooks de incidentes y ejercicios de reversión
 
-## Objectif
+## Objetivo
 
-L'item de roadmap **DOCS-9** demande des playbooks actionnables plus un plan de repetition pour que
-les operateurs du portail puissent recuperer des echecs de livraison sans deviner. Cette note
-couvre trois incidents a fort signal - deploiements rates, degradation de replication et
-pannes d'analytics - et documente les drills trimestriels qui prouvent que le rollback d'alias
-et la validation synthetique fonctionnent toujours de bout en bout.
+El elemento de la hoja de ruta **DOCS-9** requiere guías prácticas además de un plan de repetición para que
+les operatorurs du portail puissent recuperer des echecs de livraison sans deviner. esta nota
+incidentes de couvre trois en una señal de fuerte: tasas de implementación, degradación de replicación y
+Paneles de análisis: documente los ejercicios trimestrales que proporcionan la reversión de alias.
+y la validación sintética funciona todos los días de combate en combate.
 
-### Materiel connexe
+### Conexión de material
 
-- [`devportal/deploy-guide`](./deploy-guide) - workflow de packaging, signing et promotion d'alias.
-- [`devportal/observability`](./observability) - release tags, analytics et probes references ci-dessous.
+- [`devportal/deploy-guide`](./deploy-guide) - flujo de trabajo de empaquetado, firma y promoción de alias.
+- [`devportal/observability`](./observability) - etiquetas de lanzamiento, análisis y referencias de sondas ci-dessous.
 - `docs/source/sorafs_node_client_protocol.md`
-  et [`sorafs/pin-registry-ops`](../sorafs/pin-registry-ops)
-  - telemetrie du registre et seuils d'escalade.
-- `docs/portal/scripts/sorafs-pin-release.sh` et helpers `npm run probe:*`
-  references dans les checklists.
+  y [`sorafs/pin-registry-ops`](../sorafs/pin-registry-ops)
+  - Telemetrie du registre et seuils d'escalade.
+- `docs/portal/scripts/sorafs-pin-release.sh` y ayudantes `npm run probe:*`
+  referencias en las listas de verificación.
 
-### Telemetrie et tooling partages
-
-| Signal / Outil | Objectif |
+### Telemetría y piezas de herramientas| Señal / Herramientas | Objetivo |
 | ------------- | ------- |
-| `torii_sorafs_replication_sla_total` (met/missed/pending) | Detecte les blocages de replication et les breaches de SLA. |
-| `torii_sorafs_replication_backlog_total`, `torii_sorafs_replication_completion_latency_epochs` | Quantifie la profondeur du backlog et la latence de completion pour le triage. |
-| `torii_sorafs_gateway_refusals_total`, `torii_sorafs_manifest_submit_total{status="error"}` | Montre les echecs cote gateway qui suivent souvent un deploy rate. |
-| `npm run probe:portal` / `npm run probe:tryit-proxy` | Probes synthetiques qui gate les releases et valident les rollbacks. |
-| `npm run check:links` | Gate de liens casses; utilise apres chaque mitigation. |
-| `sorafs_cli manifest submit ... --alias-*` (wrapped par `scripts/sorafs-pin-release.sh`) | Mecanisme de promotion/reversion d'alias. |
-| `Docs Portal Publishing` Grafana board (`dashboards/grafana/docs_portal.json`) | Agrege la telemetrie refusals/alias/TLS/replication. Les alertes PagerDuty referencent ces panneaux comme preuve. |
+| `torii_sorafs_replication_sla_total` (cumplido/incumplido/pendiente) | Detecte los bloqueos de replicación y las infracciones de SLA. |
+| `torii_sorafs_replication_backlog_total`, `torii_sorafs_replication_completion_latency_epochs` | Cuantifique la profundidad del trabajo pendiente y la latencia de finalización para la clasificación. |
+| `torii_sorafs_gateway_refusals_total`, `torii_sorafs_manifest_submit_total{status="error"}` | Montre les echecs cote gateway qui suivent souvent una tasa de implementación. |
+| `npm run probe:portal` / `npm run probe:tryit-proxy` | Sondas sintéticas que detectan las liberaciones y validan las reversiones. |
+| `npm run check:links` | Casos de puerta de embargo; utilizar la mitigación después del chaque. |
+| `sorafs_cli manifest submit ... --alias-*` (envuelto por `scripts/sorafs-pin-release.sh`) | Mecanismo de promoción/reversión de alias. |
+| Placa `Docs Portal Publishing` Grafana (`dashboards/grafana/docs_portal.json`) | Agregar los rechazos de telemetría/alias/TLS/replicación. Las alertas PagerDuty hacen referencia a estos paneles como antes. |
 
-## Runbook - Deploiement rate ou artefact defectueux
+## Runbook: tasa de implementación o defectos de artefactos
 
-### Conditions de declenchement
+### Condiciones de declinación
 
-- Les probes preview/production echouent (`npm run probe:portal -- --expect-release=...`).
-- Alertes Grafana sur `torii_sorafs_gateway_refusals_total` ou
-  `torii_sorafs_manifest_submit_total{status="error"}` apres un rollout.
-- QA manuel remarque des routes cassees ou des pannes du proxy Try it immediatement apres
-  la promotion de l'alias.
+- Vista previa de las sondas/echouent de producción (`npm run probe:portal -- --expect-release=...`).
+- Alertas Grafana en `torii_sorafs_gateway_refusals_total` o
+  `torii_sorafs_manifest_submit_total{status="error"}` después del lanzamiento.
+- QA manuel remarque des route cassees ou des pannes du proxy Pruébelo inmediatamente después
+  la promoción de l'alias.
 
-### Confinement immediat
-
-1. **Geler les deploiements:** marquer le pipeline CI avec `DEPLOY_FREEZE=1` (input du workflow
-   GitHub) ou mettre en pause le job Jenkins pour qu'aucun artefact ne parte.
-2. **Capturer les artefacts:** telecharger `build/checksums.sha256`,
+### Confinamiento inmediato1. **Generar implementaciones:** marcar la tubería CI con `DEPLOY_FREEZE=1` (entrada del flujo de trabajo
+   GitHub) o poner en pausa el trabajo de Jenkins para que no haya ningún artefacto en la parte.
+2. **Capturador de artefactos:** telecargador `build/checksums.sha256`,
    `portal.manifest*.{json,to,bundle,sig}`, et la sortie des probes du build en echec afin que
-   le rollback reference les digests exacts.
-3. **Notifier les parties prenantes:** storage SRE, lead Docs/DevRel, et l'officier de garde
-   governance pour awareness (surtout si `docs.sora` est impacte).
+   la referencia de reversión de los resúmenes exactos.
+3. **Notificador de las partes embarazadas:** almacenamiento SRE, plomo Docs/DevRel y el oficial de guardia
+   Gobernanza para la concientización (surtout si `docs.sora` est impacte).
 
-### Procedure de rollback
+### Procedimiento de reversión
 
-1. Identifier le manifest last-known-good (LKG). Le workflow de production les stocke sous
+1. Identificador del último bien conocido del manifiesto (LKG). El flujo de trabajo de producción de las existencias
    `artifacts/devportal/<release>/sorafs/portal.manifest.to`.
-2. Re-lier l'alias a ce manifest avec le helper de shipping:
+2. Re-lier l'alias a ce manifest avec le helper de Shipping:
 
 ```bash
 cd docs/portal
@@ -99,123 +97,113 @@ cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
   --summary-out artifacts/.../sorafs/rollback.submit.json
 ```
 
-3. Enregistrer le resume du rollback dans le ticket d'incident avec les digests du
+3. Registre le resume du rollback dans le ticket d'incident avec les digests du
    manifest LKG et du manifest en echec.
 
-### Validation
+### Validación
 
 1. `npm run probe:portal -- --expect-release=${LKG_TAG}`.
 2. `npm run check:links`.
-3. `sorafs_cli manifest verify-signature ...` et `sorafs_cli proof verify ...`
-   (voir le guide de deploiement) pour confirmer que le manifest repromu correspond
-   toujours au CAR archive.
-4. `npm run probe:tryit-proxy` pour s'assurer que le proxy Try-It staging est revenu.
+3. `sorafs_cli manifest verify-signature ...` y `sorafs_cli proof verify ...`
+   (Vea la guía de implementación) para confirmar que el manifiesto repromu corresponde
+   toujours au CAR archivo.
+4. `npm run probe:tryit-proxy` para asegurar que el proxy Try-It staging esté rentable.
 
-### Post-incident
-
-1. Reactiver le pipeline de deploiement uniquement apres avoir compris la cause racine.
-2. Mettre a jour les entrees "Lessons learned" dans [`devportal/deploy-guide`](./deploy-guide)
+### Post-incidente1. Reactiver le pipeline de deploiement only después de haber comprendido la causa racine.
+2. Mettre a jour les entrees "Lecciones aprendidas" en [`devportal/deploy-guide`](./deploy-guide)
    avec de nouveaux points, si besoin.
-3. Ouvrir des defects pour la suite de tests en echec (probe, link checker, etc.).
+3. Buscar defectos para el conjunto de pruebas en echec (sonda, verificador de enlaces, etc.).
 
-## Runbook - Degradation de replication
+## Runbook - Degradación de replicación
 
-### Conditions de declenchement
+### Condiciones de declinación
 
-- Alerte: `sum(torii_sorafs_replication_sla_total{outcome="met"}) /
-  clamp_min(sum(torii_sorafs_replication_sla_total{outcome=~"met|missed"}), 1) <
-  0.95` pendant 10 minutes.
-- `torii_sorafs_replication_backlog_total > 10` pendant 10 minutes (voir
+- Alerta: `sum(torii_sorafs_replication_sla_total{outcome="met"}) /
+  abrazadera_min(suma(torii_sorafs_replication_sla_total{resultado=~"cumplido|perdido"}), 1) <
+  Colgante de 0,95` 10 minutos.
+- `torii_sorafs_replication_backlog_total > 10` colgante 10 minutos (voir
   `pin-registry-ops.md`).
-- Governance signale une disponibilite d'alias lente apres un release.
+- Gobernanza señala una disponibilidad de alias lente después de la liberación.
 
-### Triage
+### Triaje
 
-1. Inspecter les dashboards [`sorafs/pin-registry-ops`](../sorafs/pin-registry-ops) pour
-   confirmer si le backlog est localise sur une classe de stockage ou une flotte de providers.
-2. Croiser les logs Torii pour les warnings `sorafs_registry::submit_manifest` afin de
-   determiner si les submissions echouent.
-3. Echantillonner la sante des replicas via `sorafs_cli manifest status --manifest ...`
-   (liste les resultats par provider).
+1. Inspeccione los paneles [`sorafs/pin-registry-ops`](../sorafs/pin-registry-ops) para
+   Confirme si el trabajo pendiente está localizado en una clase de almacenamiento o en una flota de proveedores.
+2. Croiser les logs Torii pour les advertencias `sorafs_registry::submit_manifest` afin de
+   determinante si les envíos echouent.
+3. Echantillonner la sante des replicas vía `sorafs_cli manifest status --manifest ...`
+   (Liste los resultados por proveedor).
 
-### Mitigation
-
-1. Reemettre le manifest avec un nombre de replicas plus eleve (`--pin-min-replicas 7`) via
-   `scripts/sorafs-pin-release.sh` afin que le scheduler etale la charge sur plus de providers.
-   Enregistrer le nouveau digest dans le log d'incident.
-2. Si le backlog est lie a un provider unique, le desactiver temporairement via le scheduler
-   de replication (documente dans `pin-registry-ops.md`) et soumettre un nouveau manifest
-   forcant les autres providers a rafraichir l'alias.
+### Mitigación1. Reemettre le manifest avec un nombre de replicas plus once (`--pin-min-replicas 7`) vía
+   `scripts/sorafs-pin-release.sh` afin que le planificador etale la cargo sur plus de los proveedores.
+   Registre el nuevo resumen en el registro del incidente.
+2. Si el trabajo pendiente es un proveedor único, lo desactivará temporalmente a través del programador
+   de replicación (documento en `pin-registry-ops.md`) y soumettre un nouveau manifest
+   Forcant les otros proveedores a rafraichir l'alias.
 3. Quand la fraicheur de l'alias est plus critique que la parite de replication, re-lier
-   l'alias a un manifest chaud deja stage (`docs-preview`), puis publier un manifest de
-   suivi une fois que SRE a nettoye le backlog.
+   l'alias a un manifest chaud deja stage (`docs-preview`), después publier un manifest de
+   Después de una vez que SRE a nettoye le backlog.
 
-### Recuperation et cloture
+### Recuperación y cierre
 
-1. Surveiller `torii_sorafs_replication_sla_total{outcome="missed"}` pour s'assurer que le
-   compteur se stabilise.
-2. Capturer la sortie `sorafs_cli manifest status` comme preuve que chaque replica est de
-   retour en conformite.
-3. Ouvrir ou mettre a jour le post-mortem du backlog de replication avec les prochaines
-   etapes (scaling providers, tuning du chunker, etc.).
+1. Vigilante `torii_sorafs_replication_sla_total{outcome="missed"}` para asegurar que le
+   compteur se estabiliza.
+2. Capturer la salida `sorafs_cli manifest status` como antes de que cada réplica esté
+   volver en conformidad.
+3. Revisar o medir un día el post-mortem del trabajo pendiente de replicación con las cadenas
+   etapas (proveedores de escalado, tuning du fragmentador, etc.).
 
-## Runbook - Panne d'analytics ou de telemetrie
+## Runbook: panel de análisis o telemetría
 
-### Conditions de declenchement
+### Condiciones de declinación
 
-- `npm run probe:portal` reussit mais les dashboards cessent d'ingester des evenements
-  `AnalyticsTracker` pendant >15 minutes.
-- Privacy review detecte une hausse inattendue d'evenements abandonnes.
-- `npm run probe:tryit-proxy` echoue sur les paths `/probe/analytics`.
+- `npm run probe:portal` reutilice los paneles de control antes de recibir eventos
+  `AnalyticsTracker` colgante >15 minutos.
+- La revisión de privacidad detecta una casa desatendida de eventos abandonados.
+- `npm run probe:tryit-proxy` repite las rutas `/probe/analytics`.
 
-### Reponse
+### Respuesta1. Verificador de entradas de compilación: `DOCS_ANALYTICS_ENDPOINT` y
+   `DOCS_ANALYTICS_SAMPLE_RATE` en el artefacto de liberación (`build/release.json`).
+2. Reejecutor `npm run probe:portal` con `DOCS_ANALYTICS_ENDPOINT` apuntando a la versión le
+   Collector de staging pour confirmer que le tracker emet encore des payloads.
+3. Si los coleccionistas están caídos, defina `DOCS_ANALYTICS_ENDPOINT=""` y reconstruya para
+   que le tracker circuito judicial; consignador la fenetre d'outage dans la timeline.
+4. Validador que `scripts/check-links.mjs` continúa con la huella digital `checksums.sha256`
+   (Los paneles de análisis no deben *pas* bloquear la validación del mapa del sitio).
+5. Una vez que el coleccionista retabli, lancer `npm run test:widgets` para ejecutar archivos
+   pruebas unitarias del análisis auxiliar antes de volver a publicar.
 
-1. Verifier les inputs de build: `DOCS_ANALYTICS_ENDPOINT` et
-   `DOCS_ANALYTICS_SAMPLE_RATE` dans l'artefact de release (`build/release.json`).
-2. Re-executer `npm run probe:portal` avec `DOCS_ANALYTICS_ENDPOINT` pointant vers le
-   collector de staging pour confirmer que le tracker emet encore des payloads.
-3. Si les collectors sont down, definir `DOCS_ANALYTICS_ENDPOINT=""` et rebuild pour
-   que le tracker court-circuite; consigner la fenetre d'outage dans la timeline.
-4. Valider que `scripts/check-links.mjs` continue de fingerprint `checksums.sha256`
-   (les pannes d'analytics ne doivent *pas* bloquer la validation du sitemap).
-5. Une fois le collector retabli, lancer `npm run test:widgets` pour executer les
-   unit tests du helper analytics avant de republish.
+### Post-incidente
 
-### Post-incident
+1. Mettre a jour [`devportal/observability`](./observability) con las nuevas limitaciones
+   du coleccionista o les exigencias de muestreo.
+2. Emettre une Notice Governance Sides Donnees Analytics Ont ete Perdues ou Redactees
+   fuera de la política.
 
-1. Mettre a jour [`devportal/observability`](./observability) avec les nouvelles limites
-   du collector ou les exigences de sampling.
-2. Emettre une notice governance si des donnees analytics ont ete perdues ou redactees
-   hors politique.
+## Ejercicios trimestriels de resiliencia
 
-## Drills trimestriels de resilience
-
-Lancer les deux drills durant le **premier mardi de chaque trimestre** (Jan/Avr/Jul/Oct)
-ou immediatement apres tout changement majeur d'infrastructure. Stocker les artefacts sous
-`artifacts/devportal/drills/<YYYYMMDD>/`.
-
-| Drill | Etapes | Preuve |
+Lancer les deux drills durant le **premier mardi de chaque trimestre** (enero/abril/julio/octubre)
+O inmediatamente después de cualquier cambio mayor de infraestructura. Stocker les artefactos sous
+`artifacts/devportal/drills/<YYYYMMDD>/`.| Taladro | Etapas | Preuve |
 | ----- | ----- | -------- |
-| Repetition du rollback d'alias | 1. Rejouer le rollback "Deploiement rate" avec le manifest production le plus recent.<br/>2. Re-lier a production une fois que les probes passent.<br/>3. Enregistrer `portal.manifest.submit.summary.json` et les logs de probes dans le dossier du drill. | `rollback.submit.json`, sortie des probes, et release tag de la repetition. |
-| Audit de validation synthetique | 1. Lancer `npm run probe:portal` et `npm run probe:tryit-proxy` contre production et staging.<br/>2. Lancer `npm run check:links` et archiver `build/link-report.json`.<br/>3. Joindre screenshots/exports de panneaux Grafana confirmant le succes des probes. | Logs de probes + `link-report.json` referencant le fingerprint du manifest. |
+| Repetición de la reversión de alias | 1. Rejuvenece la reversión "Tasa de implementación" con el manifiesto de producción más reciente.2. Re-lier a production une fois que les probes passent.3. Registre `portal.manifest.submit.summary.json` y los registros de sondas en el expediente del taladro. | `rollback.submit.json`, salida de sondas y liberación de etiqueta de repetición. |
+| Auditoría de validación sintética | 1. Lancer `npm run probe:portal` et `npm run probe:tryit-proxy` contra producción y puesta en escena.2. Lancer `npm run check:links` y archivador `build/link-report.json`.3. Se unen capturas de pantalla/exportaciones de paneles Grafana que confirman el éxito de las sondas. | Registros de sondas + `link-report.json` referentes a la huella digital del manifiesto. |
 
-Escalader les drills manques au manager Docs/DevRel et a la revue governance SRE, car le
-roadmap exige une preuve trimestrielle deterministe que le rollback d'alias et les probes
+Escalader les drills manques au manager Docs/DevRel et a la revue Governance SRE, car le
+La hoja de ruta exige un preuve trimestrielle deterministe que le rollback d'alias et les probes
 portal restent sains.
 
-## Coordination PagerDuty et on-call
-
-- Le service PagerDuty **Docs Portal Publishing** possede les alertes generees depuis
-  `dashboards/grafana/docs_portal.json`. Les regles `DocsPortal/GatewayRefusals`,
-  `DocsPortal/AliasCache`, et `DocsPortal/TLSExpiry` page la primaire Docs/DevRel
-  avec Storage SRE en secondaire.
-- Quand on est page, inclure le `DOCS_RELEASE_TAG`, joindre des screenshots des panneaux
-  Grafana impactes et lier la sortie probe/link-check dans les notes d'incident avant
-  de commencer la mitigation.
-- Apres mitigation (rollback ou redeploy), re-executer `npm run probe:portal`,
-  `npm run check:links`, et capturer des snapshots Grafana montrant les metriques
-  revenues dans les seuils. Joindre toute l'evidence a l'incident PagerDuty
-  avant resolution.
-- Si deux alertes se declenchent en meme temps (par ex. TLS expiry plus backlog), trier
-  refusals en premier (arreter la publication), executer la procedure de rollback, puis
-  traiter TLS/backlog avec Storage SRE sur le bridge.
+## Coordinación PagerDuty y guardia- El servicio PagerDuty **Docs Portal Publishing** posee las alertas generadas desde entonces
+  `dashboards/grafana/docs_portal.json`. Las reglas `DocsPortal/GatewayRefusals`,
+  `DocsPortal/AliasCache` y `DocsPortal/TLSExpiry` página principal Docs/DevRel
+  con Storage SRE en secondaire.
+- Cuando en esta página, incluya el `DOCS_RELEASE_TAG`, junto con las capturas de pantalla de los paneles
+  Grafana impacta y lier la sortie probe/link-check dans les notes d'incident avant
+  de comenzar la mitigación.
+- Mitigación después (revertir o volver a implementar), reejecutor `npm run probe:portal`,
+  `npm run check:links`, y capturador de instantáneas Grafana montando las medidas
+  ingresos dans les seuils. Únase a todas las pruebas del incidente PagerDuty
+  resolución de vanguardia.
+- Si dos alertas se declencent en meme temps (por ejemplo, vencimiento de TLS más trabajo pendiente), prueba
+  negativas en primer ministro (arreter la publicación), ejecutor la procedimiento de reversión, puis
+  Traer TLS/backlog con Storage SRE en el puente.

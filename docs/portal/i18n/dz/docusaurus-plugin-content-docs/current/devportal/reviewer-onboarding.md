@@ -8,131 +8,126 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: Preview reviewer onboarding
 sidebar_label: Reviewer onboarding
 description: Process and checklists for enrolling reviewers in the docs portal public preview.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-## Overview
+## སྤྱི་མཐོང་།
 
-DOCS-SORA tracks a staged launch of the developer portal. Checksum-gated builds
-(`npm run serve`) and hardened Try it flows unblock the next milestone:
-onboarding vetted reviewers before the public preview opens broadly. This guide
-describes how to collect requests, verify eligibility, provision access, and
-offboard participants safely. Refer to the
-[preview invite flow](./preview-invite-flow.md) for cohort planning, invite
-cadence, and telemetry exports; the steps below focus on the actions to take
-once a reviewer has been selected.
+DOCS-I1NT00000005X གིས་ གོང་འཕེལ་གཏང་མི་ དྲྭ་ཚིགས་འདི་ གོ་རིམ་ཅན་གྱི་འགོ་བཙུགས་ཅིག་ བརྟག་ཞིབ་འབདཝ་ཨིན། ཞིབ་དཔྱད་བསྡོམས་རྩིས་-ged བཟོ་བསྐྲུན་ཚུ།
+(`npm run serve`) དང་སྲ་ཀྲག་འབད་ཡོདཔ།
+མི་མང་སྔོན་ལྟའི་འགོ་མ་བཙུགས་པའི་ཧེ་མར་ བཀོད་ཚོགས་ཀྱི་ བསྐྱར་ཞིབ་པ་ རྒྱ་ཆེཝ་སྦེ་ མ་ཕྱེ་བའི་ཧེ་མ་ཨིན། ལམ་སྟོན་འདི་
+ཞུ་བ་བསྡུ་ལེན་འབད་ཐངས་ཚུ་ འགྲེལ་བཤད་རྐྱབ་ནི་དང་ འོས་འབབ་བདེན་དཔྱད་འབད་ནི།
+offboard བཅའ་མར་གཏོགས་མི་ཚུ་ ཉེན་སྲུང་དང་ལྡནམ་སྦེ་ཡོདཔ་ཨིན། འདི་ལུ་བལྟ།
+[Preview gint flow](./preview-invite-flow.md) མཉམ་འབྲེལ་འཆར་གཞི་གི་དོན་ལུ་ མགྲོན་འབོད་འབད་ནི།
+ལྡོག་ཕྱོགས་དང་ བརྒྱུད་འཕྲིན་ཕྱིར་འདྲེན་ཚུ། འོག་གི་རིམ་པ་ཚུ་ འབད་དགོ་པའི་བྱ་བ་ཚུ་ལུ་གཙོ་བོར་བསྟེནམ་ཨིན།
+བསྐྱར་ཞིབ་པ་ཅིག་གདམ་ཁ་རྐྱབ་ཚརཝ་ཅིག་།
 
-- **Scope:** reviewers who need access to the docs preview (`docs-preview.sora`,
-  GitHub Pages builds, or SoraFS bundles) before GA.
-- **Out-of-scope:** Torii or SoraFS operators (covered by their own onboarding
-  kits) and production portal deployments (see
-  [`devportal/deploy-guide`](./deploy-guide.md)).
+- **Scope:** བསྐྱར་ཞིབ་འབད་མི་ཚུ་ ཡིག་ཆ་ཚུ་གི་སྔོན་ལྟ་ལུ་འཛུལ་སྤྱོད་འབད་དགོ་མི་ (`docs-preview.sora`,
+  ཇི་ཨེ་གི་ཧེ་མ་ གིཊི་ཧབ་ཤོག་ལེབ་ཚུ་བཟོ་བསྐྲུན་འབདཝ་ཨིན་ ཡང་ན་ I18NT0000000X བཱན་ཌལ་ཚུ་).
+- **ཕྱི་-ཨོཕ་-ཨོཕ་-སབ་:** Torii ཡང་ན་ I18NT000000001X བཀོལ་སྤྱོད་པ་ཚུ་ (ཁོང་རའི་རང་སོའི་ གུ་ཡངས་ཀྱི་ གཡོག་བཀོལ།
+  ཐབ་ཚང་།) དང་ཐོན་ལས་དྲ་རྒྱའི་བཀྲམ་སྤེལ་ (see)
+  [I18NI0000025X](./deploy-guide.md)).
 
-## Roles & prerequisites
+## འགན་ཁུར་དང་སྔོན་འགྲོའི་ཆ་རྐྱེན།
 
-| Role | Typical goals | Required artefacts | Notes |
+| འགན་ཁུར་ | སྤྱིར་བཏང་གི་དམིགས་ཡུལ་ | དགོས་མཁོའི་དངོས་པོ་ཚུ། | དྲན་ཐོ། |
 | --- | --- | --- | --- |
-| Core maintainer | Verify new guides, run smoke tests. | GitHub handle, Matrix contact, signed CLA on file. | Usually already in the `docs-preview` GitHub team; still file a request so access is auditable. |
-| Partner reviewer | Validate SDK snippets or governance content before public release. | Corporate email, legal POC, signed preview terms. | Must acknowledge telemetry + data handling requirements. |
-| Community volunteer | Provide usability feedback on guides. | GitHub handle, preferred contact, timezone, acceptance of CoC. | Keep cohorts small; prioritize reviewers who have signed the contributor agreement. |
+| ཀོར་བདག་འཛིན་པ། | ལམ་སྟོན་གསརཔ་ཚུ་བདེན་དཔྱད་འབད་ཞིནམ་ལས་ དུ་ཁ་བརྟག་དཔྱད་ཚུ་ གཡོག་བཀོལ། | GitHub བཀོལ་སྤྱོད་ ཡིག་སྣོད་གུ་ཡོད་པའི་ སི་ཨེལ་ཨེ་ མཚན་རྟགས་བཀོད་ཡོདཔ། | སྤྱིར་བཏང་ལུ་ ཧེ་མ་ལས་ `docs-preview` གི་ཊི་ཧབ་སྡེ་ཚན་ནང་; ད་ལྟོ་ཡང་ཞུ་བ་ཅིག་ དེ་འབདཝ་ལས་ འཛུལ་སྤྱོད་འདི་རྩིས་ཞིབ་འབད་ཚུགས། |
+| མཉམ་འབྲེལ་བསྐྱར་ཞིབ་པ། | མི་མང་གསལ་བསྒྲགས་མ་འབད་བའི་ཧེ་མ་ ཨེསི་ཌི་ཀེ་ སི་ནིཔ་ ཡང་ན་ གཞུང་སྐྱོང་ནང་དོན་ཚུ་ བདེན་དཔྱད་འབད། | ལས་འཛིན་གློག་འཕྲིན་ ཁྲིམས་མཐུན་གྱི་ POC, མཚན་རྟགས་བཀོད་པའི་སྔོན་ལྟའི་ཐ་སྙད་ཚུ། | ཊེ་ལི་མི་ཊི་རི་ + གནས་སྡུད་འཛིན་སྐྱོང་དགོས་མཁོ་ཚུ་ངོས་ལེན་འབད་དགོ། |
+| མི་སྡེ་ཁས་བླངས་པ། | ལམ་སྟོན་པ་ཚུ་གི་སྐོར་ལས་ ལག་ལེན་འཐབ་བཏུབ་པའི་བསམ་འཆར་ཚུ་བྱིན། | GitHub གི་འཛིན་སྐྱོང་གིས་ འབྲེལ་བ་འཐབ་ཐངས་དང་ དུས་ཚོད་ས་ཁོངས་ དེ་ལས་ CoC འདི་ ངོས་ལེན་འབད་ནི། | སྡེ་ཚན་ཆུང་ཀུ་སྦེ་བཞག། ཕན་འདེབས་ཀྱི་གན་ཡིག་གུ་ མཚན་རྟགས་བཀོད་མི་ བསྐྱར་ཞིབ་འབད་མི་ཚུ་ལུ་ གཙོ་རིམ་བཟུང་དགོ། |
 
-All reviewer types must:
+བསྐྱར་ཞིབ་པ་རིགས་ཆ་མཉམ་ནི།
 
-1. Acknowledge the acceptable-use policy for preview artefacts.
-2. Read the security/observability appendices
-   ([`security-hardening`](./security-hardening.md),
-   [`observability`](./observability.md),
-   [`incident-runbooks`](./incident-runbooks.md)).
-3. Agree to run `docs/portal/scripts/preview_verify.sh` before serving any
-   snapshot locally.
+༡ སྔོན་ལྟའི་ཅ་ཆས་ཚུ་གི་དོན་ལུ་ ངོས་ལེན་ཅན་གྱི་ལག་ལེན་སྲིད་བྱུས་འདི་ངོས་ལེན་འབད་ནི།
+2. བདེ་འཇགས་/བལྟ་རྟོག་བྱེད་ཐུབ་པའི་ཟུར་དེབ་ལྷག་པ།
+   ([I18NI0000027X](I18NU0000012X);
+   [I18NI0000028X](./observability.md);
+   [I18NI0000029X](I18NU0000014X)).
+3. གང་རུང་མ་ཕྱག་ཞུ་མ་ཚར་ `docs/portal/scripts/preview_verify.sh` རྒྱུགས་ ཆོག་པ།
+   ས་གནས་ནང་པར་ལེན་འབད།
 
-## Intake workflow
+## ལཱ་གི་རྒྱུན་རིམ་ཚུ་བཙུགས་ནི།
 
-1. Ask the requester to fill out the
-   [`docs/examples/docs_preview_request_template.md`](../../../examples/docs_preview_request_template.md)
-   form (or copy/paste it into an issue). Capture at least: identity, contact
-   method, GitHub handle, intended review dates, and confirmation that the
-   security docs were read.
-2. Record the request in the `docs-preview` tracker (GitHub issue or governance
-   ticket) and assign an approver.
-3. Validate prerequisites:
-   - CLA / contributor agreement on file (or partner contract reference).
-   - Acceptable-use acknowledgement stored in the request.
-   - Risk assessment complete (for example, partner reviewers approved by Legal).
-4. Approver signs off in the request and links the tracking issue to any
-   change-management entry (example: `DOCS-SORA-Preview-####`).
+1. ཞུ་བ་འབད་མི་ལུ་ བཀང་དགོཔ་སྦེ་སླབ་དགོ།
+   [I18NI0000031X](I18NU0000015X)
+   form (ཡང་ན་ འདྲ་བཤུས་/གནད་དོན་ནང་ སྦྱར་དགོ།) ཉུང་མཐའ་ལུ་: ངོ་རྟགས་, འབྲེལ་མཐུད་འབད།
+   thecon, གིཊི་ཧབ་ཀྱི་ལག་ལེན། བསྐྱར་ཞིབ་ཚེས་གྲངས་ཚུ་ དེ་ལས་ བདེན་དཔྱད་འབད་ནི།
+   ཉེན་སྲུང་ཡིག་ཆ་ཚུ་ལྷག་ཡོདཔ་ཨིན།
+༢ ཞུ་བ་འདི་ I18NI000000032X བརྟག་ཞིབ་པ་ (GitHub disort ཡང་ན་ གཞུང་སྐྱོང་) ནང་ཐོ་བཀོད་འབད།
+   ཤོག་འཛིན་) དང་ ཆ་འཇོག་འབད་མི་ཅིག་ འགན་སྤྲོད་འབད།
+3. སྔོན་འགྲོའི་དགོས་མཁོ།
+   - ཡིག་སྣོད་གུ་ CLA / ཕན་འདེབས་འབད་མི་ཆིངས་ཡིག།
+   - ཞུ་བ་ནང་ གསོག་འཇོག་འབད་ཡོད་པའི་ ངོས་ལེན་ཅན་གྱི་ལག་ལེན་གྱི་ངོས་ལེན་འབད་ནི།
+   - ཉེན་ཁ་བརྟག་ཞིབ་ཆ་ཚང་ (དཔེར་ན་ ཁྲིམས་དོན་གྱིས་ཆ་འཇོག་འབད་མི་ མཉམ་འབྲེལ་པ་བསྐྱར་ཞིབ་པ་)།
+༤ ཞུ་བ་ནང་ ཆ་འཇོག་འབད་ཞིནམ་ལས་ བརྟག་ཞིབ་ཀྱི་གནད་དོན་འདི་ གང་རུང་ཅིག་ལུ་ འབྲེལ་མཐུད་འབདཝ་ཨིན།
+   བསྒྱུར་བཅོས་-འཛིན་སྐྱོང་ཐོ་བཀོད་ (དཔེར་ན་: `DOCS-SORA-Preview-####`).
 
-## Provisioning & tooling
+## མཁོ་སྤྲོད་དང་ལག་ཆས།
 
-1. **Share artefacts** — Provide the latest preview descriptor + archive from
-   the CI workflow or SoraFS pin (`docs-portal-preview` artefact). Remind
-   reviewers to run:
+1. **བགོ་བཤའ་ ཅ་མཛོད་ཚུ་** — སྔོན་ལྟའི་འགྲེལ་བཤད་གསརཔ་ + གཏན་མཛོད་འདི་ ལས་བྱིནམ་ཨིན།
+   CI ལཱ་གི་རྒྱུན་རིམ་ཡང་ན་ I18NT0000002X པིན་ (I18NI000000034X ཅ་རྙིང་)། དྲན་གསོ་འབད་ནི
+   བསྐྱར་ཞིབ་པ་ཚུ་ གཡོག་བཀོལ་ནི།
 
-   ```bash
-   ./docs/portal/scripts/preview_verify.sh \
-     --build-dir build \
-     --descriptor artifacts/preview-descriptor.json \
-     --archive artifacts/preview-site.tar.gz
-   ```
+   I18NF0000008X
 
-2. **Serve with checksum enforcement** — Point reviewers at the checksum-gated
-   command:
+2. ** ཅེག་སམ་བཀག་སྡོམ་དང་གཅིག་ཁར་ ཞབས་ཏོག་སྤྲོད་དགོ།
+   བཀའ༌རྒྱ:
 
-   ```bash
-   DOCS_RELEASE_TAG=preview-<stamp> npm run --prefix docs/portal serve
-   ```
+   I18NF0000009X
 
-   This reuses `scripts/serve-verified-preview.mjs` so no unverified build can be
-   launched accidentally.
+   འདི་གིས་ I18NI000000035X ལོག་ལག་ལེན་འཐབ་དོ་ཡོདཔ་ལས་ བདེན་དཔྱད་མ་འབད་བའི་བཟོ་བསྐྲུན་འདི་ འབད་མི་བཏུབ།
+   རྐྱེན་ངན་བྱུང་བའི་སྒོ་ལས་ འགོ་བཙུགས་ཡོདཔ།
 
-3. **Grant GitHub access (optional)** — If reviewers need unpublished branches,
-   add them to the `docs-preview` GitHub team for the duration of the review and
-   record the membership change in the request.
+3. **Grant GitHub འཛུལ་སྤྱོད་ (གདམ་ཁ་ཅན་)** — བསྐྱར་ཞིབ་འབད་མི་ཚུ་ལུ་ དཔར་བསྐྲུན་མ་འབད་བའི་ཡན་ལག་ཚུ་དགོ་པ་ཅིན་
+   བསྐྱར་ཞིབ་ཀྱི་དུས་ཡུན་དོན་ལུ་ `docs-preview` གི་ཊི་ཧབ་སྡེ་ཚན་ལུ་ཁ་སྐོང་འབད།
+   ཞུ་བ་ནང་ འཐུས་མི་བསྒྱུར་བཅོས་འདི་ཐོ་བཀོད་འབད།
 
-4. **Communicate support channels** — Share the on-call contact (Matrix/Slack)
-   and incident procedure from [`incident-runbooks`](./incident-runbooks.md).
+4. **རྒྱབ་སྐྱོར་གྱི་རྒྱུ་ལམ་** — འབོད་བརྡ་ནང་ལུ་འབྲེལ་བ་འཐབ་སྟེ་ (Matrix/Slack) བརྗེ་སོར་འབད།
+   དང་ [`incident-runbooks`](./incident-runbooks.md)ལས་བྱུང་བའི་བྱ་རིམ།
 
-5. **Telemetry + feedback** — Remind reviewers that anonymised analytics are
-  collected (see [`observability`](./observability.md)). Provide the feedback
-  form or issue template referenced in the invite and log the event with the
-  [`preview-feedback-log`](./preview-feedback-log) helper so the wave summary
-  stays current.
+5. **Telemetry + བསམ་འཆར།** — མིང་མ་བཀོད་པའི་དབྱེ་དཔྱད་འདི་ བསྐྱར་ཞིབ་པ་དྲན་སྐུལ་འབད།
+  བསྡུ་སྒྲིག་ (`observability`](./observability.md) ལུ་བལྟ། བསམ་འཆར།
+  form or tache template འདི་ མགྲོན་བརྡ་ནང་ གཞི་བསྟུན་འབད་ཞིནམ་ལས་ བྱུང་ལས་འདི་ ༡ དང་ཅིག་ཁར་ ནང་བསྐྱོད་འབད།
+  [`preview-feedback-log`](I18NU0000018X)རོགས་སྐྱོར་བྱེད་པས་རླབས་བསྡུས་པ།
+  ད་ལྟོའི་གནས་སྟངས་ནང་སྡོད།
 
-## Reviewer checklist
+## དཔྱད་ཡིག་དཔྱད་ཐོ་།
 
-Before accessing the preview, reviewers must complete the following:
+སྔོན་ལྟ་འདི་ འཛུལ་སྤྱོད་མ་འབད་བའི་ཧེ་མ་ བསྐྱར་ཞིབ་འབད་མི་ཚུ་གིས་ གཤམ་གསལ་ཚུ་ མཇུག་བསྡུ་དགོ།
 
-1. Verify the downloaded artefacts (`preview_verify.sh`).
-2. Launch the portal via `npm run serve` (or `serve:verified`) to ensure the
-   checksum guard is active.
-3. Read the security and observability notes linked above.
-4. Test the OAuth/Try it console using device-code login (if applicable) and
-   avoid reusing production tokens.
-5. File findings in the agreed tracker (issue, shared doc, or form) and tag
-   them with the preview release tag.
+༡ ཕབ་ལེན་འབད་ཡོད་པའི་ཅ་ཆས་ཚུ་ བདེན་དཔྱད་འབད། (`preview_verify.sh`)
+2. `npm run serve` (ཡང་ན་ `serve:verified`) བརྒྱུད་དེ་ དྲྭ་ཚིགས་འདི་འགོ་བཙུགས་དགོ།
+   checksum sarder འདི་ ཤུགས་ལྡན་ཨིན།
+༣ གོང་ལུ་འབྲེལ་མཐུད་འབད་ཡོད་པའི་ ཉེན་སྲུང་དང་ བལྟ་བརྟོག་དྲན་འཛིན་ཚུ་ལྷག།
+༤ ཐབས་འཕྲུལ་གྱི་ཨང་རྟགས་ནང་བསྐྱོད་ (གལ་སྲིད་བཙུགས་པ་ཅིན་) དང་ OAuth/Oauth//
+   ཐོན་སྐྱེད་ཊོ་ཀེན་ཚུ་ ལོག་ལག་ལེན་འཐབ་ནི་ལས་ འཛེམ་དགོ།
+༥ ཆ་འཇོག་གྲུབ་པའི་རྗེས་འདེད་ནང་ ཡིག་སྣོད་ཀྱི་ཤེས་རྟོགས་ (གནད་དོན་ བརྗེ་སོར་ཡིག་ཆ་ ཡང་ན་ འབྲི་ཤོག་) དང་ རྟགས་བཀོད་ནི།
+   དེ་ཚུ་གིས་ སྔོན་ལྟའི་གསར་བཏོན་ངོ་རྟགས་དང་གཅིག་ཁར་ཨིན།
 
-## Maintainer responsibilities & offboarding
+## རྒྱུན་སྐྱོང་གི་འགན་འཁྲི།
 
-| Phase | Actions |
+| དུས་རིམ་ | བྱ་བ་ |
 | --- | --- |
-| Kickoff | Confirm intake checklist is attached to the request, share artefacts + instructions, append an `invite-sent` entry via [`preview-feedback-log`](./preview-feedback-log), and schedule a midpoint sync if the review lasts longer than one week. |
-| Monitoring | Track preview telemetry (look for unusual Try it traffic, probe failures) and follow the incident runbook if anything suspicious occurs. Log `feedback-submitted`/`issue-opened` events as findings arrive so the wave metrics stay accurate. |
-| Offboarding | Revoke temporary GitHub or SoraFS access, record `access-revoked`, archive the request (include feedback summary + outstanding actions), and update the reviewer registry. Ask the reviewer to purge local builds and attach the digest generated from [`docs/examples/docs_preview_feedback_digest.md`](../../../examples/docs_preview_feedback_digest.md). |
+| ཀིཀ་ཨོཕ་ | བརྟག་ཞིབ་ཐོ་ཡིག་འདི་ ཞུ་བ་ལུ་མཉམ་སྦྲགས་འབད་ཡོདཔ་དང་ ཅ་ཆས་ཚུ་ + བཀོད་རྒྱ་ཚུ་ བརྗེ་སོར་འབད་དེ་ I18NI000000043X ཐོ་བཀོད་འདི་ [I18NI000000044X](./preview-feedback-log) བརྒྱུད་དེ་ ཁ་སྐོང་འབད་ཞིནམ་ལས་ བསྐྱར་ཞིབ་འདི་ བདུན་ཕྲག་གཅིག་ལས་ལྷག་སྟེ་ ཡུན་རིངམོ་སྦེ་གནས་པ་ཅིན་ བར་མཚམས་ལུ་ མཉམ་འབྱུང་ཅིག་ དུས་ཚོད་བཀོད་དགོ། |
+| ལྟ་རྟོག་འབད་ནི། | སྔོན་ལྟའི་བརྒྱུད་འཕྲིན་འཚོལ་ཞིབ་ (སྤྱིར་བཏང་མིན་པའི་འགྲུལ་བསྐྱོད་འབད་རྩོལ་བསྐྱེད་ འཚོལ་ཞིབ་འཐུས་ཤོར་) དང་ དོགས་པ་ཅན་ག་ཅི་རང་བྱུང་པ་ཅིན་ བྱུང་རྐྱེན་གྱི་རན་དེབ་འདི་ རྗེས་སུ་འཇུག་དགོ། ལོག་ `feedback-submitted`/`issue-opened` བྱུང་རིམ་ཚུ་ ལྷོད་ཡོདཔ་ལས་ རླབས་ཀྱི་ བརྡ་རྟགས་ཚུ་ གཏན་གཏན་སྦེ་ གནས་ཏེ་ཡོདཔ་ཨིན། |
+| བཀོད་སྒྲིག་འབད་ནི། | གནས་སྐབས་ཀྱི་ GitHub ཡང་ན་ I18NT0000003X འཛུལ་སྤྱོད་ཚུ་ ཆ་མེད་གཏང་ཞིནམ་ལས་ ཐོ་བཀོད་ I18NI000000047X ཐོ་བཀོད་འབད་ ཞུ་བ་འདི་ གཏན་མཛོད་འབད་ཞིནམ་ལས་ (བསམ་འཆར་གྱི་བཅུད་དོན་ + ཁྱད་འཕགས་ཅན་གྱི་བྱ་བ་ཚུ་ ཚུད་དེ་) དེ་ལས་ བསྐྱར་ཞིབ་འབད་མི་ཐོ་བཀོད་འདི་དུས་མཐུན་བཟོ་དགོ། བསྐྱར་ཞིབ་པ་ལུ་ ས་གནས་ཀྱི་བཟོ་བསྐྲུན་ཚུ་ གཙང་སྦྲ་དང་ བཞུ་བཅོས་ཚུ་ [I18NI000000048X](I18NU000000020X)ལས་ མཐུད་དགོཔ་སྦེ་ ཞུ། |
 
-Use the same process when rotating reviewers between waves. Keeping the
-paper trail in the repo (issue + templates) helps DOCS-SORA remain auditable and
-lets governance confirm that preview access followed the documented controls.
+རླབས་ཚུ་གི་བར་ན་ བསྐྱར་ཞིབ་འབད་མི་ཚུ་བསྒྱིར་བའི་སྐབས་ བྱ་རིམ་གཅིག་པ་ལག་ལེན་འཐབ། འདི་ཡང་བཞག་ནི་
+ཤོག་གུའི་ལམ་འདི་ རི་པོ་(གནད་དོན་ + ཊེམ་པེལེཊི་) གིས་ DOCS-I18NT000000007X རྩིས་ཞིབ་འབད་བཏུབ་སྦེ་སྡོད་ནི་ལུ་ ཕན་ཐོགཔ་ཨིན།
+ཡིག་ཆ་བཟོ་ཡོད་པའི་ཚད་འཛིན་ཚུ་གི་ཤུལ་ལས་ གཞུང་སྐྱོང་གིས་ སྔོན་ལྟ་འཛུལ་སྤྱོད་འདི་ ངེས་གཏན་བཟོཝ་ཨིན།
 
-## Invite templates & tracking
+## འབོད་བརྡ་དང་རྗེས་འདེད་འབད་ནི།
 
-- Start every outreach with the
-  [`docs/examples/docs_preview_invite_template.md`](../../../examples/docs_preview_invite_template.md)
-  file. It captures the minimum legal language, preview checksum instructions,
-  and the expectation that reviewers acknowledge the acceptable-use policy.
-- When editing the template, replace the placeholders for `<preview_tag>`,
-  `<request_ticket>`, and contact channels. Store a copy of the final message in
-  the intake ticket so reviewers, approvers, and auditors can reference the
-  exact wording that was sent.
-- After dispatching the invite, update the tracking spreadsheet or issue with
-  the `invite_sent_at` timestamp and expected end date so the
-  [preview invite flow](./preview-invite-flow.md) report can pick up the cohort
-  automatically.
+- ཕྱིར་ཐོན་ཚང་མ་དང་མཉམ་དུ་འགོ་བཙུགས།
+  [I18NI0000049X](../../../examples/docs_preview_invite_template.md)
+  ཡིག༌སྣོད། འདི་གིས་ ཁྲིམས་དོན་སྐད་ཡིག་དམའ་ཤོས་དང་ སྔོན་ལྟ་ཞིབ་དཔྱད་ཀྱི་བཀོད་རྒྱ་ཚུ་ འཛིན་བཟུང་འབདཝ་ཨིན།
+  དང་ བསྐྱར་ཞིབ་པ་ཚུ་གིས་ ངོས་ལེན་འབད་བཏུབ་པའི་ ལག་ལེན་གྱི་ སྲིད་བྱུས་འདི་ ངོས་ལེན་འབད་བའི་ རེ་བ་འདི་ཨིན།
+- ཊེམ་པེལེཊི་འདི་ཞུན་དག་འབད་བའི་སྐབས་ `<preview_tag>` གི་དོན་ལུ་ས་གནས་འཛིན་མི་ཚུ་ཚབ་བཙུགས་དགོ།
+  I18NI000000051X, དང་འབྲེལ་གཏུག་ལམ། ༢༠༠༨ ལུ་ འཕྲིན་དོན་གྱི་འདྲ་ཅིག་གསོག་འཇོག་འབད།
+  བསྐྱར་ཞིབ་པ་ ཆ་འཇོག་འབད་མི་དང་ རྩིས་ཞིབ་པ་ཚུ་གིས་ འཛུལ་ཞུགས་ཀྱི་ ཤོག་འཛིན་འདི་ གཞི་བསྟུན་འབད་ཚུགས།
+  ཚིག་དོན་ཏག་ཏག་བཏང་ཡོད།
+- མགྲོན་བརྡ་གཏང་ཚར་བའི་ཤུལ་ལས་ བརྟག་ཞིབ་ཤོག་ཁྲམ་འདི་ དང་གཅིག་ཁར་ དུས་མཐུན་བཟོ་ནི་ཡང་ན་ གནད་དོན་དང་གཅིག་ཁར་ དུས་མཐུན་བཟོ་ནི།
+  འདི་ `invite_sent_at` དུས་ཚོད་མཚོན་རྟགས་དང་རེ་བ་སྐྱེད་པའི་མཇུག་ཚེས་གྲངས་ དེ་འབདཝ་ལས་
+  [preview gint flow](./preview-invite-flow.md) སྙན་ཞུའི་སྙན་ཞུ་གིས་སྡེ་ཚན་འདི་འཐུ་ཚུགས།
+  རང་བཞིན་གྱིས་

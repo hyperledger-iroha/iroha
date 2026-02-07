@@ -10,27 +10,28 @@ translation_last_reviewed: 2026-02-07
 title: Swift ledger flow recipe
 description: Use IrohaSwift to mint and transfer assets with the default dev network.
 slug: /sdks/recipes/swift-ledger-flow
+translator: machine-google-reviewed
 ---
 
-import SampleDownload from '@site/src/components/SampleDownload';
+從“@site/src/components/SampleDownload”導入 SampleDownload；
 
-> IrohaSwift’s encoder currently exposes mint/transfer helpers; asset-definition
-> registration still happens through the CLI. Run the CLI command in step 1 once
-> before executing the Swift sample.
+> IrohaSwift 的編碼器當前公開了鑄幣/傳輸助手；資產定義
+> 註冊仍然通過 CLI 進行。運行步驟 1 中的 CLI 命令一次
+> 在執行 Swift 示例之前。
 
-<SampleDownload
+<樣本下載
   href="/sdk-recipes/swift/Sources/LedgerFlow/main.swift"
-  filename="Sources/LedgerFlow/main.swift"
-  description="Download the async/await example so you can open it in Xcode or paste it into your Swift package."
+  文件名=“來源/LedgerFlow/main.swift”
+  description="下載 async/await 示例，以便您可以在 Xcode 中打開它或將其粘貼到您的 Swift 包中。"
 />
 
-## 1. Register the asset (CLI)
+## 1. 註冊資產 (CLI)
 
 ```bash
 iroha --config defaults/client.toml asset definition register --id coffee#wonderland
 ```
 
-## 2. Prepare credentials
+## 2. 準備憑證
 
 ```bash
 # raw 32-byte Ed25519 key in hex (use `iroha_cli tools crypto private-key export --raw` if needed)
@@ -39,15 +40,15 @@ export ADMIN_ACCOUNT="ih58..."
 export RECEIVER_ACCOUNT="ih58..."
 ```
 
-## 3. Add IrohaSwift to your package
+## 3. 將 IrohaSwift 添加到您的包中
 
 ```swift title="Package.swift"
 .package(name: "IrohaSwift", path: "../../IrohaSwift")
 ```
 
-or use the Git URL (`https://github.com/hyperledger/iroha-swift`) in Xcode.
+或者在 Xcode 中使用 Git URL (`https://github.com/hyperledger/iroha-swift`)。
 
-## 4. Example program
+## 4. 示例程序
 
 ```swift title="Sources/LedgerFlow/main.swift"
 import Foundation
@@ -112,11 +113,11 @@ struct LedgerFlow {
 }
 ```
 
-Build with `swift build -c release` and run using `swift run LedgerFlow`.
+使用 `swift build -c release` 構建並使用 `swift run LedgerFlow` 運行。
 
-## 5. Verify parity
+## 5. 驗證奇偶性
 
-- Inspect the transactions through `iroha --config defaults/client.toml transaction get --hash <hash>`.
-- Compare holdings with `iroha --config defaults/client.toml asset list filter '{"id":"coffee#wonderland##<account>"}'`.
-- Combine this recipe with the Rust/Python/JavaScript ones to confirm every SDK
-  produces the same hashes for the demo flow.
+- 通過 `iroha --config defaults/client.toml transaction get --hash <hash>` 檢查交易。
+- 將持有量與 `iroha --config defaults/client.toml asset list filter '{"id":"coffee#wonderland##<account>"}'` 進行比較。
+- 將此配方與 Rust/Python/JavaScript 相結合以確認每個 SDK
+  為演示流程生成相同的哈希值。

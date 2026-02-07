@@ -7,6 +7,7 @@ generator: scripts/sync_docs_i18n.py
 source_hash: 8757f0bf8699b532ece29437af953353526b3201b4b129ebec7d6bf5d224f038
 source_last_modified: "2025-12-29T18:16:35.061402+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
@@ -15,54 +16,54 @@ translation_last_reviewed: 2026-02-07
 
 # Data-Availability Threat-Model Automation (DA-1)
 
-Roadmap item DA-1 and `status.md` call for a deterministic automation loop that
-produces the Norito PDP/PoTR threat-model summaries surfaced in
-`docs/source/da/threat_model.md` and the Docusaurus mirror. This directory
-captures the artefacts referenced by:
+Ճանապարհային քարտեզի DA-1 կետը և `status.md`-ը պահանջում են դետերմինիստական ավտոմատացման հանգույց, որը
+արտադրում է Norito PDP/PoTR սպառնալիքի մոդելի ամփոփագրերը, որոնք հայտնվել են
+`docs/source/da/threat_model.md` և Docusaurus հայելին: Այս գրացուցակը
+գրավում է արտեֆակտները, որոնք վկայակոչում են.
 
 - `cargo xtask da-threat-model-report [--out <path|->] [--seed <u64|0xhex>] [--config <path>]`
 - `.github/workflows/da-threat-model-nightly.yml`
-- `make docs-da-threat-model` (which runs `scripts/docs/render_da_threat_model_tables.py`)
+- `make docs-da-threat-model` (որն աշխատում է `scripts/docs/render_da_threat_model_tables.py`)
 - `cargo xtask da-commitment-reconcile --receipt <path> --block <path> [--json-out <path|->]`
 - `cargo xtask da-privilege-audit --config <torii.toml> [--extra-path <path> ...] [--json-out <path|->]`
 
-## Flow
+## Հոսք
 
-1. **Generate the report**
+1. **Ստեղծեք հաշվետվություն**
    ```bash
    cargo xtask da-threat-model-report \
      --config configs/da/threat_model.toml \
      --out artifacts/da/threat_model_report.json
    ```
-   The JSON summary records the simulated replication failure rate, chunker
-   thresholds, and any policy violations detected by the PDP/PoTR harness in
+   JSON-ի ամփոփագիրը գրանցում է կրկնօրինակված ձախողման արագությունը, chunker-ը
+   շեմերը և քաղաքականության ցանկացած խախտում, որը հայտնաբերված է PDP/PoTR սարքի կողմից
    `integration_tests/src/da/pdp_potr.rs`.
-2. **Render the Markdown tables**
+2. **Պատկերացրեք Markdown աղյուսակները**
    ```bash
    make docs-da-threat-model
    ```
-   This runs `scripts/docs/render_da_threat_model_tables.py` to rewrite
-   `docs/source/da/threat_model.md` and `docs/portal/docs/da/threat-model.md`.
-3. **Archive the artefact** by copying the JSON report (and optional CLI log) to
-   `docs/automation/da/reports/<timestamp>-threat_model_report.json`. When
-   governance decisions rely on a specific run, include the git commit hash and
-   simulator seed in a sibling `<timestamp>-metadata.md`.
+   Սա գործարկում է `scripts/docs/render_da_threat_model_tables.py`՝ վերաշարադրելու համար
+   `docs/source/da/threat_model.md` և `docs/portal/docs/da/threat-model.md`:
+3. **Արխիվացրեք արտեֆակտը**՝ պատճենելով JSON զեկույցը (և կամընտիր CLI մատյանը)
+   `docs/automation/da/reports/<timestamp>-threat_model_report.json`. Երբ
+   կառավարման որոշումները հիմնվում են կոնկրետ գործարկման վրա, ներառում են git commit hash-ը և
+   սիմուլյատորի սերմ `<timestamp>-metadata.md` եղբոր մեջ:
 
-## Evidence Expectations
+## Ապացույցների ակնկալիքներ
 
-- JSON files should remain <100 KiB so they can live in git. Larger execution
-  traces belong in external storage—reference their signed hash in the metadata
-  note if needed.
-- Each archived file must list the seed, config path, and simulator version so
-  reruns can be reproduced exactly when auditing DA release gates.
-- Link back to the archived file from `status.md` or the roadmap entry whenever
-  the DA-1 acceptance criteria advance, ensuring reviewers can verify the
-  baseline without rerunning the harness.
+- JSON ֆայլերը պետք է մնան <100 ԿԲ, որպեսզի կարողանան ապրել git-ում: Ավելի մեծ կատարում
+  հետքերը պատկանում են արտաքին պահոցին՝ հղում կատարելով դրանց ստորագրված հեշին մետատվյալներում
+  անհրաժեշտության դեպքում նշեք.
+- Յուրաքանչյուր արխիվացված ֆայլ պետք է նշի սերմերը, կազմաձևման ուղին և սիմուլյատորի տարբերակը
+  կրկնությունները կարող են վերարտադրվել հենց այն ժամանակ, երբ ստուգում են DA-ի թողարկման դարպասները:
+- Հղում արխիվացված ֆայլին `status.md`-ից կամ ճանապարհային քարտեզի մուտքագրում, երբ
+  DA-1-ի ընդունման չափանիշները առաջ են գնում՝ ապահովելով, որ վերանայողները կարող են ստուգել այն
+  ելակետային գիծ՝ առանց ամրագոտու վերագործարկման:
 
-## Commitment Reconciliation (Sequencer Omission)
+## Պարտավորությունների հաշտեցում (Հաջորդականության բացթողում)
 
-Use `cargo xtask da-commitment-reconcile` to compare DA ingest receipts against
-DA commitment records, catching sequencer omission or tampering:
+Օգտագործեք `cargo xtask da-commitment-reconcile`՝ DA մուտքագրման անդորրագրերը համեմատելու համար
+DA-ի պարտավորությունների գրառումները, հաջորդականության հայտնաբերման բացթողումը կամ կեղծումը.
 
 ```bash
 cargo xtask da-commitment-reconcile \
@@ -71,19 +72,19 @@ cargo xtask da-commitment-reconcile \
   --json-out artifacts/da/commitment_reconciliation.json
 ```
 
-- Accepts receipts in Norito or JSON form and commitments from
-  `SignedBlockWire`, `.norito`, or JSON bundles.
-- Fails when any ticket is missing from the block log or when hashes diverge;
-  `--allow-unexpected` ignores block-only tickets when you intentionally scope
-  the receipt set.
-- Attach the emitted JSON to governance packets/Alertmanager for omission
-  alerts; defaults to `artifacts/da/commitment_reconciliation.json`.
+- Ընդունում է Norito կամ JSON ձևով անդորրագրեր և պարտավորություններ
+  `SignedBlockWire`, `.norito` կամ JSON փաթեթներ:
+- Չհաջողվեց, երբ որևէ տոմս բացակայում է բլոկի մատյանից կամ երբ հեշերը տարբերվում են.
+  `--allow-unexpected`-ն անտեսում է միայն արգելափակման տոմսերը, երբ դուք միտումնավոր եք
+  անդորրագրի հավաքածուն.
+- Կցեք թողարկված JSON-ը կառավարման փաթեթներին/Alertmanager-ին բացթողման համար
+  ահազանգեր; կանխադրված է `artifacts/da/commitment_reconciliation.json`:
 
-## Privilege Audit (Quarterly Access Review)
+## Արտոնությունների աուդիտ (Մուտքի եռամսյակային ակնարկ)
 
-Use `cargo xtask da-privilege-audit` to scan the DA manifest/replay directories
-(plus optional extra paths) for missing, non-directory, or world-writable
-entries:
+Օգտագործեք `cargo xtask da-privilege-audit`՝ սկանավորելու DA մանիֆեստի/կրկնակի գրացուցակները
+(գումարած կամընտիր լրացուցիչ ուղիներ) բացակայող, ոչ գրացուցակի կամ աշխարհագրելի համար
+գրառումներ:
 
 ```bash
 cargo xtask da-privilege-audit \
@@ -92,9 +93,9 @@ cargo xtask da-privilege-audit \
   --json-out artifacts/da/privilege_audit.json
 ```
 
-- Reads the DA ingest paths from the provided Torii config and inspects Unix
-  permissions where available.
-- Flags missing/not-a-directory/world-writable paths and returns a non-zero exit
-  code when issues are present.
-- Sign and attach the JSON bundle (`artifacts/da/privilege_audit.json` by
-  default) to quarterly access-review packets and dashboards.
+- Կարդում է DA մուտքագրման ուղիները տրամադրված Torii կոնֆիգուրից և ստուգում Unix-ը
+  թույլտվությունները, որտեղ առկա են:
+- Նշում է բացակայող/ոչ-տեղեկատու/աշխարհում գրվող ուղիները և վերադարձնում է ոչ զրոյական ելք
+  կոդ, երբ խնդիրներ կան:
+- Ստորագրեք և կցեք JSON փաթեթը (`artifacts/da/privilege_audit.json` by
+  լռելյայն) եռամսյակային մուտքի և վերանայման փաթեթների և վահանակների համար:

@@ -4,43 +4,45 @@ direction: rtl
 source: docs/portal/docs/norito/ledger-walkthrough.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: Walkthrough do ledger
-description: Reproduza um fluxo deterministico de register -> mint -> transfer com o CLI `iroha` e verifique o estado do ledger resultante.
-slug: /norito/ledger-walkthrough
+عنوان: لیجر واک تھرو
+تفصیل: رجسٹر -> ٹکسال -> سے CLI `iroha` کے ساتھ منتقلی سے ایک تعصب کا سلسلہ چلائیں اور نتیجے میں ہونے والے لیجر کی حالت کو چیک کریں۔
+سلگ: /نوریٹو /لیجر واک تھرو
 ---
 
-Este walkthrough complementa o [Norito quickstart](./quickstart.md) ao mostrar como mutar e inspecionar o estado do ledger com o CLI `iroha`. Voce vai registrar uma nova definicao de ativo, mintar unidades na conta de operador padrao, transferir parte do saldo para outra conta e verificar as transacoes e holdings resultantes. Cada passo espelha os fluxos cobertos nos quickstarts de SDK Rust/Python/JavaScript para confirmar a paridade entre CLI e SDK.
+اس واک تھرو کی تکمیل [Norito کوئیک اسٹارٹ] (./quickstart.md) یہ دکھا کر کہ کس طرح Norito CLI کے ساتھ لیجر اسٹیٹ کو تبدیل اور معائنہ کیا جائے۔ آپ ایک نئی اثاثہ تعریف ، ٹکسال یونٹ کو معیاری تاجر اکاؤنٹ میں رجسٹر کریں گے ، توازن کا کچھ حصہ دوسرے اکاؤنٹ میں منتقل کریں گے ، اور اس کے نتیجے میں لین دین اور ہولڈنگ کی تصدیق کریں گے۔ ہر قدم سی ایل آئی اور ایس ڈی کے کے مابین برابری کی تصدیق کے لئے زنگ/ازگر/جاوا اسکرپٹ ایس ڈی کے کوئیک اسٹارٹ میں ڈھکے ہوئے بہاؤ کو آئینہ دیتا ہے۔
 
-## Pre-requisitos
+## شرائط
 
-- Siga o [quickstart](./quickstart.md) para iniciar a rede de um unico peer via
-  `docker compose -f defaults/docker-compose.single.yml up --build`.
-- Garanta que `iroha` (o CLI) esteja compilado ou baixado e que voce consiga
-  acessar o peer usando `defaults/client.toml`.
-- Helpers opcionais: `jq` (formatacao de respostas JSON) e um shell POSIX para
-  os snippets de variaveis de ambiente usados abaixo.
+- سنگل پیر نیٹ ورکنگ کے ذریعے شروع کرنے کے لئے [کوئیک اسٹارٹ] (./quickstart.md) پر عمل کریں
+  `docker compose -f defaults/docker-compose.single.yml up --build`۔
+- اس بات کو یقینی بنائیں کہ `iroha` (CLI) مرتب یا ڈاؤن لوڈ کیا گیا ہے اور آپ کر سکتے ہیں
+  `defaults/client.toml` کا استعمال کرتے ہوئے ہم مرتبہ تک رسائی حاصل کریں۔
+- اختیاری مددگار: `jq` (JSON رسپانس فارمیٹنگ) اور ایک POSIX شیل
+  ماحولیاتی متغیر ٹکڑوں کو ذیل میں استعمال کیا جاتا ہے۔
 
-Ao longo do guia, substitua `$ADMIN_ACCOUNT` e `$RECEIVER_ACCOUNT` pelos IDs de
-conta que voce planeja usar. O bundle padrao ja inclui duas contas derivadas das
-chaves de demo:
+گائیڈ کے دوران ، `$ADMIN_ACCOUNT` اور `$RECEIVER_ACCOUNT` کو اپنے کوڈ IDs کے ساتھ تبدیل کریں۔
+اکاؤنٹ جو آپ استعمال کرنے کا ارادہ رکھتے ہیں۔ معیاری بنڈل میں پہلے ہی دو اکاؤنٹس شامل ہیں
+ڈیمو کیز:
 
 ```sh
 export ADMIN_ACCOUNT="ih58..."
 export RECEIVER_ACCOUNT="ih58..."
 ```
 
-Confirme os valores listando as primeiras contas:
+پہلے اکاؤنٹس کی فہرست دے کر مقدار کی تصدیق کریں:
 
 ```sh
 iroha --config defaults/client.toml account list all --limit 5 --table
 ```
 
-## 1. Inspecione o estado de genesis
+## 1. پیدائش کی حیثیت کا معائنہ کریں
 
-Comece explorando o ledger que o CLI esta mirando:
+لیجر کی تلاش کرکے شروع کریں کہ سی ایل آئی کو نشانہ بنا رہا ہے:
 
 ```sh
 # Domains registrados no genesis
@@ -55,11 +57,11 @@ iroha --config defaults/client.toml account list filter \
 iroha --config defaults/client.toml asset definition list all --table
 ```
 
-Esses comandos dependem de respostas respaldadas por Norito, entao o filtro e a paginacao sao deterministas e batem com o que os SDKs recebem.
+یہ احکامات Norito کے تعاون سے جوابات پر منحصر ہیں ، لہذا فلٹر اور پیجنگ تعصب پسند ہیں اور ایس ڈی کے جو کچھ وصول کرتے ہیں اس سے ملتے ہیں۔
 
-## 2. Registre uma definicao de ativo
+## 2. اثاثہ کی تعریف کو رجسٹر کریں
 
-Crie um novo ativo infinitamente mintable chamado `coffee` dentro do dominio
+ڈومین کے اندر `coffee` نامی ایک نیا لامحدود ٹکسال اثاثہ بنائیں
 `wonderland`:
 
 ```sh
@@ -67,13 +69,13 @@ iroha --config defaults/client.toml asset definition register \
   --id coffee#wonderland
 ```
 
-O CLI imprime o hash da transacao enviada (por exemplo, `0x5f...`). Guarde-o para
-consultar o status mais tarde.
+CLI بھیجے گئے ٹرانزیکشن کی ہیش پرنٹ کرتا ہے (مثال کے طور پر ، `0x5f...`)۔ اس کے لئے محفوظ کریں
+بعد میں حیثیت کو چیک کریں۔
 
-## 3. Minte unidades na conta do operador
+## 3. آپریٹر کے اکاؤنٹ میں ٹکسال یونٹ
 
-As quantidades de ativos vivem sob o par `(asset definition, account)`. Minte 250
-unidades de `coffee#wonderland` em `$ADMIN_ACCOUNT`:
+اثاثوں کی مقدار جوڑی `(asset definition, account)` کے تحت رہتی ہے۔ ٹکسال 250
+`coffee#wonderland` سے `$ADMIN_ACCOUNT` تک یونٹ:
 
 ```sh
 iroha --config defaults/client.toml asset mint \
@@ -81,14 +83,14 @@ iroha --config defaults/client.toml asset mint \
   --quantity 250
 ```
 
-De novo, capture o hash da transacao (`$MINT_HASH`) na saida do CLI. Para
-confirmar o saldo, rode:
+ایک بار پھر ، CLI آؤٹ پٹ میں ٹرانزیکشن ہیش (`$MINT_HASH`) پر قبضہ کریں۔ کے لئے
+توازن کی تصدیق کے لئے ، چلائیں:
 
 ```sh
 iroha --config defaults/client.toml asset list all --limit 5 --table
 ```
 
-ou, para mirar apenas o novo ativo:
+یا ، صرف نئے اثاثے کو نشانہ بنانا:
 
 ```sh
 iroha --config defaults/client.toml asset list filter \
@@ -96,9 +98,9 @@ iroha --config defaults/client.toml asset list filter \
   --limit 1 | jq .
 ```
 
-## 4. Transfira parte do saldo para outra conta
+## 4. توازن کا ایک حصہ کسی دوسرے اکاؤنٹ میں منتقل کریں
 
-Mova 50 unidades da conta do operador para `$RECEIVER_ACCOUNT`:
+آپریٹر اکاؤنٹ سے 50 یونٹوں کو `$RECEIVER_ACCOUNT` میں منتقل کریں:
 
 ```sh
 iroha --config defaults/client.toml asset transfer \
@@ -107,8 +109,8 @@ iroha --config defaults/client.toml asset transfer \
   --quantity 50
 ```
 
-Guarde o hash da transacao como `$TRANSFER_HASH`. Consulte os holdings em ambas
-as contas para verificar os novos saldos:
+ٹرانزیکشن ہیش کو `$TRANSFER_HASH` کے طور پر اسٹور کریں۔ دونوں میں ہولڈنگ سے مشورہ کریں
+نئے بیلنس کی جانچ پڑتال کے لئے اکاؤنٹس:
 
 ```sh
 iroha --config defaults/client.toml asset list filter \
@@ -118,36 +120,34 @@ iroha --config defaults/client.toml asset list filter \
   "{\"id\":\"coffee#wonderland##${RECEIVER_ACCOUNT}\"}" --limit 1 | jq .
 ```
 
-## 5. Verifique as evidencias do ledger
+## 5. لیجر شواہد کی جانچ کریں
 
-Use os hashes salvos para confirmar que ambas as transacoes foram committed:
+اس بات کی تصدیق کے لئے محفوظ شدہ ہیشوں کا استعمال کریں کہ دونوں لین دین کا ارتکاب کیا گیا تھا:
 
 ```sh
 iroha --config defaults/client.toml transaction get --hash $MINT_HASH | jq .
 iroha --config defaults/client.toml transaction get --hash $TRANSFER_HASH | jq .
 ```
 
-Voce tambem pode fazer stream de blocos recentes para ver qual bloco incluiu a
-transferencia:
+آپ حالیہ بلاکس کو بھی اسٹریم کرسکتے ہیں کہ یہ دیکھنے کے لئے کہ کون سا بلاک شامل ہے
+منتقلی:
 
 ```sh
 # Stream a partir do ultimo bloco e pare apos ~5 segundos
 iroha --config defaults/client.toml blocks 0 --timeout 5s --table
 ```
 
-Cada comando acima usa os mesmos payloads Norito que os SDKs. Se voce repetir
-este fluxo via codigo (veja os quickstarts de SDK abaixo), os hashes e saldos
-vao alinhar desde que voce mire a mesma rede e os mesmos defaults.
+مذکورہ بالا ہر کمانڈ SDKs کی طرح ایک ہی Norito پے لوڈ کا استعمال کرتی ہے۔ اگر آپ دہراتے ہیں
+یہ بہاؤ کوڈ کے ذریعے (نیچے SDK کوئیک اسٹارٹ دیکھیں) ، ہیش اور بیلنس
+جب تک آپ ایک ہی نیٹ ورک اور ایک ہی ڈیفالٹس کو نشانہ بناتے ہیں اس وقت تک سیدھ میں رہیں گے۔
 
-## Links de paridade de SDK
+## SDK برابری کے لنکس-۔
+  لین دین جمع کروائیں اور مورچا سے حیثیت چیک کریں۔
+- [ازگر ایس ڈی کے کوئیک اسٹارٹ] (../sdks/python) - وہی رجسٹر/ٹکسال آپریشنز دکھاتا ہے
+  Norito کے تعاون سے JSON مددگاروں کے ساتھ۔
+-.
+  گورننس مددگار اور ٹائپ شدہ استفسار ریپرس۔
 
-- [Rust SDK quickstart](../sdks/rust) - demonstra registrar instrucoes,
-  submeter transacoes e consultar status a partir de Rust.
-- [Python SDK quickstart](../sdks/python) - mostra as mesmas operacoes register/mint
-  com helpers JSON respaldados por Norito.
-- [JavaScript SDK quickstart](../sdks/javascript) - cobre requests Torii,
-  helpers de governanca e wrappers de query tipados.
-
-Rode o walkthrough do CLI primeiro, depois repita o cenario com o SDK de sua
-preferencia para garantir que as duas superficies concordem em hashes de
-transacao, saldos e outputs de query.
+پہلے CLI واک تھرو چلائیں ، پھر اپنے SDK کے ساتھ منظر نامے کو دہرائیں۔
+اس بات کو یقینی بنانے کی ترجیح کہ دونوں سطحیں ہیشوں پر متفق ہوں
+ٹرانزیکشن ، بیلنس اور استفسار آؤٹ پٹس۔

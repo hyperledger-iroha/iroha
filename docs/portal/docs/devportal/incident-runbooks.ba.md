@@ -11,65 +11,66 @@ id: incident-runbooks
 title: Incident Runbooks & Rollback Drills
 sidebar_label: Incident Runbooks
 description: Response guides for failed portal deployments, SoraFS replication degradation, analytics outages, and the quarterly rehearsal cadence required by DOCS-9.
+translator: machine-google-reviewed
 ---
 
-## Purpose
+## Ниәт
 
-Roadmap item **DOCS-9** calls for actionable playbooks plus a rehearsal plan so
-portal operators can recover from shipping failures without guessing. This note
-covers three high-signal incidents—failed deployments, replication
-degradation, and analytics outages—and documents the quarterly drills that
-prove alias rollback and synthetic validation still work end to end.
+Юл картаһы әйбер **DOCS-9** ғәмәлгә яраҡлы плейбуктар өсөн саҡыра плюс репетиция планы шулай
+портал операторҙары фаразлауһыҙ ташыу етешһеҙлектәренән һауыға ала. Был иҫкәрмә
+өс юғары сигналлы ваҡиғаны үҙ эсенә ала — уңышһыҙлыҡтар менән файҙалана, репликация
+деградация, һәм аналитика өҙөклөктәр — һәм документтарҙы кварталлыҡ буралар, тип
+иҫбатлау псевдонимы кире ҡайтарыу һәм синтетик раҫлау эше һаман да тамамлана.
 
-### Related material
+### Бәйләнешле материал
 
-- [`devportal/deploy-guide`](./deploy-guide) — packaging, signing, and alias
-  promotion workflow.
-- [`devportal/observability`](./observability) — release tags, analytics, and
-  probes referenced below.
+- [I18NI000000013X] (./deploy-guide) — упаковка, ҡул ҡуйыу, һәм псевдоним
+  промоушен эш ағымы.
+- [I18NI000000014X] (./observability) — тегтар, аналитика, һәм
+  зондтар түбәндә һылтанма.
 - `docs/source/sorafs_node_client_protocol.md`
-  and [`sorafs/pin-registry-ops`](../sorafs/pin-registry-ops)
-  — registry telemetry and escalation thresholds.
-- `docs/portal/scripts/sorafs-pin-release.sh` and `npm run probe:*` helpers
-  referenced throughout the checklists.
+  һәм [`sorafs/pin-registry-ops`] (../sorafs/pin-registry-ops X)
+  — реестр телеметрияһы һәм эскалация сиктәре.
+- I18NI000000017X һәм I18NI000000018X ярҙамсылары
+  һылтанмалар бөтә тикшерелгән исемлектәр буйынса.
 
-### Shared telemetry & tooling
+### Дөйөм телеметрия & инструменталь
 
-| Signal / Tool | Purpose |
-| ------------- | ------- |
-| `torii_sorafs_replication_sla_total` (met/missed/pending) | Detects replication stalls and SLA breaches. |
-| `torii_sorafs_replication_backlog_total`, `torii_sorafs_replication_completion_latency_epochs` | Quantifies backlog depth and completion latency for triage. |
-| `torii_sorafs_gateway_refusals_total`, `torii_sorafs_manifest_submit_total{status="error"}` | Shows gateway-side failures that often follow a bad deploy. |
-| `npm run probe:portal` / `npm run probe:tryit-proxy` | Synthetic probes that gate releases and validate runbacks. |
-| `npm run check:links` | Broken-link gate; used after every mitigation. |
-| `sorafs_cli manifest submit … --alias-*` (wrapped by `scripts/sorafs-pin-release.sh`) | Alias promotion/reversion mechanism. |
-| `Docs Portal Publishing` Grafana board (`dashboards/grafana/docs_portal.json`) | Aggregates refusal/alias/TLS/replication telemetry. PagerDuty alerts reference these panels for evidence. |
+| Сигнал / Ҡорал | Маҡсат |
+| ------------- | ------ |
+| `torii_sorafs_replication_sla_total` (мет/дөрөҫ түгел/өтөп) | Репликация ларектарын һәм СЛА боҙоуҙарҙы асыҡлай. |
+| `torii_sorafs_replication_backlog_total`, `torii_sorafs_replication_completion_latency_epochs` | Һанлылыҡ тәрәнлеге һәм тамамлау латентлығы өсөн триаж. |
+| I18NI00000022Х, I18NI000000023X | Шлюз яғында етешһеҙлектәрен күрһәтә, улар йыш ҡына насар йәйелдерелә. |
+| `npm run probe:portal` / I18NI000000025X | Синтетик зондтар, тип ҡапҡа сыға һәм раҫлай рунбек. |
+| `npm run check:links` | Һынған һығылмалы ҡапҡа; һәр йомшартыуҙан һуң ҡулланыла. |
+| `sorafs_cli manifest submit … --alias-*` (I18NI000000028X X) | Псевдоним пропагандалау/ҡайтарыу механизмы. |
+| `Docs Portal Publishing` XI18NT000000000Х таҡтаһы (I18NI000000030X) | Агрегаттар баш тартыу/псевдоним/TLS/репликация телеметрияһы. PagerDuty иҫкәртмәләр был панелдәргә һылтанма өсөн дәлилдәр. |
 
-## Runbook — Failed deployment or bad artefact
+## Runbook — Уңышһыҙ таратыу йәки насар артефакт
 
-### Trigger conditions
+### Триггер шарттары
 
-- Preview/production probes fail (`npm run probe:portal -- --expect-release=…`).
-- Grafana alerts on `torii_sorafs_gateway_refusals_total` or
-  `torii_sorafs_manifest_submit_total{status="error"}` after a rollout.
-- Manual QA notices broken routes or Try-It proxy failures immediately after
-  alias promotion.
+- Алдан ҡарау/етештереү зондтары уңышһыҙлыҡҡа осрай (`npm run probe:portal -- --expect-release=…`).
+- I18NI00000000032X йәки 1990 й.
+  I18NI000000033X йәйелгәндән һуң.
+- Ҡул менән QA өҙөлгән маршруттар йәки тырышып-It прокси етешһеҙлектәре 2012 йылдан һуң шунда уҡ иғтибар итә.
+  псевдоним промоушен.
 
-### Immediate containment
+### Тиҙ арала тыйыу
 
-1. **Freeze deployments:** mark the CI pipeline with `DEPLOY_FREEZE=1` (GitHub
-   workflow input) or pause the Jenkins job so no additional artefacts go out.
-2. **Capture artefacts:** download the failing build’s `build/checksums.sha256`,
-   `portal.manifest*.{json,to,bundle,sig}`, and probe output so the rollback can
-   reference exact digests.
-3. **Notify stakeholders:** storage SRE, Docs/DevRel lead, and the governance
-   duty officer for awareness (especially when `docs.sora` is impacted).
+1. **Тутыума таратыу:** I18NI000000034X менән CI торбаһын билдәләү (GitHub
+   эш ағымы индереү) йәки туҡтап, Дженкинс эше, шулай итеп, бер ниндәй ҙә өҫтәмә артефакттар сыға.
+2. **Һалтырғыс артефакттар:** скачать етешһеҙлектәр төҙөү’s I18NI000000035X,
+   I18NI0000000036X, һәм зонд сығарыу, шулай итеп, кире ҡайтарыу мөмкин
+   һылтанма таҫмалар.
+3. **Ҡатнашыусыларға хәбәр итеү:** һаҡлау SRE, Docs/DevRel лидеры, һәм идара итеү
+   аң өсөн дежур (бигерәк тә I18NI000000037X йоғонто яһағанда).
 
-### Rollback procedure
+### Rollback процедураһы
 
-1. Identify the last-known-good (LKG) manifest. The production workflow stores
-   them under `artifacts/devportal/<release>/sorafs/portal.manifest.to`.
-2. Rebind the alias to that manifest with the shipping helper:
+1. Һуңғы билдәле-яҡшы (ЛКГ) манифестын билдәләү. Етештереүҙең эш ағымы магазиндары .
+   уларҙы I18NI000000038X буйынса.
+.
 
 ```bash
 cd docs/portal
@@ -106,123 +107,123 @@ cargo run -p sorafs_orchestrator --bin sorafs_cli -- \
   --summary-out artifacts/.../sorafs/rollback.submit.json
 ```
 
-3. Record the rollback summary in the incident ticket together with the LKG and
-   failed manifest digests.
+3. Инцидент билетында резюме резюме яҙмаһы менән бергә ЛКГ һәм
+   уңышһыҙлыҡҡа осраған асыҡ һеңдерелгән.
 
-### Validation
+### Валидация
 
-1. `npm run probe:portal -- --expect-release=${LKG_TAG}`.
-2. `npm run check:links`.
-3. `sorafs_cli manifest verify-signature …` and `sorafs_cli proof verify …`
-   (see the deployment guide) to confirm the re-promoted manifest still matches
-   the archived CAR.
-4. `npm run probe:tryit-proxy` to ensure the Try-It staging proxy came back.
+1. I18NI000000039X.
+2. I18NI000000040X.
+3. `sorafs_cli manifest verify-signature …` һәм `sorafs_cli proof verify …`
+   (ҡара: таратыу етәксеһе) раҫлау өсөн яңынан пропускной манифест һаман да тап килә
+   архивланған КАР.
+4. `npm run probe:tryit-proxy` тәьмин итеү өсөн Try-It стадияһы прокси ҡайтып килде.
 
-### Post-incident
+### Пост-инцидент
 
-1. Re-enable the deployment pipeline only after the root cause is understood.
-2. Backfill [`devportal/deploy-guide`](./deploy-guide) “Lessons learned”
-   entries with new gotchas, if any.
-3. File defects for the failing test suite (probe, link checker, etc.).
+1. Ҡабатлау торба үткәргесте тамыр сәбәбе аңлағандан һуң ғына.
+.
+   яңы gechas менән яҙмалар, әгәр бар икән.
+3. Файл етешһеҙлектәре өсөн етешһеҙлектәр һынау люкс (зонд, һылтанма тикшерергә һ.б.).
 
-## Runbook — Replication degradation
+## Runbook — репликация деградацияһы
 
-### Trigger conditions
+### Триггер шарттары
 
-- Alert: `sum(torii_sorafs_replication_sla_total{outcome="met"}) /
-  clamp_min(sum(torii_sorafs_replication_sla_total{outcome=~"met|missed"}), 1) <
-  0.95` for 10 minutes.
-- `torii_sorafs_replication_backlog_total > 10` for 10 minutes (see
-  `pin-registry-ops.md`).
-- Governance reports slow alias availability after a release.
+- Иҫкәртмә: `сумма(тории_сорафтар_репликация_sla_tatal{oftcome="met"}) /
+  lamp_min(сумма(торий_сорафтар_репликация_sla_tatal{ofecome=~"мет|хәсрәтле"}), 1) <
+  0,95` 10минут өсөн.
+- 10минут өсөн I18NI0000000045X
+  `pin-registry-ops.md` X).
+- Идара итеү тураһында хәбәр итә яй псевдонимдар булғандан һуң, азат ителгәндән һуң.
 
-### Triage
+### Триаж
 
-1. Inspect [`sorafs/pin-registry-ops`](../sorafs/pin-registry-ops) dashboards to confirm
-   whether the backlog is localized to a storage class or a provider fleet.
-2. Cross-check Torii logs for `sorafs_registry::submit_manifest` warnings to
-   determine whether submissions themselves are failing.
-3. Sample replica health via `sorafs_cli manifest status --manifest …` (lists
-   per-provider replication outcomes).
+1. Инспекция [I18NI000000047X] (I18NU000000011X) приборҙар таҡталары раҫлау өсөн
+   артта ҡалғанмы, һаҡлау класы йәки провайдер паркына локалләшәме.
+2. Cross-тикшерергә I18NT00000000005X өсөн I18NI000000048X иҫкәртмәләр өсөн .
+   тапшырыуҙар үҙҙәре етешһеҙлектәрме икәнлеген асыҡлау.
+3. Өлгө реплика һаулыҡ аша I18NI00000000049X (исемлектәр
+   пер-провайдер репликация һөҙөмтәләре).
 
-### Mitigation
+###
 
-1. Reissue the manifest with higher replica count (`--pin-min-replicas 7`) using
-   `scripts/sorafs-pin-release.sh` so the scheduler spreads load across a larger
-   provider set. Record the new manifest digest in the incident log.
-2. If backlog is tied to a single provider, temporarily disable it via the
-   replication scheduler (documented in `pin-registry-ops.md`) and submit a new
-   manifest forcing the other providers to refresh the alias.
-3. When alias freshness is more critical than replication parity, rebind the
-   alias to a warm manifest already staged (`docs-preview`), then publish a
-   follow-up manifest once SRE clears the backlog.
+1. Ҡайтанан сығарыу манифест менән юғары реплика һаны (I18NI000000050X) ҡулланып .
+   I18NI000000051X шулай итеп, планлаштырыусы таратыу йөкләмәһе аша ҙурыраҡ
+   провайдер ҡуйылған. Яңы асыҡ һеңдерелгән инцидент журналында яҙып алығыҙ.
+2. Әгәр артта ҡалған бер провайдер бәйләнгән, ваҡытлыса уны өҙөп аша .
+   репликация планлаштырыусы (документацияланған I18NI000000052X) һәм яңы тапшырыу
+   башҡа провайдерҙарҙы псевдонимдарҙы яңыртырға мәжбүр итеүен күрһәтә.
+3. Ҡасан псевдоним яңылыҡ тәнҡитле репликация паритет ҡарағанда, rebirl
+   псевдонимы йылы манифест инде сәхнәләштерелгән (I18NI000000053X), һуңынан баҫтырып сығарыу
+   эҙмә-эҙлекле манифест бер тапҡыр SRE ташыуҙы таҙарта.
 
-### Recovery & closure
+### Һауығыу & ябыу
 
-1. Monitor `torii_sorafs_replication_sla_total{outcome="missed"}` to ensure the
-   count plateaus.
-2. Capture `sorafs_cli manifest status` output as evidence that every replica is
-   back in compliance.
-3. File or update the replication backlog post-mortem with next steps
-   (provider scaling, chunker tuning, etc.).
+1. Монитор I18NI0000000054X тәьмин итеү өсөн
+   ҡалҡыулыҡтарҙы иҫәпләй.
+2. Капитан I18NI0000000055X сығышы дәлилдәр булараҡ, һәр реплика
+   кире үтәү.
+3. Файл йәки яңыртыу репликация артта ҡалғандан һуң үлем менән киләһе аҙымдар .
+   (провайдер масштаблау, өлөшләтә тюнинг һ.б.).
 
-## Runbook — Analytics or telemetry outage
+## Runbook — Аналитика йәки телеметрия өҙөлгән
 
-### Trigger conditions
+### Триггер шарттары
 
-- `npm run probe:portal` succeeds but dashboards stop ingesting
-  `AnalyticsTracker` events for >15 minutes.
-- Privacy review flags an unexpected increase in dropped events.
-- `npm run probe:tryit-proxy` fails on `/probe/analytics` paths.
+- I18NI000000056X XIX
+  `AnalyticsTracker` ваҡиғалар өсөн >15минут.
+- Хосусилыҡты тикшерҙе, көтөлмәгән арттырыуҙы кәметкән ваҡиғалар.
+- I18NI0000058X I18NI000000059X юлдарында уңышһыҙлыҡҡа осрай.
 
-### Response
+### Яуап
 
-1. Verify build-time inputs: `DOCS_ANALYTICS_ENDPOINT` and
-   `DOCS_ANALYTICS_SAMPLE_RATE` in the failing release artifact (`build/release.json`).
-2. Re-run `npm run probe:portal` with `DOCS_ANALYTICS_ENDPOINT` pointing at the
-   staging collector to confirm the tracker still emits payloads.
-3. If collectors are down, set `DOCS_ANALYTICS_ENDPOINT=""` and rebuild so the
-   tracker short-circuits; record the outage window in the incident timeline.
-4. Validate `scripts/check-links.mjs` still fingerprints `checksums.sha256`
-   (analytics outages must *not* block sitemap validation).
-5. Once the collector recovers, run `npm run test:widgets` to exercise the
-   analytics helper unit tests before republishing.
+1. Төҙөү ваҡытында индереүҙәрҙе тикшерергә: I18NI000000060X һәм
+   I18NI000000061X етешһеҙлеккә тарыған релиз артефактында (I18NI000000062X).
+.
+   стадиялау коллекционер раҫлау өсөн трекер һаман да файҙалы йөктәр сығара.
+3. Әгәр коллекционерҙар аҫҡа, I18NI000000065X ҡуйылған һәм яңынан төҙөү, шулай итеп,
+   трекер ҡыҫҡа замыкание; инцидент ваҡыт һыҙығында өҙөклөк тәҙрәһен яҙып алырға.
+4. Валидат I18NI000000066X һаман да бармаҡ эҙҙәре I18NI000000067X
+   (аналитика өҙөлгән булырға тейеш * түгел * блок сайт картаһы раҫлау).
+5. Бер тапҡыр коллекционер һауыға, эшләй I18NI00000000068X to күнекмәләр өсөн
+   аналитика ярҙамсы блогы һынауҙары ҡабаттан баҫтырыу алдынан.
 
-### Post-incident
+### Пост-инцидент
 
-1. Update [`devportal/observability`](./observability) with any new collector
-   limitations or sampling requirements.
-2. File governance notice if any analytics data was dropped or redacted outside
-   policy.
+1. Яңыртыу [I18NI0000000069X X] (./observability) теләһә ниндәй яңы коллекционер менән
+   сикләүҙәр йәки үлсәү талаптары.
+2. Файл идара итеү тураһында иҫкәртмә, әгәр ниндәй ҙә булһа аналитика мәғлүмәттәре ташланған йәки тышҡы redacted
+   сәйәсәт.
 
-## Quarterly resilience drills
+## Кварталь ныҡлыҡ күнекмәләре
 
-Run both drills during the **first Tuesday of each quarter** (Jan/Apr/Jul/Oct)
-or immediately after any major infrastructure change. Store artifacts under
+Йүгереп ике күнекмәләр ваҡытында **беренсе шишәмбе һәр квартал ** (Ян/Апр/июл/Окт)
+йәки ниндәй ҙә булһа ҙур инфраструктура үҙгәрештәренән һуң шунда уҡ. Һаҡлау артефакттары буйынса .
 `artifacts/devportal/drills/<YYYYMMDD>/`.
 
-| Drill | Steps | Evidence |
-| ----- | ----- | -------- |
-| Alias rollback rehearsal | 1. Replay the “Failed deployment” rollback using the most recent production manifest.<br/>2. Re-bind to production once probes pass.<br/>3. Record `portal.manifest.submit.summary.json` and probe logs in the drill folder. | `rollback.submit.json`, probe output, and release tag of the rehearsal. |
-| Synthetic validation audit | 1. Run `npm run probe:portal` and `npm run probe:tryit-proxy` against production and staging.<br/>2. Run `npm run check:links` and archive `build/link-report.json`.<br/>3. Attach screenshots/exports of Grafana panels confirming probe success. | Probe logs + `link-report.json` referencing the manifest fingerprint. |
+| Дренаж | Аҙымдар | Дәлилдәр |
+| ----- | ----- | ------- |
+| Псевдоним репетиция | 1. Ҡабатлау “Уңышлы таратыу” ҡабыҙыу ҡулланып, иң һуңғы етештереү манифест.<br/>2. Ҡабаттан етештереү өсөн бер тапҡыр зондтар үтә.<br/>3. Яҙма `portal.manifest.submit.summary.json` һәм зонд журналдары бура папкаһында. | `rollback.submit.json`, зонд сығарыу, һәм репетицияның тегын сығарыу. |
+| Синтетик раҫлау аудит | 1. `npm run probe:portal` һәм I18NI000000074X етештереү һәм сәхнәләштереүгә ҡаршы йүгерергә.<br/>2. `npm run check:links` һәм архив I18NI000000076X.<br/>3. Беркетергә скриншоттар/экспорт I18NT000000002X панелдәре раҫлау зонд уңыш. | Зонд логтары + `link-report.json` манифест бармаҡ эҙенә һылтанма яһай. |
 
-Escalate missed drills to the Docs/DevRel manager and SRE governance review,
-since the roadmap requires deterministic, quarterly evidence that both alias
-rollback and portal probes remain healthy.
+Эскалат үткәрмәгән дрель Docs/DevRel менеджеры һәм SRE идара итеү тикшерелгән,
+сөнки юл картаһы детерминистик, квартал һайын дәлилдәр талап итә, тип, ике псевдоним
+кире ҡайтарыу һәм порталь зондтар һау-сәләмәт булып ҡала.
 
-## PagerDuty & on-call coordination
+## PagerDuty & шылтыратыу буйынса координация
 
-- PagerDuty service **Docs Portal Publishing** owns the alerts generated from
-  `dashboards/grafana/docs_portal.json`. The rules `DocsPortal/GatewayRefusals`,
-  `DocsPortal/AliasCache`, and `DocsPortal/TLSExpiry` page the Docs/DevRel
-  primary with Storage SRE as secondary.
-- When paged, include the `DOCS_RELEASE_TAG`, attach screenshots of the affected
-  Grafana panels, and link probe/link-check output in the incident notes before
-  mitigation starts.
-- After mitigation (rollback or redeploy), re-run `npm run probe:portal`,
-  `npm run check:links`, and capture fresh Grafana snapshots showing the metrics
-  back within thresholds. Attach all evidence to the PagerDuty incident prior to
-  resolving it.
-- If two alerts fire simultaneously (for example TLS expiry plus backlog), triage
-  refuses first (stop publishing), execute the rollback procedure, then clear
-  TLS/backlog items with Storage SRE on the bridge.
+- PagerDuty хеҙмәте **Докс порталы нәшриәт ** генерацияланған иҫкәртмәләргә эйә.
+  `dashboards/grafana/docs_portal.json`. Ҡағиҙәләр I18NI000000079X, .
+  I18NI000000080X, һәм I18NI000000081X битендә Док/ДевРель
+  беренсел менән һаҡлау SRE икенсел булараҡ.
+- Ҡасан бит, I18NI000000082X индереү, скриншоттар беркетергә ҡағылған .
+  I18NT00000000003X панелдәр, һәм һылтанма зонд/һылтанма-тикшереү сығышы инцидент яҙмаларында 2012 йылға тиклем .
+  йомшартыу башлана.
+- Һуң йомшартыу (кире кире йәки үҙгәртеп ҡороу), ҡабаттан идара итеү I18NI000000083X, .
+  I18NI000000084X, һәм яңы I18NT00000000004X снимоктарын күрһәтеү метрикаһы
+  кире сиктә сиктәр эсендә. Бөтә дәлилдәрҙе беркетергә PagerDuty ваҡиғаға тиклем .
+  уны хәл итеү.
+- Әгәр ике иҫкәртмә бер юлы ата (мәҫәлән, TLS срогы плюс артта ҡалған), триаж
+  тәүҙә баш тарта (тапшырыуҙы туҡтатыу), кире ҡағыу процедураһын башҡара, һуңынан асыҡ
+  TLS/артҡы әйберҙәр менән һаҡлау SRE күперҙә.

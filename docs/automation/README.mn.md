@@ -7,48 +7,49 @@ generator: scripts/sync_docs_i18n.py
 source_hash: c56bacde8ee42c2427d06038a3a6ca65035d4055c42f6e5ded7e54b33c1fe921
 source_last_modified: "2025-12-29T18:16:35.060432+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
 <!--
   SPDX-License-Identifier: Apache-2.0
 -->
 
-# Documentation Automation Baselines
+# Баримтжуулалтын автоматжуулалтын суурь
 
-This directory captures the automation surfaces that roadmap items such as
-AND5/AND6 (Android Developer Experience + Release Readiness) and DA-1
-(Data-Availability threat-model automation) refer to when they call for
-auditable documentation evidence. Staging the command references and expected
-artefacts in-tree keeps the prerequisites for compliance reviews available even
-when CI pipelines or dashboards are offline.
+Энэ лавлах нь замын зураглал гэх мэт зүйлсийн автоматжуулалтын гадаргууг авдаг
+AND5/AND6 (Android хөгжүүлэгчийн туршлага + хувилбарын бэлэн байдал) болон DA-1
+(Өгөгдлийн хүртээмжийн аюул-загварын автоматжуулалт) тэд хэзээ дуудаж байгааг харна
+шалгах боломжтой баримт бичгийн нотлох баримт. Тушаалын лавлагаа болон хүлээгдэж буй үе шат
+мод доторх олдворууд нь дагаж мөрдөх шалгалтын урьдчилсан нөхцөлийг бүрдүүлдэг
+CI дамжуулах хоолой эсвэл хяналтын самбар офлайн байх үед.
 
-## Directory Layout
+## Лавлах Layout
 
-| Path | Purpose |
+| Зам | Зорилго |
 |------|---------|
-| `docs/automation/android/` | Android documentation and localization automation baselines (AND5), including i18n stub sync logs, parity summaries, and SDK publishing evidence required before AND6 sign-off. |
-| `docs/automation/da/` | Data-Availability threat-model automation outputs referenced by `cargo xtask da-threat-model-report` and the nightly docs refresh. |
+| `docs/automation/android/` | AND6-д нэвтрэхээс өмнө шаардлагатай i18n stub синк лог, паритын хураангуй болон SDK нийтлэх нотлох баримт зэрэг Android баримтжуулалт болон нутагшуулах автоматжуулалтын үндсэн үзүүлэлтүүд (AND5). |
+| `docs/automation/da/` | `cargo xtask da-threat-model-report`-аас иш татсан Өгөгдлийн хүртээмжийн аюул-загварын автоматжуулалтын гаралтууд болон шөнийн баримтуудыг шинэчилдэг. |
 
-Each subdirectory documents the commands that produce the evidence along with
-the file layout we expect to check in (usually JSON summaries, run logs, or
-manifests). Teams drop new artefacts under the respective folder whenever an
-automation run materially changes the published docs, then link to the commit
-from the relevant status/roadmap entry.
+Дэд лавлах бүр нь нотлох баримтыг гаргах командуудыг баримтжуулдаг
+Бидний шалгах гэж буй файлын зохион байгуулалт (ихэвчлэн JSON хураангуй, ажиллуулах лог, эсвэл
+илэрдэг). Багууд шинэ олдворуудыг хүссэн хавтас дор нь буулгадаг
+автоматжуулалт нь нийтлэгдсэн баримт бичгүүдийг ихээхэн өөрчилж, дараа нь амлалт руу холбоно
+холбогдох статус/замын зургийн оруулгаас.
 
-## Usage
+## Хэрэглээ
 
-1. **Run the automation** using the commands described in the subdirectory
-   README (for example, `ci/check_android_fixtures.sh` or
+1. Дэд директорт тайлбарласан командуудыг ашиглан **Автоматжуулалтыг ажиллуулна уу**
+   README (жишээ нь, `ci/check_android_fixtures.sh` эсвэл
    `cargo xtask da-threat-model-report`).
-2. **Copy the resulting JSON/log artefacts** from `artifacts/…` into the
-   matching `docs/automation/<program>/…` folder with an ISO-8601 timestamp in
-   the filename so auditors can correlate the evidence with governance minutes.
-3. **Reference the commit** in `status.md`/`roadmap.md` when closing a roadmap
-   gate so reviewers can confirm the automation baseline used for that decision.
-4. **Keep the files lightweight**. The expectation is structured metadata,
-   manifests, or summaries—not bulk binary blobs. Larger dumps should stay in
-   object storage with the signed reference recorded here.
+2. **Үйлдвэрлэсэн JSON/логийн олдворуудыг** `artifacts/…`-аас хуулах
+   ISO-8601 цагийн тэмдэгтэй `docs/automation/<program>/…` хавтастай таарч байна
+   аудиторууд нотлох баримтыг засаглалын протоколтой уялдуулахын тулд файлын нэр.
+3. Замын зургийг хаахдаа `status.md`/`roadmap.md`-д **commit**-г лавлана уу.
+   gate тул хянагчид тухайн шийдвэрт ашигласан автоматжуулалтын суурь үзүүлэлтийг баталгаажуулах боломжтой.
+4. **Файлуудыг хөнгөн байлгах**. Хүлээлт нь бүтэцлэгдсэн мета өгөгдөл,
+   манифест эсвэл хураангуй - бөөнөөр нь биш. Томоохон хогийн цэгүүд үлдэх ёстой
+   энд бичигдсэн гарын үсэг бүхий лавлагаа бүхий объект хадгалах.
 
-By centralising these automation notes we unblock the “docs/automation baselines
-available for audit” prerequisite that AND6 calls out and give the DA threat
-model flow a deterministic home for the nightly reports and manual spot checks.
+Эдгээр автоматжуулалтын тэмдэглэлийг төвлөрүүлснээр бид "docs/automation baselines
+аудит хийх боломжтой" гэсэн урьдчилсан нөхцөл нь AND6-г дуудаж, DA-д аюул учруулдаг
+загвар нь шөнийн тайлан болон гарын авлагын спот шалгалтын хувьд тодорхойлогч гэр юм.

@@ -4,6 +4,8 @@ direction: rtl
 source: docs/portal/docs/da/replication-policy.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 :::note المصدر القياسي
@@ -23,28 +25,28 @@ _الحالة: قيد التنفيذ -- المالكون: Core Protocol WG / Sto
 ## السياسة الافتراضية
 
 | فئة blob | احتفاظ hot | احتفاظ cold | النسخ المطلوبة | فئة التخزين | وسم الحوكمة |
-|----------|------------|-------------|----------------|-------------|-------------|
-| `taikai_segment` | 24 ساعة | 14 يوما | 5 | `hot` | `da.taikai.live` |
-| `nexus_lane_sidecar` | 6 ساعات | 7 ايام | 4 | `warm` | `da.sidecar` |
-| `governance_artifact` | 12 ساعة | 180 يوما | 3 | `cold` | `da.governance` |
-| _Default (كل الفئات الاخرى)_ | 6 ساعات | 30 يوما | 3 | `warm` | `da.default` |
+|--------|--------|----------------|----------------|-------------|----------------|
+| `taikai_segment` | 24 ساعة | 14 יומא | 5 | `hot` | `da.taikai.live` |
+| `nexus_lane_sidecar` | 6 ساعات | 7 אימה | 4 | `warm` | `da.sidecar` |
+| `governance_artifact` | 12 ساعة | 180 יומא | 3 | `cold` | `da.governance` |
+| _Default (كل الفئات الاخرى)_ | 6 ساعات | 30 יומא | 3 | `warm` | `da.default` |
 
 تدمج هذه القيم في `torii.da_ingest.replication_policy` وتطبق على جميع
-طلبات `/v1/da/ingest`. يعيد Torii كتابة manifests مع ملف الاحتفاظ المفروض ويصدر
+קוד `/v1/da/ingest`. يعيد Torii كتابة manifests مع ملف الاحتفاظ المفروض ويصدر
 تحذيرا عندما يوفر المتصلون قيما غير متطابقة حتى يتمكن المشغلون من كشف SDKs
 المتقادمة.
 
 ### فئات توفر Taikai
 
 تعلن manifests توجيه Taikai (`taikai.trm`) عن `availability_class`
-(`hot`, `warm`, او `cold`). يفرض Torii السياسة المطابقة قبل التقسيم بحيث يمكن
+(`hot`, `warm`, או `cold`). يفرض Torii السياسة المطابقة قبل التقسيم بحيث يمكن
 للمشغلين توسيع عدد النسخ لكل stream دون تعديل الجدول العام. الافتراضيات:
 
 | فئة التوفر | احتفاظ hot | احتفاظ cold | النسخ المطلوبة | فئة التخزين | وسم الحوكمة |
-|------------|------------|-------------|----------------|-------------|-------------|
-| `hot` | 24 ساعة | 14 يوما | 5 | `hot` | `da.taikai.live` |
-| `warm` | 6 ساعات | 30 يوما | 4 | `warm` | `da.taikai.warm` |
-| `cold` | 1 ساعة | 180 يوما | 3 | `cold` | `da.taikai.archive` |
+|-------------------------------------------------------|
+| `hot` | 24 ساعة | 14 יומא | 5 | `hot` | `da.taikai.live` |
+| `warm` | 6 ساعات | 30 יומא | 4 | `warm` | `da.taikai.warm` |
+| `cold` | 1 ساعة | 180 יומא | 3 | `cold` | `da.taikai.archive` |
 
 التلميحات المفقودة تعود الى `hot` حتى تحتفظ البثوث الحية باقوى سياسة. قم
 بتجاوز الافتراضيات عبر
@@ -55,7 +57,7 @@ _الحالة: قيد التنفيذ -- المالكون: Core Protocol WG / Sto
 
 تعيش السياسة تحت `torii.da_ingest.replication_policy` وتعرض قالب *default* مع
 مصفوفة overrides لكل فئة. معرفات الفئة غير حساسة لحالة الاحرف وتقبل
-`taikai_segment`, `nexus_lane_sidecar`, `governance_artifact`, او `custom:<u16>`
+`taikai_segment`, `nexus_lane_sidecar`, `governance_artifact`, או `custom:<u16>`
 للامتدادات المعتمدة حوكما. فئات التخزين تقبل `hot`, `warm`, او `cold`.
 
 ```toml
@@ -100,9 +102,7 @@ governance_tag = "da.taikai.archive"
 - ترفض manifests المبنية مسبقا التي تعلن ملف احتفاظ غير مطابق بـ
   `400 schema mismatch` حتى لا تتمكن العملاء المتقادمة من اضعاف العقد.
 - يتم تسجيل كل حدث override (`blob_class`, السياسة المرسلة مقابل المتوقعة)
-  لاظهار المتصلين غير الملتزمين اثناء rollout.
-
-راجع [خطة ingest لتوفر البيانات](ingest-plan.md) (قائمة التحقق) للبوابة المحدثة
+  لاظهار المتصلين غير الملتزمين اثناء rollout.راجع [خطة ingest لتوفر البيانات](ingest-plan.md) (قائمة التحقق) للبوابة المحدثة
 التي تغطي انفاذ الاحتفاظ.
 
 ## سير عمل اعادة التكرار (متابعة DA-4)
@@ -112,7 +112,7 @@ governance_tag = "da.taikai.archive"
 تكرار blobs غير المتوافقة تلقائيا.
 
 1. **راقب الانحراف.** يصدر Torii
-   `overriding DA retention policy to match configured network baseline` عندما
+   `overriding DA retention policy to match configured network baseline` נבנה
    يرسل المتصل قيما قديمة للاحتفاظ. قرن هذا السجل مع قياسات
    `torii_sorafs_replication_*` لاكتشاف نقص النسخ او اعادة نشر متاخرة.
 2. **فرق النية مقابل النسخ الحية.** استخدم مساعد التدقيق الجديد:
@@ -135,14 +135,14 @@ governance_tag = "da.taikai.archive"
      `RetentionPolicy.required_replicas` او يقدم تعيينات اقل من الهدف.
 
    حالة خروج غير صفرية تعني نقصا نشطا حتى تتمكن اتـمتة CI/on-call من التنبيه
-   فورا. ارفق تقرير JSON بحزمة `docs/examples/da_manifest_review_template.md`
+   פורה. ارفق تقرير JSON بحزمة `docs/examples/da_manifest_review_template.md`
    لتصويت البرلمان.
 3. **اطلق اعادة التكرار.** عندما يبلغ التدقيق عن نقص، اصدر `ReplicationOrderV1`
    جديدا عبر ادوات الحوكمة الموصوفة في
-   [SoraFS storage capacity marketplace](../sorafs/storage-capacity-marketplace.md)
+   [שוק קיבולת אחסון SoraFS](../sorafs/storage-capacity-marketplace.md)
    واعِد تشغيل التدقيق حتى تتقارب مجموعة النسخ. للتجاوزات الطارئة، اربط مخرجات
    CLI مع `iroha app da prove-availability` حتى يتمكن SREs من الرجوع لنفس digest
-   ودليل PDP.
+   ואלי PDP.
 
 توجد تغطية الانحدار في `integration_tests/tests/da/replication_policy.rs`؛ تقوم
 الحزمة بارسال سياسة احتفاظ غير متطابقة الى `/v1/da/ingest` وتتحقق من ان

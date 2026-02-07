@@ -4,51 +4,53 @@ direction: ltr
 source: docs/portal/docs/sns/bulk-onboarding-toolkit.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note مستند ماخذ
+:::nota مستند ماخذ
 یہ صفحہ `docs/source/sns/bulk_onboarding_toolkit.md` کی عکاسی کرتا ہے تاکہ بیرونی
 آپریٹرز ریپو کلون کئے بغیر وہی SN-3b رہنمائی دیکھ سکیں۔
 :::
 
-# SNS Bulk Onboarding Toolkit (SN-3b)
+# Kit de ferramentas de integração em massa SNS (SN-3b)
 
-**روڈمیپ حوالہ:** SN-3b "Bulk onboarding tooling"  
-**Artefacts:** `scripts/sns_bulk_onboard.py`, `scripts/tests/test_sns_bulk_onboard.py`,
+**روڈمیپ حوالہ:** SN-3b "Ferramentas de integração em massa"  
+**Artefatos:** `scripts/sns_bulk_onboard.py`, `scripts/tests/test_sns_bulk_onboard.py`,
 `docs/portal/scripts/sns_bulk_release.sh`
 
-بڑے registrars اکثر `.sora` یا `.nexus` registrations کو ایک ہی governance
-approvals اور settlement rails کے ساتھ سیکڑوں کی تعداد میں پہلے سے تیار کرتے
-ہیں۔ دستی طور پر JSON payloads بنانا یا CLI دوبارہ چلانا scale نہیں کرتا، اس
-لئے SN-3b ایک deterministic CSV-to-Norito builder فراہم کرتا ہے جو Torii یا CLI
-کے لئے `RegisterNameRequestV1` structures تیار کرتا ہے۔ helper ہر row کو پہلے
-validate کرتا ہے، aggregated manifest اور optional newline-delimited JSON خارج
-کرتا ہے، اور audits کے لئے structured receipts ریکارڈ کرتے ہوئے payloads کو
-خودکار طور پر submit کر سکتا ہے۔
+بڑے registradores اکثر `.sora` یا registros `.nexus` کو ایک ہی governança
+aprovações اور trilhos de liquidação کے ساتھ سیکڑوں کی تعداد میں پہلے سے تیار کرتے
+ہیں۔ Você pode usar cargas úteis JSON com CLI e escala de escala com escala
+O construtor SN-3b é determinístico CSV-to-Norito.
+Estruturas `RegisterNameRequestV1` تیار کرتا ہے۔ ajudante ہر linha کو پہلے
+validar کرتا ہے، manifesto agregado e JSON opcional delimitado por nova linha
+کرتا ہے، اور auditorias کے لئے recibos estruturados ریکارڈ کرتے ہوئے cargas úteis کو
+خودکار طور پر enviar کر سکتا ہے۔
 
-## 1. CSV اسکیمہ
+## 1. Arquivo CSV
 
-Parser کو درج ذیل header row درکار ہے (order flexible ہے):
+Analisador کو درج ذیل linha de cabeçalho درکار ہے (ordem flexível ہے):
 
-| Column | Required | Description |
-|--------|----------|-------------|
-| `label` | Yes | Requested label (mixed case accepted; tool Norm v1 اور UTS-46 کے مطابق normalize کرتا ہے). |
-| `suffix_id` | Yes | Numeric suffix identifier (decimal یا `0x` hex). |
-| `owner` | Yes | Registration owner کے لئے AccountId string (IH58 literal; optional @domain hint). |
-| `term_years` | Yes | Integer `1..=255`. |
-| `payment_asset_id` | Yes | Settlement asset (مثال `xor#sora`). |
-| `payment_gross` / `payment_net` | Yes | Unsigned integers جو asset-native units کو represent کریں۔ |
-| `settlement_tx` | Yes | JSON value یا literal string جو payment transaction یا hash بیان کرے۔ |
-| `payment_payer` | Yes | AccountId جس نے payment authorize کی۔ |
-| `payment_signature` | Yes | JSON یا literal string جس میں steward/treasury signature proof ہو۔ |
-| `controllers` | Optional | Controller account addresses کی semicolon/comma-separated list۔ خالی ہونے پر `[owner]`. |
-| `metadata` | Optional | Inline JSON یا `@path/to/file.json` جو resolver hints، TXT records وغیرہ دے۔ Default `{}`۔ |
-| `governance` | Optional | Inline JSON یا `@path` جو `GovernanceHookV1` کی طرف ہو۔ `--require-governance` اس column کو لازمی کرتا ہے۔ |
+| Coluna | Obrigatório | Descrição |
+|--------|----------|------------|
+| `label` | Sim | Etiqueta solicitada (maiúsculas e minúsculas aceitas; ferramenta Norm v1 اور UTS-46 کے مطابق normalize کرتا ہے). |
+| `suffix_id` | Sim | Identificador de sufixo numérico (decimal یا `0x` hex). |
+| `owner` | Sim | Proprietário do registro کے لئے String AccountId (literal IH58; dica opcional @domain). |
+| `term_years` | Sim | Inteiro `1..=255`. |
+| `payment_asset_id` | Sim | Ativo de liquidação (exemplo `xor#sora`). |
+| `payment_gross` / `payment_net` | Sim | Inteiros não assinados ou unidades nativas de ativos representam کریں۔ |
+| `settlement_tx` | Sim | Valor JSON یا string literal جو transação de pagamento یا hash بیان کرے۔ |
+| `payment_payer` | Sim | AccountId جس نے autorização de pagamento کی۔ |
+| `payment_signature` | Sim | JSON یا string literal جس میں prova de assinatura do administrador/tesouro ہو۔ |
+| `controllers` | Opcional | Endereços de conta do controlador کی lista separada por ponto e vírgula/vírgula۔ É um `[owner]`. |
+| `metadata` | Opcional | JSON inline یا `@path/to/file.json`, dicas de resolução, registros TXT e outros Padrão `{}`۔ |
+| `governance` | Opcional | JSON inline یا `@path` ou `GovernanceHookV1` کی طرف ہو۔ `--require-governance` coluna کو لازمی کرتا ہے۔ |
 
-کوئی بھی column سیل ویلیو میں `@` لگا کر external file کو refer کر سکتا ہے۔
-Paths CSV file کے relative resolve ہوتے ہیں۔
+کوئی بھی coluna سیل ویلیو میں `@` لگا کر arquivo externo کو consulte کر سکتا ہے۔
+Arquivo CSV de caminhos کے resolução relativa ہوتے ہیں۔
 
-## 2. Helper چلانا
+## 2. Ajudante
 
 ```bash
 python3 scripts/sns_bulk_onboard.py registrations.csv \
@@ -56,16 +58,16 @@ python3 scripts/sns_bulk_onboard.py registrations.csv \
   --ndjson artifacts/sns_bulk_requests.ndjson
 ```
 
-Key options:
+Principais opções:
 
-- `--require-governance` governance hook کے بغیر rows reject کرتا ہے (premium
-  auctions یا reserved assignments کے لئے مفید).
-- `--default-controllers {owner,none}` طے کرتا ہے کہ خالی controller cells owner
-  account پر واپس جائیں یا نہیں.
-- `--controllers-column`, `--metadata-column`, اور `--governance-column` upstream
-  exports کے ساتھ کام کرتے ہوئے optional columns کے نام بدلنے دیتے ہیں.
+- Gancho de governança `--require-governance` کے بغیر linhas rejeitadas کرتا ہے (premium
+  leilões یا atribuições reservadas کے لئے مفید).
+- `--default-controllers {owner,none}` طے کرتا ہے کہ خالی proprietário das células controladoras
+  conta پر واپس جائیں یا نہیں.
+- `--controllers-column`, `--metadata-column`, e `--governance-column` upstream
+  exporta کے ساتھ کام کرتے ہوئے colunas opcionais کے نام بدلنے دیتے ہیں.
 
-کامیابی پر script aggregated manifest لکھتا ہے:
+کامیابی پر script agregado manifesto لکھتا ہے:
 
 ```json
 {
@@ -102,9 +104,9 @@ Key options:
 }
 ```
 
-اگر `--ndjson` دیا جائے تو ہر `RegisterNameRequestV1` کو single-line JSON
-document کے طور پر بھی لکھا جاتا ہے تاکہ automations requests کو براہ راست Torii
-میں stream کر سکیں:
+O `--ndjson` é um JSON de linha única e o `RegisterNameRequestV1` é JSON de linha única
+documento کے طور پر بھی لکھا جاتا ہے تاکہ solicitações de automações کو براہ راست Torii
+O stream que você deseja:
 
 ```bash
 jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
@@ -114,14 +116,12 @@ jq -c '.requests[]' artifacts/sns_bulk_manifest.json |
          -d "$payload" \
          https://torii.sora.net/v1/sns/registrations
   done
-```
+```## 3. Envios automatizados
 
-## 3. Automated submissions
-
-### 3.1 Torii REST mode
+### 3.1 Torii Modo REST
 
 `--submit-torii-url` کے ساتھ `--submit-token` یا `--submit-token-file` دیں تاکہ
-manifest کی ہر entry براہ راست Torii کو push ہو:
+manifesto کی ہر entrada براہ راست Torii کو push ہو:
 
 ```bash
 python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json \
@@ -133,17 +133,17 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
 ```
 
 - Helper ہر request کے لئے `POST /v1/sns/registrations` بھیجتا ہے اور پہلی HTTP
-  error پر abort کرتا ہے۔ Responses log path میں NDJSON records کے طور پر append
+  erro پر abortar کرتا ہے۔ Caminho do log de respostas میں registros NDJSON کے طور پر anexar
   ہوتے ہیں۔
-- `--poll-status` ہر submission کے بعد `/v1/sns/registrations/{selector}` کو
-  دوبارہ query کرتا ہے (زیادہ سے زیادہ `--poll-attempts`, default 5) تاکہ record
-  visible ہونے کی تصدیق ہو۔ `--suffix-map` (JSON جو `suffix_id` کو "suffix" values
-  سے map کرے) فراہم کریں تاکہ tool `{label}.{suffix}` literals derive کر سکے۔
-- Tunables: `--submit-timeout`, `--poll-attempts`, `--poll-interval`.
+- `--poll-status` ہر submissão کے بعد `/v1/sns/registrations/{selector}` کو
+  دوبارہ consulta کرتا ہے (زیادہ سے زیادہ `--poll-attempts`, padrão 5) تاکہ registro
+  visível ہونے کی تصدیق ہو۔ `--suffix-map` (JSON ou `suffix_id` e valores de "sufixo"
+  سے mapa کرے) فراہم کریں تاکہ ferramenta `{label}.{suffix}` literais derivam کر سکے۔
+- Ajustáveis: `--submit-timeout`, `--poll-attempts`, `--poll-interval`.
 
-### 3.2 iroha CLI mode
+### 3.2 modo CLI iroha
 
-ہر manifest entry کو CLI سے گزارنے کے لئے binary path دیں:
+ہر entrada de manifesto کو CLI سے گزارنے کے لئے caminho binário دیں:
 
 ```bash
 python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json \
@@ -153,19 +153,19 @@ python3 scripts/sns_bulk_onboard.py --manifest artifacts/sns_bulk_manifest.json 
   --submission-log artifacts/sns_bulk_submit.log
 ```
 
-- Controllers کو `Account` entries ہونا چاہئے (`controller_type.kind = "Account"`)
-  کیونکہ CLI فی الحال صرف account-based controllers expose کرتا ہے۔
-- Metadata اور governance blobs ہر request کے لئے temporary files میں لکھے جاتے
+- Controladores com entradas `Account` ہونا چاہئے (`controller_type.kind = "Account"`)
+  کیونکہ CLI فی الحال صرف controladores baseados em conta expõem کرتا ہے۔
+- Metadados اور blobs de governança ہر solicitação کے لئے arquivos temporários میں لکھے جاتے
   ہیں اور `iroha sns register --metadata-json ... --governance-json ...` کو پاس
   کئے جاتے ہیں۔
-- CLI stdout/stderr اور exit codes log ہوتے ہیں؛ non-zero codes run کو abort کرتے ہیں۔
+- CLI stdout/stderr e log de códigos de saída ہوتے ہیں؛ códigos diferentes de zero são executados کو abortar کرتے ہیں۔
 
-دونوں submission modes ایک ساتھ چل سکتے ہیں (Torii اور CLI) تاکہ registrar
-deployments cross-check ہوں یا fallbacks rehearse کئے جائیں۔
+Modos de envio de دونوں ایک ساتھ چل سکتے ہیں (Torii اور CLI) تاکہ registrador
+verificação cruzada de implantações ہوں یا ensaio de fallbacks کئے جائیں۔
 
-### 3.3 Submission receipts
+### 3.3 Recibos de envio
 
-جب `--submission-log <path>` فراہم کیا جائے تو script NDJSON entries append کرتا ہے:
+O `--submission-log <path>` é o mesmo que o script NDJSON entradas acrescentam کرتا ہے:
 
 ```json
 {"timestamp":"2026-03-30T07:22:04.123Z","mode":"torii","index":12,"selector":"1:alpha","status":200,"success":true,"detail":"..."}
@@ -173,17 +173,17 @@ deployments cross-check ہوں یا fallbacks rehearse کئے جائیں۔
 {"timestamp":"2026-03-30T07:22:06.789Z","mode":"cli","index":12,"selector":"1:alpha","status":0,"success":true,"detail":"Registration accepted"}
 ```
 
-Successful Torii responses میں `NameRecordV1` یا `RegisterNameResponseV1` سے نکالے
-گئے structured fields شامل ہوتے ہیں (مثال `record_status`, `record_pricing_class`,
+Respostas Torii bem-sucedidas میں `NameRecordV1` یا `RegisterNameResponseV1` سے نکالے
+Existem campos estruturados que podem ser usados (como `record_status`, `record_pricing_class`,
 `record_owner`, `record_expires_at_ms`, `registry_event_version`, `suffix_id`,
-`label`) تاکہ dashboards اور governance reports log کو free-form text دیکھے بغیر
-parse کر سکیں۔ اس log کو manifest کے ساتھ registrar tickets پر attach کریں تاکہ
-reproducible evidence رہے۔
+`label`) تاکہ dashboards اور relatórios de governança کو texto de formato livre دیکھے بغیر
+analisar کر سکیں۔ اس log کو manifesto کے ساتھ tickets de registrador پر anexar کریں تاکہ
+evidência reproduzível رہے۔
 
-## 4. Docs portal release automation
+## 4. Automação de lançamento do portal de documentos
 
 CI اور portal jobs `docs/portal/scripts/sns_bulk_release.sh` کو call کرتے ہیں، جو
-helper کو wrap کرتا ہے اور artefacts کو `artifacts/sns/releases/<timestamp>/` کے
+ajudante کو wrap کرتا ہے اور artefatos کو `artifacts/sns/releases/<timestamp>/` کے
 تحت store کرتا ہے:
 
 ```bash
@@ -197,25 +197,25 @@ docs/portal/scripts/sns_bulk_release.sh \
   --cli-config configs/registrar.toml
 ```
 
-Script:
+Roteiro:
 
-1. `registrations.manifest.json`, `registrations.ndjson` بناتا ہے اور original
-   CSV کو release directory میں کاپی کرتا ہے۔
+1. `registrations.manifest.json`, `registrations.ndjson` original ou original
+   CSV é o diretório de lançamento میں کاپی کرتا ہے۔
 2. Torii اور/یا CLI کے ذریعے manifest submit کرتا ہے (جب configure ہو)، اور
-   `submissions.log` میں اوپر والے structured receipts لکھتا ہے۔
-3. `summary.json` emit کرتا ہے جو release کو describe کرتا ہے (paths, Torii URL,
-   CLI path, timestamp) تاکہ portal automation bundle کو artefact storage پر
-   upload کر سکے۔
-4. `metrics.prom` بناتا ہے (`--metrics` کے ذریعے override)، جس میں Prometheus-
-   format counters ہوتے ہیں: total requests, suffix distribution, asset totals,
-   اور submission outcomes۔ summary JSON اس file کی طرف link کرتا ہے۔
+   `submissions.log` میں اوپر والے recibos estruturados لکھتا ہے۔
+3. `summary.json` emite کرتا ہے جو release کو descreve کرتا ہے (caminhos, URL Torii,
+   Caminho CLI, carimbo de data/hora) Pacote de automação de portal e armazenamento de artefato
+   carregar کر سکے۔
+4. `metrics.prom` بناتا ہے (`--metrics` کے ذریعے substituição), جس میں Prometheus-
+   contadores de formato ہوتے ہیں: total de solicitações, distribuição de sufixos, totais de ativos,
+   Sobre os resultados do envio۔ resumo JSON اس arquivo کی طرف link کرتا ہے۔
 
-Workflows صرف release directory کو ایک artefact کے طور پر archive کرتے ہیں، جس میں
-اب وہ سب کچھ ہے جو governance کو audit کے لئے درکار ہے۔
+Fluxos de trabalho صرف diretório de liberação کو ایک artefato کے طور پر arquivo کرتے ہیں، جس میں
+اب وہ سب کچھ ہے جو governança کو auditoria کے لئے درکار ہے۔
 
-## 5. Telemetry اور dashboards
+## 5. Telemetria e painéis
 
-`sns_bulk_release.sh` کے ذریعہ بننے والی metrics file درج ذیل series expose کرتی ہے:
+`sns_bulk_release.sh` کے ذریعہ بننے والی arquivo de métricas درج ذیل exposição de série کرتی ہے:
 
 ```
 # HELP sns_bulk_release_requests_total Number of registration requests per release and suffix.
@@ -224,41 +224,39 @@ sns_bulk_release_requests_total{release="2026q2-beta",suffix_id="all"} 120
 sns_bulk_release_requests_total{release="2026q2-beta",suffix_id="1"} 118
 sns_bulk_release_payment_gross_units{release="2026q2-beta",asset_id="xor#sora"} 28800
 sns_bulk_release_submission_events_total{release="2026q2-beta",mode="torii",success="true"} 118
-```
+````metrics.prom` کو اپنے Prometheus sidecar میں feed کریں (مثال کے طور پر Promtail
+یا importador de lote کے ذریعے) تاکہ registradores, administradores e pares de governança em massa
+progresso پر alinhado رہیں۔ Placa Grafana
+`dashboards/grafana/sns_bulk_release.json` e painéis de dados میں دکھاتا ہے: por sufixo
+contagens, volume de pagamento, taxas de sucesso/falha de envio۔ Placa `release`
+filtro کرتا ہے تاکہ auditores ایک CSV executado پر broca کر سکیں۔
 
-`metrics.prom` کو اپنے Prometheus sidecar میں feed کریں (مثال کے طور پر Promtail
-یا batch importer کے ذریعے) تاکہ registrars, stewards اور governance peers bulk
-progress پر aligned رہیں۔ Grafana board
-`dashboards/grafana/sns_bulk_release.json` وہی data panels میں دکھاتا ہے: per-suffix
-counts، payment volume، اور submission success/failure ratios۔ Board `release`
-filter کرتا ہے تاکہ auditors ایک CSV run پر drill کر سکیں۔
+## 6. Validação e modos de falha
 
-## 6. Validation اور failure modes
+- **Canonização do rótulo:** insere Python IDNA کے ساتھ minúsculas اور Norm v1
+  filtros de caracteres سے normalizar ہوتے ہیں۔ etiquetas inválidas chamadas de rede سے پہلے
+  falhar rápido ہوتے ہیں۔
+- **Proteções numéricas:** ids de sufixo, anos de vigência e dicas de preços `u16` e `u8`
+  limites Campos de pagamento decimais یا inteiros hexadecimais `i64::MAX`
+  تک aceitar کرتے ہیں۔
+- **Metadados e análise de governança:** JSON inline براہ راست análise ہوتا ہے؛ arquivo
+  faz referência à localização do CSV کے resolução relativa ہوتی ہیں۔ Metadados não objetos
+  erro de validação
+- **Controladores:** células خالی `--default-controllers` کو honor کرتے ہیں۔ não proprietário
+  atores کو delegado کرتے وقت listas de controladores explícitas دیں (مثال `ih58...;ih58...`)۔
 
-- **Label canonicalisation:** inputs Python IDNA کے ساتھ lowercase اور Norm v1
-  character filters سے normalise ہوتے ہیں۔ invalid labels network calls سے پہلے
-  fail fast ہوتے ہیں۔
-- **Numeric guardrails:** suffix ids, term years اور pricing hints `u16` اور `u8`
-  bounds کے اندر ہونے چاہئیں۔ Payment fields decimal یا hex integers `i64::MAX`
-  تک accept کرتے ہیں۔
-- **Metadata یا governance parsing:** inline JSON براہ راست parse ہوتا ہے؛ file
-  references CSV location کے relative resolve ہوتی ہیں۔ Non-object metadata
-  validation error دیتا ہے۔
-- **Controllers:** خالی cells `--default-controllers` کو honour کرتے ہیں۔ non-owner
-  actors کو delegate کرتے وقت explicit controller lists دیں (مثال `ih58...;ih58...`)۔
+Números de linhas contextuais de falhas کے ساتھ relatório ہوتے ہیں (مثال
+`error: row 12 term_years must be between 1 and 255`). Erros de validação de script
+`1` caminho CSV ausente
 
-Failures contextual row numbers کے ساتھ report ہوتے ہیں (مثال
-`error: row 12 term_years must be between 1 and 255`). Script validation errors پر
-`1` اور CSV path missing ہونے پر `2` کے ساتھ exit کرتا ہے۔
+## 7. Teste de proveniência
 
-## 7. Testing اور provenance
+- Análise CSV `python3 -m pytest scripts/tests/test_sns_bulk_onboard.py`, NDJSON
+  emissão, aplicação de governança, caminhos de envio CLI/Torii e cobertura کرتا ہے۔
+- Helper puro Python ہے (کوئی اضافی dependências نہیں) اور جہاں `python3` دستیاب
+  ہو وہاں چلتا ہے۔ Histórico de commits CLI کے ساتھ repositório principal میں track ہوتی ہے
+  تاکہ reprodutibilidade ہو۔
 
-- `python3 -m pytest scripts/tests/test_sns_bulk_onboard.py` CSV parsing، NDJSON
-  emission، governance enforcement، اور CLI/Torii submission paths کو cover کرتا ہے۔
-- Helper pure Python ہے (کوئی اضافی dependencies نہیں) اور جہاں `python3` دستیاب
-  ہو وہاں چلتا ہے۔ Commit history CLI کے ساتھ main repository میں track ہوتی ہے
-  تاکہ reproducibility ہو۔
-
-Production runs کے لئے، generated manifest اور NDJSON bundle کو registrar ticket کے
-ساتھ attach کریں تاکہ stewards Torii کو submit ہونے والے exact payloads replay
+A produção é executada no manifesto gerado e no pacote NDJSON e no ticket do registrador.
+ساتھ anexar کریں تاکہ stewards Torii کو enviar ہونے والے repetição exata de cargas úteis
 کر سکیں۔

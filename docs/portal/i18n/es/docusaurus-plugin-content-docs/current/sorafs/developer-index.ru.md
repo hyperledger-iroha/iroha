@@ -4,16 +4,18 @@ direction: ltr
 source: docs/portal/docs/sorafs/developer-index.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: developer-index
-title: Руководства для разработчиков SoraFS
-description: Стартовая страница документации для разработчиков SoraFS, примеров и справок по автоматизации.
+id: índice-desarrollador
+título: Руководства для разработчиков SoraFS
+descripción: Стартовая страница документации для разработчиков SoraFS, примеров and правок по автоматизации.
 sidebar_label: Обзор для разработчиков
 ---
 
-:::note Канонический источник
+:::nota Канонический источник
 :::
 
 # Руководства для разработчиков SoraFS

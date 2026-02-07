@@ -11,189 +11,190 @@ id: operations-playbook
 title: SoraFS Operations Playbook
 sidebar_label: Operations Playbook
 description: Incident response guides and chaos drill procedures for SoraFS operators.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
-This page mirrors the runbook maintained under `docs/source/sorafs_ops_playbook.md`. Keep both copies in sync until the Sphinx documentation set is fully migrated.
+::: Каноник эх сурвалжийг анхаарна уу
+Энэ хуудас нь `docs/source/sorafs_ops_playbook.md`-ийн дагуу хадгалагдсан runbook-ийг толилуулж байна. Сфинксийн баримт бичгийн багцыг бүрэн шилжүүлж дуустал хоёуланг нь синхрончлоорой.
 :::
 
-## Key References
+## Гол лавлагаа
 
-- Observability assets: refer to the Grafana dashboards under `dashboards/grafana/` and Prometheus alert rules in `dashboards/alerts/`.
-- Metric catalog: `docs/source/sorafs_observability_plan.md`.
-- Orchestrator telemetry surfaces: `docs/source/sorafs_orchestrator_plan.md`.
+- Ажиглах боломжтой хөрөнгө: `dashboards/alerts/` доторх `dashboards/grafana/` болон Prometheus дохиоллын дүрмийн дагуу Grafana хяналтын самбарыг үзнэ үү.
+- Метрийн каталог: `docs/source/sorafs_observability_plan.md`.
+- Оркестрийн телеметрийн гадаргуу: `docs/source/sorafs_orchestrator_plan.md`.
 
-## Escalation Matrix
+## Өсгөлтийн матриц
 
-| Priority | Trigger examples | Primary on-call | Backup | Notes |
+| Тэргүүлэх чиглэл | Триггер жишээ | Үндсэн дуудлага | Нөөц | Тэмдэглэл |
 |----------|------------------|-----------------|--------|-------|
-| P1 | Global gateway outage, PoR failure rate > 5% (15 min), replication backlog doubling every 10 min | Storage SRE | Observability TL | Engage governance council if impact exceeds 30 min. |
-| P2 | Regional gateway latency SLO breach, orchestrator retry spike without SLA impact | Observability TL | Storage SRE | Continue rollout but gate new manifests. |
-| P3 | Non-critical alerts (manifest staleness, capacity 80–90%) | Intake triage | Ops guild | Address within next business day. |
+| P1 | Глобал гарцын тасалдал, PoR алдааны түвшин > 5% (15 минут), хуулбарлалтын саатал 10 минут тутамд хоёр дахин нэмэгддэг | Хадгалах SRE | Ажиглах чадвар TL | Үр нөлөө нь 30 минутаас хэтэрсэн тохиолдолд засаглалын зөвлөлийг оролцуулах. |
+| P2 | Бүс нутгийн гарцын саатал SLO зөрчсөн, SLA нөлөөлөлгүйгээр зохион байгуулагчийн дахин оролдлого | Ажиглах чадвар TL | Хадгалах SRE | Үргэлжлүүлэн нэвтрүүлэх боловч шинэ манифестуудыг нээх. |
+| P3 | Чухал бус сэрэмжлүүлэг (манифест хуучирсан, хүчин чадал 80–90%) | Хэрэглээний гурвалж | Ops Guild | Дараагийн ажлын өдөрт багтаан хаяг. |
 
-## Gateway Outage / Degraded Availability
+## Гарцын тасалдал / Боломж муутай
 
-**Detection**
+**Илрүүлэх**
 
-- Alerts: `SoraFSGatewayAvailabilityDrop`, `SoraFSGatewayLatencySlo`.
-- Dashboard: `dashboards/grafana/sorafs_gateway_overview.json`.
+- Анхааруулга: `SoraFSGatewayAvailabilityDrop`, `SoraFSGatewayLatencySlo`.
+- Хяналтын самбар: `dashboards/grafana/sorafs_gateway_overview.json`.
 
-**Immediate actions**
+**Шууд арга хэмжээ**
 
-1. Confirm scope (single provider vs fleet) via request-rate panel.
-2. Switch Torii routing to healthy providers (if multi-provider) by toggling `sorafs_gateway_route_weights` in the ops config (`docs/source/sorafs_gateway_self_cert.md`).
-3. If all providers impacted, enable “direct fetch” fallback for CLI/SDK clients (`docs/source/sorafs_node_client_protocol.md`).
+1. Хүсэлтийн тарифын самбараар хамрах хүрээг (нэг үйлчилгээ үзүүлэгч ба флот) баталгаажуулна уу.
+2. Үйл ажиллагааны тохиргоонд (`docs/source/sorafs_gateway_self_cert.md`) `sorafs_gateway_route_weights`-г сэлгэн залгах замаар Torii чиглүүлэлтийг эрүүл үйлчилгээ үзүүлэгч рүү (олон үйлчилгээ үзүүлэгч бол) шилжүүлнэ үү.
+3. Хэрэв бүх үйлчилгээ үзүүлэгч нөлөөлсөн бол CLI/SDK үйлчлүүлэгчид (`docs/source/sorafs_node_client_protocol.md`) "шууд татах" буцаалтыг идэвхжүүлнэ үү.
 
-**Triage**
+** Гурвалсан үе**
 
-- Check stream token utilisation against `sorafs_gateway_stream_token_limit`.
-- Inspect gateway logs for TLS or admission errors.
-- Run `scripts/telemetry/run_schema_diff.sh` to ensure the gateway exported schema matches the expected version.
+- `sorafs_gateway_stream_token_limit` эсрэг урсгалын токен ашиглалтыг шалгана уу.
+- Гарцын бүртгэлд TLS эсвэл элсэлтийн алдаа байгаа эсэхийг шалгана уу.
+- Экспортолсон гарцын схем нь хүлээгдэж буй хувилбартай таарч байгаа эсэхийг шалгахын тулд `scripts/telemetry/run_schema_diff.sh`-г ажиллуул.
 
-**Remediation options**
+**Засах сонголтууд**
 
-- Restart only the affected gateway process; avoid recycling the entire cluster unless multiple providers are failing.
-- Increase stream token limit by 10–15% temporarily if saturation is confirmed.
-- Re-run self-cert (`scripts/sorafs_gateway_self_cert.sh`) after stabilisation.
+- Зөвхөн өртсөн гарцын процессыг дахин эхлүүлэх; олон үйлчилгээ үзүүлэгч амжилтгүй болохоос бусад тохиолдолд кластерыг бүхэлд нь дахин боловсруулахаас зайлсхий.
+- Хэрэв ханасан байдал батлагдсан бол урсгалын токен хязгаарыг түр хугацаанд 10-15%-иар нэмэгдүүлнэ.
+- Тогтворжуулсны дараа өөрөө баталгаажуулалтыг (`scripts/sorafs_gateway_self_cert.sh`) дахин ажиллуулна.
 
-**Post-incident**
+** Үйл явдлын дараах**
 
-- File a P1 postmortem using `docs/source/sorafs/postmortem_template.md`.
-- Schedule follow-up chaos drill if remediation relied on manual interventions.
+- `docs/source/sorafs/postmortem_template.md` ашиглан үхлийн дараах P1 файлыг бөглөнө үү.
+- Гар аргаар засч залруулахад тулгуурласан эмх замбараагүй байдлын дасгалыг төлөвлө.
 
-## Proof Failure Spike (PoR / PoTR)
+## Бүтэлгүйтлийн баталгаа (PoR / PoTR)
 
-**Detection**
+**Илрүүлэх**
 
-- Alerts: `SoraFSProofFailureSpike`, `SoraFSPoTRDeadlineMiss`.
-- Dashboard: `dashboards/grafana/sorafs_proof_integrity.json`.
-- Telemetry: `torii_sorafs_proof_stream_events_total` and `sorafs.fetch.error` events with `provider_reason=corrupt_proof`.
+- Анхааруулга: `SoraFSProofFailureSpike`, `SoraFSPoTRDeadlineMiss`.
+- Хяналтын самбар: `dashboards/grafana/sorafs_proof_integrity.json`.
+- Телеметр: `torii_sorafs_proof_stream_events_total` ба `sorafs.fetch.error` үйл явдлууд `provider_reason=corrupt_proof`.
 
-**Immediate actions**
+**Шууд арга хэмжээ**
 
-1. Freeze new manifest admissions by flagging the manifest registry (`docs/source/sorafs/manifest_pipeline.md`).
-2. Notify Governance to pause incentives for affected providers.
+1. Манифестын бүртгэлийг дарцаглаж (`docs/source/sorafs/manifest_pipeline.md`) шинэ манифестийн бүртгэлийг царцаана уу.
+2. Нөлөөлөлд өртсөн үйлчилгээ үзүүлэгчдийн урамшууллыг түр зогсоохыг засаглалд мэдэгдэнэ.
 
-**Triage**
+** Гурвалсан үе**
 
-- Check PoR challenge queue depth vs `sorafs_node_replication_backlog_total`.
-- Validate proof verification pipeline (`crates/sorafs_node/src/potr.rs`) for recent deployments.
-- Compare provider firmware versions with the operator registry.
+- `sorafs_node_replication_backlog_total` эсрэг PoR сорилтын дарааллын гүнийг шалгана уу.
+- Сүүлийн үеийн байршуулалтуудын баталгааг баталгаажуулах дамжуулах хоолойг (`crates/sorafs_node/src/potr.rs`) баталгаажуулна уу.
+- Үйлчилгээ үзүүлэгчийн програм хангамжийн хувилбаруудыг операторын бүртгэлтэй харьцуулах.
 
-**Remediation options**
+**Засах сонголтууд**
 
-- Trigger PoR replays using `sorafs_cli proof stream` with the latest manifest.
-- If proofs consistently fail, remove provider from active set by updating the governance registry and forcing orchestrator scoreboards to refresh.
+- Хамгийн сүүлийн үеийн манифест бүхий `sorafs_cli proof stream` ашиглан PoR дахин тоглуулахыг идэвхжүүлнэ үү.
+- Хэрэв нотолгоо байнга бүтэлгүйтвэл засаглалын бүртгэлийг шинэчилж, найруулагчийн онооны самбарыг дахин сэргээх замаар үйлчилгээ үзүүлэгчийг идэвхтэй багцаас хас.
 
-**Post-incident**
+** Үйл явдлын дараах**
 
-- Run the PoR chaos drill scenario before the next production deploy.
-- Capture lessons in the postmortem template and update provider qualification checklist.
+- Дараагийн үйлдвэрлэлийн байршуулалтаас өмнө PoR эмх замбараагүй өрөмдлөгийн хувилбарыг ажиллуул.
+- Нас барсны дараах загварт хичээлүүдийг бичиж, үйлчилгээ үзүүлэгчийн мэргэшлийн хяналтын хуудсыг шинэчлэх.
 
-## Replication Lag / Backlog Growth
+## Хуулбарлах хоцрогдол / Хоцрогдсон өсөлт
 
-**Detection**
+**Илрүүлэх**
 
-- Alerts: `SoraFSReplicationBacklogGrowing`, `SoraFSCapacityPressure`. Import
-  `dashboards/alerts/sorafs_capacity_rules.yml` and run
+- Анхааруулга: `SoraFSReplicationBacklogGrowing`, `SoraFSCapacityPressure`. Импорт
+  `dashboards/alerts/sorafs_capacity_rules.yml` ба ажиллуулна уу
   `promtool test rules dashboards/alerts/tests/sorafs_capacity_rules.test.yml`
-  before promotion so Alertmanager reflects the documented thresholds.
-- Dashboard: `dashboards/grafana/sorafs_capacity_health.json`.
-- Metrics: `sorafs_node_replication_backlog_total`, `sorafs_node_manifest_refresh_age_seconds`.
+  албан тушаал ахихын өмнө, тиймээс Alertmanager нь баримтжуулсан босгыг тусгадаг.
+- Хяналтын самбар: `dashboards/grafana/sorafs_capacity_health.json`.
+- хэмжигдэхүүн: `sorafs_node_replication_backlog_total`, `sorafs_node_manifest_refresh_age_seconds`.
 
-**Immediate actions**
+**Шууд арга хэмжээ**
 
-1. Verify backlog scope (single provider or fleet) and pause non-essential replication tasks.
-2. If backlog is isolated, temporarily reassign new orders to alternate providers via the replication scheduler.
+1. Хоцролтын хамрах хүрээг (нэг үйлчилгээ үзүүлэгч эсвэл флот) шалгаж, чухал бус хуулбарлах ажлыг түр зогсоо.
+2. Хэрэв хоцрогдол нь тусгаарлагдсан бол хуулбарлах хуваарьлагчаар дамжуулан өөр үйлчилгээ үзүүлэгчдэд шинэ захиалгыг түр хугацаагаар дахин хуваарилна уу.
 
-**Triage**
+** Гурвалсан үе**
 
-- Inspect orchestrator telemetry for retry bursts that may cascade backlog.
-- Confirm storage targets have sufficient headroom (`sorafs_node_capacity_utilisation_percent`).
-- Review recent configuration changes (chunk profile updates, proof cadence).
+- Оркестраторын телеметрийг дахин оролдох тасралтуудыг шалгана.
+- Хадгалах зорилтот зай хангалттай байгаа эсэхийг баталгаажуулах (`sorafs_node_capacity_utilisation_percent`).
+- Сүүлийн үеийн тохиргооны өөрчлөлтүүдийг шалгана уу (бүдүүн профайлын шинэчлэлт, баталгааны хэмнэл).
 
-**Remediation options**
+**Засах сонголтууд**
 
-- Run `sorafs_cli` with the `--rebalance` option to redistribute content.
-- Scale replication workers horizontally for the impacted provider.
-- Trigger manifest refresh to re-align TTL windows.
+- Агуулгыг дахин түгээхийн тулд `sorafs_cli`-г `--rebalance` сонголтоор ажиллуулна уу.
+- Нөлөөлөлд өртсөн үйлчилгээ үзүүлэгчийн хувьд хуулбарлах ажилчдыг хэвтээ байдлаар хуваах.
+- TTL цонхыг дахин тохируулахын тулд манифестийн шинэчлэлтийг идэвхжүүлнэ үү.
 
-**Post-incident**
+** Үйл явдлын дараах**
 
-- Schedule a capacity drill focusing on provider saturation failure.
-- Update replication SLA documentation in `docs/source/sorafs_node_client_protocol.md`.
+- Үйлчилгээ үзүүлэгчийн ханалтын доголдолд анхаарлаа хандуулж хүчин чадлын өрөмдлөгийн хуваарь гаргах.
+- `docs/source/sorafs_node_client_protocol.md` дээр хуулбарлах SLA баримт бичгийг шинэчлэх.
 
-## Repair Backlog & SLA Breaches
+## Хоцрогдол ба SLA зөрчлийг засах
 
-**Detection**
+**Илрүүлэх**
 
-- Alerts:
-  - `SoraFSRepairBacklogHigh` (queue depth > 50 or oldest queued age > 4h for 10m).
-  - `SoraFSRepairEscalations` (> 3 escalations/hour).
-  - `SoraFSRepairLeaseExpirySpike` (> 5 lease expiries/hour).
-  - `SoraFSRetentionBlockedEvictions` (retention blocked by active repairs in last 15m).
-- Dashboard: `dashboards/grafana/sorafs_capacity_health.json`.
+- Анхааруулга:
+  - `SoraFSRepairBacklogHigh` (дарааллын гүн > 50 эсвэл хамгийн хуучин дарааллын нас > 4 цаг 10 м).
+  - `SoraFSRepairEscalations` (> 3 өсөлт/цаг).
+  - `SoraFSRepairLeaseExpirySpike` (>5 түрээсийн хугацаа/цаг).
+  - `SoraFSRetentionBlockedEvictions` (сүүлийн 15 метрийн идэвхтэй засварын улмаас хадгалалт хаагдсан).
+- Хяналтын самбар: `dashboards/grafana/sorafs_capacity_health.json`.
 
-**Immediate actions**
+**Шууд арга хэмжээ**
 
-1. Identify affected providers (queue depth spikes) and pause new pins/replication orders for them.
-2. Verify repair worker liveness and increase worker concurrency if safe.
+1. Нөлөөлөлд өртсөн үйлчилгээ үзүүлэгчдийг (дарааллын гүнийн огцом өсөлт) тодорхойлж, тэдэнд зориулсан шинэ зүү/хуулбарлах захиалгыг түр зогсоо.
+2. Засварын ажилтны амьжиргааг шалгаж, аюулгүй бол ажилчдын нэгдмэл байдлыг нэмэгдүүлнэ.
 
-**Triage**
+** Гурвалсан үе**
 
-- Compare `torii_sorafs_repair_backlog_oldest_age_seconds` against the 4h SLA window.
-- Inspect `torii_sorafs_repair_lease_expired_total{outcome=...}` for crash/clock-skew patterns.
-- Review escalated tickets for repeated manifest/provider pairs and verify evidence bundles.
+- `torii_sorafs_repair_backlog_oldest_age_seconds`-г 4 цагийн SLA цонхтой харьцуул.
+- `torii_sorafs_repair_lease_expired_total{outcome=...}`-ийг гацах/цаг хазайсан хэв маягийг шалгана уу.
+- Давтагдсан манифест/үйлүүлэгчийн хосуудын өргөгдсөн тасалбарыг хянаж, нотлох баримтын багцыг шалгана уу.
 
-**Remediation options**
+**Засах сонголтууд**
 
-- Reassign or restart stalled repair workers; clear orphaned leases via the normal claim flow.
-- Throttle new pins while repairs drain to prevent additional SLA pressure.
-- Escalate to governance if escalations persist and attach the repair audit artefacts.
+- Зогсоосон засварын ажилчдыг дахин томилох буюу дахин эхлүүлэх; энгийн нэхэмжлэлийн урсгалаар өнчин түрээсийг арилгах.
+- Нэмэлт SLA даралтаас сэргийлэхийн тулд засварын үед ус зайлуулах цооногийг тохируулна.
+- Хэрэв хурцадмал байдал үргэлжилсээр байвал засаглал руу шилжиж, засварын аудитын олдворуудыг хавсаргана.
 
-## Retention / GC Inspection (Read-only)
+## Хадгалах / GC Inspection (Зөвхөн унших)
 
-**Detection**
+**Илрүүлэх**
 
-- Alerts: `SoraFSCapacityPressure` or sustained `torii_sorafs_storage_bytes_used` > 90%.
-- Dashboard: `dashboards/grafana/sorafs_capacity_health.json`.
+- Анхааруулга: `SoraFSCapacityPressure` эсвэл тогтвортой `torii_sorafs_storage_bytes_used` > 90%.
+- Хяналтын самбар: `dashboards/grafana/sorafs_capacity_health.json`.
 
-**Immediate actions**
+**Шууд арга хэмжээ**
 
-1. Run a local retention snapshot:
+1. Орон нутгийн хадгалалтын агшин зуурын зургийг ажиллуулна уу:
    ```bash
    iroha app sorafs gc inspect --data-dir /var/lib/sorafs
    ```
-2. Capture an expired-only view for triage:
+2. Гуравлахын тулд зөвхөн хугацаа нь дууссан зураг авах:
    ```bash
    iroha app sorafs gc dry-run --data-dir /var/lib/sorafs
    ```
-3. Attach the JSON outputs to the incident ticket for auditability.
+3. Аудит боломжтой байх үүднээс JSON гаралтыг ослын тасалбарт хавсаргана уу.
 
-**Triage**
+** Гурвалсан үе**
 
-- Confirm which manifests report `retention_epoch=0` (no expiry) vs. those with deadlines.
-- Use `retention_sources` in the GC JSON output to see which constraint set the effective
-  retention (`deal_end`, `governance_cap`, `pin_policy`, or `unbounded`). Deal and governance caps
-  are supplied via manifest metadata keys `sorafs.retention.deal_end_epoch` and
+- Хугацаатай `retention_epoch=0` (хугацаа нь дуусаагүй) тайлангийн аль нь болохыг баталгаажуулна уу.
+- GC JSON гаралт дахь `retention_sources`-г ашиглан аль хязгаарлалт нь үр дүнтэй болохыг хараарай.
+  хадгалах (`deal_end`, `governance_cap`, `pin_policy`, эсвэл `unbounded`). Хэлэлцээр ба засаглалын дээд хязгаар
+  `sorafs.retention.deal_end_epoch` манифест мета өгөгдлийн түлхүүрээр хангагдсан ба
   `sorafs.retention.governance_cap_epoch`.
-- If `dry-run` reports expired manifests but capacity remains pinned, verify no
-  active repairs or retention policy overrides block eviction.
-  Capacity-triggered sweeps evict expired manifests by least-recently-used order with
-  `manifest_id` tie-breakers.
+- Хэрэв `dry-run` тайлангийн хугацаа дууссан боловч хүчин чадал нь тогтоогдсон хэвээр байвал үгүй гэдгийг баталгаажуулна уу.
+  идэвхтэй засвар эсвэл хадгалах бодлого нь блок нүүлгэлтийг хүчингүй болгодог.
+  Хүчин чадлаар өдөөгдсөн шүүрлүүд нь хугацаа нь дууссан манифестуудыг хамгийн сүүлд ашигласан захиалгаар нүүлгэдэг.
+  `manifest_id` зангиа таслагч.
 
-**Remediation options**
+**Засах сонголтууд**
 
-- The GC CLI is read-only. Do not delete manifests or chunks manually in production.
-- Escalate to governance for retention policy adjustments or capacity expansion
-  when expired data accumulates without automated eviction.
+- GC CLI нь зөвхөн унших боломжтой. Үйлдвэрлэлийн явцад манифест эсвэл хэсгүүдийг гараар устгаж болохгүй.
+- Хадгалах бодлогын зохицуулалт эсвэл чадавхийг нэмэгдүүлэхийн тулд засаглал руу шилжих
+  хугацаа нь дууссан өгөгдөл автоматаар нүүлгэхгүйгээр хуримтлагдах үед.
 
 ## Chaos Drill Cadence
 
-- **Quarterly**: Combined gateway outage + orchestrator retry storm simulation.
-- **Biannual**: PoR/PoTR failure injection across two providers with recovery.
-- **Monthly spot-check**: Replication lag scenario using staging manifests.
-- Track drills in the shared runbook log (`ops/drill-log.md`) via:
+- **Улирал бүр**: Хосолсон гарцын тасалдал + найруулагчийн шуурганы симуляцийг дахин оролдох.
+- **Жилд хоёр удаа**: Сэргээх боломжтой хоёр үйлчилгээ үзүүлэгчийн хооронд PoR/PoTR алдаа тарина.
+- **Сар бүр спот-шалгах**: Тайлбарын манифест ашиглан хуулбарлах хоцрогдолтой хувилбар.
+- Хуваалцсан runbook лог (`ops/drill-log.md`) дээрх дасгалуудыг хянах:
 
   ```bash
   scripts/telemetry/log_sorafs_drill.sh \
@@ -206,15 +207,15 @@ This page mirrors the runbook maintained under `docs/source/sorafs_ops_playbook.
     --link "docs/source/sorafs/postmortem_template.md"
   ```
 
-- Validate the log before commits with:
+- Дараахыг хийхээс өмнө бүртгэлийг баталгаажуулна уу:
 
   ```bash
   scripts/telemetry/validate_drill_log.sh
   ```
 
-- Use `--status scheduled` for upcoming drills, `pass`/`fail` for completed runs, and `follow-up` when action items remain open.
-- Override the destination with `--log` for dry-runs or automated verification; without it the script continues to update `ops/drill-log.md`.
+- Удахгүй болох дасгалуудад `--status scheduled`, дууссан гүйлтэд `pass`/`fail`, үйлдлийн зүйл нээлттэй хэвээр байвал `follow-up` ашиглана уу.
+- Очих газраа `--log` ашиглан хуурай гүйлт эсвэл автомат баталгаажуулалт хийх; үүнгүйгээр скрипт нь `ops/drill-log.md` шинэчлэгдсээр байна.
 
-## Postmortem Template
+## Үхлийн дараах загвар
 
-Use `docs/source/sorafs/postmortem_template.md` for every P1/P2 incident and for chaos drill retrospectives. The template covers timeline, impact quantification, contributing factors, corrective actions, and follow-up verification tasks.
+`docs/source/sorafs/postmortem_template.md`-ийг P1/P2 тохиолдол бүрт болон эмх замбараагүй өрөмдлөгийн ретроспективуудад ашиглаарай. Загвар нь цаг хугацааны хуваарь, нөлөөллийн хэмжигдэхүүн, нөлөөлөгч хүчин зүйлс, засч залруулах арга хэмжээ, баталгаажуулалтын дараагийн ажлуудыг багтаасан болно.

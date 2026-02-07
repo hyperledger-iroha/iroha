@@ -4,21 +4,23 @@ direction: ltr
 source: docs/portal/docs/sorafs/reports/capacity-marketplace-validation.ar.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: التحقق من سوق سعة SoraFS
-tags: [SF-2c, acceptance, checklist]
-summary: قائمة تحقق للقبول تغطي انضمام المزودين، تدفقات النزاعات، وتسوية الخزانة التي تضبط جاهزية الإطلاق العام لسوق سعة SoraFS.
+título: التحقق من سوق سعة SoraFS
+tags: [SF-2c, aceitação, lista de verificação]
+resumo: قائمة تحقق للقبول تغطي انضمام المزودين, تدفقات النزاعات, وتسوية الخزانة التي تضبط A solução de problemas é SoraFS.
 ---
 
 # قائمة تحقق التحقق من سوق سعة SoraFS
 
-**نافذة المراجعة:** 2026-03-18 -> 2026-03-24  
-**مالكو البرنامج:** Storage Team (`@storage-wg`)، Governance Council (`@council`)، Treasury Guild (`@treasury`)  
-**النطاق:** مسارات انضمام المزودين، تدفقات تحكيم النزاعات، وعمليات تسوية الخزانة المطلوبة لـ SF-2c GA.
+**نافذة المراجعة:** 18/03/2026 -> 24/03/2026  
+**مالكو البرنامج:** Equipe de armazenamento (`@storage-wg`), Conselho de governança (`@council`), Guilda do Tesouro (`@treasury`)  
+**النطاق:** مسارات انضمام المزودين, تدفقات تحكيم النزاعات, وعمليات تسوية الخزانة المطلوبة لـ SF-2cGA.
 
-يجب مراجعة قائمة التحقق أدناه قبل تمكين السوق للمشغلين الخارجيين. كل صف يربط إلى دليل حتمي (tests أو fixtures أو توثيق) يمكن للمدققين إعادة تشغيله.
+Isso pode ser feito por meio de uma chave de fenda. Isso significa que o teste (testes, luminárias e testes) é algo que você pode fazer.
 
 ## قائمة تحقق القبول
 
@@ -26,28 +28,26 @@ summary: قائمة تحقق للقبول تغطي انضمام المزودين
 
 | الفحص | التحقق | الدليل |
 |-------|------------|----------|
-| يقبل registry إعلانات السعة القياسية | يقوم اختبار تكاملي بتشغيل `/v1/sorafs/capacity/declare` عبر app API، مع التحقق من معالجة التواقيع، التقاط metadata، وتسليمها إلى registry العقدة. | `crates/iroha_torii/src/routing.rs:7654` |
-| يرفض smart contract الـ payloads غير المتطابقة | يضمن اختبار وحدات أن معرفات المزود وحقول GiB الملتزم بها تطابق الإعلان الموقع قبل الحفظ. | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3445` |
-| يصدر CLI artefacts انضمام قياسية | يقوم CLI harness بكتابة مخرجات Norito/JSON/Base64 حتمية ويتحقق من round-trips حتى يتمكن المشغلون من إعداد الإعلانات offline. | `crates/sorafs_car/tests/capacity_cli.rs:17` |
-| يلتقط دليل المشغلين سير قبول الانضمام وحواجز الحوكمة | توثيق يعدد مخطط الإعلان، policy defaults، وخطوات المراجعة للمجلس. | `../storage-capacity-marketplace.md` |
+| يقبل registro إعلانات السعة القياسية | يقوم اختبار تكاملي بتشغيل `/v1/sorafs/capacity/declare` na API do aplicativo, مع التحقق من معالجة التواقيع, metadados de dados, وتسليمها إلى registro العقدة. | `crates/iroha_torii/src/routing.rs:7654` |
+| Construir contratos inteligentes e cargas úteis | Você pode usar o GiB para obter mais informações sobre o GiB. | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3445` |
+| Artefactos CLI Ferramentas de construção | O chicote CLI é usado para viagens de ida e volta Norito/JSON/Base64 e viagens de ida e volta. الإعلانات offline. | `crates/sorafs_car/tests/capacity_cli.rs:17` |
+| يلتقط دليل المشغلين سير قبول الانضمام e حواجز الحوكمة | Você pode definir os padrões de política e os padrões de política. | `../storage-capacity-marketplace.md` |
 
 ### تسوية النزاعات
 
 | الفحص | التحقق | الدليل |
 |-------|------------|----------|
-| تبقى سجلات النزاع مع digest قياسي للـ payload | يسجل اختبار وحدات نزاعا، ويفك payload المخزن، ويؤكد حالة pending لضمان حتمية ledger. | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:1835` |
-| مولد نزاعات CLI يطابق المخطط القياسي | يغطي اختبار CLI مخرجات Base64/Norito وملخصات JSON لـ `CapacityDisputeV1`، بما يضمن أن evidence bundles تُهش بشكل حتمي. | `crates/sorafs_car/tests/capacity_cli.rs:455` |
-| اختبار replay يثبت حتمية النزاع/العقوبة | telemetry الخاصة بـ proof-failure التي تُعاد مرتين تنتج snapshots متطابقة للـ ledger والائتمان والنزاع، ليبقى slashes حتميا بين peers. | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3430` |
-| يوثق runbook مسار التصعيد والإلغاء | يلتقط دليل العمليات سير المجلس ومتطلبات الأدلة وإجراءات rollback. | `../dispute-revocation-runbook.md` |
+| تبقى سجلات النزاع مع digest قياسي للـ payload | Você pode encontrar uma carga útil e uma carga útil pendente e um livro-razão pendente. | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:1835` |
+| مولد نزاعات CLI يطابق المخطط القياسي | Você pode usar CLI como Base64/Norito e JSON para `CapacityDisputeV1`, sem precisar de pacotes de evidências. Sim. | `crates/sorafs_car/tests/capacity_cli.rs:455` |
+| Repetir replay يثبت حتمية النزاع/العقوبة | telemetria. Seus colegas. | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3430` |
+| يوثق runbook مسار التصعيد والإلغاء | Não há nenhuma reversão e reversão. | `../dispute-revocation-runbook.md` |
 
-### تسوية الخزانة
-
-| الفحص | التحقق | الدليل |
+### تسوية الخزانة| الفحص | التحقق | الدليل |
 |-------|------------|----------|
-| تراكم ledger يطابق توقع soak لمدة 30 يوما | يمتد اختبار soak عبر خمسة مزودين على 30 نافذة settlement، مع مقارنة إدخالات ledger بالمرجع المتوقع للمدفوعات. | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3000` |
-| تسوية صادرات ledger تُسجل ليلا | يقارن `capacity_reconcile.py` توقعات fee ledger بصادرات تحويل XOR المنفذة، ويصدر مقاييس Prometheus، ويضبط موافقة الخزانة عبر Alertmanager. | `scripts/telemetry/capacity_reconcile.py:1`,`docs/source/sorafs/runbooks/capacity_reconciliation.md:1`,`dashboards/alerts/sorafs_capacity_rules.yml:100` |
-| لوحات billing تعرض العقوبات وtelemetry التراكم | يعرض استيراد Grafana تراكم GiB-hour، عدادات strikes، والضمان المربوط لتمكين الرؤية لدى فريق المناوبة. | `dashboards/grafana/sorafs_capacity_penalties.json:1` |
-| التقرير المنشور يؤرشف منهجية soak وأوامر replay | يوضح التقرير نطاق soak وأوامر التنفيذ وhooks للرصد من اجل المدققين. | `./sf2c-capacity-soak.md` |
+| Livro razão يطابق توقع molho 30 dias | يمتد اختبار absorver عبر خمسة مزودين على 30 نافذة liquidação, مع مقارنة إدخالات razão بالمرجع المتوقع Não. | `crates/iroha_core/src/smartcontracts/isi/sorafs.rs:3000` |
+| Livros-razão de contabilidade | يقارن `capacity_reconcile.py` توقعات livro razão de taxas بصادرات تحويل XOR المنفذة, ويصدر مقاييس Prometheus, ويضبط موافقة الخزانة عبر Alertmanager. | `scripts/telemetry/capacity_reconcile.py:1`,`docs/source/sorafs/runbooks/capacity_reconciliation.md:1`,`dashboards/alerts/sorafs_capacity_rules.yml:100` |
+| Serviços de facturação, facturação, serviços e telemetria | O Grafana possui GiB-hora, golpes de ataque, e o número de bits é o mesmo. | `dashboards/grafana/sorafs_capacity_penalties.json:1` |
+| التقرير المنشور يؤرشف منهجية absorver e reproduzir replay | Não deixe de molho, coloque os ganchos e os ganchos no lugar certo. | `./sf2c-capacity-soak.md` |
 
 ## ملاحظات التنفيذ
 
@@ -63,20 +63,20 @@ cargo test -p sorafs_car --features cli --test capacity_cli
 python3 scripts/telemetry/capacity_reconcile.py --snapshot <state.json> --ledger <ledger.ndjson> --warn-only
 ```
 
-يجب على المشغلين إعادة توليد payloads طلبات الانضمام/النزاع عبر `sorafs_manifest_stub capacity {declaration,dispute}` وأرشفة بايتات JSON/Norito الناتجة بجانب تذكرة الحوكمة.
+Não use cargas úteis para carregar cargas úteis / cargas úteis `sorafs_manifest_stub capacity {declaration,dispute}` e não usar JSON/Norito é um arquivo que está sendo executado.
 
-## artefacts الموافقة
+## artefatos
 
-| Artefact | Path | blake2b-256 |
-|----------|------|-------------|
-| حزمة موافقة انضمام المزودين | `docs/examples/sorafs_capacity_marketplace_validation/2026-03-24_onboarding_signoff.md` | `8f41a745d8d94710fe81c07839651520429d4abea5729bc00f8f45bbb11daa4c` |
-| حزمة موافقة تسوية النزاعات | `docs/examples/sorafs_capacity_marketplace_validation/2026-03-24_dispute_signoff.md` | `c3ac3999ef52857170fedb83cddbff7733ef5699f8b38aea2e65ae507a6229f7` |
-| حزمة موافقة تسوية الخزانة | `docs/examples/sorafs_capacity_marketplace_validation/2026-03-24_treasury_signoff.md` | `0511aeed1f5607c329428cd49c94d1af51292c85134c10c3330c172b0140e8c6` |
+| Artefato | Caminho | blake2b-256 |
+|----------|------|------------|
+| Máquinas de lavar roupa | `docs/examples/sorafs_capacity_marketplace_validation/2026-03-24_onboarding_signoff.md` | `8f41a745d8d94710fe81c07839651520429d4abea5729bc00f8f45bbb11daa4c` |
+| Máquinas de lavar roupa | `docs/examples/sorafs_capacity_marketplace_validation/2026-03-24_dispute_signoff.md` | `c3ac3999ef52857170fedb83cddbff7733ef5699f8b38aea2e65ae507a6229f7` |
+| Máquinas de lavar roupa | `docs/examples/sorafs_capacity_marketplace_validation/2026-03-24_treasury_signoff.md` | `0511aeed1f5607c329428cd49c94d1af51292c85134c10c3330c172b0140e8c6` |
 
-احتفظ بالنسخ الموقعة من هذه artefacts مع حزمة الإصدار واربطها في سجل تغييرات الحوكمة.
+احتفظ بالنسخ الموقعة من هذه artefatos مع حزمة الإصدار واربطها في سجل تغييرات الحوكمة.
 
 ## الموافقات
 
-- Storage Team Lead — @storage-tl (2026-03-24)  
-- Governance Council Secretary — @council-sec (2026-03-24)  
-- Treasury Operations Lead — @treasury-ops (2026-03-24)
+- Líder da equipe de armazenamento - @storage-tl (24/03/2026)  
+- Secretário do Conselho de Governança — @council-sec (2026-03-24)  
+- Líder de Operações de Tesouraria — @treasury-ops (24/03/2026)

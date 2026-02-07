@@ -4,61 +4,59 @@ direction: rtl
 source: docs/portal/docs/sorafs/developer-deployment.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: developer-deployment
-title: SoraFS deployment notes
-sidebar_label: Deployment notes
-description: CI سے production تک SoraFS pipeline promote کرنے کی checklist۔
+المعرف: نشر المطور
+العنوان: ملاحظات النشر SoraFS
+Sidebar_label: ملاحظات النشر
+الوصف: خط أنابيب CI للإنتاج SoraFS يروج لقائمة المراجعة.
 ---
 
-:::note مستند ماخذ
+:::ملاحظة مستند ماخذ
 :::
 
-# Deployment notes
+# ملاحظات النشر
 
-SoraFS packaging workflow determinism مضبوط کرتا ہے، اس لئے CI سے production پر جانا بنیادی طور پر operational guardrails مانگتا ہے۔ جب آپ ٹولنگ کو حقیقی gateways اور storage providers پر rollout کریں تو یہ checklist استعمال کریں۔
+SoraFS التعبئة والتغليف حتمية سير العمل مضيعة للوقت، وهي تهدف إلى إنتاج CI من خلال حواجز الحماية التشغيلية في مانگتا. فيما يلي بعض البوابات الحقيقية وموفري خدمات التخزين قبل بدء التشغيل أو قائمة التحقق من الاستخدام.
 
-## Pre-flight
+## ما قبل الرحلة
 
-- **Registry alignment** — تصدیق کریں کہ chunker profiles اور manifests ایک ہی `namespace.name@semver` tuple کو refer کرتے ہیں (`docs/source/sorafs/chunker_registry.md`).
-- **Admission policy** — `manifest submit` کے لئے درکار signed provider adverts اور alias proofs کا جائزہ لیں (`docs/source/sorafs/provider_admission_policy.md`).
-- **Pin registry runbook** — recovery scenarios (alias rotation, replication failures) کے لئے `docs/source/sorafs/runbooks/pin_registry_ops.md` قریب رکھیں۔
+- **محاذاة التسجيل** — يمكنك التحقق من ملفات تعريف وبيانات المقسم في صف `namespace.name@semver` الذي يشير إلى القائمة (`docs/source/sorafs/chunker_registry.md`).
+- **سياسة القبول** — `manifest submit` کے لئے دکار إعلانات المزود الموقعة وإثباتات الأسماء المستعارة کا جائزہ لیں (`docs/source/sorafs/provider_admission_policy.md`).
+- **دبوس سجل التشغيل** — سيناريوهات الاسترداد (تدوير الاسم المستعار، فشل النسخ المتماثل) `docs/source/sorafs/runbooks/pin_registry_ops.md` قریب رکھیں۔
 
-## Environment configuration
+## تكوين البيئة
 
-- Gateways کو proof streaming endpoint (`POST /v1/sorafs/proof/stream`) enable کرنا ہوگا تاکہ CLI telemetry summaries emit کر سکے۔
-- `sorafs_alias_cache` policy کو `iroha_config` defaults یا CLI helper (`sorafs_cli manifest submit --alias-*`) کے ذریعے configure کریں۔
-- Stream tokens (یا Torii credentials) کو ایک محفوظ secret manager سے فراہم کریں۔
-- Telemetry exporters (`torii_sorafs_proof_stream_*`, `torii_sorafs_chunk_range_*`) enable کریں اور انہیں اپنے Prometheus/OTel stack میں ship کریں۔
+- تمكّن البوابات التي تثبت نقطة النهاية للتدفق (`POST /v1/sorafs/proof/stream`) من إرسال ملخصات القياس عن بعد لـ CLI إلى كرنا ہوگا تاکہ.
+- سياسة `sorafs_alias_cache` أو الإعدادات الافتراضية `iroha_config` أو مساعد CLI (`sorafs_cli manifest submit --alias-*`) الذي يتم تكوينه.
+- رموز الدفق (أو بيانات اعتماد Torii) وهي عبارة عن مدير سري محفوظ.
+- يقوم مصدرو القياس عن بعد (`torii_sorafs_proof_stream_*`، `torii_sorafs_chunk_range_*`) بتمكين الشحن والنقل عبر مكدس Prometheus/OTel.
 
-## Rollout strategy
+## استراتيجية الطرح1. **بيانات اللون الأزرق/الأخضر**
+   - يتم استخدام أرشيف الردود على الطرح `manifest submit --summary-out`.
+   - `torii_sorafs_gateway_refusals_total` عدم تطابق قدرة القدرة على النظر إلى الجلد.
+2. **التحقق من صحة الإثبات**
+   - `sorafs_cli proof stream` من بين حالات الفشل في حاصرات النشر؛ ارتفاع زمن الاستجابة بسبب زيادة اختناق الموفر أو الطبقات التي تمت تهيئتها بشكل خاطئ.
+   - اختبار دخان ما بعد الدبوس `proof verify` يتضمن تقنية اللعب التي يقدمها مقدمو خدمة CAR المستضافة ومطابقة ملخص البيان.
+3. **لوحات معلومات القياس عن بعد**
+   - `docs/examples/sorafs_proof_streaming_dashboard.json` وGrafana يتم استيراده.
+   - صحة التسجيل الدبوس (`docs/source/sorafs/runbooks/pin_registry_ops.md`) وإحصائيات نطاق القطعة للوحات الإضافية.
+4. **تمكين متعدد المصادر**
+   - قام المنسق في `docs/source/sorafs/runbooks/multi_source_rollout.md` بتنظيم خطوات بدء التشغيل، وعمليات التدقيق لأرشفة لوحة النتائج/عناصر القياس عن بعد.
 
-1. **Blue/green manifests**
-   - ہر rollout کے لئے responses archive کرنے کے لئے `manifest submit --summary-out` استعمال کریں۔
-   - `torii_sorafs_gateway_refusals_total` پر نظر رکھیں تاکہ capability mismatches جلدی پکڑ لیں۔
-2. **Proof validation**
-   - `sorafs_cli proof stream` میں failures کو deployment blockers سمجھیں؛ latency spikes اکثر provider throttling یا misconfigured tiers کی نشاندہی کرتے ہیں۔
-   - Post-pin smoke test میں `proof verify` شامل کریں تاکہ یقینی ہو کہ providers پر hosted CAR اب بھی manifest digest سے match کرتا ہے۔
-3. **Telemetry dashboards**
-   - `docs/examples/sorafs_proof_streaming_dashboard.json` کو Grafana میں import کریں۔
-   - Pin registry health (`docs/source/sorafs/runbooks/pin_registry_ops.md`) اور chunk range stats کے لئے اضافی panels لگائیں۔
-4. **Multi-source enablement**
-   - Orchestrator آن کرتے وقت `docs/source/sorafs/runbooks/multi_source_rollout.md` کے staged rollout steps فالو کریں، اور audits کے لئے scoreboard/telemetry artifacts archive کریں۔
+## التعامل مع الحوادث
 
-## Incident handling
+- `docs/source/sorafs/runbooks/` مسارات التصعيد فالو کریں:
+  - `sorafs_gateway_operator_playbook.md` انقطاع البوابة واستنفاد رمز الدفق.
+  - `dispute_revocation_runbook.md` جب نزاعات النسخ المتماثل ہوں۔
+  - `sorafs_node_ops.md` الصيانة على مستوى العقدة کے لئے۔
+  - `multi_source_rollout.md` يتجاوز المنسق، ووضع القائمة السوداء للأقران، وعمليات الطرح المرحلية.
+- إثبات حالات الفشل وشذوذ زمن الوصول في GovernanceLog الذي يتضمن واجهات برمجة التطبيقات (APIs) لتعقب PoR الموجودة والتي تسجل أداء موفر الحوكمة وتقييم الأداء.
 
-- `docs/source/sorafs/runbooks/` میں escalation paths فالو کریں:
-  - `sorafs_gateway_operator_playbook.md` gateway outages اور stream-token exhaustion کے لئے۔
-  - `dispute_revocation_runbook.md` جب replication disputes ہوں۔
-  - `sorafs_node_ops.md` node-level maintenance کے لئے۔
-  - `multi_source_rollout.md` orchestrator overrides، peer blacklisting، اور staged rollouts کے لئے۔
-- Proof failures اور latency anomalies کو GovernanceLog میں موجود PoR tracker APIs کے ذریعے record کریں تاکہ governance provider performance assess کر سکے۔
+## الخطوات التالية- منسق جلب متعدد المصادر (SF-6b) يعمل على أتمتة المنسق (`sorafs_car::multi_fetch`) يدمج کریں.
+- ترقيات PDP/PoTR إلى SF-13/SF-14 في المسار الصحيح؛ عندما تثبت البراهين المواعيد النهائية لـ CLI والمستندات وسطح اختيار الطبقة.
 
-## Next steps
-
-- Multi-source fetch orchestrator (SF-6b) آنے پر orchestrator automation (`sorafs_car::multi_fetch`) integrate کریں۔
-- PDP/PoTR upgrades کو SF-13/SF-14 کے تحت track کریں؛ جب یہ proofs stabilize ہوں تو CLI اور docs deadlines اور tier selection surface کریں گے۔
-
-ان deployment notes کو quickstart اور CI recipes کے ساتھ ملانے سے ٹیمیں local experiments سے production-grade SoraFS pipelines تک repeatable اور observable process کے ساتھ جا سکتی ہیں۔
+إن ملاحظات النشر ووصفات التشغيل السريع وCI التي تتضمن تجارب محلية وخطوط أنابيب SoraFS من فئة الإنتاج هي عملية قابلة للتكرار ويمكن ملاحظتها وهي مستمرة.

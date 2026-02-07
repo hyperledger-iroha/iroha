@@ -4,25 +4,27 @@ direction: ltr
 source: docs/portal/docs/sorafs/developer-ci.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: developer-ci
-title: SoraFS CI recipes
-sidebar_label: CI recipes
-description: GitHub اور GitLab pipelines میں keyless signing کے ساتھ SoraFS CLI چلائیں۔
+ID: 開発者-ci
+title: SoraFS CI レシピ
+サイドバー_ラベル: CI レシピ
+説明: GitHub、GitLab パイプライン、キーレス署名、SoraFS CLI、および
 ---
 
-:::note مستند ماخذ
+:::note メモ
 :::
 
-# SoraFS CI recipes
+# SoraFS CI レシピ
 
-SoraFS pipelines deterministic chunking، manifest signing اور proof verification سے فائدہ اٹھاتے ہیں۔
-`sorafs_cli` command surface ان steps کو CI providers کے درمیان portable رکھتا ہے۔ یہ صفحہ canonical
-recipes highlight کرتا ہے اور ready-to-use templates کی طرف اشارہ کرتا ہے۔
+SoraFS パイプラインの決定論的チャンク化、マニフェストの署名、証明の検証、およびテスト。
+`sorafs_cli` コマンド サーフェスの手順と CI プロバイダーのポータブル バージョン正規品
+レシピのハイライト すぐに使えるテンプレート طرف اشارہ کرتا ہے۔
 
-## GitHub Actions (keyless)
+## GitHub アクション (キーレス)
 
 ```yaml
 name: sorafs-artifacts
@@ -95,11 +97,11 @@ jobs:
           path: artifacts/
 ```
 
-Key points:
+重要なポイント:
 
-- Static signing keys store نہیں ہوتے؛ OIDC tokens on-demand fetch ہوتے ہیں۔
-- Artifacts (CAR, manifest, bundle, proof summaries) review کے لیے upload ہوتے ہیں۔
-- Job وہی Norito schemas reuse کرتا ہے جو production rollouts میں استعمال ہوتے ہیں۔
+- 静的署名キー ストアOIDC トークンのオンデマンドフェッチ ہوتے ہیں۔
+- アーティファクト (CAR、マニフェスト、バンドル、証明の概要) のレビュー、アップロード、アップロード
+- ジョブ وہی Norito スキーマの再利用 ٩رتا ہے جو 運用ロールアウト میں استعمال ہوتے ہیں۔
 
 ## GitLab CI
 
@@ -135,12 +137,12 @@ sorafs:publish:
       - artifacts/
 ```
 
-- `SIGSTORE_ID_TOKEN` کو GitLab workload identity federation یا sealed secret کے ذریعے provision کریں، publish stage چلانے سے پہلے۔
-- CLI کے کسی بھی step کی failure pipeline کو halt کر دیتی ہے، اور consistent artifacts محفوظ رہتے ہیں۔
+- `SIGSTORE_ID_TOKEN` GitLab Workload Identity フェデレーション、封印された秘密、プロビジョニング、公開ステージ、および公開ステージ
+- CLI ステップ 失敗パイプライン 停止 一貫性のあるアーティファクト チェック
 
-## Additional resources
+## 追加のリソース
 
-- End-to-end templates (Bash helpers، federated identity configuration، اور clean-up steps شامل ہیں): `docs/examples/sorafs_ci.md`
-- CLI reference جو ہر option cover کرتا ہے: `docs/source/sorafs_cli.md`
-- Submission سے پہلے governance/alias requirements:
+- エンドツーエンドのテンプレート (Bash ヘルパー、フェデレーション ID 構成、クリーンアップ手順): `docs/examples/sorafs_ci.md`
+- CLI リファレンス オプション カバー: `docs/source/sorafs_cli.md`
+- 提出に関するガバナンス/エイリアスの要件:
   `docs/source/sorafs/provider_admission_policy.md`

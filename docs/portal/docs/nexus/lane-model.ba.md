@@ -10,60 +10,61 @@ translation_last_reviewed: 2026-02-07
 id: nexus-lane-model
 title: Nexus lane model
 description: Logical lane taxonomy, configuration geometry, and world-state merge rules for Sora Nexus.
+translator: machine-google-reviewed
 ---
 
-# Nexus Lane Model & WSV Partitioning
+# I18NT0000000004X лейн-моделе һәм WSV бүленеше
 
-> **Status:** NX-1 deliverable — lane taxonomy, configuration geometry, and storage layout are ready for implementation.  
-> **Owners:** Nexus Core WG, Governance WG  
-> **Roadmap reference:** NX-1 in `roadmap.md`
+> **Статус:** NX-1 тапшырыу — һыҙат таксономияһы, конфигурация геометрияһы һәм һаҡлау планировкаһы тормошҡа ашырыу өсөн әҙер.  
+> **Хужалар:** I18NT0000000005Х Ядро В.Г., идара итеү WG  
+> **Рад картаһы һылтанмаһы:** NX-1 `roadmap.md` .
 
-This portal page mirrors the canonical `docs/source/nexus_lanes.md` brief so Sora
-Nexus operators, SDK owners, and reviewers can read the lane guidance without
-diving into the mono-repo tree. The target architecture keeps the world state
-deterministic while allowing individual data spaces (lanes) to run public or
-private validator sets with isolated workloads.
+Был портал битендә канонлы I18NI000000017X брифы шулай Сора .
+I18NT0000000006X операторҙары, SDK хужалары, һәм рецензенттар 2012 йылғы юл етәкселеген уҡый ала.
+моно-репо ағасына һыу инеү. Маҡсат архитектураһы донъя дәүләтен һаҡлай .
+детерминистик, шул уҡ ваҡытта айырым мәғлүмәт киңлектәрен (лайндар) йәмәғәт йәки
+шәхси валитатор комплекттары менән айырымланған эш йөкләмәһе.
 
-## Concepts
+## Концепттар
 
-- **Lane:** Logical shard of the Nexus ledger with its own validator set and
-  execution backlog. Identified by a stable `LaneId`.
-- **Data Space:** Governance bucket grouping one or more lanes that share
-  compliance, routing, and settlement policies.
-- **Lane Manifest:** Governance-controlled metadata describing validators, DA
-  policy, gas token, settlement rules, and routing permissions.
-- **Global Commitment:** Proof emitted by a lane summarising new state roots,
-  settlement data, and optional cross-lane transfers. The global NPoS ring
-  orders commitments.
+- **Лейн:** I18NT0000000007X баш китабының логик осколкаһы үҙенең валитаторы комплекты һәм
+  башҡарыу артта ҡалған. I18NI000000018X тотороҡло танылған.
+- **Мәғлүмәттәр йыһан:** Идара итеү биҙрә төркөмләү бер йәки бер нисә һыҙат, улар бүлешә
+  үтәү, маршрутлаштырыу, һәм иҫәп-хисап сәйәсәте.
+- **Лейн Манифест:** Идара итеү контролдә тотолған метамағлүмәттәр валидаторҙарын тасуирлай, Д.А.
+  сәйәсәт, газ жетон, иҫәп-хисап ҡағиҙәләре, һәм маршрутлаштырыу рөхсәттәре.
+- **Глобаль йөкләмә:** Яңы дәүләт тамырҙарын дөйөмләштереү һыҙаты менән сығарылған иҫбатлау,
+  иҫәп-хисап мәғлүмәттәре, һәм факультатив кросс-һыҙыҡ күсермәләр. Глобаль NPoS йөҙөк
+  бойороҡтар йөкләмәләр.
 
-## Lane taxonomy
+## Лейн таксономияһы
 
-Lane types canonically describe their visibility, governance surface, and
-settlement hooks. The configuration geometry (`LaneConfig`) captures these
-attributes so nodes, SDKs, and tooling can reason about the layout without
-bespoke logic.
+Лейн типтары канон һүрәтләү уларҙы күренеш, идара итеү өҫтө, һәм
+ҡасаба ҡармаҡтары. Конфигурация геометрияһы (I18NI000000019X) был тота.
+атрибуттар шулай төйөндәр, SDKs, һәм инструменттар тураһында фекер йөрөтөү мөмкин макеты тураһында .
+заказ буйынса логика.
 
-| Lane type | Visibility | Validator membership | WSV exposure | Default governance | Settlement policy | Typical use |
-|-----------|------------|----------------------|--------------|--------------------|-------------------|-------------|
-| `default_public` | public | Permissionless (global stake) | Full state replica | SORA Parliament | `xor_global` | Baseline public ledger |
-| `public_custom` | public | Permissionless or stake-gated | Full state replica | Stake weighted module | `xor_lane_weighted` | High-throughput public applications |
-| `private_permissioned` | restricted | Fixed validator set (governance approved) | Commitments & proofs | Federated council | `xor_hosted_custody` | CBDC, consortium workloads |
-| `hybrid_confidential` | restricted | Mixed membership; wraps ZK proofs | Commitments + selective disclosure | Programmable money module | `xor_dual_fund` | Privacy-preserving programmable money |
+| Тип һыҙығы | Күренеш | Валидатор ағзалығы | WSV экспозицияһы | Ғәҙәттәгесә идара итеү | Ҡасаба сәйәсәте | Типик ҡулланыу |
+|---------|---------------------------------|--------------------------------- ---|-------------------|------------------|--------------- |
+| `default_public` | йәмәғәт | Рөхсәтһеҙ (глобаль ставка) | Тулы дәүләт репликаһы | SORA Парламент | `xor_global` | Базалы йәмәғәт баш китабы |
+| `public_custom` | йәмәғәт | Рөхсәтһеҙ йәки ставка-ҡапҡа | Тулы дәүләт репликаһы | Стаклы ауырлыҡлы модуль | `xor_lane_weighted` | Юғары етештереүсәнлекле йәмәғәт ҡушымталары |
+| `private_permissioned` | сикләнгән | Ҡатнашыусы валитатор йыйылмаһы (идара итеү раҫланған) | Ҡулдар һәм дәлилдәр | Федераль совет | `xor_hosted_custody` | CBDC, консорциум эш йөкләмәләре |
+| `hybrid_confidential` | сикләнгән | Ҡатнаш ағзалыҡ; ZK дәлилдәрен урап | Ҡулдар + һайлап алыу асыҡлау | Программалы аҡса модуле | `xor_dual_fund` | Хосусилыҡты һаҡлаусы программалы аҡса |
 
-All lane types must declare:
+Бөтә һыҙат төрҙәре лә иғлан итергә тейеш:
 
-- Dataspace alias — human-readable grouping that binds compliance policies.
-- Governance handle — identifier resolved through `Nexus.governance.modules`.
-- Settlement handle — identifier consumed by the settlement router to debit XOR
-  buffers.
-- Optional telemetry metadata (description, contact, business domain) surfaced
-  through `/status` and dashboards.
+- Dataspace псевдонимы — кеше уҡый торған төркөмләү, тип бәйләй үтәү сәйәсәте.
+- Идара итеү тотҡаһы — идентификатор I18NI000000028X аша хәл ителә.
+- Ҡасаба тотҡаһы — ҡасаба маршрутизаторы ҡулланған идентификатор XOR дебет
+  буферҙары.
+- Опциональ телеметрия метамағлүмәттәре (тасуирлама, контакт, эшлекле домен)
+  аша I18NI000000029X һәм приборҙар таҡталары.
 
-## Lane configuration geometry (`LaneConfig`)
+## һыҙатлы конфигурация геометрияһы (I18NI000000030X)
 
-`LaneConfig` is the runtime geometry derived from the validated lane catalog. It
-does **not** replace governance manifests; instead it provides deterministic
-storage identifiers and telemetry hints for every configured lane.
+I18NI000000031X — раҫланған һыҙат каталогынан алынған геометрия эшләү ваҡыты. Был
+** түгел ** идара итеүҙе алмаштырыу күрһәтә; урынына ул детерминистик тәьмин итә
+һаҡлау идентификаторҙары һәм телеметрия кәңәштәре өсөн һәр конфигурацияланған һыҙат.
 
 ```text
 LaneConfigEntry {
@@ -80,112 +81,112 @@ LaneConfigEntry {
 }
 ```
 
-- `LaneConfig::from_catalog` recomputes the geometry whenever configuration is
-  loaded (`State::set_nexus`).
-- Aliases are sanitised into lowercase slugs; consecutive non-alphanumeric
-  characters collapse into `_`. If the alias yields an empty slug we fall back
-  to `lane{id}`.
-- `shard_id` is derived from the catalog metadata key `da_shard_id` (defaulting
-  to `lane_id`) and drives the persisted shard cursor journal to keep DA replay
-  deterministic across restarts/resharding.
-- Key prefixes ensure the WSV keeps per-lane key ranges disjoint even when the
-  same backend is shared.
-- Kura segment names are deterministic across hosts; auditors can cross-check
-  segment directories and manifests without bespoke tooling.
-- Merge segments (`lane_{id:03}_merge`) hold the latest merge-hint roots and
-  global state commitments for that lane.
+- I18NI0000000032X геометрияны конфигурация ҡасан ғына ҡабатлай.
+  тейәлгән (I18NI000000033X).
+- псевдонимдар бәләкәй хәрефтәргә санитариялана; эҙмә-эҙлекле алфатлы булмаған
+  символдар `_`-ға тарҡала. Әгәр псевдонимдар буш слизнять бирәбеҙ, беҙ кире төшәбеҙ
+  `lane{id}` тиклем.
+- I18NI0000000036X каталог метамағлүмәттәр асҡысы I18NI000000037X (дефолдинг
+  I18NI000000038X тиклем) һәм DA реплейын һаҡлау өсөн ныҡышмалы осколка курсоры журналын йөрөтә
+  детерминистик аша перезапуск/порошок.
+- Асҡыс префикстары тәьмин итеү WSV һаҡлай бер һыҙат асҡыс диапазондары dischoint хатта ҡасан да
+  шул уҡ бэкэнд менән уртаҡ.
+- Кура сегменттары исемдәре хужалар буйынса детерминистик; аудиторҙар кросс-тикшерә ала
+  сегмент каталогтары һәм нәфислек инструментһыҙ инструменталь.
+- Берләштереү сегменттары (I18NI0000000039X) һуңғы берләштереү-күҙаллау тамырҙары һәм
+  глобаль дәүләт йөкләмәләре өсөн шул һыҙат.
 
-## World-state partitioning
+## Донъя-дәүләт бүленеше
 
-- The logical Nexus world state is the union of per-lane state spaces. Public
-  lanes persist full state; private/confidential lanes export Merkle/commitment
-  roots to the merge ledger.
-- MV storage prefixes every key with the 4-byte lane prefix from
-  `LaneConfigEntry::key_prefix`, yielding keys such as `[00 00 00 01] ++
+- логик Nexus донъя дәүләте — юл буйынса дәүләт киңлектәренең берләшеүе. Йәмәғәт
+  һыҙаттар тулы дәүләт һаҡлана; шәхси/конфиденциаль һыҙаттар экспортлау Меркл/эшкә
+  тамырҙары берләштереү баш китабына тиклем.
+- МВ һаҡлау префикстары һәр асҡыс менән 4-байт һыҙатлы префикс 2012 йылдан .
+  I18NI000000040X, `[00 00 00 01] ++ кеүек асҡыстар бирә.
   PackedKey`.
-- Shared tables (accounts, assets, triggers, governance records) therefore store
-  entries grouped by lane prefix, keeping range scans deterministic.
-- Merge-ledger metadata mirrors the same layout: each lane writes merge-hint
-  roots and reduced global state roots to `lane_{id:03}_merge`, allowing
-  targeted retention or eviction when a lane retires.
-- Cross-lane indexes (account aliases, asset registries, governance manifests)
-  store explicit lane prefixes so operators can reconcile entries quickly.
-- **Retention policy** — public lanes retain full block bodies; commitment-only
-  lanes may compact older bodies after checkpoints because commitments are
-  authoritative. Confidential lanes keep ciphertext journals in dedicated
-  segments to avoid blocking other workloads.
-- **Tooling** — maintenance utilities (`kagami`, CLI admin commands) should
-  reference the slugged namespace when exposing metrics, Prometheus labels, or
-  archiving Kura segments.
+- Дөйөм таблицалар (иҫәптәр, активтар, триггерҙар, идара итеү яҙмалары) шуға күрә һаҡлай
+  һыҙаттар префикстары менән төркөмләнгән яҙмалар, диапазон сканерлауҙы һаҡлау детерминистик.
+- Берләшеп торған метамағлүмәттәр бер үк планировканы көҙгөләй: һәр һыҙат берләштереү-уҡыу яҙа
+  тамырҙары һәм глобаль дәүләт тамырҙарын кәметергә I18NI000000041X, рөхсәт итеү
+  маҡсатлы һаҡлау йәки күсерергә ҡасан һыҙат пенсияға сыға.
+- Кросс-транс индекстары (иҫәп псевдонимы, активтар реестрҙары, идара итеү күрһәтә)
+  һаҡлау асыҡ һыҙат префикстары, шулай итеп, операторҙар тиҙ яраштырырға мөмкин.
+- **Тотоу сәйәсәте** — йәмәғәт һыҙаттары тулы блоклы органдарҙы һаҡлай; тик йөкләмә-тик
+  һыҙаттар тикшерелгән пункттарҙан һуң иҫке органдарҙы тығыҙлай ала, сөнки йөкләмәләр
+  авторитетлы. Конфиденциаль һыҙаттар шифр-текст журналдарын һаҡлай бағышланған .
+  сегменттар башҡа эш йөкләмәләрен блоклауҙан ҡотолоу өсөн.
+- **Толлинг** — хеҙмәтләндереүҙең коммуналь хеҙмәттәре (I18NI000000042X, CLI админ командалары) тейеш
+  һылтанма slugged исемдәр киңлегендә ҡасан метрика, I18NT0000000000X ярлыҡтары, йәки
+  архивлау Кура сегменттары.
 
-## Routing & APIs
+## Маршрутлаштырыу & API-лар
 
-- Torii REST/gRPC endpoints accept an optional `lane_id`; absence implies
+- I18NT000000013X REST/gRPC ос нөктәләре ҡабул итә опциональ `lane_id`; юҡлығы күҙ уңында тота
   `lane_default`.
-- SDKs surface lane selectors and map user-friendly aliases to `LaneId` using
-  the lane catalog.
-- Routing rules operate on the validated catalog and may pick both lane and
-  dataspace. `LaneConfig` provides telemetry-friendly aliases for dashboards and
-  logs.
+- SDKs өҫкө һыҙат селекторҙары һәм картаһы ҡулланыусылар өсөн уңайлы псевдоним I18NI000000045X ҡулланып .
+  һыҙат каталогы.
+- Маршрутлаштырыу ҡағиҙәләре раҫланған каталогта эшләй һәм һыҙаттар һәм һыҙаттар һәм һайлап алыу мөмкин.
+  мәғлүмәттәр киңлеге. I18NI000000046X телеметрия-дуҫ псевдонимдар өсөн приборҙар таҡталары һәм
+  журналдар.
 
-## Settlement & fees
+## Ҡасаба & гонорарҙар
 
-- Every lane pays XOR fees to the global validator set. Lanes may collect native
-  gas tokens but must escrow XOR equivalents alongside commitments.
-- Settlement proofs include amount, conversion metadata, and proof of escrow
-  (for example, transfer to the global fee vault).
-- The unified settlement router (NX-3) debits buffers using the same lane
-  prefixes, so settlement telemetry lines up with storage geometry.
+- Һәр һыҙат глобаль валидатор йыйылмаһына XOR түләүҙәрен түләй. Лейнс йыя ала тыуған ер .
+  газ жетондары, әммә йөкләмәләр менән бер рәттән XOR эквиваленты эскроусы булырға тейеш.
+- Ҡасаба иҫбатлауҙары суммаһы, конверсия метамағлүмәттәре һәм эскроу иҫбатлауы инә.
+  (мәҫәлән, донъя гонорарына күсеү).
+- Берҙәм ҡасаба маршрутизаторы (NX-3) дебет буферҙары ҡулланып, шул уҡ һыҙат .
+  префикстар, шуға күрә ҡаласыҡ телеметрияһы һаҡлау геометрияһы менән рәткә сыға.
 
-## Governance
+## Идара итеү
 
-- Lanes declare their governance module via the catalog. `LaneConfigEntry`
-  carries the original alias and slug to keep telemetry and audit trails
-  readable.
-- The Nexus registry distributes signed lane manifests that include the
-  `LaneId`, dataspace binding, governance handle, settlement handle, and
-  metadata.
-- Runtime-upgrade hooks continue to enforce governance policies
-  (`gov_upgrade_id` by default) and log diffs via the telemetry bridge
-  (`nexus.config.diff` events).
+- Лейнс каталог аша үҙҙәренең идара итеү модулен иғлан итә. `LaneConfigEntry`
+  тәүге псевдонимын һәм слизняктарҙы телеметрия һәм аудит юлдарын һаҡлау өсөн слизняк йөрөтә
+  уҡымлы.
+- I18NT0000000010X реестры тарата ҡул ҡуйылған һыҙат манифесттары, улар үҙ эсенә ала
+  I18NI000000048X, мәғлүмәттәр киңлектә бәйләү, идара итеү ручкаһы, иҫәп-хисап ручкаһы һәм
+  метамағлүмәттәр.
+- Йүгереп йөрөүсе ҡармаҡтар идара итеү сәйәсәтен үтәүен дауам итә
+  (I18NI0000000049X Xeak ) һәм лог диффтар аша телеметрия күпере
+  (`nexus.config.diff` ваҡиғалар).
 
-## Telemetry & status
+## Телеметрия & статус
 
-- `/status` exposes lane aliases, dataspace bindings, governance handles, and
-  settlement profiles, derived from the catalog and `LaneConfig`.
-- Scheduler metrics (`nexus_scheduler_lane_teu_*`) render lane aliases/slugs so
-  operators can map backlog and TEU pressure quickly.
-- `nexus_lane_configured_total` counts the number of derived lane entries and is
-  recomputed when configuration changes. Telemetry emits signed diffs whenever
-  lane geometry changes.
-- Dataspace backlog gauges include the alias/description metadata to help
-  operators associate queue pressure with business domains.
+- I18NI000000051X һыҙат псевдонимы, мәғлүмәт киңлеге бәйләүҙәре, идара итеү тотҡалары һәм
+  ҡаласыҡ профилдәре, каталог һәм I18NI000000052X алынған.
+- График метрикаһы (I18NI000000053X) һыҙат псевдонимы/славкалар шулай рендер
+  операторҙары артта ҡалыу һәм ТЭУ баҫымын тиҙ картаға төшөрә ала.
+- I18NI000000054X алынған һыҙат яҙмалары һанын иҫәпләй һәм
+  конфигурация үҙгәргәндә яңынан иҫәпләнгән. Телеметрия 1990 йылда диффтар ҡул ҡуйҙы.
+  һыҙат геометрияһы үҙгәрә.
+- Dataspace артта ҡалған датчиктар псевдонимы/тасуирлама метамағлүмәттәре ярҙам итә
+  операторҙар сират баҫымын бизнес домендары менән бәйләй.
 
-## Configuration & Norito types
+## Конфигурация & I18NT0000000001X типтары
 
-- `LaneCatalog`, `LaneConfig`, and `DataSpaceCatalog` live in
-  `iroha_data_model::nexus` and provide Norito-format structures for
-  manifests and SDKs.
-- `LaneConfig` lives in `iroha_config::parameters::actual::Nexus` and is derived
-  automatically from the catalog; it does not require Norito encoding because it
-  is an internal runtime helper.
-- The user-facing configuration (`iroha_config::parameters::user::Nexus`)
-  continues to accept declarative lane and dataspace descriptors; parsing now
-  derives the geometry and rejects invalid aliases or duplicate lane IDs.
+— I18NI000000055X, I18NI000000056X, һәм I18NI000000057X 1990 йылда йәшәй.
+  I18NI000000058X һәм I18NT000000002X-формат структураларын тәьмин итеү өсөн 2019 йыл.
+  манифесттары һәм СДК.
+- I18NI000000059X йәшәй I18NI0000000060X һәм алынған
+  автоматик рәүештә каталогтан; был кәрәкмәй I18NT00000000003X кодлау, сөнки ул
+  эске эшләү ваҡыты ярҙамсыһы булып тора.
+- Ҡулланыусыға ҡараған конфигурация (I18NI000000061X)
+  декларатив һыҙат һәм мәғлүмәт киңлеге тасуирламаларын ҡабул итеүен дауам итә; анализлау хәҙер
+  геометрияны сығара һәм дөрөҫ булмаған псевдоним йәки дубликаттар һыҙаты идентификаторҙарын кире ҡаға.
 
-## Outstanding work
+## Күренекле эш
 
-- Integrate settlement router updates (NX-3) with the new geometry so XOR buffer
-  debits and receipts are tagged by lane slug.
-- Extend admin tooling to list column families, compact retired lanes, and
-  inspect per-lane block logs using the slugged namespace.
-- Finalise the merge algorithm (ordering, pruning, conflict detection) and
-  attach regression fixtures for cross-lane replay.
-- Add compliance hooks for whitelists/blacklists and programmable-money
-  policies (tracked under NX-12).
+- Яңы геометрия менән интеграциялау маршрутизатор яңыртыу (NX-3) шулай XOR буферы
+  дебеттар һәм квитанциялар һыҙат слизняктары ярҙамында билдәләнә.
+- Оҙайтыу админ инструменттары исемлегенә рубрика ғаиләләре, компакт отставкалағы һыҙаттар, һәм
+  тикшерергә, бер һыҙатлы блок журналдары ҡулланып slugged исемдәр киңлеге.
+- Берләштереү алгоритмын финаллаштырыу (заказ, ҡырҡыу, конфликттарҙы асыҡлау) һәм
+  беркетергә регрессия ҡоролмалары өсөн кросс- һыҙатлы реплей.
+- Аҡ исемлектәр/ҡара исемлектәр һәм программалы-аҡса өсөн ҡармаҡтар өҫтәү
+  сәйәсәте (NX-12 буйынса күҙәтелә).
 
 ---
 
-*This page will continue to track NX-1 follow-ups as NX-2 through NX-18 land.
-Please surface open questions in `roadmap.md` or the governance tracker so the
-portal stays aligned with the canonical docs.*
+*Был бит NX-1 күҙәтеүҙәрен NX-2 аша NX-18 ер аша күҙәтеүҙе дауам итәсәк.
+Зинһар, асыҡ һорауҙар өҫтөндә I18NI0000000062X йәки идара итеү трекер шулай итеп,
+порталь ҡала канон docs менән тура килтерелгән.*

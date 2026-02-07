@@ -8,29 +8,31 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: SoraFS Repair Automation & Auditor API
 sidebar_label: Repair Automation
 description: Governance policy, escalation lifecycle, and API expectations for SoraFS repair automation.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
-Mirrors `docs/source/sorafs_repair_plan.md`. Keep both versions in sync until the Sphinx set is retired.
+:::note 正規ソース
+ミラー `docs/source/sorafs_repair_plan.md`。 Sphinx セットが廃止されるまで、両方のバージョンを同期させてください。
 :::
 
-## Governance Decision Lifecycle
-1. Escalated repairs create a slash proposal draft and open the dispute window.
-2. Governance voters submit approve/reject votes during the dispute window.
-3. At `escalated_at_unix + dispute_window_secs` the decision is computed deterministically: minimum voters, approvals exceed rejections, and the approval ratio meets the quorum threshold.
-4. Approved decisions open an appeal window; appeals recorded before `approved_at_unix + appeal_window_secs` mark the decision as appealed.
-5. Penalty caps apply to all proposals; submissions above the cap are rejected.
+## ガバナンスの決定ライフサイクル
+1. エスカレートされた修理はスラッシュ提案草案を作成し、紛争ウィンドウを開きます。
+2. ガバナンス有権者は、紛争期間中に承認/拒否の投票を提出します。
+3. `escalated_at_unix + dispute_window_secs` では、決定は決定論的に計算されます。つまり、最小投票者数、承認が拒否を上回り、承認率が定足数のしきい値を満たしています。
+4. 決定が承認された場合には、異議申し立ての窓口が開かれます。 `approved_at_unix + appeal_window_secs` より前に記録された控訴は、決定を控訴済みとしてマークします。
+5. ペナルティの上限はすべての提案に適用されます。上限を超える投稿は拒否されます。
 
-## Governance Escalation Policy
-The escalation policy is sourced from `governance.sorafs_repair_escalation` in `iroha_config` and is enforced for every repair slash proposal.
+## ガバナンス エスカレーション ポリシー
+エスカレーション ポリシーは、`iroha_config` の `governance.sorafs_repair_escalation` から取得され、すべての修復スラッシュ提案に適用されます。
 
-| Setting | Default | Meaning |
-|---------|---------|---------|
-| `quorum_bps` | 6667 | Minimum approval ratio (basis points) among counted votes. |
-| `minimum_voters` | 3 | Minimum number of distinct voters required to resolve a decision. |
-| `dispute_window_secs` | 86400 | Time after escalation before votes are finalized (seconds). |
-| `appeal_window_secs` | 604800 | Time after approval during which appeals are accepted (seconds). |
-| `max_penalty_nano` | 1,000,000,000 | Maximum slash penalty allowed for repair escalations (nano-XOR). |
+|設定 |デフォルト |意味 |
+|----------|----------|----------|
+| `quorum_bps` | 6667 |集計された投票数のうちの最小支持率（ベーシスポイント）。 |
+| `minimum_voters` | 3 |決定を解決するために必要な個別の投票者の最小数。 |
+| `dispute_window_secs` | 86400 |エスカレーション後、投票が確定するまでの時間 (秒)。 |
+| `appeal_window_secs` | 604800 |承認後、異議申し立てが受け付けられるまでの時間 (秒)。 |
+| `max_penalty_nano` | 1,000,000,000 |修復エスカレーションに許可される最大のスラッシュ ペナルティ (ナノ XOR)。 |
 
-- Scheduler-generated proposals are capped at `max_penalty_nano`; auditor submissions above the cap are rejected.
-- Vote records are stored in `repair_state.to` with deterministic ordering (`voter_id` sorting) so all nodes derive the same decision timestamp and outcome.
+- スケジューラが生成するプロポーザルの上限は `max_penalty_nano` です。上限を超える監査人の提出は拒否されます。
+- 投票レコードは決定論的な順序付け (`voter_id` ソート) で `repair_state.to` に保存されるため、すべてのノードが同じ決定タイムスタンプと結果を導き出します。

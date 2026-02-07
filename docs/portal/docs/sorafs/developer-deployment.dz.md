@@ -11,75 +11,76 @@ id: developer-deployment
 title: SoraFS Deployment Notes
 sidebar_label: Deployment Notes
 description: Checklist for promoting the SoraFS pipeline from CI to production.
+translator: machine-google-reviewed
 ---
 
-:::note Canonical Source
+:::དྲན་ཐོའི་འབྱུང་ཁུངས།
 :::
 
-# Deployment Notes
+# བཀྲམ་སྤེལ་དྲན་ཐོ།
 
-The SoraFS packaging workflow hardens determinism, so moving from CI to
-production mainly requires operational guardrails. Use this checklist when
-rolling the tooling out to real gateways and storage providers.
+I18NT000000002X ཐུམ་སྒྲིལ་གྱི་ལཱ་འདི་ ཧརཌ་མི་ནི་ཛམ་བཟོཝ་ཨིན་ དེ་འབདཝ་ལས་ སི་ཨའི་ལས་ སི་ཨའི་ལུ་འགྱོཝ་ཨིན།
+ཐོན་སྐྱེད་ལུ་ གཙོ་བོ་རང་ ལག་ལེན་གྱི་ ལྟ་རྟོག་པ་དགོཔ་ཨིན། ཞིབ་དཔྱད་ཐོ་ཡིག་འདི་ ག་དེམ་ཅིག་སྦེ་ལག་ལེན་འཐབ།
+འཛུལ་སྒོ་ངོ་མ་དང་ གསོག་འཇོག་འབད་མི་ཚུ་ལུ་ ལག་ཆས་ཚུ་ བསྐོར་ར་རྐྱབ་ནི།
 
-## Pre-flight
+## འཕུར་འགྲུལ་གྱི་སྔོན་ལ།
 
-- **Registry alignment** — confirm chunker profiles and manifests reference the
-  same `namespace.name@semver` tuple (`docs/source/sorafs/chunker_registry.md`).
-- **Admission policy** — review the signed provider adverts and alias proofs
-  needed for `manifest submit` (`docs/source/sorafs/provider_admission_policy.md`).
-- **Pin registry runbook** — keep `docs/source/sorafs/runbooks/pin_registry_ops.md`
-  handy for recovery scenarios (alias rotation, replication failures).
+- **ཐོ་བཀོད་ཕྲང་སྒྲིག་** — ཅཱན་ཀར་གསལ་སྡུད་ཚུ་ངེས་གཏན་བཟོཝ་ཨིནམ་དང་ གཞི་བསྟུན་གསལ་སྟོན་འབདཝ་ཨིན།
+  དེ་དང་འདྲ་བའི་ I18NI0000005X ཊུཔ་པལ་ (`docs/source/sorafs/chunker_registry.md`).
+- **འཛུལ་ཞུགས་སྲིད་བྱུས་** — མཚན་རྟགས་བཀོད་པའི་བྱིན་མི་ཁྱབ་བསྒྲགས་དང་ མིང་གཞན་བདེན་ཁུངས་ཚུ་བསྐྱར་ཞིབ་འབད།
+  དགོས་མཁོ། `manifest submit` (I18NI0000008X).
+- **པིན་ཐོ་བཀོད་ཀྱི་ རྙིང་མ།** — I18NI000009X བཞག་ཡོད།
+  ལག་བཟོའི་དོན་ལུ་ བསྐྱར་གསོའི་གནས་སྟངས་ (མི་གཞན་བསྒྱིར་ནི་དང་ འདྲ་བཤུས་རྐྱབ་མ་ཚུགས་པའི་ འཐུས་ཤོར་)།
 
-## Environment configuration
+## མཐའ་སྐོར་རིམ་སྒྲིག་།
 
-- Gateways must enable the proof streaming endpoint (`POST /v1/sorafs/proof/stream`)
-  so the CLI can emit telemetry summaries.
-- Configure `sorafs_alias_cache` policy using the defaults in
-  `iroha_config` or the CLI helper (`sorafs_cli manifest submit --alias-*`).
-- Provide stream tokens (or Torii credentials) via a secure secret manager.
-- Enable telemetry exporters (`torii_sorafs_proof_stream_*`,
-  `torii_sorafs_chunk_range_*`) and ship them to your Prometheus/OTel stack.
+- གཱེཊི་ཝེ་ཚུ་གིས་ བདེན་ཁུངས་རྒྱུན་སྤེལ་གྱི་མཐའ་མཚམས་ (I18NI0000010X) ལྕོགས་ཅན་བཟོ་དགོ།
+  དེ་འབདཝ་ལས་ སི་ཨེལ་ཨའི་གིས་ ཊེ་ལི་མི་ཊི་ཊི་ བཅུད་བསྡུས་ཚུ་ བཏོན་ཚུགས།
+- ནང་ན་སྔོན་སྒྲིག་ལག་ལེན་འཐབ་ཐོག་ལས་ I18NI000000011X སྲིད་བྱུས་རིམ་སྒྲིག་འབད།
+  I18NI000000012X ཡང་ན་ སི་ཨེལ་ཨའི་གྲོགས་རམ་པ་ (`sorafs_cli manifest submit --alias-*`).
+- ཉེན་སྲུང་ཅན་གྱི་གསང་བའི་འཛིན་སྐྱོང་པ་ཅིག་བརྒྱུད་དེ་ རྒྱུན་ལམ་ཊོ་ཀེན་ཚུ་ (ཡང་ན་ I18NT0000004X ངོ་རྟགས་ཚུ་) བྱིན་དགོ།
+- བརྒྱུད་འཕྲིན་ཕྱིར་འདྲེན་འབད་མི་ཚུ་ ལྕོགས་ཅན་བཟོ།(`torii_sorafs_proof_stream_*`,
+  `torii_sorafs_chunk_range_*`) དེ་ལས་ ཁྱོད་ཀྱི་ Prometheus/OTel stack ལུ་གཏང་དགོ།
 
-## Rollout strategy
+## འགག་པའི་ཐབས་ལམ།
 
-1. **Blue/green manifests**
-   - Use `manifest submit --summary-out` to archive responses for each rollout.
-   - Keep an eye on `torii_sorafs_gateway_refusals_total` to catch capability
-     mismatches early.
-2. **Proof validation**
-   - Treat failures in `sorafs_cli proof stream` as deployment blockers; latency
-     spikes often indicate provider throttling or misconfigured tiers.
-   - `proof verify` should be part of the post-pin smoke test to ensure the CAR
-     hosted by providers still matches the manifest digest.
-3. **Telemetry dashboards**
-   - Import `docs/examples/sorafs_proof_streaming_dashboard.json` into Grafana.
-   - Layer additional panels for pin registry health
-     (`docs/source/sorafs/runbooks/pin_registry_ops.md`) and chunk range stats.
-4. **Multi-source enablement**
-   - Follow the staged rollout steps in
-     `docs/source/sorafs/runbooks/multi_source_rollout.md` when turning on the
-     orchestrator, and archive the scoreboard/telemetry artefacts for audits.
+༡ **སྔོན་པོ་/ལྗང་ཁུའི་མངོན་གསལ་**།
+   - བསྐོར་ཐེངས་རེ་རེ་གི་དོན་ལུ་ གཏན་མཛོད་ལན་ཚུ་ I18NI0000016X ལག་ལེན་འཐབ།
+   - བཟུང་ཚུགས་པའི་ནུས་པ་ལུ་ `torii_sorafs_gateway_refusals_total` ལུ་བལྟ་དགོ།
+     མ་མཐུན་པར་སྔོན་ལ།
+2. **བདེན་དཔང་བདེན་དཔང་**
+   - བཀྲམ་སྤེལ་བཀག་ཆ་འབད་མི་སྦེ་ `sorafs_cli proof stream` ནང་ལུ་ འཐུས་ཤོར་ཚུ་ བརྩི་འཇོག་འབད། ཞལ༌དབང༌
+     spikes གིས་ འཕྲལ་འཕྲལ་སྦེ་ར་ བྱིན་མི་འདི་གིས་ ཐོཊ་ལིང་དང་ ཡང་ན་ རིམ་སྒྲིག་ལོགཔ་སྦེ་ཡོད་པའི་ རིམ་པ་ཚུ་ བརྡ་སྟོནམ་ཨིན།
+   - I18NI000000019X འདི་ CAR ངེས་གཏན་བཟོ་ཐབས་ལུ་ post-pin གི་ཐ་མག་བརྟག་དཔྱད་ཀྱི་ཆ་ཤས་ཅིག་འོང་དགོ།
+     བྱིན་མི་ཚུ་གིས་ ཧོན་ལྡེམ་འབད་ཡོད་མི་གིས་ ད་ལྟོ་ཡང་ གསལ་སྟོན་བཞུ་ནི་དང་མཐུན་སྒྲིག་འབདཝ་ཨིན།
+3. **ཊེ་ལི་མི་ཊི་ ཌེཤ་བོརཌ་**།
+   - I18NI000000020X ནང་འདྲེན་ Grafana ནང་འདྲེན་འབད།
+   - པིན་ཐོ་བཀོད་འཕྲོད་བསྟེན་དོན་ལུ་ ཁ་སྐོང་པེ་ནཱལ་ཚུ།
+     (`docs/source/sorafs/runbooks/pin_registry_ops.md`) དང་ ཆུང་ཆུང་ཁྱབ་ཚད་ཀྱི་གནས་སྡུད་ཚུ།
+4. **སྣ་མང་-འབྱུང་ཁུངས་ལྕོགས་ཅན་**།
+   - གནས་རིམ་བཀོད་ཡོད་པའི་ བསྐོར་རིམ་ཚུ་ ༢༠༠༨ ལུ་ རྗེས་སུ་འཇུག་དགོ།
+     I18NI0000002X འདི་ ཁ་ཕྱེ་བའི་སྐབས།
+     སྙན་ཆའི་སྡེ་ཚན་དང་ རྩིས་ཞིབ་ཀྱི་དོན་ལུ་ སྐུགས་ཐོབ་ཐངས་/འཕྲུལ་རིག་ཅ་ཆས་ཚུ་ གཏན་མཛོད་འབད་ནི།
 
-## Incident handling
+## བྱུང་རྐྱེན་བདག་འཛིན།
 
-- Follow the escalation paths in `docs/source/sorafs/runbooks/`:
-  - `sorafs_gateway_operator_playbook.md` for gateway outages and stream-token
-    exhaustion.
-  - `dispute_revocation_runbook.md` when replication disputes occur.
-  - `sorafs_node_ops.md` for node-level maintenance.
-  - `multi_source_rollout.md` for orchestrator overrides, peer blacklisting, and
-    staged rollouts.
-- Record proof failures and latency anomalies in GovernanceLog via the existing
-  PoR tracker APIs so governance can assess provider performance.
+- `docs/source/sorafs/runbooks/` ནང་ ཡར་འཕར་གྱི་འགྲུལ་ལམ་ཚུ་ རྗེས་སུ་འཇུག་དགོ།
+  - གཱེཊ་ཝེ་གློག་ཐག་དང་ རྒྱུན་ལམ་ཊོ་ཀེན་ཚུ་གི་དོན་ལུ་ `sorafs_gateway_operator_playbook.md`
+    ཐང་ཆད་པ།
+  - འདྲ་བཤུས་རྩོད་རྙོག་ཚུ་འབྱུང་པའི་སྐབས་ I18NI0000025X
+  - I18NI000000026X མཐུད་མཚམས་གནས་རིམ་རྒྱུན་སྐྱོང་དོན་ལུ་ཨིན།
+  - I18NI000000027X སྙན་ཆའི་སྡེ་ཚན་ལུ་ མཉམ་རོགས་ཀྱི་ཐོ་ཡིག་ནགཔོ་དང་ དེ་ལས་ མཉམ་རོགས་ཀྱི་ཐོ་བཀོད་དང་ དང་།
+    specif བསྐོར་འགྲན།
+- ད་ལྟོ་ཡོད་པའི་ཐོག་ལས་ གོ་ཝར་ནེནསི་ལོག་ནང་ དྲན་ཐོ་བདེན་དཔང་འཐུས་ཤོར་དང་ འཕྲོ་མཐུད་ཀྱི་ མ་ཚད།
+  PoR tracker APIs སོ་གཞུང་གིས་ བྱིན་མི་གི་ལཱ་འགན་ཚུ་ དབྱེ་ཞིབ་འབད་ཚུགས།
 
-## Next steps
+## ཤུལ་མམ་གྱི་གོམ་པ།
 
-- Integrate orchestrator automation (`sorafs_car::multi_fetch`) once the
-  multi-source fetch orchestrator (SF-6b) lands.
-- Track PDP/PoTR upgrades under SF-13/SF-14; the CLI and docs will evolve to
-  surface deadlines and tier selection once those proofs stabilize.
+- ཨོར་ཀེཊ་ཊར་འཕྲུལ་ཆས་ (`sorafs_car::multi_fetch`) འདི་ གཅིག་བསྡོམས་འབད་ནི།
+  སྣ་མང་འབྱུང་ཁུངས་ཀྱི་ འཐོབ་མི་ རོལ་དབྱངས་ཚོགས་པ་ (SF-6b) ས་ཆ།
+- SF-13/SF-14 གི་འོག་ལུ་ PDP/PoTR ཡར་འཕར་ཚུ་ Track; CLI དང་ docs ཚུ་ ལུ་འཕེལ་འོང་།
+  ཁ་ཐོག་གི་དུས་ཚོད་དང་ རིམ་པ་གདམ་ཁ་རྐྱབ་སྟེ་ བདེན་ཁུངས་དེ་ཚུ་ བརྟན་ཏོག་ཏོ་བཟོཝ་ཨིན།
 
-By combining these deployment notes with the quickstart and CI recipes, teams
-can move from local experiments to production-grade SoraFS pipelines with a
-repeatable, observable process.
+བཀྲམ་སྤེལ་དྲན་ཐོ་འདི་ཚུ་ མགྱོགས་དྲགས་འགོ་བཙུགས་ནི་དང་ སི་ཨའི་བཟོ་ཐངས་ཚུ་དང་གཅིག་ཁར་ མཉམ་བསྡོམ་འབད་ཐོག་ལས་ སྡེ་ཚན་ཚུ།
+ས་གནས་ཀྱི་བརྟག་དཔྱད་ལས་ ཐོན་སྐྱེད་གནས་རིམ་ SoraFS མདོང་ལམ་ལུ་འགྱོ་ཚུགས།
+བསྐྱར་ལོག་འབད་ཚུགསཔ་ བལྟ་རྟོག་འབད་བཏུབ་པའི་ལས་རིམ།

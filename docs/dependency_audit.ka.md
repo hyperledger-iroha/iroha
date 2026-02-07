@@ -7,56 +7,57 @@ generator: scripts/sync_docs_i18n.py
 source_hash: cb0a770fac1086462d949dbf17dd5a05f133169e57d50b0d90ddb48ae05f2853
 source_last_modified: "2026-01-05T09:28:11.822642+00:00"
 translation_last_reviewed: 2026-02-07
+translator: machine-google-reviewed
 ---
 
-//! Dependency Audit Summary
+//! დამოკიდებულების აუდიტის რეზიუმე
 
-Date: 2025-09-01
+თარიღი: 2025-09-01
 
-Scope: Workspace-wide review of all crates declared in Cargo.toml files and resolved in Cargo.lock. Performed with cargo-audit against the RustSec advisory DB plus manual review for crate legitimacy and “main crate” choices for algorithms.
+ფარგლები: სამუშაო სივრცის განხილვა Cargo.toml ფაილებში დეკლარირებული და Cargo.lock-ში გადაწყვეტილი ყველა ყუთის შესახებ. შესრულებულია ტვირთის აუდიტით RustSec-ის საკონსულტაციო DB-ის პლიუს ხელით მიმოხილვა ყუთის ლეგიტიმურობისა და ალგორითმებისთვის „მთავარი კრატის“ არჩევანისთვის.
 
-Tools/commands run:
-- `cargo tree -d --workspace --locked --offline` – inspected duplicate versions
-- `cargo audit` – scanned Cargo.lock for known vulnerabilities and yanked crates
+ინსტრუმენტები/ბრძანებები მუშაობს:
+- `cargo tree -d --workspace --locked --offline` – შემოწმებული დუბლიკატი ვერსიები
+- `cargo audit` – დასკანირებული Cargo.lock ცნობილი მოწყვლადობისთვის და გახეხილი ყუთებისთვის
 
-Security advisories found (now 0 vulns; 2 warnings):
-- crossbeam-channel — RUSTSEC-2025-0024
-  - Fixed: bumped to `0.5.15` in `crates/ivm/Cargo.toml`.
+ნაპოვნია უსაფრთხოების რჩევები (ახლა 0 vulns; 2 გაფრთხილება):
+- ჯვარედინი არხი - RUSTSEC-2025-0024
+  - დაფიქსირდა: შეეჯახა `0.5.15`-ს `crates/ivm/Cargo.toml`-ში.
 
-  - Fixed: flipped `pprof` to `prost-codec` in `crates/iroha_torii/Cargo.toml`.
+  - დაფიქსირდა: გადატრიალდა `pprof` `prost-codec`-ზე `crates/iroha_torii/Cargo.toml`-ში.
 
-- ring — RUSTSEC-2025-0009
-  - Fixed: bumped QUIC/TLS stack (`quinn 0.11`, `rustls 0.23`, `tokio-rustls 0.26`) and updated WS stack to `tungstenite/tokio-tungstenite 0.24`. Forced lock to `ring 0.17.12` via `cargo update -p ring --precise 0.17.12`.
+- ბეჭედი - RUSTSEC-2025-0009
+  - დაფიქსირდა: შეკუმშული QUIC/TLS დასტა (`quinn 0.11`, `rustls 0.23`, `tokio-rustls 0.26`) და განახლებული WS დასტა `tungstenite/tokio-tungstenite 0.24`-მდე. იძულებითი ჩაკეტვა `ring 0.17.12`-ზე `cargo update -p ring --precise 0.17.12`-ით.
 
-Remaining advisories: none. Remaining warnings: `backoff` (unmaintained), `derivative` (unmaintained).
+დარჩენილი რჩევები: არცერთი. დარჩენილი გაფრთხილებები: `backoff` (შეუნარჩუნებელი), `derivative` (შეუნარჩუნებელი).
 
-Legitimacy and “main crate” assessment (spotlight):
-- Hashing: `sha2` (RustCrypto), `blake2` (RustCrypto), `tiny-keccak` (widely used) — canonical choices.
-- AEAD/Symmetric: `aes-gcm`, `chacha20poly1305`, `aead` traits (RustCrypto) — canonical.
-- Signatures/ECC: `ed25519-dalek`, `x25519-dalek` (dalek project), `k256` (RustCrypto), `secp256k1` (libsecp bindings) — all legitimate; prefer a single secp256k1 stack (`k256` for pure Rust or `secp256k1` for libsecp) to reduce surface area.
-- BLS12-381/ZK: `blstrs`, `halo2_*` — widely used in production ZK ecosystems; legitimate.
-- PQ: `pqcrypto-dilithium`, `pqcrypto-traits` — legit reference crates.
-- TLS: `rustls`, `tokio-rustls`, `hyper-rustls` — canonical modern Rust TLS stack.
-- Noise: `snow` — canonical implementation.
-- Serialization: `parity-scale-codec` is canonical for SCALE. Serde has been removed from production dependencies across the workspace; Norito derives/writers cover every runtime path. Any residual Serde references live in historical documentation, guardrail scripts, or test-only allowlists.
-- FFI/libs: `libsodium-sys-stable`, `openssl` — legitimate; prefer Rustls over OpenSSL in production paths (current code already does).
+ლეგიტიმურობა და „მთავარი კრატის“ შეფასება (ფოკუსირებული):
+- ჰეშინგი: `sha2` (RustCrypto), `blake2` (RustCrypto), `tiny-keccak` (ფართოდ გამოყენებული) — კანონიკური არჩევანი.
+- AEAD/სიმეტრიული: `aes-gcm`, `chacha20poly1305`, `aead` თვისებები (RustCrypto) — კანონიკური.
+- ხელმოწერები/ECC: `ed25519-dalek`, `x25519-dalek` (dalek პროექტი), `k256` (RustCrypto), `secp256k1` (libsecp აკინძვები) - ყველა კანონიერია; უპირატესობა მიანიჭეთ ერთ secp256k1 დასტას (`k256` სუფთა Rust-ისთვის ან `secp256k1` libsecp-ისთვის) ზედაპირის ფართობის შესამცირებლად.
+- BLS12-381/ZK: `blstrs`, `halo2_*` — ფართოდ გამოიყენება ZK ეკოსისტემების წარმოებაში; ლეგიტიმური.
+- PQ: `pqcrypto-dilithium`, `pqcrypto-traits` — კანონიერი საცნობარო ყუთები.
+- TLS: `rustls`, `tokio-rustls`, `hyper-rustls` — კანონიკური თანამედროვე Rust TLS დასტა.
+- ხმაური: `snow` — კანონიკური განხორციელება.
+- სერიალიზაცია: `parity-scale-codec` არის კანონიკური SCALE-სთვის. Serde ამოღებულ იქნა წარმოების დამოკიდებულებიდან სამუშაო სივრცეში; Norito წარმოიქმნება/ჩამწერები ფარავს გაშვების ყველა გზას. Serde-ს ნებისმიერი ნარჩენი მითითება განთავსებულია ისტორიულ დოკუმენტაციაში, დამცავ სკრიპტებში ან მხოლოდ ტესტის ნებადართულ სიებში.
+- FFI/libs: `libsodium-sys-stable`, `openssl` — ლეგიტიმური; უპირატესობა მიანიჭეთ Rustls-ს, ვიდრე OpenSSL-ს წარმოების ბილიკებში (მიმდინარე კოდი უკვე ასეა).
 
-Recommendations:
-- Address warnings:
-  - Consider replacing `backoff` with `retry`/`futures-retry` or a local exponential backoff helper.
-  - Replace `derivative` derives with manual impls or `derive_more` where applicable.
-- Medium: unify on either `k256` or `secp256k1` where possible to reduce duplicate implementations (leave both only if genuinely required).
-- Medium: review `poseidon-primitives 0.2.0` provenance for ZK usage; if feasible, consider aligning with an Arkworks/Halo2-native Poseidon implementation to minimize parallel ecosystems.
+რეკომენდაციები:
+- მისამართის გაფრთხილებები:
+  - იფიქრეთ `backoff`-ის შეცვლაზე `retry`/`futures-retry`-ით ან ადგილობრივი ექსპონენციური უკან დახევის დამხმარით.
+  - ჩაანაცვლეთ `derivative` მომდინარეობს ხელით ან `derive_more`, სადაც ეს შესაძლებელია.
+- საშუალო: გაერთიანება `k256`-ზე ან `secp256k1`-ზე, სადაც შესაძლებელია, დუბლიკატი განხორციელების შესამცირებლად (ორივე დატოვეთ მხოლოდ იმ შემთხვევაში, თუ ეს ნამდვილად საჭიროა).
+- საშუალო: მიმოხილვა `poseidon-primitives 0.2.0` წარმოშობის ZK გამოყენებისთვის; თუ ეს შესაძლებელია, განიხილეთ Arkworks/Halo2-ის მშობლიურ Poseidon-ის იმპლემენტაცია, რათა მინიმუმამდე დაიყვანოთ პარალელური ეკოსისტემები.
 
-Notes:
-- `cargo tree -d` shows expected duplicate major versions (`bitflags` 1/2, multiple `ring`), not by itself a security risk but increases build surface.
-- No typosquat-like crates were observed; all names and sources resolve to well-known ecosystem crates or internal workspace members.
-- Experimental: added `iroha_crypto` feature `bls-backend-blstrs` to begin migrating BLS to a blstrs‑only backend (removes dependence on arkworks when enabled). Default remains `w3f-bls` to avoid behavior/encoding changes. Alignment plan:
-  - Add round-trip fixtures in `crates/iroha_crypto/tests/bls_backend_compat.rs` that derive keys once and assert equality across both backends, covering `SecretKey`, `PublicKey`, and signature aggregation.
+შენიშვნები:
+- `cargo tree -d` აჩვენებს მოსალოდნელ დუბლიკატულ ძირითად ვერსიებს (`bitflags` 1/2, მრავალჯერადი `ring`), თავისთავად არ წარმოადგენს უსაფრთხოების რისკს, მაგრამ ზრდის მშენებლობის ზედაპირს.
+- არ დაფიქსირებულა typosquat-ის მსგავსი ყუთები; ყველა დასახელება და წყარო გადაეცემა კარგად ცნობილ ეკოსისტემის ყუთებს ან შიდა სამუშაო სივრცის წევრებს.
+- ექსპერიმენტული: დამატებულია `iroha_crypto` ფუნქცია `bls-backend-blstrs` BLS-ის მიგრაციის დასაწყებად მხოლოდ blstrs-ის ფონზე (აშორებს დამოკიდებულებას arkworks-ზე, როდესაც ჩართულია). ნაგულისხმევად რჩება `w3f-bls` ქცევის/კოდირების ცვლილებების თავიდან ასაცილებლად. გასწორების გეგმა:
+  - დაამატეთ ორმხრივი მოწყობილობები `crates/iroha_crypto/tests/bls_backend_compat.rs`-ში, რომლებიც იღებენ კლავიშებს ერთხელ და ამტკიცებენ თანასწორობას ორივე საზურგეზე, რომელიც მოიცავს `SecretKey`, `PublicKey` და ხელმოწერის აგრეგაციას.
 
-Follow-ups (proposed work items):
-- Keep the Serde guardrails in CI (`scripts/check_no_direct_serde.sh`, `scripts/deny_serde_json.sh`) so new production usages cannot be introduced.
+შემდგომი ღონისძიებები (შემოთავაზებული სამუშაო ელემენტები):
+- შეინახეთ სერდეს დამცავი მოაჯირები CI-ში (`scripts/check_no_direct_serde.sh`, `scripts/deny_serde_json.sh`), რათა ახალი წარმოების გამოყენება არ დაინერგოს.
 
-Testing performed for this audit:
-- Ran `cargo audit` with the latest advisory DB; verified the four advisories and their dependency trees.
-- Searched for direct dependency declarations of affected crates to pinpoint fix locations.
+ამ აუდიტისთვის ჩატარებული ტესტირება:
+- გაუშვით `cargo audit` უახლესი საკონსულტაციო DB-ით; გადაამოწმა ოთხი რჩევა და მათი დამოკიდებულების ხეები.
+- მოძებნეთ დაზარალებული ყუთების პირდაპირი დამოკიდებულების დეკლარაციები მდებარეობების დაფიქსირების მიზნით.

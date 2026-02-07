@@ -4,30 +4,32 @@ direction: rtl
 source: docs/portal/docs/norito/examples/call-transfer-asset.ru.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-slug: /norito/examples/call-transfer-asset
-title: Вызвать перенос с хоста из Kotodama
-description: Показывает, как точка входа Kotodama может вызвать инструкцию хоста `transfer_asset` с встроенной проверкой метаданных.
-source: crates/ivm/docs/examples/08_call_transfer_asset.ko
+سبيكة: /norito/examples/call-transfer-asset
+العنوان: إنشاء علاقة مع المضيف من Kotodama
+description: لاحظ كيف يمكن لـ Kotodama أن تستخرج تعليمات المضيف `transfer_asset` باستخدام اختبار قوي.
+المصدر: صناديق/ivm/docs/examples/08_call_transfer_asset.ko
 ---
 
-Показывает, как точка входа Kotodama может вызвать инструкцию хоста `transfer_asset` с встроенной проверкой метаданных.
+لاحظ كيف يمكن لنقطة Kotodama استخدام تعليمات المضيف `transfer_asset` باستخدام اختبار حقيقي.
 
-## Пошаговый обход реестра
+## Почаговый обдод еестра
 
-- Пополните полномочия контракта (например `ih58...`) активом, который он будет переводить, и выдайте полномочию роль `CanTransfer` или эквивалентное разрешение.
-- Вызовите точку входа `call_transfer_asset`, чтобы перевести 5 единиц с аккаунта контракта на `ih58...`, отражая то, как ончейн-автоматизация может оборачивать вызовы хоста.
-- Проверьте балансы через `FindAccountAssets` или `iroha_cli ledger assets list --account ih58...` и просмотрите события, чтобы подтвердить, что guard метаданных записал контекст перевода.
+- عقد المساهمات الكاملة (على سبيل المثال `ih58...`) الذي يتم تجديده على الميزانية، ويحدد الدور الهام `CanTransfer` أو ما يعادلها.
+- اختر هنا `call_transfer_asset` لتحويل 5 سنوات إلى عقد حساب `ih58...`، بالإضافة إلى ذلك، يمكن للأتمتة الأولية أن تدعم استخدام المضيف.
+- التحقق من التوازن عبر `FindAccountAssets` أو `iroha_cli ledger assets list --account ih58...` وإظهار الاشتراكات للتأكد من حماية البيانات المسجلة إعادة صياغة السياق.
 
-## Связанные руководства SDK
+## تطوير شامل SDK
 
 - [Quickstart Rust SDK](/sdks/rust)
 - [Quickstart Python SDK](/sdks/python)
 - [Quickstart JavaScript SDK](/sdks/javascript)
 
-[Скачать исходник Kotodama](/norito-snippets/call-transfer-asset.ko)
+[تحميل المصدر Kotodama](/norito-snippets/call-transfer-asset.ko)
 
 ```text
 // Direct builtin call (no contract-style call syntax) inside a contract.

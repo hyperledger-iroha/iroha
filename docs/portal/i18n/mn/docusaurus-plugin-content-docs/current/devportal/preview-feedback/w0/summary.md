@@ -8,54 +8,56 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: W0 midpoint feedback digest
 sidebar_label: W0 feedback (midpoint)
 description: Midpoint checkpoints, findings, and action items for the core-maintainer preview wave.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-| Item | Details |
+| Зүйл | Дэлгэрэнгүй |
 | --- | --- |
-| Wave | W0 — Core maintainers |
-| Digest date | 2025‑03‑27 |
-| Review window | 2025‑03‑25 → 2025‑04‑08 |
-| Participants | docs-core-01, sdk-rust-01, sdk-js-01, sorafs-ops-01, observability-01 |
-| Artefact tag | `preview-2025-03-24` |
+| Долгион | W0 — Үндсэн засварлагч |
+| Мэдээллийн огноо | 2025-03-27 |
+| Хяналтын цонх | 2025‑03‑25 → 2025‑04‑08 |
+| Оролцогчид | docs-core-01, sdk-rust-01, sdk-js-01, sorafs-ops-01, ажиглалт-01 |
+| Олдворын шошго | `preview-2025-03-24` |
 
-## Highlights
+## Онцлох үйл явдал
 
-1. **Checksum workflow** — All reviewers confirmed `scripts/preview_verify.sh`
-   succeeded against the shared descriptor/archive pair. No manual overrides
-   required.
-2. **Navigation feedback** — Two minor sidebar ordering issues were filed
-   (`docs-preview/w0 #1–#2`). Both are routed to Docs/DevRel and do not block the
-   wave.
-3. **SoraFS runbook parity** — sorafs-ops-01 requested clearer cross-links
-   between `sorafs/orchestrator-ops` and `sorafs/multi-source-rollout`. Follow-up
-   issue filed; to be addressed before W1.
-4. **Telemetry review** — observability-01 confirmed `docs.preview.integrity`,
-   `TryItProxyErrors`, and Try-it proxy logs stayed green; no alerts fired.
+1. **Шалгалтын ажлын урсгал** — Бүх хянагчид `scripts/preview_verify.sh` баталгаажуулсан
+   хуваалцсан тодорхойлогч/архивын хосын эсрэг амжилттай болсон. Гараар дарж бичихгүй
+   шаардлагатай.
+2. **Навигацийн санал хүсэлт** — Хажуугийн самбарын захиалгын хоёр жижиг асуудал гарсан
+   (`docs-preview/w0 #1–#2`). Хоёуланг нь Docs/DevRel руу чиглүүлдэг бөгөөд блоклохгүй
+   долгион.
+3. **SoraFS runbook parity** — sorafs-ops-01 илүү тодорхой хөндлөн холбоос хүссэн
+   `sorafs/orchestrator-ops` болон `sorafs/multi-source-rollout` хооронд. Хяналт
+   асуудал гаргасан; W1-ээс өмнө хаяглах ёстой.
+4. **Телеметрийн тойм** — ажиглалт-01 батлагдсан `docs.preview.integrity`,
+   `TryItProxyErrors`, Try-it прокси логууд ногоон хэвээр байна; дохио өгөөгүй.
 
-## Action items
+## Үйлдлийн зүйл
 
-| ID | Description | Owner | Status |
+| ID | Тодорхойлолт | Эзэмшигч | Статус |
 | --- | --- | --- | --- |
-| W0-A1 | Reorder devportal sidebar entries to surface reviewer-focused docs (`preview-invite-*` group together). | Docs-core-01 | ✅ Completed — sidebar now lists the reviewer docs contiguously (`docs/portal/sidebars.js`). |
-| W0-A2 | Add explicit cross-link between `sorafs/orchestrator-ops` and `sorafs/multi-source-rollout`. | Sorafs-ops-01 | ✅ Completed — each runbook now links to the other so operators see both guides during rollouts. |
-| W0-A3 | Share telemetry snapshots + query bundle with governance tracker. | Observability-01 | ✅ Completed — bundle attached to `DOCS-SORA-Preview-W0`. |
+| W0-A1 | Гадаргуугийн хянагч руу чиглэсэн баримт бичигт (`preview-invite-*` бүлэгт) зориулж devportal sidebar оруулгуудыг дахин эрэмбэлэх. | Doc-core-01 | ✅ Дууссан — хажуугийн самбар одоо хянагчийн баримт бичгүүдийг зэрэгцүүлэн жагсаав (`docs/portal/sidebars.js`). |
+| W0-A2 | `sorafs/orchestrator-ops` болон `sorafs/multi-source-rollout` хооронд тодорхой хөндлөн холбоос нэмнэ үү. | Sorafs-ops-01 | ✅ Гүйцэтгэсэн — runbook бүр нөгөөтэй нь холбогддог тул операторууд танилцуулах явцад хоёр гарын авлагыг хардаг. |
+| W0-A3 | Телеметрийн агшин зураг + асуулгын багцыг засаглалын трекертэй хуваалцаарай. | Ажиглалт-01 | ✅ Дууссан — багцыг `DOCS-SORA-Preview-W0`-д хавсаргасан. |
 
-## Exit summary (2025-04-08)
+## Гаралтын хураангуй (2025-04-08)
 
-- All five reviewers confirmed completion, purged local builds, and exited the
-  preview window; access revocations recorded in `DOCS-SORA-Preview-W0`.
-- No incidents or alerts fired during the wave; telemetry dashboards stayed
-  green for the full period.
-- Navigation + cross-link actions (W0-A1/A2) are implemented and reflected in
-  the docs above; telemetry evidence (W0-A3) is attached to the tracker.
-- Evidence bundle archived: telemetry screenshots, invite acknowledgements, and
-  this digest are linked from the tracker issue.
+- Таван хянан шалгагч бүгд дууссаныг баталж, орон нутгийн барилгуудыг цэвэрлэж, орхисон
+  урьдчилан харах цонх; `DOCS-SORA-Preview-W0`-д бүртгэгдсэн хандалтын цуцлалт.
+- Давалгааны үеэр ямар нэгэн осол, дохиолол гараагүй; телеметрийн хяналтын самбарууд үлдсэн
+  бүтэн хугацаанд ногоон.
+- Navigation + cross-link actions (W0-A1/A2) хэрэгжиж, тусгагдсан
+  дээрх баримтууд; телеметрийн нотолгоог (W0-A3) трекерт хавсаргав.
+- Архивлагдсан нотлох баримтын багц: телеметрийн дэлгэцийн агшин, урилгын талархал, болон
+  Энэ тоймыг трекерийн асуудлаас холбосон.
 
-## Next steps
+## Дараагийн алхамууд
 
-- Implement W0 action items before opening W1.
-- Obtain legal approval and proxy staging slot, then follow the partner-wave
-  preflight steps outlined in the [preview invite flow](../../preview-invite-flow.md).
+- W1-ийг нээхээс өмнө W0 үйлдлийн зүйлийг хэрэгжүүл.
+- Хууль эрх зүйн зөвшөөрөл болон прокси хувилбарыг авах, дараа нь түншийн давалгааг дагана уу
+  [урьдчилан үзэх урилгын урсгал](../../preview-invite-flow.md)-д тодорхойлсон нислэгийн өмнөх алхмууд.
 
-_This digest is linked from the [preview invite tracker](../../preview-invite-tracker.md) to
-keep the DOCS-SORA roadmap traceable._
+_Энэ тоймыг [урьдчилан үзэх урилга хянагч](../../preview-invite-tracker.md)-аас холбосон.
+DOCS-SORA замын зураглалыг мөрдөх боломжтой байлгах._

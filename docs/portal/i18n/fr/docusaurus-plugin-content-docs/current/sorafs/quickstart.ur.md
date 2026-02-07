@@ -4,28 +4,30 @@ direction: ltr
 source: docs/portal/docs/sorafs/quickstart.ur.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# SoraFS کا فوری آغاز
+# SoraFS est là pour vous
 
 یہ عملی رہنمائی SoraFS اسٹوریج پائپ لائن کی بنیاد بننے والے
-deterministic SF-1 چنکر پروفائل، مینی فیسٹ سائننگ، اور متعدد فراہم کنندگان سے
-fetch فلو پر لے جاتی ہے۔ ڈیزائن نوٹس اور CLI فلیگ ریفرنس کے لیے اسے
-[manifest pipeline کی تفصیلی وضاحت](manifest-pipeline.md) کے ساتھ استعمال کریں۔
+déterministe SF-1 est un système de recherche en ligne et de recherche en ligne
+récupérer فلو پر لے جاتی ہے۔ ڈیزائن نوٹس اور CLI فلیگ ریفرنس کے لیے اسے
+[pipeline manifeste کی تفصیلی وضاحت](manifest-pipeline.md) کے ساتھ استعمال کریں۔
 
 ## ضروریات
 
-- Rust ٹول چین (`rustup update`)، اور workspace لوکل طور پر کلون ہو۔
-- اختیاری: [OpenSSL کے مطابق Ed25519 keypair](https://github.com/hyperledger-iroha/iroha/tree/master/defaults/dev-keys#readme)
+- Rust ٹول چین (`rustup update`) ، اور workspace لوکل طور پر کلون ہو۔
+- Nom : [Paire de clés OpenSSL et Ed25519] (https://github.com/hyperledger-iroha/iroha/tree/master/defaults/dev-keys#readme)
   مینی فیسٹ سائن کرنے کے لیے۔
-- اختیاری: Node.js ≥ 18 اگر آپ Docusaurus پورٹل کا پیش نظارہ کرنا چاہتے ہیں۔
+- Version : Node.js ≥ 18 ans Docusaurus correspond à la version actuelle.
 
 `export RUST_LOG=info` سیٹ کریں تاکہ تجربات کے دوران مفید CLI پیغامات سامنے آئیں۔
 
-## 1. deterministic fixtures تازہ کریں
+## 1. luminaires déterministes تازہ کریں
 
-SF-1 کے canonical chunking vectors دوبارہ تیار کریں۔ جب `--signing-key` فراہم کیا
-جائے تو یہ کمانڈ signed manifest envelopes بھی بناتی ہے؛ `--allow-unsigned` صرف
+SF-1 est un vecteur de regroupement canonique. جب `--signing-key` فراہم کیا
+جائے تو یہ کمانڈ enveloppes manifestes signées بھی بناتی ہے؛ `--allow-unsigned` ici
 مقامی ڈیولپمنٹ میں استعمال کریں۔
 
 ```bash
@@ -34,14 +36,14 @@ cargo run -p sorafs_chunker --bin export_vectors -- --allow-unsigned
 
 آؤٹ پٹ:
 
-- `fixtures/sorafs_chunker/sf1_profile_v1.{json,rs,ts,go}`
-- `fixtures/sorafs_chunker/manifest_blake3.json`
+-`fixtures/sorafs_chunker/sf1_profile_v1.{json,rs,ts,go}`
+-`fixtures/sorafs_chunker/manifest_blake3.json`
 - `fixtures/sorafs_chunker/manifest_signatures.json` (اگر سائن ہوا ہو)
-- `fuzz/sorafs_chunker/sf1_profile_v1_{input,backpressure}.json`
+-`fuzz/sorafs_chunker/sf1_profile_v1_{input,backpressure}.json`
 
-## 2. payload کو chunk کریں اور پلان دیکھیں
+## 2. charge utile et bloc de charge et fragment de charge utile
 
-`sorafs_chunker` سے کسی بھی فائل یا آرکائیو کو chunk کریں:
+`sorafs_chunker` est un morceau de morceau:
 
 ```bash
 echo "SoraFS deterministic chunking" > /tmp/docs.txt
@@ -51,21 +53,21 @@ cargo run -p sorafs_chunker --bin sorafs-chunk-dump -- /tmp/docs.txt \
 
 اہم فیلڈز:
 
-- `profile` / `break_mask` – `sorafs.sf1@1.0.0` کے پیرامیٹرز کی تصدیق۔
-- `chunks[]` – ترتیب وار offsets، lengths، اور chunk BLAKE3 digests۔
+- `profile` / `break_mask` – `sorafs.sf1@1.0.0` est en cours de réalisation.
+- `chunks[]` – Ajout de décalages, de longueurs et de résumés BLAKE3 de fragments
 
-بڑے fixtures کے لیے، proptest پر مبنی regression چلائیں تاکہ streaming اور batch
+Les matchs sont en cours de proptest et de régression en streaming et par lots
 chunking ہم آہنگ رہے:
 
 ```bash
 cargo test -p sorafs_chunker streaming_backpressure_fuzz_matches_batch
 ```
 
-## 3. manifest بنائیں اور سائن کریں
+## 3. manifeste بنائیں اور سائن کریں
 
-chunk plan، aliases، اور governance signatures کو `sorafs-manifest-stub` کے ذریعے
-manifest میں لپیٹیں۔ نیچے دی گئی کمانڈ single-file payload دکھاتی ہے؛ درخت پیک کرنے
-کے لیے directory path دیں (CLI اسے lexicographic ترتیب میں چلتا ہے)۔
+plan de fragments, alias et signatures de gouvernance comme `sorafs-manifest-stub`
+manifeste میں لپیٹیں۔ Il s'agit d'une charge utile à fichier unique. درخت پیک کرنے
+کے لیے chemin du répertoire دیں (CLI اسے lexicographique ترتیب میں چلتا ہے)۔
 
 ```bash
 cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
@@ -77,19 +79,19 @@ cargo run -p sorafs_manifest --bin sorafs-manifest-stub -- \
   --allow-unsigned
 ```
 
-`/tmp/docs.report.json` میں دیکھیں:
+`/tmp/docs.report.json` correspond à :
 
-- `chunking.chunk_digest_sha3_256` – offsets/lengths کا SHA3 digest، chunker fixtures کے مطابق۔
-- `manifest.manifest_blake3` – manifest envelope میں سائن کیا گیا BLAKE3 digest۔
-- `chunk_fetch_specs[]` – orchestrators کے لیے ترتیب وار fetch ہدایات۔
+- `chunking.chunk_digest_sha3_256` – décalages/longueurs pour SHA3 digest, montages de chunker pour plus de détails
+- `manifest.manifest_blake3` – enveloppe manifeste pour le résumé BLAKE3
+- `chunk_fetch_specs[]` – orchestrateurs et récupérateurs de fichiers
 
-جب حقیقی signatures دینے کے لیے تیار ہوں تو `--signing-key` اور `--signer` arguments شامل
-کریں۔ کمانڈ envelope لکھنے سے پہلے ہر Ed25519 signature کی توثیق کرتی ہے۔
+Les signatures et les arguments `--signing-key` et `--signer` sont également disponibles.
+کریں۔ Enveloppe enveloppante en forme de lettre Ed25519 signature en forme de lettre
 
-## 4. multi-provider retrieval کی سمیولیشن
+## 4. Récupération multi-fournisseurs کی سمیولیشن
 
-developer fetch CLI سے chunk plan کو ایک یا زیادہ providers کے خلاف replay کریں۔ یہ CI
-smoke tests اور orchestrator prototyping کے لیے بہترین ہے۔
+le développeur récupère la CLI et le plan de bloc ainsi que les fournisseurs et les replays یہ CI
+tests de fumée et prototypage d'orchestrateur
 
 ```bash
 cargo run -p sorafs_car --bin sorafs_fetch -- \
@@ -99,26 +101,24 @@ cargo run -p sorafs_car --bin sorafs_fetch -- \
   --json-out=/tmp/docs.fetch-report.json
 ```
 
-توثیقات:
+Caractéristiques :
 
-- `payload_digest_hex` کو manifest رپورٹ سے ملنا چاہیے۔
-- `provider_reports[]` ہر provider کے لیے success/failure counts دکھاتا ہے۔
-- غیر صفر `chunk_retry_total` back-pressure ایڈجسٹمنٹ دکھاتا ہے۔
-- `--max-peers=<n>` کے ذریعے run میں شیڈول ہونے والے providers کی تعداد محدود کریں اور CI
-  simulations کو اہم امیدواروں پر مرکوز رکھیں۔
-- `--retry-budget=<n>` per-chunk retry count (3) کو override کرتا ہے تاکہ failures inject
-  کرنے پر orchestrator regressions جلد ظاہر ہوں۔
+- `payload_digest_hex` et manifeste رپورٹ سے ملنا چاہیے۔
+- `provider_reports[]` pour le fournisseur et le nombre de réussites/échecs.
+- Système de contre-pression `chunk_retry_total`.
+- `--max-peers=<n>` exécutez des fournisseurs de services d'exécution et de fournisseur d'accès à CI
+  simulations
+- `--retry-budget=<n>` nombre de tentatives par fragment (3) pour remplacer les échecs par injection
+  Voici les régressions de l'orchestrateur
 
-`--expect-payload-digest=<hex>` اور `--expect-payload-len=<bytes>` شامل کریں تاکہ reconstructed
-payload اگر manifest سے ہٹے تو فوراً fail ہو جائے۔
+`--expect-payload-digest=<hex>` et `--expect-payload-len=<bytes>` شامل کریں تاکہ reconstruit
+payload اگر manifeste سے ہٹے تو فوراً fail ہو جائے۔
 
-## 5. اگلے اقدامات
-
-- **Governance integration** – manifest digest اور `manifest_signatures.json` کو council
-  workflow میں بھیجیں تاکہ Pin Registry availability کی تشہیر کر سکے۔
-- **Registry negotiation** – نئے profiles رجسٹر کرنے سے پہلے
+## 5. اگلے اقدامات- **Intégration de la gouvernance** – résumé du manifeste اور `manifest_signatures.json` کو conseil
+  flux de travail Détails sur la disponibilité du registre Pin Disponibilité du registre
+- **Négociation de registre** – Profils de personnes رجسٹر کرنے سے پہلے
   [`sorafs/chunker_registry.md`](https://github.com/hyperledger-iroha/iroha/blob/master/docs/source/sorafs/chunker_registry.md)
-  دیکھیں۔ آٹومیشن کو numeric IDs کے بجائے canonical handles (`namespace.name@semver`) کو
+  دیکھیں۔ Il existe des identifiants numériques et des poignées canoniques (`namespace.name@semver`).
   ترجیح دینی چاہیے۔
-- **CI automation** – اوپر دی گئی کمانڈز کو release pipelines میں شامل کریں تاکہ docs،
-  fixtures، اور artifacts signed metadata کے ساتھ deterministic manifests شائع کریں۔
+- **Automation CI** – Vous trouverez plus de détails sur les pipelines de publication et les documents de référence.
+  luminaires, artefacts, métadonnées signées, manifestes déterministes, etc.

@@ -8,19 +8,21 @@ generator: docs/portal/scripts/sync-i18n.mjs
 title: Node Operations Runbook
 sidebar_label: Node Operations Runbook
 description: Validate the embedded `sorafs-node` deployment inside Torii.
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-:::note Canonical Source
-Mirrors `docs/source/sorafs/runbooks/sorafs_node_ops.md`. Keep both versions in sync until the Sphinx set is retired.
-:::
+::: ማስታወሻ ቀኖናዊ ምንጭ
+መስተዋቶች `docs/source/sorafs/runbooks/sorafs_node_ops.md`. የ Sphinx ስብስብ ጡረታ እስኪወጣ ድረስ ሁለቱንም ስሪቶች በማመሳሰል ያቆዩዋቸው።
+::
 
-## Overview
+## አጠቃላይ እይታ
 
-This runbook walks operators through validating an embedded `sorafs-node` deployment inside Torii. Each section maps directly to the SF-3 deliverables: pin/fetch round trips, restart recovery, quota rejection, and PoR sampling.
+ይህ Runbook ኦፕሬተሮችን በTorii ውስጥ የተካተተ `sorafs-node` ስርጭቱን በማረጋገጥ ይራመዳል። እያንዳንዱ ክፍል በቀጥታ ወደ SF-3 ማቅረቢያዎች ያዘጋጃል፡- ፒን/የዙር ጉዞዎችን ማምጣት፣ ማገገምን እንደገና ማስጀመር፣ ኮታ አለመቀበል እና የPoR ናሙና።
 
-## 1. Prerequisites
+## 1. ቅድመ ሁኔታዎች
 
-- Enable the storage worker in `torii.sorafs.storage`:
+- የማከማቻ ሰራተኛውን በ`torii.sorafs.storage` ውስጥ አንቃ፡
 
   ```toml
   [torii.sorafs.storage]
@@ -38,13 +40,13 @@ This runbook walks operators through validating an embedded `sorafs-node` deploy
   por_success_alpha = 0.25
   ```
 
-- Ensure the Torii process has read/write access to `data_dir`.
-- Confirm the node advertises the expected capacity via `GET /v1/sorafs/capacity/state` once a declaration is recorded.
-- When smoothing is enabled, dashboards expose both the raw and smoothed GiB·hour/PoR counters to highlight jitter-free trends alongside spot values.
+- የ Torii ሂደት የ `data_dir` የማንበብ/የመፃፍ መዳረሻ እንዳለው ያረጋግጡ።
+- መስቀለኛ መንገዱ የሚጠበቀውን አቅም በ`GET /v1/sorafs/capacity/state` በኩል አንድ ጊዜ መግለጫ ከተመዘገበ ያረጋግጡ።
+- ማለስለስ ሲነቃ ዳሽቦርዶች ጥሬውን እና ለስላሳውን የጂቢሆር/PoR ቆጣሪዎችን ከቦታ እሴቶች ጎን ለጎን ከጅት ነፃ የሆኑ አዝማሚያዎችን ለማጉላት ያጋልጣሉ።
 
-### CLI Dry Run (Optional)
+### CLI ደረቅ ሩጫ (አማራጭ)
 
-Before exposing HTTP endpoints you can sanity-check the storage backend with the bundled CLI.【crates/sorafs_node/src/bin/sorafs-node.rs#L1】
+የኤችቲቲፒ የመጨረሻ ነጥቦችን ከማጋለጥዎ በፊት የማከማቻውን ጀርባ በተጠቀለለ CLI ይመልከቱ።【crates/sorafs_node/src/bin/sorafs-node.rs#L1】
 
 ```bash
 cargo run -p sorafs_node --bin sorafs-node ingest \
@@ -59,11 +61,11 @@ cargo run -p sorafs_node --bin sorafs-node export \
   --payload-out ./out/payload.bin
 ```
 
-The commands print Norito JSON summaries and refuse chunk-profile or digest mismatches, making them useful for CI smoke checks ahead of Torii wiring.【crates/sorafs_node/tests/cli.rs#L1】
+ትእዛዞቹ I18NT0000000X JSON ማጠቃለያዎችን ያትሙ እና የተቆራረጡ መገለጫዎችን እምቢ ይላሉ ወይም አለመዛመጃዎችን አይፍጩ፣ ይህም ለ CI ጭስ ፍተሻዎች ከTorii ሽቦ በፊት ጠቃሚ ያደርጋቸዋል።【crates/sorafs_node/tests/cli.rs#L1】
 
-### PoR Proof Rehearsal
+### የPoR ማረጋገጫ ልምምድ
 
-Operators can now replay governance-issued PoR artefacts locally before uploading them to Torii. The CLI reuses the same `sorafs-node` ingestion path, so local runs surface the exact validation errors that the HTTP API would return.
+ኦፕሬተሮች አሁን በአስተዳደር የተሰጡ የPoR ቅርሶችን ወደ Torii ከመጫንዎ በፊት እንደገና ማጫወት ይችላሉ። CLI ተመሳሳዩን I18NI0000023X የማስገቢያ ዱካውን እንደገና ይጠቀማል፣ ስለዚህ የሀገር ውስጥ ሂደቶች የኤችቲቲፒ ኤፒአይ የሚመልሳቸውን ትክክለኛ የማረጋገጫ ስህተቶችን ያሳያል።
 
 ```bash
 cargo run -p sorafs_node --bin sorafs-node ingest por \
@@ -73,21 +75,21 @@ cargo run -p sorafs_node --bin sorafs-node ingest por \
   --verdict ./fixtures/sorafs_manifest/por/verdict_v1.to
 ```
 
-The command emits a JSON summary (manifest digest, provider id, proof digest, sample count, optional verdict outcome). Provide `--manifest-id=<hex>` to ensure the stored manifest matches the challenge digest, and `--json-out=<path>` when you want to archive the summary with the original artefacts for audit evidence. Including `--verdict` lets you rehearse the entire challenge → proof → verdict loop offline before calling the HTTP API.
+ትዕዛዙ የJSON ማጠቃለያ (ገላጭ ዳይጀስት፣ የአቅራቢ መታወቂያ፣ የማረጋገጫ መፍቻ፣ የናሙና ብዛት፣ የአማራጭ የፍርድ ውጤት) ያወጣል። የተከማቸ አንጸባራቂ ከተፈታታኝ ሁኔታ ጋር የሚዛመድ መሆኑን ለማረጋገጥ `--manifest-id=<hex>` ያቅርቡ እና ለኦዲት ማስረጃዎች ማጠቃለያውን ከመጀመሪያዎቹ ቅርሶች ጋር በማህደር ለማስቀመጥ ሲፈልጉ `--json-out=<path>` ያቅርቡ። `--verdict` ን ጨምሮ የኤችቲቲፒ ኤፒአይ ከመደወልዎ በፊት ሙሉውን ፈተና →ማስረጃ → ከመስመር ውጭ ብይን እንዲለማመዱ ያስችልዎታል።
 
-Once Torii is live you can retrieve the same artefacts via HTTP:
+አንዴ Torii ቀጥታ ስርጭት ከሆነ ተመሳሳይ ቅርሶችን በኤችቲቲፒ ማግኘት ይችላሉ።
 
 ```bash
 curl -s http://$TORII/v1/sorafs/storage/manifest/$MANIFEST_ID_HEX | jq .
 curl -s http://$TORII/v1/sorafs/storage/plan/$MANIFEST_ID_HEX | jq .plan.chunk_count
 ```
 
-Both endpoints are served by the embedded storage worker, so CLI smoke tests and gateway probes stay in sync.【crates/iroha_torii/src/sorafs/api.rs#L1207】【crates/iroha_torii/src/sorafs/api.rs#L1259】
+ሁለቱም የመጨረሻ ነጥቦች የሚቀርቡት በተሰቀለው የማከማቻ ሰራተኛ ነው፣ ስለዚህ የCLI የጭስ ሙከራዎች እና የጌትዌይ ፍተሻዎች ሳይመሳሰሉ ይቀራሉ።【crates/iroha_torii/src/sorafs/api.rs#L1207】【crates/iroha_torii/src/sorafs/api.rs#L1259】
 
-## 2. Pin → Fetch Round Trip
+## 2. ፒን → የክብ ጉዞን አምጣ
 
-1. Produce a manifest + payload bundle (for example with `iroha app sorafs toolkit pack ./payload.bin --manifest-out manifest.to --car-out payload.car --json-out manifest_report.json`).
-2. Submit the manifest with base64 encoding:
+1. የማኒፌክት + የመጫኛ ጥቅል (ለምሳሌ በ`iroha app sorafs toolkit pack ./payload.bin --manifest-out manifest.to --car-out payload.car --json-out manifest_report.json`) ያዘጋጁ።
+2. አንጸባራቂውን በbase64 ኢንኮዲንግ ያስገቡ፡-
 
    ```bash
    curl -X POST http://$TORII/v1/sorafs/storage/pin \
@@ -95,8 +97,8 @@ Both endpoints are served by the embedded storage worker, so CLI smoke tests and
      -d @pin_request.json
    ```
 
-   The request JSON must contain `manifest_b64` and `payload_b64`. A successful response returns `manifest_id_hex` and the payload digest.
-3. Fetch the pinned data:
+   JSON ጥያቄው `manifest_b64` እና I18NI0000029X መያዝ አለበት። የተሳካ ምላሽ I18NI0000030X እና የተጫነውን ጭነት ይመልሳል።
+3. የተሰካውን ውሂብ ያውጡ፡
 
    ```bash
    curl -X POST http://$TORII/v1/sorafs/storage/fetch \
@@ -108,44 +110,44 @@ Both endpoints are served by the embedded storage worker, so CLI smoke tests and
      }'
    ```
 
-   Base64-decode the `data_b64` field and verify it matches the original bytes.
+   Base64-የ`data_b64` መስኩን መፍታት እና ከዋናው ባይት ጋር መዛመዱን ያረጋግጡ።
 
-## 3. Restart Recovery Drill
+## 3. የመልሶ ማግኛ ቁፋሮውን እንደገና ያስጀምሩ
 
-1. Pin at least one manifest as above.
-2. Restart the Torii process (or the entire node).
-3. Re-submit the fetch request. The payload must still be retrievable and the returned digest must match the pre-restart value.
-4. Inspect `GET /v1/sorafs/storage/state` to confirm `bytes_used` reflects the persisted manifests after the reboot.
+1. ከላይ እንደተገለጸው ቢያንስ አንድ አንጸባራቂ ይሰኩት።
+2. የ Torii ሂደቱን (ወይም ሙሉውን መስቀለኛ መንገድ) እንደገና ያስጀምሩ.
+3. የማምጣት ጥያቄውን እንደገና ያስገቡ። የተጫነው ጭነት አሁንም ተመልሶ ሊወጣ የሚችል መሆን አለበት እና የተመለሰው የምግብ መፍጫ ከቅድመ-ዳግም ማስጀመር ዋጋ ጋር መዛመድ አለበት።
+4. `bytes_used` ለማረጋገጥ I18NI0000032Xን መርምር ከዳግም ማስነሳቱ በኋላ የቆዩትን መገለጫዎች የሚያንፀባርቅ ነው።
 
-## 4. Quota Rejection Test
+## 4. የኮታ ውድቅ ሙከራ
 
-1. Temporarily lower `torii.sorafs.storage.max_capacity_bytes` to a small value (for example the size of a single manifest).
-2. Pin one manifest; the request should succeed.
-3. Attempt to pin a second manifest of similar size. Torii must reject the request with HTTP `400` and an error message containing `storage capacity exceeded`.
-4. Restore the normal capacity limit when finished.
+1. ለጊዜው I18NI0000034X ወደ ትንሽ እሴት ዝቅ አድርግ (ለምሳሌ የአንድ አንጸባራቂ መጠን)።
+2. ፒን አንድ አንጸባራቂ; ጥያቄው ሊሳካለት ይገባል.
+3. ተመሳሳይ መጠን ያለው ሁለተኛ አንጸባራቂ ለመሰካት ይሞክሩ። Torii ጥያቄውን በ HTTP I18NI0000035X እና `storage capacity exceeded` የያዘ የስህተት መልእክት ውድቅ ማድረግ አለበት።
+4. ሲጨርሱ መደበኛውን የአቅም ገደብ ይመልሱ.
 
-## 5. Retention / GC Inspection (Read-only)
+## 5. ማቆየት / ጂሲ ምርመራ (ተነባቢ-ብቻ)
 
-1. Run a local retention scan against the storage directory:
+1. በማከማቻ ማውጫው ላይ የአካባቢ ማቆያ ቅኝትን ያሂዱ፡
 
    ```bash
    iroha app sorafs gc inspect --data-dir ./storage/sorafs
    ```
 
-2. Inspect only expired manifests (dry-run only, no deletions):
+2. ጊዜው ያለፈባቸው አንጸባራቂዎችን ብቻ መርምር (በደረቅ አሂድ ብቻ፣ ምንም ስረዛ የለም)።
 
    ```bash
    iroha app sorafs gc dry-run --data-dir ./storage/sorafs
    ```
 
-3. Use `--now` or `--grace-secs` to pin the evaluation window when comparing reports across hosts or incidents.
+3. በአስተናጋጆች ወይም በአጋጣሚዎች ላይ ሪፖርቶችን ሲያወዳድሩ የግምገማ መስኮቱን ለመሰካት `--now` ወይም I18NI0000038X ይጠቀሙ።
 
-The GC CLI is intentionally read-only. Use it to capture retention deadlines and expired-manifest inventory for audit trails; do not remove data manually in production.
+GC CLI ሆን ተብሎ ተነባቢ ብቻ ነው። የማቆያ ቀነ-ገደቦችን እና ጊዜው ያለፈበት-የኦዲት ዱካዎች ዝርዝር መረጃን ለመያዝ ይጠቀሙበት። በምርት ውስጥ መረጃን በእጅ አያስወግዱ.
 
-## 6. PoR Sampling Probe
+## 6. PoR ናሙና ምርመራ
 
-1. Pin a manifest.
-2. Request a PoR sample:
+1. መግለጫ ሰካ።
+2. የPoR ናሙና ጠይቅ፡-
 
    ```bash
    curl -X POST http://$TORII/v1/sorafs/storage/por-sample \
@@ -157,21 +159,21 @@ The GC CLI is intentionally read-only. Use it to capture retention deadlines and
      }'
    ```
 
-3. Verify the response contains `samples` with the requested count and that each proof validates against the stored manifest root.
+3. ምላሹ ከተጠየቀው ቆጠራ ጋር `samples` መያዙን ያረጋግጡ እና እያንዳንዱ ማስረጃ ከተከማቸ አንጸባራቂ ስር ይፀድቃል።
 
-## 7. Automation Hooks
+## 7. አውቶሜሽን መንጠቆዎች
 
-- CI / smoke tests can reuse the targeted checks added in:
+- CI/ጭስ ሙከራዎች የታለሙትን ቼኮች እንደገና መጠቀም ይችላሉ፡-
 
   ```bash
   cargo test -p sorafs_node --test pin_workflows
   ```
 
-  which covers `pin_fetch_roundtrip`, `pin_survives_restart`, `pin_quota_rejection`, and `por_sampling_returns_verified_proofs`.
-- Dashboards should track:
+  ይህም `pin_fetch_roundtrip`, `pin_survives_restart`, `pin_quota_rejection`, እና I18NI0000043X ይሸፍናል.
+- ዳሽቦርዶች መከታተል አለባቸው:
   - `torii_sorafs_storage_bytes_used / torii_sorafs_storage_bytes_capacity`
-  - `torii_sorafs_storage_pin_queue_depth` and `torii_sorafs_storage_fetch_inflight`
-  - PoR success/failure counters surfaced via `/v1/sorafs/capacity/state`
-  - Settlement publish attempts via `sorafs_node_deal_publish_total{result=success|failure}`
+  - `torii_sorafs_storage_pin_queue_depth` እና `torii_sorafs_storage_fetch_inflight`
+  - የPoR ስኬት/የሽንፈት ቆጣሪዎች በ`/v1/sorafs/capacity/state` በኩል ብቅ አሉ።
+  - የመቋቋሚያ ሙከራዎችን በ`sorafs_node_deal_publish_total{result=success|failure}` በኩል ያትማል
 
-Following these drills ensures the embedded storage worker can ingest data, survive restarts, respect configured quotas, and generate deterministic PoR proofs before the node advertises capacity to the wider network.
+እነዚህን ልምምዶች መከተል የመስቀለኛ መንገዱ አቅም ለሰፊው አውታረመረብ ከማስተዋወቁ በፊት የተካተተ የማከማቻ ሰራተኛ መረጃን ወደ ውስጥ ማስገባት፣ ዳግም ሲጀመር መትረፍ፣ የተዋቀሩ ኮታዎችን ማክበር እና ቆራጥ የPoR ማረጋገጫዎችን ማመንጨት መቻሉን ያረጋግጣል።

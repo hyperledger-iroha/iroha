@@ -4,98 +4,98 @@ direction: rtl
 source: docs/portal/docs/sorafs/developer-releases.es.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-title: Proceso de lanzamiento
-summary: Ejecuta el gate de lanzamiento de CLI/SDK, aplica la política de versionado compartida y publica notas de lanzamiento canónicas.
+כותרת: Proceso de lanzamiento
+תקציר: Ejecuta el gate de lanzamiento de CLI/SDK, aplica la política de versionado compartida y publica notas de lanzamiento canónicas.
 ---
 
-# Proceso de lanzamiento
+# תהליך לנזמיינטו
 
-Los binarios de SoraFS (`sorafs_cli`, `sorafs_fetch`, helpers) y los crates de SDK
-(`sorafs_car`, `sorafs_manifest`, `sorafs_chunker`) se publican juntos. El pipeline
+Los binarios de SoraFS (`sorafs_cli`, `sorafs_fetch`, עוזרים) y los boxes de SDK
+(`sorafs_car`, `sorafs_manifest`, `sorafs_chunker`) se publican juntos. צינור אל
 de lanzamiento mantiene el CLI y las bibliotecas alineados, asegura cobertura de
-lint/test y captura artefactos para consumidores downstream. Ejecuta la lista de
-verificación de abajo para cada tag candidato.
+מוך/בדיקה ותפיסת חפצים לצריכה במורד הזרם. Ejecuta la list de
+Verificación de Abajo para cada tag candidato.
 
-## 0. Confirmar la aprobación de la revisión de seguridad
+## 0. אישור להחלפת הדיווח
 
-Antes de ejecutar el gate técnico de lanzamiento, captura los artefactos más
+Antes de ejecutar el gate técnico de lazamiento, captura los artefactos más
 recientes de la revisión de seguridad:
 
-- Descarga el memo más reciente de revisión de seguridad SF-6 ([reports/sf6-security-review](./reports/sf6-security-review.md))
+- הורד את התזכיר más reciente de revisión de seguridad SF-6 ([דוחות/sf6-security-review](./reports/sf6-security-review.md))
   y registra su hash SHA256 en el ticket de lanzamiento.
 - Adjunta el enlace del ticket de remediación (por ejemplo, `governance/tickets/SF6-SR-2026.md`) y anota
   los aprobadores de Security Engineering y del Tooling Working Group.
-- Verifica que la lista de remediación del memo esté cerrada; los ítems sin resolver bloquean el lanzamiento.
-- Prepárate para subir los logs del harness de paridad (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`)
+- Verifica que la List de remediación del memo esté cerrada; los ítems sin resolver bloquean el lanzamiento.
+- הכנה למען סוביר לוס לוגים דל רתום דה פארידאד (`cargo test -p sorafs_car -- --nocapture sorafs_cli::proof_stream::bounded_channels`)
   junto con el bundle del manifest.
-- Confirma que el comando de firma que planeas ejecutar incluya tanto `--identity-token-provider` como
+- אישור que el comando de firma que planeas ejecutar incluya tanto `--identity-token-provider` como
   un `--identity-token-audience=<aud>` explícito para que el alcance de Fulcio quede capturado en la evidencia del release.
 
-Incluye estos artefactos al notificar a gobernanza y publicar el lanzamiento.
+כולל אמנות חפצים אל הודעה על הגוברננזה y publicar el lanzamiento.
 
 ## 1. Ejecutar el gate de lanzamiento/pruebas
 
 El helper `ci/check_sorafs_cli_release.sh` ejecuta formateo, Clippy y tests
-sobre los crates de CLI y SDK con un directorio target local al workspace (`.target`)
+sobre los crates de CLI y SDK con un directorio target local al space work (`.target`)
 para evitar conflictos de permisos al ejecutarse dentro de contenedores CI.
 
 ```bash
 CARGO_TARGET_DIR=.target ci/check_sorafs_cli_release.sh
 ```
 
-El script realiza las siguientes comprobaciones:
+התסריט הממש את התוצאות הבאות:
 
-- `cargo fmt --all -- --check` (workspace)
-- `cargo clippy --locked --all-targets` para `sorafs_car` (con la feature `cli`),
+- `cargo fmt --all -- --check` (סביבת עבודה)
+- `cargo clippy --locked --all-targets` עבור `sorafs_car` (עם תכונה `cli`),
   `sorafs_manifest` y `sorafs_chunker`
-- `cargo test --locked --all-targets` para esos mismos crates
+- `cargo test --locked --all-targets` עבור ארגזי esos mismos
 
-Si algún paso falla, corrige la regresión antes de etiquetar. Los builds de release
-deben estar continuos con main; no hagas cherry-pick de fixes en ramas de release.
+אם יש לך רקע, יש צורך בתקשורת. Los builds de release
+deben estar continuos con main; אין hagas cherry-pick de fixes en ramas de release.
 El gate también comprueba que los flags de firma sin claves (`--identity-token-issuer`,
 `--identity-token-audience`) se proporcionen donde corresponda; los argumentos
 faltantes hacen fallar la ejecución.
 
-## 2. Aplicar la política de versionado
+## 2. אפליקציית מדיניות הגרסה
 
-Todos los crates de CLI/SDK de SoraFS usan SemVer:
-
-- `MAJOR`: Se introduce para el primer release 1.0. Antes de 1.0 el incremento
+מטלות לארגזי CLI/SDK de SoraFS usan SemVer:- `MAJOR`: ראה הצג עבור מהדורת פריימר 1.0. Antes de 1.0 el incremento
   menor `0.y` **indica cambios con ruptura** en la superficie del CLI o en los
   esquemas Norito.
-- `MINOR`: Trabajo de funciones sin ruptura (nuevos comandos/flags, nuevos
-  campos Norito protegidos por política opcional, adiciones de telemetría).
-- `PATCH`: Correcciones de bugs, releases solo de documentación y actualizaciones de
-  dependencias que no cambian el comportamiento observable.
+- `MINOR`: Trabajo de funciones sin ruptura (נואבוס קומנדוס/דגלים, נואבוס
+  campos Norito protegidos por política optional, adiciones de telemetria).
+- `PATCH`: תיקוני באגים, משחרר סולו של תיעוד ואקטואליזציה
+  dependencias que no cambian el comportamiento לצפייה.
 
-Siempre mantén `sorafs_car`, `sorafs_manifest` y `sorafs_chunker` en la misma versión
-para que los consumidores de SDK downstream puedan depender de una única cadena
-alineada. Al incrementar versiones:
+Siempre mantén `sorafs_car`, `sorafs_manifest` y `sorafs_chunker` en la misma version
+para que los consumidores de SDK במורד הזרם puedan depender de una única cadena
+אלינאדה. גרסאות מצטברות:
 
 1. Actualiza los campos `version =` en cada `Cargo.toml`.
 2. Regenera el `Cargo.lock` vía `cargo update -p <crate>@<new-version>` (el workspace
-   exige versiones explícitas).
+   גרסאות מוצהרות).
 3. Ejecuta el gate de lanzamiento otra vez para asegurar que no queden artefactos
-   obsoletos.
+   מיושנים.
 
-## 3. Preparar notas de lanzamiento
+## 3. הכנת מסמכים דה לנזמיינטו
 
-Cada release debe publicar un changelog en markdown que resalte cambios que
-impacten CLI, SDK y gobernanza. Usa la plantilla en
+שחרור קודמים פורסם ב-Changelog ב-Markdown כדי להחזיר את התמונות
+השפעה על CLI, SDK ו-gobernanza. Usa la plantilla en
 `docs/examples/sorafs_release_notes.md` (cópiala a tu directorio de artefactos de
 release y completa las secciones con detalles concretos).
 
-Contenido mínimo:
+טווח מינימלי:
 
 - **Destacados**: titulares de funciones para consumidores de CLI y SDK.
-- **Impacto**: cambios con ruptura, upgrades de políticas, requisitos
-  mínimos de gateway/nodo.
+- **Impacto**: cambios con ruptura, שדרוגים של פוליטיקה, דרישות
+  מינימוס דה gateway/nodo.
 - **Pasos de actualización**: comandos TL;DR para actualizar dependencias cargo y
-  reejecutar fixtures deterministas.
-- **Verificación**: hashes o envoltorios de salida de comandos y la revisión exacta
+  מכשירי reejecutar deterministas.
+- **אימות**: hashes o envoltorios de salida de comandos y la revisión exacta
   de `ci/check_sorafs_cli_release.sh` ejecutada.
 
 Adjunta las notas de lanzamiento completas al tag (por ejemplo, el cuerpo del release
@@ -104,10 +104,10 @@ en GitHub) y guárdalas junto a los artefactos generados de forma determinista.
 ## 4. Ejecutar los hooks de release
 
 Ejecuta `scripts/release_sorafs_cli.sh` para generar el bundle de firmas y el
-resumen de verificación que se envía con cada release. El wrapper compila el CLI
-cuando es necesario, llama a `sorafs_cli manifest sign` y reproduce de inmediato
+קורות חיים של אימות que se envía con cada release. El עטיפה קומפילה אל CLI
+cuando es necesario, llama a `sorafs_cli manifest sign` y reproducere de inmediato
 `manifest verify-signature` para que los fallos aparezcan antes de etiquetar.
-Ejemplo:
+דוגמה:
 
 ```bash
 scripts/release_sorafs_cli.sh \
@@ -121,33 +121,31 @@ scripts/release_sorafs_cli.sh \
   --expect-token-hash "$(cat .release/token.hash)"
 ```
 
-Consejos:
-
-- Registra los inputs del release (payload, plans, summaries, hash de token esperado)
-  en tu repo o config de despliegue para que el script sea reproducible. El bundle
+יתרונות:- רישום כניסות לשחרור (מטען, תוכניות, סיכומים, אספרדו hash de token)
+  en tu repo o config de despliegue para que el script ים לשחזור. צרור אל
   de fixtures en `fixtures/sorafs_manifest/ci_sample/` muestra el layout canónico.
 - Basa la automatización de CI en `.github/workflows/sorafs-cli-release.yml`; ejecuta
   el gate de release, invoca el script anterior y archiva bundles/firmas como
-  artefactos del workflow. Refleja el mismo orden de comandos (gate de release → firmar
+  חפצי זרימת עבודה. Refleja el mismo orden de comandos (שער שחרור → firmar
   → verificar) en otros sistemas CI para que los logs de auditoría coincidan con los
   hashes generados.
 - Mantén juntos `manifest.bundle.json`, `manifest.sig`, `manifest.sign.summary.json`
   y `manifest.verify.summary.json`; forman el paquete referenciado en la notificación
-  de gobernanza.
-- Cuando el release actualice fixtures canónicos, copia el manifest actualizado,
+  דה גוברננסה.
+- אביזרי פרסום אקטואליים, עותק של מציאות,
   el chunk plan y los summaries en `fixtures/sorafs_manifest/ci_sample/` (y actualiza
-  `docs/examples/sorafs_ci_sample/manifest.template.json`) antes de etiquetar.
-  Los operadores downstream dependen de los fixtures versionados para reproducir
+  `docs/examples/sorafs_ci_sample/manifest.template.json`) לפני הנימוס.
+  מערכת ההפעלה במורד הזרם תלויה בגרסת התקנים לשחזור
   el bundle de release.
 - Captura el log de ejecución de la verificación de canales acotados de
   `sorafs_cli proof stream` y adjúntalo al paquete del release para demostrar que
-  las salvaguardas de proof streaming siguen activas.
+  לאס salvaguardas דה הוכחה הזרמת סיואן פעיל.
 - Registra el `--identity-token-audience` exacto usado durante la firma en las
   notas de lanzamiento; gobernanza verifica el audience contra la política de Fulcio
   antes de aprobar la publicación.
 
-Usa `scripts/sorafs_gateway_self_cert.sh` cuando el release también incluya un
-rollout de gateway. Apunta al mismo bundle de manifest para probar que la
+ארה"ב `scripts/sorafs_gateway_self_cert.sh` cuando el release también incluya un
+השקת שער. Apunta al mismo bundle de manifest para probar que la
 atestación coincide con el artefacto candidato:
 
 ```bash
@@ -156,42 +154,40 @@ scripts/sorafs_gateway_self_cert.sh --config docs/examples/sorafs_gateway_self_c
   --manifest-bundle artifacts/release/manifest.bundle.json
 ```
 
-## 5. Etiquetar y publicar
+## 5. כללי התנהגות ופרסום
 
-Después de que los checks pasen y los hooks se completen:
-
-1. Ejecuta `sorafs_cli --version` y `sorafs_fetch --version` para confirmar que los binarios
-   reportan la nueva versión.
-2. Prepara la configuración del release en un `sorafs_release.toml` versionado (preferido)
+Después de que los checks pasen y los hooks se completen:1. Ejecuta `sorafs_cli --version` y `sorafs_fetch --version` para confirmar que los binarios
+   reportan la nueva version.
+2. הכנה לתצורת גרסה בגרסה `sorafs_release.toml` (מועדף)
    o en otro archivo de config rastreado por tu repo de despliegue. Evita depender de
-   variables de entorno ad-hoc; pasa rutas al CLI con `--config` (o equivalente) para que
-   los inputs del release sean explícitos y reproducibles.
-3. Crea un tag firmado (preferido) o un tag anotado:
+   משתנים de entorno אד-הוק; pasa rutas al CLI con `--config` (o equivalente) para que
+   תשומות לשחרור שון מפורשים ופרטים לשחזור.
+3. יצירת תג פיראדו (מועדף) או תג אנוטדו:
    ```bash
    git tag -s sorafs-vX.Y.Z -m "SoraFS CLI & SDK vX.Y.Z"
    git push origin sorafs-vX.Y.Z
    ```
-4. Sube los artefactos (bundles CAR, manifests, resúmenes de proofs, notas de release,
-   outputs de atestación) al registry del proyecto siguiendo el checklist de gobernanza
-   en la [guía de despliegue](./developer-deployment.md). Si el release generó nuevos
-   fixtures, súbelos al repositorio de fixtures compartido o al object store para que la
-   automatización de auditoría pueda comparar el bundle publicado con el control de
-   versiones.
-5. Notifica al canal de gobernanza con enlaces al tag firmado, notas de release, hashes
+4. Sube los artefactos (חבילות CAR, מניפסטים, resúmenes de proofs, notas de release,
+   פלטים של אטסטציון) אל הרישום דל פרויקטו סיואינדו אל רשימת הבדיקה של גוברננזה
+   en la [guía de despliegue](./developer-deployment.md). זה שחרור גדול
+   אביזרי, מאגר אביזרי מתקנים או חנות חפצים
+   automatización de auditoría pueda השוואת אל צרור פרסום עם אל בקרה דה
+   גרסאות.
+5. הודעה על תעלת גוברננצה עם תג פיראדו, הודעות שחרור, חשיש
    del bundle/firmas del manifest, resúmenes archivados de `manifest.sign/verify` y
-   cualquier envoltorio de atestación. Incluye la URL del job CI (o archivo de logs) que
-   ejecutó `ci/check_sorafs_cli_release.sh` y `scripts/release_sorafs_cli.sh`. Actualiza
+   cualquier envoltorio de atestación. כולל כתובת CI של עבודה (או ארכיון יומנים) que
+   ejecutó `ci/check_sorafs_cli_release.sh` y `scripts/release_sorafs_cli.sh`. אקטואליזה
    el ticket de gobernanza para que los auditores puedan trazar las aprobaciones a los
-   artefactos; cuando el job `.github/workflows/sorafs-cli-release.yml` publique
+   חפצים; cuando el job `.github/workflows/sorafs-cli-release.yml` publique
    notificaciones, enlaza los hashes registrados en lugar de pegar resúmenes ad-hoc.
 
-## 6. Seguimiento posterior al release
+## 6. Seguimiento שחרור אחורי
 
-- Asegura que la documentación que apunta a la nueva versión (quickstarts, plantillas de CI)
+- Asegura que la documentación que apunta a la nueva version (התחלות מהירות, plantillas de CI)
   esté actualizada o confirma que no se requieren cambios.
 - Registra entradas de roadmap si se requiere trabajo posterior (por ejemplo, flags de
 - Archiva los logs de salida del gate de release para auditoría: guárdalos junto a los
   artefactos firmados.
 
-Seguir este pipeline mantiene el CLI, los crates del SDK y el material de gobernanza
+Seguir este pipeline mantiene el CLI, los cartes del SDK y el material de gobernanza
 alineados para cada ciclo de release.

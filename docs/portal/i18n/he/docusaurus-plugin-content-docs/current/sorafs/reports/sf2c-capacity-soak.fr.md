@@ -4,30 +4,32 @@ direction: rtl
 source: docs/portal/docs/sorafs/reports/sf2c-capacity-soak.fr.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 # Rapport de soak d'accumulation de capacité SF-2c
 
-Date: 2026-03-21
+תאריך: 21-03-2026
 
 ## Portée
 
 Ce rapport consigne les tests déterministes de soak d'accumulation et de paiement de capacité SoraFS demandés
 dans la feuille de route SF-2c.
 
-- **Soak multi-provider sur 30 jours:** Exécuté par
+- **השרות מרובה ספקים למשך 30 ז':** Exécuté par
   `capacity_fee_ledger_30_day_soak_deterministic` dans
   `crates/iroha_core/src/smartcontracts/isi/sorafs.rs`.
-  Le harness instancie cinq providers, couvre 30 fenêtres de settlement et
-  valide que les totaux du ledger correspondent à une projection de référence
+  ספקי Le Rants instancie cinq, couvre 30 fenêtres de settlement et
+  Valide que les Totaux du Ledger correspondent à une Projection de Référence
   calculée indépendamment. Le test émet un digest Blake3 (`capacity_soak_digest=...`)
-  afin que CI puisse capturer et comparer le snapshot canonique.
+  אפין que CI puisse capturer and comparer the snapshot canonique.
 - **Pénalités de sous-livraison:** Appliquées par
   `record_capacity_telemetry_penalises_persistent_under_delivery`
-  (même fichier). Le test confirme que les seuils de strikes, cooldowns,
-  slashes de collateral et compteurs du ledger restent déterministes.
+  (même fichier). הבדיקה מאשרת את השביתות, ההתקררות,
+  חתכים של בטחונות ו-Compteurs du Ledger restent déterministes.
 
-## Exécution
+## ביצוע
 
 Relancez les validations de soak localement avec:
 
@@ -37,22 +39,22 @@ cargo test -p iroha_core -- capacity_fee_ledger_30_day_soak_deterministic
 ```
 
 Les tests se terminent en moins d'une seconde sur un laptop standard et ne
-nécessitent aucun fixture externe.
+nécessitent aucun מתקן חיצוני.
 
-## Observabilité
+## יכולת התבוננות
 
-Torii expose maintenant des snapshots de crédit providers aux côtés des fee ledgers afin que les dashboards
-puissent gate sur les faibles soldes et penalty strikes:
+Torii חשוף לתחזוקה של צילומי מצב של ספקי אשראי aux côtés des פנקסי אגרות אפינ que les לוחות מחוונים
+שער puissent sur les faibles soldes ועונשין:
 
-- REST: `GET /v1/sorafs/capacity/state` renvoie des entrées `credit_ledger[*]` qui
-  reflètent les champs du ledger vérifiés dans le test de soak. Voir
+- מנוחה: `GET /v1/sorafs/capacity/state` renvoie des entrées `credit_ledger[*]` qui
+  Reflètent les champs du Ledger vérifiés dans le test de soak. Voir
   `crates/iroha_torii/src/sorafs/registry.rs`.
-- Import Grafana: `dashboards/grafana/sorafs_capacity_penalties.json` trace les
+- ייבוא Grafana: `dashboards/grafana/sorafs_capacity_penalties.json` עקבות
   compteurs de strikes exportés, les totaux de pénalités et le collateral engagé afin que
-  l'équipe on-call puisse comparer les baselines de soak avec les environnements live.
+  l'équipe ב-call puisse comparer les baselines de soak עם les environnements בשידור חי.
 
 ## Suivi
 
-- Planifier des exécutions hebdomadaires de gate en CI pour rejouer le test de soak (smoke-tier).
+- Planifier des exécutions hebdomadaires de gate en CI pour rejouer le test de soak (עשן-tier).
 - Étendre le tableau Grafana avec les cibles de scrape Torii une fois que les exports de telemetry de production
   seront en ligne.

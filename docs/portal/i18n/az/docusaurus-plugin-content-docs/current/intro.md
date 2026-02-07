@@ -4,50 +4,52 @@ direction: ltr
 source: docs/portal/docs/intro.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
-# Welcome to the SORA Nexus Developer Portal
+# SORA Nexus Developer Portalına xoş gəlmisiniz
 
-The SORA Nexus developer portal bundles interactive documentation, SDK
-tutorials, and API references for Nexus operators and Hyperledger Iroha
-contributors. It complements the main docs site by surfacing hands-on guides
-and generated specs directly from this repository. The landing page now carries
-themed Norito/SoraFS entry points, signed OpenAPI snapshots, and a dedicated
-Norito Streaming reference so contributors can find the streaming control-plane
-contract without digging through the root spec.
+SORA Nexus tərtibatçı portalı interaktiv sənədləri, SDK paketlərini birləşdirir
+Nexus operatorları və Hyperledger Iroha üçün dərsliklər və API istinadları
+ianəçilər. Təcrübəli bələdçilərə müraciət etməklə əsas sənədlər saytını tamamlayır
+və spesifikasiyaları birbaşa bu depodan yaratdı. Açılış səhifəsi indi daşıyır
+temalı Norito/SoraFS giriş nöqtələri, imzalanmış OpenAPI anlıq görüntülər və xüsusi
+Norito Yayım arayışı, beləliklə, ianəçilər axın nəzarət müstəvisini tapa bilsinlər
+kök spesifikasiyasını qazmadan müqavilə bağlayın.
 
-## What you can do here
+## Burada nə edə bilərsən
 
-- **Learn Norito** – start with the overview and quickstart to understand the
-  serialization model and bytecode tooling.
-- **Bootstrap SDKs** – follow quickstarts for JavaScript and Rust today; Python,
-  Swift, and Android guides will join them as recipes are migrated.
-- **Browse API references** – the Torii OpenAPI page renders the latest REST
-  specification, and configuration tables link back to the canonical Markdown
-  sources.
-- **Prepare deployments** – operational runbooks (telemetry, settlement, Nexus
-  overlays) are being ported from `docs/source/` and will land in this site as
-  the migration progresses.
+- **Norito öyrənin** – ümumi baxışla başlayın və başa düşmək üçün sürətli başlayın
+  serializasiya modeli və bayt kodu aləti.
+- **Bootstrap SDKs** – bu gün JavaScript və Rust üçün sürətli başlanğıcları izləyin; piton,
+  Reseptlər köçürüldükcə Swift və Android bələdçiləri onlara qoşulacaq.
+- **API arayışlarını nəzərdən keçirin** – Torii OpenAPI səhifəsi ən son REST-i təqdim edir
+  spesifikasiya və konfiqurasiya cədvəlləri kanonik Markdown ilə əlaqələndirilir
+  mənbələr.
+- **Yerləşdirmələri hazırlayın** – əməliyyat kitabçaları (telemetri, məskunlaşma, Nexus
+  örtüklər) `docs/source/`-dən daşınır və bu sayta aşağıdakı kimi enəcək
+  miqrasiya irəliləyir.
 
-## Current status
+## Cari status
 
-- ✅ Themed Docusaurus v3 landing with refreshed typography, gradient-driven
-  hero/cards, and resource tiles that include the Norito Streaming summary.
-- ✅ Torii OpenAPI plugin wired to `npm run sync-openapi`, with signed snapshot
-  checks and CSP guards enforced by `buildSecurityHeaders`.
-- ✅ Preview and probe coverage run in CI (`docs-portal-preview.yml` +
-  `scripts/portal-probe.mjs`), now gating the streaming doc, SoraFS quickstarts,
-  and the reference checklists before artifacts are published.
-- ✅ Norito, SoraFS, and SDK quickstarts plus reference sections are live in the
-  sidebar; new imports from `docs/source/` (streaming, orchestration, runbooks)
-  land here as they are authored.
+- ✅ Yenilənmiş tipoqrafiya ilə temalı Docusaurus v3 enişi, gradient əsaslı
+  qəhrəman/kartlar və Norito Yayım xülasəsini ehtiva edən resurs plitələri.
+- ✅ Torii OpenAPI plaqini, imzalanmış şəkil ilə `npm run sync-openapi`-ə qoşulmuşdur
+  `buildSecurityHeaders` tərəfindən tətbiq edilən çeklər və CSP mühafizəçiləri.
+- ✅ Önizləmə və əhatə dairəsini CI-də yoxlayın (`docs-portal-preview.yml` +
+  `scripts/portal-probe.mjs`), indi axın sənədini bağlayır, SoraFS sürətli başlanğıcları,
+  və artefaktlar dərc edilməzdən əvvəl istinad siyahıları.
+- ✅ Norito, SoraFS və SDK sürətli başlanğıcları və istinad bölmələri burada canlıdır
+  yan panel; `docs/source/`-dən yeni idxallar (axın, orkestrasiya, runbooks)
+  onlar müəllif kimi burada torpaq.
 
-## Getting involved
+## İştirak etmək
 
-- See `docs/portal/README.md` for local development commands (`npm install`,
+- Yerli inkişaf əmrləri üçün baxın `docs/portal/README.md` (`npm install`,
   `npm run start`, `npm run build`).
-- Content migration tasks are tracked alongside the `DOCS-*` roadmap items.
-  Contributions are welcome—port sections from `docs/source/` and add the page
-  to the sidebar.
-- If you add a generated artifact (specs, config tables), document the build
-  command so future contributors can refresh it easily.
+- Məzmun köçürmə tapşırıqları `DOCS-*` yol xəritəsi elementləri ilə yanaşı izlənilir.
+  Töhfələr qəbul olunur - `docs/source/`-dən port bölmələri və səhifəni əlavə edin
+  yan panelə.
+- Yaradılmış artefakt əlavə etsəniz (xüsusiyyətlər, konfiqurasiya cədvəlləri), quruluşu sənədləşdirin
+  əmr edin ki, gələcək töhfəçilər onu asanlıqla yeniləyə bilsinlər.

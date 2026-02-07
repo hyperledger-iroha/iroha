@@ -4,36 +4,36 @@ direction: ltr
 source: docs/portal/docs/sorafs/priority-snapshot-2025-03.pt.md
 status: complete
 generator: docs/portal/scripts/sync-i18n.mjs
+translator: machine-google-reviewed
+translation_last_reviewed: 2026-02-07
 ---
 
 ---
-id: priority-snapshot-2025-03
-title: Snapshot de prioridades - marco de 2025 (Beta)
-description: Espelho do snapshot de steering Nexus 2025-03; pendente de ACKs antes do rollout publico.
+ID: instantánea-prioritaria-2025-03
+título: Instantánea de prioridades - marco de 2025 (Beta)
+descripción: Espelho do snapshot de Steering Nexus 2025-03; pendiente de ACK antes del lanzamiento público.
 ---
 
-> Fonte canonica: `docs/source/sorafs/priority_snapshot_2025-03.md`
+> Fuente canónica: `docs/source/sorafs/priority_snapshot_2025-03.md`
 >
-> Status: **Beta / aguardando ACKs de steering** (Networking, Storage, Docs leads).
+> Estado: **Beta / guardando ACKs de dirección** (Redes, Almacenamiento, Documentos potenciales).
 
-## Visao geral
+## Visao general
 
-O snapshot de marco mantem as iniciativas de docs/content-network alinhadas aos
-tracks de entrega de SoraFS (SF-3, SF-6b, SF-9). Quando todos os leads fizerem
-acknowledge no canal steering do Nexus, remova a nota "Beta" acima.
+La instantánea de marco mantem como iniciativas de docs/content-network alinhadas aos
+pistas de entrega de SoraFS (SF-3, SF-6b, SF-9). Quando todos os leads fizerem
+Reconocer que no hay dirección del canal en Nexus, eliminar una nota "Beta" acima.
 
-### Threads de foco
+### Hilos de foco
 
-1. **Circular snapshot de prioridades** - coletar acknowledgements e registra-los
-   nas atas do council de 2025-03-05.
+1. **Circular instantánea de prioridades** - coletar agradecimientos e registrar-los
+   nas atas do consejo de 2025-03-05.
 2. **Fechamento do kickoff Gateway/DNS** - ensaiar o novo facilitation kit (Secao 6
-   no runbook) antes do workshop 2025-03-03.
-3. **Migracao de runbooks de operador** - o portal `Runbook Index` esta live; exponha
-   a URL de beta preview apos o sign-off do onboarding de reviewers.
+   sin runbook) antes del taller 2025-03-03.
+3. **Migracao de runbooks de operador** - o portal `Runbook Index` esta vivo; exponha
+   una URL de vista previa beta para la aprobación de la incorporación de revisores.
 4. **Threads de entrega SoraFS** - alinhar o trabalho restante de SF-3/6b/9 com o
-   plan/roadmap:
-   - `sorafs-node` PoR ingestion worker + status endpoint.
-   - Polimento de bindings CLI/SDK nas integracoes orchestrator Rust/JS/Swift.
-   - PoR coordinator runtime wiring e eventos GovernanceLog.
-
-Veja o arquivo fonte para a tabela completa, o distribution checklist e log entries.
+   plan/hoja de ruta:
+   - `sorafs-node` Trabajador de ingesta PoR + punto final de estado.
+   - Política de enlaces CLI/SDK con orquestador integrado Rust/JS/Swift.
+   - Coordinador PoR runtime cableado y eventos GovernanceLog.Vea el archivo fuente para una tabla completa, la lista de verificación de distribución y las entradas de registro.
