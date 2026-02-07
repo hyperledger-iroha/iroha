@@ -568,7 +568,10 @@ impl Scheduler {
                 pool = Some(p);
                 break;
             }
-            if let Ok(p) = rayon::ThreadPoolBuilder::new().num_threads(built_threads).build() {
+            if let Ok(p) = rayon::ThreadPoolBuilder::new()
+                .num_threads(built_threads)
+                .build()
+            {
                 pool = Some(p);
                 break;
             }

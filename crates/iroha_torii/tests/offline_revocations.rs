@@ -200,11 +200,7 @@ fn build_revocation_harness() -> RevocationTestHarness {
     let query = LiveQueryStore::start_test();
     let seeds = build_revocation_seeds();
     let world = world_from_revocation_seeds(&seeds);
-    let state = Arc::new(State::new_for_testing(
-        world,
-        Arc::clone(&kura),
-        query,
-    ));
+    let state = Arc::new(State::new_for_testing(world, Arc::clone(&kura), query));
 
     let fixtures = seed_offline_revocations(&state, &seeds);
 

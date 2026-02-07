@@ -110,7 +110,12 @@ async fn accounts_portfolio_filters_by_asset_id() {
     let asset = AssetId::new(cash_def, account_id);
     // `AssetId::Display` omits the account domain, but the HTTP API expects the
     // same literal form as JSON (`ih58@domain`) so it can be parsed unambiguously.
-    let asset_id = format!("{}#{}@{}", asset.definition(), asset.account(), asset.account().domain());
+    let asset_id = format!(
+        "{}#{}@{}",
+        asset.definition(),
+        asset.account(),
+        asset.account().domain()
+    );
     let expected_asset_id =
         json::to_value(&asset).expect("serialize asset id for response comparison");
     let resp = app

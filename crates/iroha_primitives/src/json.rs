@@ -157,19 +157,13 @@ impl Json {
     }
 
     /// Fallible constructor from `&str` using Norito's JSON helper.
-    /// Matches `FromStr` behavior but returns `norito::Error`.
+    /// Unlike `FromStr`, this helper is strict and rejects non-JSON text.
     ///
     /// # Errors
-    /// Returns an error if the input string is not valid JSON and cannot be
-    /// normalized by Norito's JSON value conversion.
+    /// Returns an error if the input string is not valid JSON.
     pub fn from_str_norito(s: &str) -> Result<Self, norito::Error> {
-        match json::parse_value(s) {
-            Ok(value) => Self::from_norito_value_ref(&value),
-            Err(_parse_err) => {
-                let value = Value::String(s.to_owned());
-                Self::from_norito_value_ref(&value)
-            }
-        }
+        let value = json::parse_value(s).map_err(|e| norito::Error::from(e.to_string()))?;
+        Self::from_norito_value_ref(&value)
     }
 
     /// Creates a `Json` value without validating that the input is well-formed.
@@ -369,11 +363,13 @@ mod tests {
     }
 
     #[test]
-    fn from_str_norito_handles_plain_and_json() {
-        // Plain string becomes a JSON string (quoted)
-        let j = Json::from_str_norito("hello").expect("from_str_norito");
-        assert_eq!(j.as_ref(), "hello");
-        // Proper JSON object is preserved
+    fn from_str_norito_rejects_plain_text_and_accepts_json() {
+        let err = Json::from_str_norito("hello").expect_err("plain text must fail");
+        assert!(
+            err.to_string().contains("JSON error"),
+            "unexpected parse error: {err}"
+        );
+        // Proper JSON is preserved.
         let j2 = Json::from_str_norito("{\"k\":1}").expect("json object");
         let v: norito::json::Value = norito::json::from_str(j2.get()).expect("parse value");
         assert_eq!(v, norito::json!({"k": 1}));
