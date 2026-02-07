@@ -1,0 +1,74 @@
+{
+  "alias_claims": [],
+  "car_digest": "AE5BB8B4A865AD70CBC10CBFEBF5E401C5F50D94DAF566BCEBA915C9133C71B7",
+  "car_size": 576,
+  "chunking": {
+    "aliases": [
+      "sorafs.sf1@1.0.0",
+      "sorafs-sf1"
+    ],
+    "break_mask": 65535,
+    "max_size": 524288,
+    "min_size": 65536,
+    "multihash_code": 31,
+    "name": "sf1",
+    "namespace": "sorafs",
+    "profile_id": [
+      1
+    ],
+    "semver": "1.0.0",
+    "target_size": 262144
+  },
+  "content_length": 201,
+  "dag_codec": [
+    113
+  ],
+  "governance": {
+    "council_signatures": []
+  },
+  "metadata": [],
+  "pin_policy": {
+    "min_replicas": 1,
+    "retention_epoch": 0,
+    "storage_class": "hot"
+  },
+  "root_cid": [
+    1,
+    113,
+    31,
+    32,
+    175,
+    167,
+    93,
+    55,
+    20,
+    95,
+    250,
+    220,
+    71,
+    2,
+    136,
+    49,
+    244,
+    15,
+    136,
+    77,
+    215,
+    86,
+    48,
+    212,
+    220,
+    99,
+    62,
+    86,
+    97,
+    54,
+    157,
+    185,
+    199,
+    160,
+    211,
+    240
+  ],
+  "version": 1
+}

@@ -624,6 +624,16 @@ fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
         }
         StateDel { path } => f(*path),
         DecodeInt { blob, .. } | JsonDecode { blob, .. } | NameDecode { blob, .. } => f(*blob),
+        TlvLen { value, .. } => f(*value),
+        JsonGetInt { json, key, .. }
+        | JsonGetJson { json, key, .. }
+        | JsonGetName { json, key, .. }
+        | JsonGetAccountId { json, key, .. }
+        | JsonGetNftId { json, key, .. }
+        | JsonGetBlobHex { json, key, .. } => {
+            f(*json);
+            f(*key);
+        }
         SchemaDecode { schema, blob, .. } => {
             f(*schema);
             f(*blob);
@@ -786,11 +796,18 @@ fn dest_temp(instr: &Instr) -> Option<Temp> {
         Instr::VrfVerifyBatch { dest, .. } => Some(*dest),
         Instr::MapGet { dest, .. } => Some(*dest),
         Instr::DecodeInt { dest, .. } => Some(*dest),
+        Instr::TlvLen { dest, .. } => Some(*dest),
         Instr::EncodeInt { dest, .. } => Some(*dest),
         Instr::PathMapKey { dest, .. } => Some(*dest),
         Instr::PathMapKeyNorito { dest, .. } => Some(*dest),
         Instr::JsonEncode { dest, .. } => Some(*dest),
         Instr::JsonDecode { dest, .. } => Some(*dest),
+        Instr::JsonGetInt { dest, .. }
+        | Instr::JsonGetJson { dest, .. }
+        | Instr::JsonGetName { dest, .. }
+        | Instr::JsonGetAccountId { dest, .. }
+        | Instr::JsonGetNftId { dest, .. }
+        | Instr::JsonGetBlobHex { dest, .. } => Some(*dest),
         Instr::NameDecode { dest, .. } => Some(*dest),
         Instr::SchemaEncode { dest, .. } => Some(*dest),
         Instr::SchemaDecode { dest, .. } => Some(*dest),

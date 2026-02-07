@@ -156,9 +156,6 @@ pub struct DeployActivateArgs {
     /// Authority account identifier (IH58 (preferred)/sora (second-best)/0x, uaid:, opaque:, or <alias|public_key>@domain)
     #[arg(long)]
     pub authority: String,
-    /// Hex-encoded private key for signing and manifest provenance
-    #[arg(long, value_name = "HEX")]
-    pub private_key: String,
     /// Governance namespace to bind (e.g., apps)
     #[arg(long)]
     pub namespace: String,
@@ -181,11 +178,15 @@ pub struct DeployActivateArgs {
 
 impl Run for DeployActivateArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let _authority =
+        let authority =
             crate::resolve_account_id(context, &self.authority).wrap_err("failed to resolve --authority")?;
-        let private_key: PrivateKey = self.private_key.parse().wrap_err("invalid --private-key")?;
-        let keypair =
-            KeyPair::from_private_key(private_key.clone()).wrap_err("derive keypair failed")?;
+        let cfg_authority = context.config().account.clone();
+        if authority != cfg_authority {
+            return Err(eyre!(
+                "--authority must match client.toml authority (expected {cfg_authority}, got {authority})"
+            ));
+        }
+        let keypair = &context.config().key_pair;
         let code = load_code_bytes(self.code_file.clone(), self.code_b64.clone())?;
         let summary = program_summary_from_bytes(&code)?;
 

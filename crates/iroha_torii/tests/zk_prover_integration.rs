@@ -616,8 +616,8 @@ async fn prover_reports_server_side_paging_limit_since() {
             headers_json.clone(),
             b,
         )
-            .await
-            .into_response()
+        .await
+        .into_response()
     };
     let r1 = post(mk_json("a")).await;
     assert_eq!(r1.status(), axum::http::StatusCode::CREATED);

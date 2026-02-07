@@ -3131,6 +3131,131 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                         ty: Type::Json,
                     })
                 }
+                "tlv_len" => {
+                    if arg_typed.len() != 1 {
+                        return Err(SemanticError {
+                            message: "tlv_len expects one argument".into(),
+                        });
+                    }
+                    let ty = resolve_struct_type(&arg_typed[0].ty);
+                    if !(is_pointer_type(&ty) || is_blob_like(&ty) || ty == Type::Json) {
+                        return Err(SemanticError {
+                            message:
+                                "tlv_len expects a pointer-ABI type, Json, or Blob|bytes argument"
+                                    .into(),
+                        });
+                    }
+                    Ok(TypedExpr {
+                        expr: ExprKind::Call {
+                            name: name.clone(),
+                            args: arg_typed,
+                        },
+                        ty: Type::Int,
+                    })
+                }
+                "json_get_int" => {
+                    if arg_typed.len() != 2
+                        || arg_typed[0].ty != Type::Json
+                        || arg_typed[1].ty != Type::Name
+                    {
+                        return Err(SemanticError {
+                            message: "json_get_int expects (Json, Name)".into(),
+                        });
+                    }
+                    Ok(TypedExpr {
+                        expr: ExprKind::Call {
+                            name: name.clone(),
+                            args: arg_typed,
+                        },
+                        ty: Type::Int,
+                    })
+                }
+                "json_get_json" => {
+                    if arg_typed.len() != 2
+                        || arg_typed[0].ty != Type::Json
+                        || arg_typed[1].ty != Type::Name
+                    {
+                        return Err(SemanticError {
+                            message: "json_get_json expects (Json, Name)".into(),
+                        });
+                    }
+                    Ok(TypedExpr {
+                        expr: ExprKind::Call {
+                            name: name.clone(),
+                            args: arg_typed,
+                        },
+                        ty: Type::Json,
+                    })
+                }
+                "json_get_name" => {
+                    if arg_typed.len() != 2
+                        || arg_typed[0].ty != Type::Json
+                        || arg_typed[1].ty != Type::Name
+                    {
+                        return Err(SemanticError {
+                            message: "json_get_name expects (Json, Name)".into(),
+                        });
+                    }
+                    Ok(TypedExpr {
+                        expr: ExprKind::Call {
+                            name: name.clone(),
+                            args: arg_typed,
+                        },
+                        ty: Type::Name,
+                    })
+                }
+                "json_get_account_id" => {
+                    if arg_typed.len() != 2
+                        || arg_typed[0].ty != Type::Json
+                        || arg_typed[1].ty != Type::Name
+                    {
+                        return Err(SemanticError {
+                            message: "json_get_account_id expects (Json, Name)".into(),
+                        });
+                    }
+                    Ok(TypedExpr {
+                        expr: ExprKind::Call {
+                            name: name.clone(),
+                            args: arg_typed,
+                        },
+                        ty: Type::AccountId,
+                    })
+                }
+                "json_get_nft_id" => {
+                    if arg_typed.len() != 2
+                        || arg_typed[0].ty != Type::Json
+                        || arg_typed[1].ty != Type::Name
+                    {
+                        return Err(SemanticError {
+                            message: "json_get_nft_id expects (Json, Name)".into(),
+                        });
+                    }
+                    Ok(TypedExpr {
+                        expr: ExprKind::Call {
+                            name: name.clone(),
+                            args: arg_typed,
+                        },
+                        ty: Type::NftId,
+                    })
+                }
+                "json_get_blob_hex" => {
+                    if arg_typed.len() != 2
+                        || arg_typed[0].ty != Type::Json
+                        || arg_typed[1].ty != Type::Name
+                    {
+                        return Err(SemanticError {
+                            message: "json_get_blob_hex expects (Json, Name)".into(),
+                        });
+                    }
+                    Ok(TypedExpr {
+                        expr: ExprKind::Call {
+                            name: name.clone(),
+                            args: arg_typed,
+                        },
+                        ty: Type::Bytes,
+                    })
+                }
+
                 // Schema helpers (placeholder)
                 "encode_schema" => {
                     if arg_typed.len() != 2

@@ -4977,6 +4977,261 @@ impl Compiler {
                             push_word(&mut code, encode_addi(rd, 10, 0)?);
                             spill_back(dest, rd, spilled, imm, &mut code)?;
                         }
+                        Instr::TlvLen { dest, value } => {
+                            if !durable_enabled {
+                                return Err(i18n::translate(
+                                    self.lang,
+                                    Message::UnsupportedBinaryOp(
+                                        "durable state requires ABI v1. Add `meta { abi_version: 1; }` or compile with `--abi 1`.",
+                                    ),
+                                ));
+                            }
+                            // r10=&TLV; publish; SCALL TLV_LEN; move r10 (len) to dest
+                            let r = src_reg(value, scratch1, &mut code)?;
+                            push_word(&mut code, encode_addi(10, r, 0)?);
+                            let pub_word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+                            );
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            let word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_TLV_LEN as u8,
+                            );
+                            code.extend_from_slice(&word.to_le_bytes());
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
+                        Instr::JsonGetInt { dest, json, key } => {
+                            if !durable_enabled {
+                                return Err(i18n::translate(
+                                    self.lang,
+                                    Message::UnsupportedBinaryOp(
+                                        "durable state requires ABI v1. Add `meta { abi_version: 1; }` or compile with `--abi 1`.",
+                                    ),
+                                ));
+                            }
+                            // r10=&Json; publish; r11=&Name key; SCALL JSON_GET_I64; move r10 (int) to dest
+                            if let Some(s) = string_map.get(&(func_idx, *json)) {
+                                let key = DataKey(DataKind::Json, s.clone());
+                                emit_literal_stub(&mut code, &mut fixups, 10, key);
+                            } else {
+                                let r = src_reg(json, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(10, r, 0)?);
+                            }
+                            let pub_word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+                            );
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            if let Some(s) = string_map.get(&(func_idx, *key)) {
+                                let kb = DataKey(DataKind::Name, s.clone());
+                                emit_literal_stub(&mut code, &mut fixups, 11, kb);
+                            } else {
+                                let r = src_reg(key, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(11, r, 0)?);
+                            }
+                            let word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_JSON_GET_I64 as u8,
+                            );
+                            code.extend_from_slice(&word.to_le_bytes());
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
+                        Instr::JsonGetJson { dest, json, key } => {
+                            if !durable_enabled {
+                                return Err(i18n::translate(
+                                    self.lang,
+                                    Message::UnsupportedBinaryOp(
+                                        "durable state requires ABI v1. Add `meta { abi_version: 1; }` or compile with `--abi 1`.",
+                                    ),
+                                ));
+                            }
+                            // r10=&Json; publish; r11=&Name key; SCALL JSON_GET_JSON; move r10
+                            if let Some(s) = string_map.get(&(func_idx, *json)) {
+                                let key = DataKey(DataKind::Json, s.clone());
+                                emit_literal_stub(&mut code, &mut fixups, 10, key);
+                            } else {
+                                let r = src_reg(json, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(10, r, 0)?);
+                            }
+                            let pub_word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+                            );
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            if let Some(s) = string_map.get(&(func_idx, *key)) {
+                                let kb = DataKey(DataKind::Name, s.clone());
+                                emit_literal_stub(&mut code, &mut fixups, 11, kb);
+                            } else {
+                                let r = src_reg(key, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(11, r, 0)?);
+                            }
+                            let word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_JSON_GET_JSON as u8,
+                            );
+                            code.extend_from_slice(&word.to_le_bytes());
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
+                        Instr::JsonGetName { dest, json, key } => {
+                            if !durable_enabled {
+                                return Err(i18n::translate(
+                                    self.lang,
+                                    Message::UnsupportedBinaryOp(
+                                        "durable state requires ABI v1. Add `meta { abi_version: 1; }` or compile with `--abi 1`.",
+                                    ),
+                                ));
+                            }
+                            // r10=&Json; publish; r11=&Name key; SCALL JSON_GET_NAME; move r10
+                            if let Some(s) = string_map.get(&(func_idx, *json)) {
+                                let key = DataKey(DataKind::Json, s.clone());
+                                emit_literal_stub(&mut code, &mut fixups, 10, key);
+                            } else {
+                                let r = src_reg(json, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(10, r, 0)?);
+                            }
+                            let pub_word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+                            );
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            if let Some(s) = string_map.get(&(func_idx, *key)) {
+                                let kb = DataKey(DataKind::Name, s.clone());
+                                emit_literal_stub(&mut code, &mut fixups, 11, kb);
+                            } else {
+                                let r = src_reg(key, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(11, r, 0)?);
+                            }
+                            let word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_JSON_GET_NAME as u8,
+                            );
+                            code.extend_from_slice(&word.to_le_bytes());
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
+                        Instr::JsonGetAccountId { dest, json, key } => {
+                            if !durable_enabled {
+                                return Err(i18n::translate(
+                                    self.lang,
+                                    Message::UnsupportedBinaryOp(
+                                        "durable state requires ABI v1. Add `meta { abi_version: 1; }` or compile with `--abi 1`.",
+                                    ),
+                                ));
+                            }
+                            // r10=&Json; publish; r11=&Name key; SCALL JSON_GET_ACCOUNT_ID; move r10
+                            if let Some(s) = string_map.get(&(func_idx, *json)) {
+                                let key = DataKey(DataKind::Json, s.clone());
+                                emit_literal_stub(&mut code, &mut fixups, 10, key);
+                            } else {
+                                let r = src_reg(json, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(10, r, 0)?);
+                            }
+                            let pub_word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+                            );
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            if let Some(s) = string_map.get(&(func_idx, *key)) {
+                                let kb = DataKey(DataKind::Name, s.clone());
+                                emit_literal_stub(&mut code, &mut fixups, 11, kb);
+                            } else {
+                                let r = src_reg(key, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(11, r, 0)?);
+                            }
+                            let word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_JSON_GET_ACCOUNT_ID as u8,
+                            );
+                            code.extend_from_slice(&word.to_le_bytes());
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
+                        Instr::JsonGetNftId { dest, json, key } => {
+                            if !durable_enabled {
+                                return Err(i18n::translate(
+                                    self.lang,
+                                    Message::UnsupportedBinaryOp(
+                                        "durable state requires ABI v1. Add `meta { abi_version: 1; }` or compile with `--abi 1`.",
+                                    ),
+                                ));
+                            }
+                            // r10=&Json; publish; r11=&Name key; SCALL JSON_GET_NFT_ID; move r10
+                            if let Some(s) = string_map.get(&(func_idx, *json)) {
+                                let key = DataKey(DataKind::Json, s.clone());
+                                emit_literal_stub(&mut code, &mut fixups, 10, key);
+                            } else {
+                                let r = src_reg(json, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(10, r, 0)?);
+                            }
+                            let pub_word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+                            );
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            if let Some(s) = string_map.get(&(func_idx, *key)) {
+                                let kb = DataKey(DataKind::Name, s.clone());
+                                emit_literal_stub(&mut code, &mut fixups, 11, kb);
+                            } else {
+                                let r = src_reg(key, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(11, r, 0)?);
+                            }
+                            let word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_JSON_GET_NFT_ID as u8,
+                            );
+                            code.extend_from_slice(&word.to_le_bytes());
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
+                        Instr::JsonGetBlobHex { dest, json, key } => {
+                            if !durable_enabled {
+                                return Err(i18n::translate(
+                                    self.lang,
+                                    Message::UnsupportedBinaryOp(
+                                        "durable state requires ABI v1. Add `meta { abi_version: 1; }` or compile with `--abi 1`.",
+                                    ),
+                                ));
+                            }
+                            // r10=&Json; publish; r11=&Name key; SCALL JSON_GET_BLOB_HEX; move r10
+                            if let Some(s) = string_map.get(&(func_idx, *json)) {
+                                let key = DataKey(DataKind::Json, s.clone());
+                                emit_literal_stub(&mut code, &mut fixups, 10, key);
+                            } else {
+                                let r = src_reg(json, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(10, r, 0)?);
+                            }
+                            let pub_word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+                            );
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            if let Some(s) = string_map.get(&(func_idx, *key)) {
+                                let kb = DataKey(DataKind::Name, s.clone());
+                                emit_literal_stub(&mut code, &mut fixups, 11, kb);
+                            } else {
+                                let r = src_reg(key, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(11, r, 0)?);
+                            }
+                            let word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_JSON_GET_BLOB_HEX as u8,
+                            );
+                            code.extend_from_slice(&word.to_le_bytes());
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
+
                         Instr::NameDecode { dest, blob } => {
                             // r10=&NoritoBytes; publish; SCALL NAME_DECODE; move
                             if let Some(s) = string_map.get(&(func_idx, *blob)) {

@@ -1398,9 +1398,13 @@ pub fn start_gc_worker() {
             let now = SystemTime::now();
             if let Ok(rd) = fs::read_dir(attachments_root_dir()) {
                 for e in rd.flatten() {
-                    let Ok(file_type) = e.file_type() else { continue };
+                    let Ok(file_type) = e.file_type() else {
+                        continue;
+                    };
                     let file_name = e.file_name();
-                    let Some(name) = file_name.to_str() else { continue };
+                    let Some(name) = file_name.to_str() else {
+                        continue;
+                    };
                     if file_type.is_dir() {
                         let Some(tenant_key) = sanitize_tenant_key(name) else {
                             continue;
@@ -1409,9 +1413,15 @@ pub fn start_gc_worker() {
                         if let Ok(trd) = fs::read_dir(attachments_dir(&tenant)) {
                             for te in trd.flatten() {
                                 let te_file_name = te.file_name();
-                                let Some(tname) = te_file_name.to_str() else { continue };
-                                let Some(id) = tname.strip_suffix(".json") else { continue };
-                                let Some(meta) = load_meta(&tenant, id) else { continue };
+                                let Some(tname) = te_file_name.to_str() else {
+                                    continue;
+                                };
+                                let Some(id) = tname.strip_suffix(".json") else {
+                                    continue;
+                                };
+                                let Some(meta) = load_meta(&tenant, id) else {
+                                    continue;
+                                };
                                 let meta_time = UNIX_EPOCH + Duration::from_millis(meta.created_ms);
                                 if now.duration_since(meta_time).unwrap_or_default() > ttl {
                                     delete_attachment_files(&tenant, id);
@@ -2008,8 +2018,8 @@ mod tests {
         let body = axum::body::Bytes::from_static(br#"{"hello":"world"}"#);
         let response =
             super::handle_post_attachment(super::AttachmentTenant::anonymous(), headers, body)
-            .await
-            .into_response();
+                .await
+                .into_response();
         assert_eq!(response.status(), StatusCode::CREATED);
         let meta_bytes = response
             .into_body()

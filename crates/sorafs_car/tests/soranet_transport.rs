@@ -236,7 +236,7 @@ fn manifest_without_governance_rejects_verification() {
     match err {
         ManifestVerificationError::ManifestValidation(message) => {
             assert!(
-                message.contains("MissingCouncilSignature"),
+                message.contains("council signature"),
                 "unexpected validation message: {message}"
             );
         }

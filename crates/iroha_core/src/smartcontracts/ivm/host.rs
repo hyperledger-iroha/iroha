@@ -5488,6 +5488,13 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
             | ivm::syscalls::SYSCALL_DECODE_INT
             | ivm::syscalls::SYSCALL_JSON_ENCODE
             | ivm::syscalls::SYSCALL_JSON_DECODE
+            | ivm::syscalls::SYSCALL_TLV_LEN
+            | ivm::syscalls::SYSCALL_JSON_GET_I64
+            | ivm::syscalls::SYSCALL_JSON_GET_JSON
+            | ivm::syscalls::SYSCALL_JSON_GET_NAME
+            | ivm::syscalls::SYSCALL_JSON_GET_ACCOUNT_ID
+            | ivm::syscalls::SYSCALL_JSON_GET_NFT_ID
+            | ivm::syscalls::SYSCALL_JSON_GET_BLOB_HEX
             | ivm::syscalls::SYSCALL_SCHEMA_ENCODE
             | ivm::syscalls::SYSCALL_SCHEMA_DECODE
             | ivm::syscalls::SYSCALL_POINTER_TO_NORITO

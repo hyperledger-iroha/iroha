@@ -54,6 +54,8 @@ tempfile = "3.23.0"
 hex = "0.4.3"
 blake3 = "1.8.2"
 rustls = { version = "0.23.35", default-features = false, features = ["std"] }
+assert_cmd = "2.1.1"
+httpmock = "0.8.2"
 sorafs_manifest = { path = "../sorafs_manifest" }
 iroha_crypto = { path = "../iroha_crypto" }
 soranet_pq = { path = "../soranet_pq" }
