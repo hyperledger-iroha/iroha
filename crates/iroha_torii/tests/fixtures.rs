@@ -6,10 +6,14 @@
 
 use std::sync::{Arc, LazyLock, Mutex};
 
+use axum::{body::Body, http::Request};
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use iroha_core::state::World;
+use iroha_crypto::{KeyPair, Signature};
 use iroha_data_model::peer::PeerId;
 use iroha_telemetry::metrics::Metrics;
 use iroha_test_samples::ALICE_ID;
+use rand::RngCore as _;
 
 static SHARED_METRICS: LazyLock<Mutex<Arc<Metrics>>> =
     LazyLock::new(|| Mutex::new(Arc::new(Metrics::default())));
@@ -91,4 +95,67 @@ where
 #[allow(dead_code)]
 pub fn seed_peer(world: &mut World, peer_id: PeerId) {
     seed_peers(world, [peer_id]);
+}
+
+/// Attach operator signature headers to a request targeting operator-only endpoints.
+///
+/// Operator endpoints are internet-reachable by design but must be authenticated with a
+/// request signature bound to (method, path, query, body, timestamp, nonce).
+#[allow(dead_code)]
+pub fn operator_signed_request(
+    key_pair: &KeyPair,
+    mut request: Request<Body>,
+    body_bytes: &[u8],
+) -> Request<Body> {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let ts_ms: u64 = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .try_into()
+        .unwrap_or(u64::MAX);
+
+    let mut nonce_bytes = [0u8; 12];
+    rand::thread_rng().fill_bytes(&mut nonce_bytes);
+    let nonce = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(nonce_bytes);
+
+    let mut msg =
+        iroha_torii::canonical_request_message(request.method(), request.uri(), body_bytes);
+    msg.extend_from_slice(b"\n");
+    msg.extend_from_slice(ts_ms.to_string().as_bytes());
+    msg.extend_from_slice(b"\n");
+    msg.extend_from_slice(nonce.as_bytes());
+
+    let signature = Signature::new(key_pair.private_key(), &msg);
+
+    let headers = request.headers_mut();
+    headers.insert(
+        "x-iroha-operator-public-key",
+        key_pair
+            .public_key()
+            .to_string()
+            .parse()
+            .expect("operator public key header"),
+    );
+    headers.insert(
+        "x-iroha-operator-timestamp-ms",
+        ts_ms
+            .to_string()
+            .parse()
+            .expect("operator timestamp header"),
+    );
+    headers.insert(
+        "x-iroha-operator-nonce",
+        nonce.parse().expect("operator nonce header"),
+    );
+    headers.insert(
+        "x-iroha-operator-signature",
+        BASE64_STANDARD
+            .encode(signature.payload())
+            .parse()
+            .expect("operator signature header"),
+    );
+
+    request
 }

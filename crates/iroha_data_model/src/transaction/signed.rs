@@ -1872,10 +1872,80 @@ mod norito_rpc_fixture_tests {
             );
 
             let signed_payload_bytes = norito::codec::encode_adaptive(signed_tx.payload());
-            assert_eq!(
-                signed_payload_bytes, payload_bytes,
-                "{name}: payload_base64 mismatch vs signed payload"
-            );
+            if signed_payload_bytes != payload_bytes {
+                fn first_diff(left: &[u8], right: &[u8]) -> Option<(usize, u8, u8)> {
+                    let shared_len = left.len().min(right.len());
+                    for idx in 0..shared_len {
+                        if left[idx] != right[idx] {
+                            return Some((idx, left[idx], right[idx]));
+                        }
+                    }
+                    None
+                }
+
+                let payload_from_fixture: TransactionPayload = {
+                    let _guard = norito::core::PayloadCtxGuard::enter(&payload_bytes);
+                    let mut cursor = std::io::Cursor::new(&payload_bytes);
+                    let decoded: TransactionPayload = norito::codec::Decode::decode(&mut cursor)
+                        .unwrap_or_else(|err| {
+                            panic!("{name}: decode payload fixture bytes (bare): {err}")
+                        });
+                    let used =
+                        usize::try_from(cursor.position()).expect("cursor.position fits usize");
+                    assert_eq!(
+                        used,
+                        payload_bytes.len(),
+                        "{name}: payload fixture contains trailing bytes"
+                    );
+                    decoded
+                };
+
+                let payload_equal = &payload_from_fixture == signed_tx.payload();
+                let diff = first_diff(&signed_payload_bytes, &payload_bytes);
+                let mut has_invalid_instruction = false;
+                let mut register_role_stats: Option<(usize, usize)> = None;
+                let mut instruction_count: Option<usize> = None;
+                let mut instruction_types: Vec<&'static str> = Vec::new();
+                if let Executable::Instructions(instrs) = signed_tx.instructions() {
+                    instruction_count = Some(instrs.len());
+                    for instr in instrs.iter() {
+                        if instruction_types.len() < 16 {
+                            instruction_types.push(crate::isi::Instruction::id(&**instr));
+                        }
+                        if instr
+                            .as_any()
+                            .downcast_ref::<crate::isi::InvalidInstruction>()
+                            .is_some()
+                        {
+                            has_invalid_instruction = true;
+                        }
+                        if let Some(register) = instr
+                            .as_any()
+                            .downcast_ref::<crate::isi::Register<crate::role::Role>>()
+                        {
+                            let perms = register.object.inner.permissions.len();
+                            let epochs = register.object.inner.permission_epochs.len();
+                            register_role_stats = Some((perms, epochs));
+                        }
+                        if let Some(register_box) =
+                            instr.as_any().downcast_ref::<crate::isi::RegisterBox>()
+                        {
+                            if let crate::isi::RegisterBox::Role(register) = register_box {
+                                let perms = register.object.inner.permissions.len();
+                                let epochs = register.object.inner.permission_epochs.len();
+                                register_role_stats = Some((perms, epochs));
+                            }
+                        }
+                    }
+                }
+
+                panic!(
+                    "{name}: payload bytes mismatch after decode+re-encode (len encoded={}, len fixture={}, first_diff={diff:?}, payload_equal={payload_equal}, has_invalid_instruction={has_invalid_instruction}, register_role_stats={register_role_stats:?}, instruction_count={instruction_count:?}, instruction_types={instruction_types:?})",
+                    signed_payload_bytes.len(),
+                    payload_bytes.len(),
+                );
+            }
+
             let signed_reencoded = norito::codec::encode_adaptive(&signed_tx);
             assert_eq!(
                 signed_reencoded, signed_bytes,

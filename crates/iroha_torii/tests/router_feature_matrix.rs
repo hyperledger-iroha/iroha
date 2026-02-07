@@ -241,12 +241,14 @@ async fn router_builds_under_current_features() {
     // A couple of smoke GETs that are present regardless of features
     let resp1 = app
         .clone()
-        .oneshot(
+        .oneshot(fixtures::operator_signed_request(
+            &cfg.common.key_pair,
             Request::builder()
                 .uri(Uri::from_static("/v1/sumeragi/evidence/count"))
                 .body(axum::body::Body::empty())
                 .unwrap(),
-        )
+            &[],
+        ))
         .await
         .unwrap();
     assert!(matches!(
@@ -255,16 +257,19 @@ async fn router_builds_under_current_features() {
     ));
 
     let post_body = format!("{{\"evidence_hex\":\"{}\"}}", sample_evidence_hex());
+    let post_body_bytes = post_body.as_bytes().to_vec();
     let resp_post = app
         .clone()
-        .oneshot(
+        .oneshot(fixtures::operator_signed_request(
+            &cfg.common.key_pair,
             Request::builder()
                 .method("POST")
                 .uri(Uri::from_static("/v1/sumeragi/evidence"))
                 .header("content-type", "application/json")
                 .body(axum::body::Body::from(post_body))
                 .unwrap(),
-        )
+            &post_body_bytes,
+        ))
         .await
         .unwrap();
     assert!(
@@ -385,12 +390,14 @@ async fn router_exposes_status_when_telemetry_enabled() {
     let app = torii.api_router_for_tests();
 
     let resp = app
-        .oneshot(
+        .oneshot(fixtures::operator_signed_request(
+            &cfg.common.key_pair,
             Request::builder()
                 .uri(Uri::from_static("/status"))
                 .body(axum::body::Body::empty())
                 .unwrap(),
-        )
+            &[],
+        ))
         .await
         .unwrap();
     assert!(matches!(

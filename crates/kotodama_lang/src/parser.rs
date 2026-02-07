@@ -1332,17 +1332,21 @@ impl<'a> Parser<'a> {
                     || self.peek(TokenKind::SlashEqual)
                     || self.peek(TokenKind::PercentEqual)
                 {
-                    let op_tok = self.bump().kind.clone();
+                    let op_tok = self.bump();
                     let rhs = self.parse_expr()?;
                     self.expect(TokenKind::Semicolon)?;
-                    let op = match op_tok {
+                    let op = match op_tok.kind {
                         TokenKind::Equal => AssignOp::Set,
                         TokenKind::PlusEqual => AssignOp::Add,
                         TokenKind::MinusEqual => AssignOp::Sub,
                         TokenKind::StarEqual => AssignOp::Mul,
                         TokenKind::SlashEqual => AssignOp::Div,
                         TokenKind::PercentEqual => AssignOp::Mod,
-                        _ => unreachable!(),
+                        _ => {
+                            return Err(
+                                self.error(op_tok, "expected one of: =, +=, -=, *=, /=, %=")
+                            );
+                        }
                     };
                     return Ok(match (target, op) {
                         (Expr::Ident(name), AssignOp::Set) => {
@@ -1401,16 +1405,20 @@ impl<'a> Parser<'a> {
                         || self.peek(TokenKind::SlashEqual)
                         || self.peek(TokenKind::PercentEqual))
                 {
-                    let op_tok = self.bump().kind.clone();
+                    let op_tok = self.bump();
                     let rhs = self.parse_expr()?;
-                    let op = match op_tok {
+                    let op = match op_tok.kind {
                         TokenKind::Equal => AssignOp::Set,
                         TokenKind::PlusEqual => AssignOp::Add,
                         TokenKind::MinusEqual => AssignOp::Sub,
                         TokenKind::StarEqual => AssignOp::Mul,
                         TokenKind::SlashEqual => AssignOp::Div,
                         TokenKind::PercentEqual => AssignOp::Mod,
-                        _ => unreachable!(),
+                        _ => {
+                            return Err(
+                                self.error(op_tok, "expected one of: =, +=, -=, *=, /=, %=")
+                            );
+                        }
                     };
                     return Ok(match (target, op) {
                         (Expr::Ident(name), AssignOp::Set) => {

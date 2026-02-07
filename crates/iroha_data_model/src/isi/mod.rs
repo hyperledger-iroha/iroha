@@ -705,15 +705,33 @@ impl<'a> norito::core::NoritoDeserialize<'a> for InstructionBox {
     }
 
     fn deserialize(archived: &'a norito::core::Archived<InstructionBox>) -> Self {
-        Self::try_deserialize(archived).expect("failed to deserialize instruction")
+        let (name, bytes): (String, Vec<u8>) =
+            norito::core::NoritoDeserialize::deserialize(archived.cast());
+        match decode_instruction_from_pair(&name, &bytes) {
+            Ok(inst) => inst,
+            Err(err) => {
+                // Avoid panics on malformed instruction payloads (DoS vector).
+                // Represent the decode error as a sentinel instruction that the executor rejects.
+                let hash: [u8; 32] = iroha_crypto::Hash::new(&bytes).into();
+                let mut message = err.to_string();
+                // Keep the placeholder bounded; it may end up in logs/errors.
+                const MAX_MESSAGE_LEN: usize = 256;
+                if message.len() > MAX_MESSAGE_LEN {
+                    message.truncate(MAX_MESSAGE_LEN);
+                }
+                InstructionBox::from(crate::isi::transparent::InvalidInstruction::new(
+                    name, hash, message,
+                ))
+            }
+        }
     }
 
     fn try_deserialize(
         archived: &'a norito::core::Archived<InstructionBox>,
     ) -> Result<Self, norito::core::Error> {
         let (name, bytes): (String, Vec<u8>) =
-            norito::core::NoritoDeserialize::deserialize(archived.cast());
-        decode_instruction_from_pair(&name, &bytes)
+            norito::core::NoritoDeserialize::try_deserialize(archived.cast())?;
+        decode_instruction_from_pair(&name, &bytes).map_err(norito::core::Error::from)
     }
 }
 
@@ -760,7 +778,12 @@ impl iroha_schema::TypeId for InstructionBox {
     }
 }
 
-pub(crate) fn decode_instruction_from_pair(
+/// Decode a wire-framed ISI payload into a typed [`InstructionBox`].
+///
+/// The `name` must be either the canonical Rust `type_name` or a wire-id
+/// registered in the instruction registry. The `payload` must be framed with
+/// the Norito header as produced by [`frame_instruction_payload`].
+pub fn decode_instruction_from_pair(
     name: &str,
     payload: &[u8],
 ) -> Result<InstructionBox, norito::Error> {

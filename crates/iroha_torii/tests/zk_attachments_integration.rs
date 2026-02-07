@@ -160,7 +160,7 @@ async fn attachments_post_get_list_delete_roundtrip() {
                         iroha_torii::zk_attachments::handle_get_attachment(anon_tenant.clone(), id)
                             .await,
                     )
-                },
+                }
             })
             .delete({
                 let anon_tenant = anon_tenant.clone();

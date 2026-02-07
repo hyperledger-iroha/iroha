@@ -267,7 +267,6 @@ base = int(sys.argv[2])
 peers = int(sys.argv[3])
 for port in range(base, base + peers):
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     try:
         sock.bind((host, port))
     except OSError:
@@ -500,7 +499,7 @@ echo "Waiting for network to be ready..."
 READY=false
 for ((i = 1; i <= TIMEOUT_SECS; i++)); do
   if curl -sf --connect-timeout "$CURL_TIMEOUT_SECS" --max-time "$CURL_TIMEOUT_SECS" \
-    "http://$PUBLIC_HOST_URL:$BASE_API_PORT/status" >/dev/null 2>&1; then
+    "http://$PUBLIC_HOST_URL:$BASE_API_PORT/health" >/dev/null 2>&1; then
     READY=true
     break
   fi
@@ -515,12 +514,20 @@ fi
 
 echo "Network is ready:"
 curl -sf --connect-timeout "$CURL_TIMEOUT_SECS" --max-time "$CURL_TIMEOUT_SECS" \
+  "http://$PUBLIC_HOST_URL:$BASE_API_PORT/health" || true
+
+# /status may be protected by operator auth depending on Torii config; it is not required for
+# localnet readiness checks.
+curl -s --connect-timeout "$CURL_TIMEOUT_SECS" --max-time "$CURL_TIMEOUT_SECS" \
   "http://$PUBLIC_HOST_URL:$BASE_API_PORT/status" || true
 
 echo "Waiting for consensus mode tag..."
 MODE_TAG=""
 MODE_READY=false
-for ((i = 1; i <= TIMEOUT_SECS; i++)); do
+# Mode tag is informational and may be behind operator auth depending on Torii config.
+# Don't block localnet startup for the full readiness timeout.
+MODE_TAG_TIMEOUT_SECS=10
+for ((i = 1; i <= MODE_TAG_TIMEOUT_SECS; i++)); do
   MODE_TAG="$(
     { curl -s --connect-timeout "$CURL_TIMEOUT_SECS" --max-time "$CURL_TIMEOUT_SECS" \
         "http://$PUBLIC_HOST_URL:$BASE_API_PORT/v1/sumeragi/status" 2>/dev/null || true; } \

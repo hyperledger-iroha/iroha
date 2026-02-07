@@ -1733,6 +1733,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
             soranet_handshake,
             idle_timeout,
             connect_startup_delay,
+            dial_timeout,
             peer_gossip_period,
             trust_gossip,
             quic_enabled,
@@ -1744,6 +1745,8 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
             p2p_subscriber_queue_cap,
             dns_refresh_interval,
             dns_refresh_ttl,
+            p2p_proxy,
+            p2p_no_proxy,
             happy_eyeballs_stagger: config_happy_eyeballs_stagger,
             addr_ipv6_first,
             max_incoming,
@@ -1778,7 +1781,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
             tcp_nodelay,
             tcp_keepalive,
             tls_only_v1_3: _tls_only_v1_3,
-            quic_max_idle_timeout: _quic_max_idle_timeout,
+            quic_max_idle_timeout,
             ..
         }: Config,
         // Optional ChainId used to bind handshake to chain (feature-gated by callers)
@@ -1796,6 +1799,41 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
         let trust_gossip = trust_gossip_config && soranet_handshake.trust_gossip;
         let soranet_runtime = runtime_from_handshake(soranet_handshake)?;
         let connect_startup_delay_until = tokio::time::Instant::now() + connect_startup_delay;
+
+        let proxy_policy = crate::transport::ProxyPolicy::from_config(p2p_proxy, p2p_no_proxy)?;
+
+        let quic_dialer: Option<crate::transport::QuicDialer> = {
+            #[cfg(feature = "quic")]
+            {
+                if quic_enabled {
+                    // Reuse a single UDP socket for all outbound QUIC dials.
+                    match crate::transport::quic::Dialer::bind(
+                        "0.0.0.0:0".parse().expect("valid bind addr"),
+                        crate::transport::quic::DialerConfig {
+                            max_idle_timeout: quic_max_idle_timeout,
+                            ..Default::default()
+                        },
+                    ) {
+                        Ok(dialer) => Some(dialer),
+                        Err(e) => {
+                            iroha_logger::warn!(
+                                %e,
+                                "Failed to bind QUIC dialer endpoint; outbound QUIC disabled"
+                            );
+                            None
+                        }
+                    }
+                } else {
+                    None
+                }
+            }
+            #[cfg(not(feature = "quic"))]
+            {
+                let _ = quic_enabled;
+                let _ = quic_max_idle_timeout;
+                None
+            }
+        };
         // Bind TCP listener with improved diagnostics that include the configured address.
         let listen_addr_repr = format!("{listen_addr:?}");
         let public_addr_repr = format!("{public_address:?}");
@@ -1869,6 +1907,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
                 public_address.value().clone(),
                 service_message_sender.clone(),
                 idle_timeout,
+                quic_max_idle_timeout,
                 chain_id.clone(),
                 consensus_caps.clone(),
                 confidential_caps.clone(),
@@ -1902,7 +1941,8 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
                     max_frame_bytes,
                     soranet_runtime.clone(),
                     relay_role,
-                    trust_gossip,
+                    tcp_nodelay,
+                    tcp_keepalive,
                 )
                 .await
                 {
@@ -1967,6 +2007,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
             current_topology: HashSet::new(),
             current_peers_addresses: Vec::new(),
             idle_timeout,
+            dial_timeout,
             connect_startup_delay_until,
             chain_id,
             consensus_caps,
@@ -1989,6 +2030,8 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
             quic_enabled,
             tls_enabled,
             prefer_ws_fallback,
+            proxy_policy,
+            quic_dialer,
             allowlist_only,
             allow_keys: allow_keys.into_iter().collect(),
             deny_keys: deny_keys.into_iter().collect(),
@@ -2009,6 +2052,8 @@ impl<T: Pload + message::ClassifyTopic, K: Kex + Sync, E: Enc + Sync> NetworkBas
             sampler_high_queue_warn: LogSampler::new(),
             sampler_low_queue_warn: LogSampler::new(),
             sampler_accept_err: LogSampler::new(),
+            tcp_nodelay,
+            tcp_keepalive,
             low_rate_per_sec: low_priority_rate_per_sec
                 .map(core::num::NonZeroU32::get)
                 .map(f64::from),
@@ -2595,6 +2640,7 @@ mod accept_stream_tests {
             require_sm_openssl_preview_match: true,
             idle_timeout: std::time::Duration::from_millis(200),
             connect_startup_delay: iroha_config::parameters::defaults::network::CONNECT_STARTUP_DELAY,
+            dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
             peer_gossip_period: iroha_config::parameters::defaults::network::PEER_GOSSIP_PERIOD,
             peer_gossip_max_period: iroha_config::parameters::defaults::network::PEER_GOSSIP_PERIOD,
             trust_decay_half_life:
@@ -2611,6 +2657,8 @@ mod accept_stream_tests {
             tls_enabled: false,
             tls_listen_address: None,
             prefer_ws_fallback: false,
+            p2p_proxy: None,
+            p2p_no_proxy: vec![],
             p2p_queue_cap_high: core::num::NonZeroUsize::new(128).unwrap(),
             p2p_queue_cap_low: core::num::NonZeroUsize::new(128).unwrap(),
             p2p_post_queue_cap: core::num::NonZeroUsize::new(64).unwrap(),
@@ -2851,7 +2899,7 @@ mod accept_stream_tests {
 
         let soranet = Arc::new(SoranetHandshakeConfig::defaults());
 
-        start_tls_listener::<Dummy, X25519Sha256, ChaCha20Poly1305>(
+        start_tls_listener::<super::WireMessage<Dummy>, X25519Sha256, ChaCha20Poly1305>(
             addr,
             key_pair.clone(),
             socket_addr!(127.0.0.1:1_337),
@@ -2867,6 +2915,7 @@ mod accept_stream_tests {
             soranet.clone(),
             RelayRole::Disabled,
             true,
+            None,
         )
         .await
         .expect("start_tls_listener");
@@ -3103,14 +3152,19 @@ mod accept_stream_tests {
             dns_last_refresh: HashMap::new(),
             dns_pending_refresh: HashSet::new(),
             quic_enabled: false,
+            quic_dialer: None,
             tls_enabled: false,
             prefer_ws_fallback: false,
+            proxy_policy: crate::transport::ProxyPolicy::disabled(),
             allowlist_only: false,
             allow_keys: HashSet::new(),
             deny_keys: HashSet::new(),
             allow_nets: Vec::new(),
             deny_nets: Vec::new(),
             idle_timeout: Duration::from_millis(50),
+            dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
+            tcp_nodelay: true,
+            tcp_keepalive: None,
             connect_startup_delay_until: tokio::time::Instant::now(),
             retry_backoff: HashMap::new(),
             pending_connects: Vec::new(),
@@ -3223,7 +3277,8 @@ mod accept_stream_tests {
         let key_pair = KeyPair::random();
         let max_frame_bytes = 61_111usize;
 
-        let (service_tx, mut service_rx) = mpsc::channel::<super::ServiceMessage<Dummy>>(8);
+        let (service_tx, mut service_rx) =
+            mpsc::channel::<super::ServiceMessage<super::WireMessage<Dummy>>>(8);
         tokio::spawn(async move { while service_rx.recv().await.is_some() {} });
 
         let udp = match std::net::UdpSocket::bind("127.0.0.1:0") {
@@ -3236,12 +3291,13 @@ mod accept_stream_tests {
 
         let soranet = Arc::new(SoranetHandshakeConfig::defaults());
 
-        start_quic_listener::<Dummy, X25519Sha256, ChaCha20Poly1305>(
+        start_quic_listener::<super::WireMessage<Dummy>, X25519Sha256, ChaCha20Poly1305>(
             &addr,
             key_pair.clone(),
             socket_addr!(127.0.0.1:4_321),
             service_tx,
             Duration::from_secs(1),
+            None,
             None,
             None,
             None,
@@ -3408,6 +3464,9 @@ mod accept_stream_tests {
             current_topology: HashSet::new(),
             current_peers_addresses: Vec::new(),
             idle_timeout: Duration::from_millis(50),
+            dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
+            tcp_nodelay: true,
+            tcp_keepalive: None,
             connect_startup_delay_until: tokio::time::Instant::now(),
             chain_id: None,
             consensus_caps: None,
@@ -3419,8 +3478,10 @@ mod accept_stream_tests {
             dns_last_refresh: HashMap::new(),
             dns_pending_refresh: HashSet::new(),
             quic_enabled: false,
+            quic_dialer: None,
             tls_enabled: false,
             prefer_ws_fallback: false,
+            proxy_policy: crate::transport::ProxyPolicy::disabled(),
             allowlist_only: false,
             allow_keys: HashSet::new(),
             deny_keys: HashSet::new(),
@@ -3592,6 +3653,9 @@ mod accept_stream_tests {
                 current_topology: HashSet::new(),
                 current_peers_addresses: Vec::new(),
                 idle_timeout: Duration::from_millis(50),
+                dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
+                tcp_nodelay: true,
+                tcp_keepalive: None,
                 connect_startup_delay_until: tokio::time::Instant::now(),
                 chain_id: None,
                 consensus_caps: None,
@@ -3603,8 +3667,10 @@ mod accept_stream_tests {
                 dns_last_refresh: HashMap::new(),
                 dns_pending_refresh: HashSet::new(),
                 quic_enabled: false,
+                quic_dialer: None,
                 tls_enabled: false,
                 prefer_ws_fallback: false,
+                proxy_policy: crate::transport::ProxyPolicy::disabled(),
                 allowlist_only: false,
                 allow_keys: HashSet::new(),
                 deny_keys: HashSet::new(),
@@ -3791,6 +3857,9 @@ mod accept_stream_tests {
             current_topology: HashSet::new(),
             current_peers_addresses: Vec::new(),
             idle_timeout: Duration::from_millis(50),
+            dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
+            tcp_nodelay: true,
+            tcp_keepalive: None,
             connect_startup_delay_until: tokio::time::Instant::now(),
             chain_id: None,
             consensus_caps: None,
@@ -3802,8 +3871,10 @@ mod accept_stream_tests {
             dns_last_refresh: HashMap::new(),
             dns_pending_refresh: HashSet::new(),
             quic_enabled: false,
+            quic_dialer: None,
             tls_enabled: false,
             prefer_ws_fallback: false,
+            proxy_policy: crate::transport::ProxyPolicy::disabled(),
             allowlist_only: false,
             allow_keys: HashSet::new(),
             deny_keys: HashSet::new(),
@@ -4059,6 +4130,7 @@ async fn start_quic_listener<T, K, E>(
     public_address: iroha_primitives::addr::SocketAddr,
     service_message_sender: tokio::sync::mpsc::Sender<crate::peer::message::ServiceMessage<T>>,
     idle_timeout: std::time::Duration,
+    quic_max_idle_timeout: Option<std::time::Duration>,
     chain_id: Option<iroha_data_model::ChainId>,
     consensus_caps: Option<crate::ConsensusHandshakeCaps>,
     confidential_caps: Option<crate::ConfidentialHandshakeCaps>,
@@ -4074,6 +4146,11 @@ where
     K: Kex,
     E: Enc,
 {
+    use std::sync::Arc;
+
+    use quinn::{
+        IdleTimeout, TransportConfig, crypto::rustls::QuicServerConfig as QuinnRustlsServerConfig,
+    };
     use rustls::pki_types::PrivatePkcs8KeyDer;
 
     let rcgen::CertifiedKey { cert, signing_key } =
@@ -4082,8 +4159,27 @@ where
     let cert_der = cert.der().clone().into_owned();
     let priv_key = PrivatePkcs8KeyDer::from(signing_key.serialize_der());
 
-    let server_config = quinn::ServerConfig::with_single_cert(vec![cert_der], priv_key.into())
-        .map_err(|e| Error::from(std::io::Error::other(format!("server config: {e}"))))?;
+    let mut tls = rustls::ServerConfig::builder_with_protocol_versions(&[&rustls::version::TLS13])
+        .with_no_client_auth()
+        .with_single_cert(vec![cert_der], priv_key.into())
+        .map_err(|e| Error::from(std::io::Error::other(format!("rustls server config: {e}"))))?;
+    tls.max_early_data_size = u32::MAX;
+    tls.alpn_protocols = vec![crate::transport::quic::P2P_ALPN.to_vec()];
+
+    let crypto = QuinnRustlsServerConfig::try_from(Arc::new(tls))
+        .map_err(|e| Error::from(std::io::Error::other(format!("quic rustls: {e}"))))?;
+
+    let mut server_config = quinn::ServerConfig::with_crypto(Arc::new(crypto));
+
+    // Align transport tuning with the outbound dialer defaults.
+    let mut transport = TransportConfig::default();
+    if let Some(timeout) = quic_max_idle_timeout {
+        let idle = IdleTimeout::try_from(timeout)
+            .map_err(|e| Error::from(std::io::Error::other(format!("quic idle timeout: {e}"))))?;
+        transport.max_idle_timeout(Some(idle));
+    }
+    transport.keep_alive_interval(Some(std::time::Duration::from_secs(10)));
+    server_config.transport_config(Arc::new(transport));
 
     let endpoint = quinn::Endpoint::server(server_config, *addr)
         .map_err(|e| Error::from(std::io::Error::other(format!("endpoint: {e}"))))?;
@@ -4139,32 +4235,55 @@ where
                             return;
                         }
 
-                        match new_conn.accept_bi().await {
-                            Ok((send, recv)) => {
-                                let _ = service_message_sender
-                                    .send(ServiceMessage::InboundPending(conn_id))
-                                    .await;
-                                connected_from::<T, K, E>(
-                                    public_address.clone(),
-                                    key_pair,
-                                    Connection::from_quic(conn_id, send, recv),
-                                    service_message_sender,
-                                    idle_timeout,
-                                    chain_id,
-                                    consensus_caps,
-                                    confidential_caps.clone(),
-                                    crypto_caps.clone(),
-                                    soranet_handshake.clone(),
-                                    post_capacity,
-                                    relay_role,
-                                    trust_gossip,
-                                    max_frame_bytes,
-                                );
-                            }
+                        let (send_hi, recv_hi) = match new_conn.accept_bi().await {
+                            Ok((send, recv)) => (send, recv),
                             Err(e) => {
                                 iroha_logger::warn!(%e, %remote, "Failed to accept QUIC bi-stream");
+                                return;
                             }
-                        }
+                        };
+
+                        // Optional low-priority bi-stream (not required; keep a short timeout).
+                        let low = tokio::time::timeout(
+                            std::time::Duration::from_millis(200),
+                            new_conn.accept_bi(),
+                        )
+                        .await;
+                        let (send_low, recv_low) = match low {
+                            Ok(Ok((s, r))) => (Some(s), Some(r)),
+                            Ok(Err(e)) => {
+                                iroha_logger::debug!(%e, %remote, "Failed to accept low-priority QUIC stream; continuing with single stream");
+                                (None, None)
+                            }
+                            Err(_) => (None, None),
+                        };
+
+                        let _ = service_message_sender
+                            .send(ServiceMessage::InboundPending(conn_id))
+                            .await;
+                        connected_from::<T, K, E>(
+                            public_address.clone(),
+                            key_pair,
+                            Connection::from_quic(
+                                conn_id,
+                                send_hi,
+                                recv_hi,
+                                send_low,
+                                recv_low,
+                                Some(remote),
+                            ),
+                            service_message_sender,
+                            idle_timeout,
+                            chain_id,
+                            consensus_caps,
+                            confidential_caps.clone(),
+                            crypto_caps.clone(),
+                            soranet_handshake.clone(),
+                            post_capacity,
+                            relay_role,
+                            trust_gossip,
+                            max_frame_bytes,
+                        );
                     }
                     Err(e) => {
                         iroha_logger::warn!(%e, "Failed to accept QUIC connection");
@@ -4215,6 +4334,7 @@ mod quic_tests {
             None,
             None,
             None,
+            None,
             1,
             true,
             1_048_576,
@@ -4252,7 +4372,8 @@ async fn start_tls_listener<T, K, E>(
     max_frame_bytes: usize,
     soranet_handshake: Arc<SoranetHandshakeConfig>,
     relay_role: RelayRole,
-    trust_gossip: bool,
+    tcp_nodelay: bool,
+    tcp_keepalive: Option<std::time::Duration>,
 ) -> Result<(), Error>
 where
     T: boilerplate::Pload + message::ClassifyTopic,
@@ -4303,6 +4424,8 @@ where
             let post_capacity = post_capacity;
             let soranet_handshake = soranet_handshake.clone();
             let relay_role = relay_role;
+            let tcp_nodelay = tcp_nodelay;
+            let tcp_keepalive = tcp_keepalive;
 
             tokio::spawn(async move {
                 let conn_id = id_alloc.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -4323,6 +4446,7 @@ where
                     iroha_logger::debug!(%remote, "Dropping TLS connection due to caps/throttle");
                     return;
                 }
+                crate::transport::apply_tcp_socket_options(&tcp, tcp_nodelay, tcp_keepalive);
                 match acceptor.accept(tcp).await {
                     Ok(tls_stream) => {
                         let (read_half, write_half) = tokio::io::split(tls_stream);
@@ -4461,12 +4585,17 @@ struct NetworkBase<T: Pload, K: Kex, E: Enc> {
     /// Enable QUIC transport based on config at runtime.
     #[allow(dead_code)]
     quic_enabled: bool,
+    /// Shared outbound QUIC dialer endpoint (feature-gated).
+    #[allow(dead_code)]
+    quic_dialer: Option<crate::transport::QuicDialer>,
     /// Enable TLS-over-TCP transport based on config at runtime (feature-gated).
     #[allow(dead_code)]
     tls_enabled: bool,
     /// Prefer WS fallback for outbound (feature-gated via caller).
     #[allow(dead_code)]
     prefer_ws_fallback: bool,
+    /// Proxy policy applied to outbound TCP dials.
+    proxy_policy: crate::transport::ProxyPolicy,
     /// ACL: Allowlist-only switch and lists of keys and networks
     allowlist_only: bool,
     allow_keys: std::collections::HashSet<iroha_crypto::PublicKey>,
@@ -4477,6 +4606,12 @@ struct NetworkBase<T: Pload, K: Kex, E: Enc> {
     dns_pending_refresh: HashSet<PeerId>,
     /// Duration after which terminate connection with idle peer
     idle_timeout: Duration,
+    /// Timeout applied to an individual outbound dial attempt.
+    dial_timeout: Duration,
+    /// Whether to enable TCP_NODELAY on TCP connections (best-effort).
+    tcp_nodelay: bool,
+    /// Optional TCP keepalive idle timeout (best-effort, platform-specific).
+    tcp_keepalive: Option<Duration>,
     /// Outbound dial delay applied once at startup.
     connect_startup_delay_until: tokio::time::Instant,
     /// Per-address exponential backoff schedule per peer: next allowed retry time and current base delay.
@@ -4886,8 +5021,8 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
     }
 
     fn accept_new_peer(&mut self, stream: TcpStream, conn_id: ConnectionId) {
-        // Apply minimal TCP socket options (best-effort)
-        let _ = stream.set_nodelay(true);
+        // Apply configured TCP socket options (best-effort)
+        crate::transport::apply_tcp_socket_options(&stream, self.tcp_nodelay, self.tcp_keepalive);
         let service_message_sender = self.service_message_sender.clone();
         connected_from::<WireMessage<T>, K, E>(
             self.public_address.clone(),
@@ -5380,6 +5515,7 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
             conn_id,
             service_message_sender,
             self.idle_timeout,
+            self.dial_timeout,
             self.chain_id.clone(),
             self.consensus_caps.clone(),
             self.confidential_caps.clone(),
@@ -5392,8 +5528,11 @@ impl<T: Pload + message::ClassifyTopic, K: Kex, E: Enc> NetworkBase<T, K, E> {
             self.trust_gossip,
             self.max_frame_bytes,
             self.relay_role,
-            true,
-            None,
+            self.happy_eyeballs_stagger,
+            self.tcp_nodelay,
+            self.tcp_keepalive,
+            self.proxy_policy.clone(),
+            self.quic_dialer.clone(),
         );
     }
 
@@ -6507,10 +6646,15 @@ mod tests {
                 iroha_config::parameters::defaults::network::PEER_GOSSIP_PERIOD,
             dns_pending_refresh: HashSet::new(),
             idle_timeout: Duration::from_millis(50),
+            dial_timeout: iroha_config::parameters::defaults::network::DIAL_TIMEOUT,
+            tcp_nodelay: true,
+            tcp_keepalive: None,
             connect_startup_delay_until: tokio::time::Instant::now(),
             quic_enabled: false,
+            quic_dialer: None,
             tls_enabled: false,
             prefer_ws_fallback: false,
+            proxy_policy: crate::transport::ProxyPolicy::disabled(),
             allowlist_only: false,
             allow_keys: HashSet::new(),
             deny_keys: HashSet::new(),

@@ -46,10 +46,7 @@ use tokio::{
     time::Duration,
 };
 
-use crate::{
-    ConsensusConfigCaps, ConsensusHandshakeCaps, Error, RelayRole, boilerplate::*,
-    sampler::LogSampler,
-};
+use crate::{ConsensusConfigCaps, ConsensusHandshakeCaps, Error, RelayRole, boilerplate::*};
 // (keep fully-qualified uses inline; avoid unused import warnings)
 
 /// Max length of a handshake message in bytes excluding the length prefix.
@@ -667,8 +664,10 @@ mod handshake_config_tests {
         );
 
         let mut corrupted = minted.ticket.expect("ticket bytes present");
-        let last = corrupted.len() - 1;
-        corrupted[last] ^= 0xFF;
+        // Corrupt the version byte to guarantee a parse/verify failure.
+        // Flipping solution bytes is probabilistic for low difficulties (it may still satisfy
+        // the leading-zero predicate), so do not rely on it in tests.
+        corrupted[0] ^= 0xFF;
         assert!(config.verify_challenge_ticket(&corrupted).is_err());
     }
 
@@ -1365,6 +1364,7 @@ pub mod handles {
         connection_id: ConnectionId,
         service_message_sender: mpsc::Sender<ServiceMessage<T>>,
         idle_timeout: Duration,
+        dial_timeout: Duration,
         chain_id: Option<iroha_data_model::ChainId>,
         consensus_caps: Option<crate::ConsensusHandshakeCaps>,
         confidential_caps: Option<crate::ConfidentialHandshakeCaps>,
@@ -1377,8 +1377,11 @@ pub mod handles {
         trust_gossip: bool,
         max_frame_bytes: usize,
         relay_role: RelayRole,
-        _tcp_nodelay: bool,
-        _tcp_keepalive: Option<Duration>,
+        happy_eyeballs_stagger: Duration,
+        tcp_nodelay: bool,
+        tcp_keepalive: Option<Duration>,
+        proxy_policy: crate::transport::ProxyPolicy,
+        quic_dialer: Option<crate::transport::QuicDialer>,
     ) {
         #[cfg(test)]
         crate::peer::test_support::record(
@@ -1400,6 +1403,12 @@ pub mod handles {
             prefer_ws_fallback,
             trust_gossip,
             relay_role,
+            dial_timeout,
+            happy_eyeballs_stagger,
+            tcp_nodelay,
+            tcp_keepalive,
+            proxy_policy,
+            quic_dialer,
         };
         let peer = RunPeerArgs {
             peer,
@@ -1632,6 +1641,10 @@ mod run {
     const LOW_TOPIC_COUNT: usize = 5;
     const HI_BUDGET_RESET: u8 = 32;
     const HI_BUDGET_FALLBACK: u8 = 1;
+    // Drain a few queued outbound posts per loop iteration to allow `MessageSender` to
+    // batch multiple logical messages into fewer encrypted frames.
+    const OUTBOUND_DRAIN_HI_MAX: usize = 8;
+    const OUTBOUND_DRAIN_LO_MAX: usize = 32;
     const INBOUND_SEND_WARN_MS: u64 = 250;
 
     fn low_topic_label(topic: LowTopic) -> &'static str {
@@ -1822,6 +1835,8 @@ mod run {
                     Connection {
                         read,
                         write,
+                        read_low,
+                        write_low,
                         id: connection_id,
                         ..
                     },
@@ -1888,10 +1903,14 @@ mod run {
             iroha_logger::trace!("Peer connected");
 
             let mut message_reader = MessageReader::new(read, cryptographer.clone(), max_frame_bytes);
+            let mut message_reader_low =
+                read_low.map(|read| MessageReader::new(read, cryptographer.clone(), max_frame_bytes));
             // Sampler for repeated read/parse errors to avoid log floods from malformed peers
             let mut read_err_sampler = LogSampler::new();
             let mut recv_backpressure_sampler = LogSampler::new();
-            let mut message_sender = MessageSender::new(write, cryptographer, max_frame_bytes);
+            let mut message_sender_hi = MessageSender::new(write, cryptographer.clone(), max_frame_bytes);
+            let mut message_sender_low =
+                write_low.map(|write| MessageSender::new(write, cryptographer, max_frame_bytes));
 
             let mut idle_interval = tokio::time::interval_at(Instant::now() + idle_timeout, idle_timeout);
             let mut ping_interval = tokio::time::interval_at(Instant::now() + idle_timeout / 2, idle_timeout / 2);
@@ -1913,13 +1932,100 @@ mod run {
                     &mut lo_other_rx,
                 ) {
                     iroha_logger::trace!("Post message ({})", low_topic_label(topic));
-                    if let Err(error) =
-                        message_sender.prepare_message(&Message::Data(msg), Priority::Low)
-                    {
+                    let prepared = if let Some(sender) = message_sender_low.as_mut() {
+                        sender.prepare_message(&Message::Data(msg), Priority::Low)
+                    } else {
+                        message_sender_hi.prepare_message(&Message::Data(msg), Priority::Low)
+                    };
+                    if let Err(error) = prepared {
                         iroha_logger::error!(%error, "Failed to encrypt message.");
                         break;
                     }
                     continue;
+                }
+
+                // Drain additional ready outbound posts without awaiting, so that a burst of
+                // queued messages can be coalesced into fewer encrypted frames before the next
+                // `message_sender.send()` step. This reduces per-connection frame rate and tokio
+                // I/O driver churn under load.
+                let mut drained_hi = 0usize;
+                while drained_hi < OUTBOUND_DRAIN_HI_MAX && hi_budget > 0 {
+                    let mut progressed = false;
+
+                    if let Some(m) = hi_consensus_rx.try_recv_now() {
+                        iroha_logger::trace!("Post message (hi:consensus/drain)");
+                        if let Err(error) =
+                            message_sender_hi.prepare_message(&Message::Data(m), Priority::High)
+                        {
+                            iroha_logger::error!(%error, "Failed to encrypt message.");
+                            break;
+                        }
+                        hi_budget = hi_budget.saturating_sub(1);
+                        drained_hi = drained_hi.saturating_add(1);
+                        progressed = true;
+                    }
+                    if hi_budget == 0 {
+                        break;
+                    }
+
+                    if let Some(m) = hi_consensus_chunk_rx.try_recv_now() {
+                        iroha_logger::trace!("Post message (hi:consensus_chunk/drain)");
+                        if let Err(error) =
+                            message_sender_hi.prepare_message(&Message::Data(m), Priority::High)
+                        {
+                            iroha_logger::error!(%error, "Failed to encrypt message.");
+                            break;
+                        }
+                        hi_budget = hi_budget.saturating_sub(1);
+                        drained_hi = drained_hi.saturating_add(1);
+                        progressed = true;
+                    }
+                    if hi_budget == 0 {
+                        break;
+                    }
+
+                    if let Some(m) = hi_control_rx.try_recv_now() {
+                        iroha_logger::trace!("Post message (hi:control/drain)");
+                        if let Err(error) =
+                            message_sender_hi.prepare_message(&Message::Data(m), Priority::High)
+                        {
+                            iroha_logger::error!(%error, "Failed to encrypt message.");
+                            break;
+                        }
+                        hi_budget = hi_budget.saturating_sub(1);
+                        drained_hi = drained_hi.saturating_add(1);
+                        progressed = true;
+                    }
+
+                    if !progressed {
+                        break;
+                    }
+                }
+
+                let mut drained_lo = 0usize;
+                while drained_lo < OUTBOUND_DRAIN_LO_MAX {
+                    let Some((topic, m)) = try_recv_low_rr(
+                        &mut low_rr,
+                        &mut lo_block_sync_rx,
+                        &mut lo_tx_gossip_rx,
+                        &mut lo_peer_gossip_rx,
+                        &mut lo_health_rx,
+                        &mut lo_other_rx,
+                    ) else {
+                        break;
+                    };
+                    iroha_logger::trace!("Post message ({}/drain)", low_topic_label(topic));
+                    let prepared = if let Some(sender) = message_sender_low.as_mut() {
+                        sender.prepare_message(&Message::Data(m), Priority::Low)
+                    } else {
+                        message_sender_hi.prepare_message(&Message::Data(m), Priority::Low)
+                    };
+                    if let Err(error) = prepared {
+                        iroha_logger::error!(%error, "Failed to encrypt message.");
+                        break;
+                    }
+                    hi_budget = HI_BUDGET_RESET;
+                    drained_lo = drained_lo.saturating_add(1);
                 }
 
                 tokio::select! {
@@ -1930,7 +2036,7 @@ mod run {
                             "The connection has been idle, pinging to check if it's alive"
                         );
                         if let Err(error) =
-                            message_sender.prepare_message(&Message::<T>::Ping, Priority::High)
+                            message_sender_hi.prepare_message(&Message::<T>::Ping, Priority::High)
                         {
                             iroha_logger::error!(%error, "Failed to encrypt message.");
                             break;
@@ -1946,7 +2052,7 @@ mod run {
                     msg = hi_consensus_rx.recv(), if hi_budget > 0 => {
                         if let Some(m) = msg {
                             iroha_logger::trace!("Post message (hi:consensus)");
-                            if let Err(error) = message_sender.prepare_message(&Message::Data(m), Priority::High) {
+                            if let Err(error) = message_sender_hi.prepare_message(&Message::Data(m), Priority::High) {
                                 iroha_logger::error!(%error, "Failed to encrypt message.");
                                 break;
                             }
@@ -1956,7 +2062,7 @@ mod run {
                     msg = hi_consensus_chunk_rx.recv(), if hi_budget > 0 => {
                         if let Some(m) = msg {
                             iroha_logger::trace!("Post message (hi:consensus_chunk)");
-                            if let Err(error) = message_sender.prepare_message(&Message::Data(m), Priority::High) {
+                            if let Err(error) = message_sender_hi.prepare_message(&Message::Data(m), Priority::High) {
                                 iroha_logger::error!(%error, "Failed to encrypt message.");
                                 break;
                             }
@@ -1966,7 +2072,7 @@ mod run {
                     msg = hi_control_rx.recv(), if hi_budget > 0 => {
                         if let Some(m) = msg {
                             iroha_logger::trace!("Post message (hi:control)");
-                            if let Err(error) = message_sender.prepare_message(&Message::Data(m), Priority::High) {
+                            if let Err(error) = message_sender_hi.prepare_message(&Message::Data(m), Priority::High) {
                                 iroha_logger::error!(%error, "Failed to encrypt message.");
                                 break;
                             }
@@ -1984,7 +2090,12 @@ mod run {
                     ) => {
                         if let Some((topic, msg)) = low {
                             iroha_logger::trace!("Post message ({})", low_topic_label(topic));
-                            if let Err(error) = message_sender.prepare_message(&Message::Data(msg), Priority::Low) {
+                            let prepared = if let Some(sender) = message_sender_low.as_mut() {
+                                sender.prepare_message(&Message::Data(msg), Priority::Low)
+                            } else {
+                                message_sender_hi.prepare_message(&Message::Data(msg), Priority::Low)
+                            };
+                            if let Err(error) = prepared {
                                 iroha_logger::error!(%error, "Failed to encrypt message.");
                                 break;
                             }
@@ -2009,7 +2120,7 @@ mod run {
                             Message::Ping => {
                                 iroha_logger::trace!("Received peer ping");
                                 if let Err(error) =
-                                    message_sender.prepare_message(&Message::<T>::Pong, Priority::High)
+                                    message_sender_hi.prepare_message(&Message::<T>::Pong, Priority::High)
                                 {
                                     iroha_logger::error!(%error, "Failed to encrypt message.");
                                     break;
@@ -2061,15 +2172,96 @@ mod run {
                         idle_interval.reset();
                         ping_interval.reset();
                     }
-                    // `message_sender.send()` is safe to be cancelled, it won't advance the queue or write anything if another branch completes first.
-                    //
-                    // We need to conditionally disable it in case there is no data is to be sent, otherwise `message_sender.send()` will complete immediately
-                    //
-                    // The only source of data to be sent is other branches of this loop, so we do not need any async waiting mechanism for waiting for readiness.
-                    result = message_sender.send(), if message_sender.ready() => {
+                    msg = async {
+                        let reader = message_reader_low.as_mut().expect("guarded by is_some");
+                        reader.read_message().await
+                    }, if message_reader_low.is_some() => {
+                        let (message, encoded_len): (Message<T>, usize) = match msg {
+                            Ok(Some((msg, encoded_len))) => (msg, encoded_len),
+                            Ok(None) => {
+                                iroha_logger::debug!("Peer closed low-priority stream");
+                                message_reader_low = None;
+                                continue;
+                            }
+                            Err(error) => {
+                                if let Some(supp) = read_err_sampler.should_log(tokio::time::Duration::from_millis(500)) {
+                                    iroha_logger::debug!(?error, suppressed=supp, "Error while reading message from peer (low stream).");
+                                }
+                                message_reader_low = None;
+                                continue;
+                            }
+                        };
+                        match message {
+                            Message::Ping => {
+                                iroha_logger::trace!("Received peer ping (low stream)");
+                                if let Err(error) =
+                                    message_sender_hi.prepare_message(&Message::<T>::Pong, Priority::High)
+                                {
+                                    iroha_logger::error!(%error, "Failed to encrypt message.");
+                                    break;
+                                }
+                            },
+                            Message::Pong => {
+                                iroha_logger::trace!("Received peer pong (low stream)");
+                            }
+                            Message::Data(payload) => {
+                                iroha_logger::trace!("Received peer message (low stream)");
+                                let topic = payload.topic();
+                                let inbound_priority = inbound_priority_from_topic(topic);
+                                let peer_message = PeerMessage {
+                                    peer: peer_id.clone(),
+                                    payload,
+                                    payload_bytes: encoded_len,
+                                };
+                                let send_start = Instant::now();
+                                let send_result = match inbound_priority {
+                                    Priority::High => peer_message_senders.high.send(peer_message).await,
+                                    Priority::Low => peer_message_senders.low.send(peer_message).await,
+                                };
+                                let send_wait_ms =
+                                    u64::try_from(send_start.elapsed().as_millis()).unwrap_or(u64::MAX);
+                                if matches!(inbound_priority, Priority::High)
+                                    && send_wait_ms >= INBOUND_SEND_WARN_MS
+                                {
+                                    if let Some(suppressed) = recv_backpressure_sampler
+                                        .should_log(tokio::time::Duration::from_millis(500))
+                                    {
+                                        iroha_logger::warn!(
+                                            peer = %peer_id,
+                                            conn_id,
+                                            ?topic,
+                                            wait_ms = send_wait_ms,
+                                            payload_bytes = encoded_len,
+                                            suppressed,
+                                            "Inbound high-priority frame waited on dispatch channel"
+                                        );
+                                    }
+                                }
+                                if send_result.is_err() {
+                                    iroha_logger::error!("Network dropped peer message channel.");
+                                    break;
+                                }
+                            }
+                        }
+                        // Reset idle and ping timeout as peer received message from another peer
+                        idle_interval.reset();
+                        ping_interval.reset();
+                    }
+                    // `send()` is safe to be cancelled: it won't advance the queue or write
+                    // anything if another branch completes first.
+                    result = message_sender_hi.send(), if message_sender_hi.ready() => {
                         if let Err(error) = result {
-                            iroha_logger::error!(%error, "Failed to send message to peer.");
+                            iroha_logger::error!(%error, "Failed to send message to peer (hi stream).");
                             break;
+                        }
+                    }
+                    result = async {
+                        let sender = message_sender_low.as_mut().expect("ready implies sender present");
+                        sender.send().await
+                    }, if message_sender_low.as_ref().is_some_and(|s| s.ready()) => {
+                        if let Err(error) = result {
+                            iroha_logger::warn!(%error, "Failed to send message to peer (low stream); falling back to hi stream");
+                            message_sender_low = None;
                         }
                     }
                     else => break,
@@ -2085,7 +2277,12 @@ mod run {
                         &mut lo_health_rx,
                         &mut lo_other_rx,
                     ) {
-                        if let Err(error) = message_sender.prepare_message(&Message::Data(m), Priority::Low) {
+                        let prepared = if let Some(sender) = message_sender_low.as_mut() {
+                            sender.prepare_message(&Message::Data(m), Priority::Low)
+                        } else {
+                            message_sender_hi.prepare_message(&Message::Data(m), Priority::Low)
+                        };
+                        if let Err(error) = prepared {
                             iroha_logger::error!(%error, "Failed to encrypt message.");
                             break;
                         }
@@ -2204,7 +2401,7 @@ mod run {
                 buffer: BytesMut::with_capacity(capacity),
                 decrypted: Vec::with_capacity(decrypt_capacity),
                 pending: VecDeque::new(),
-                framed_schema: M::schema_hash(),
+                framed_schema: <M as ncore::NoritoSerialize>::schema_hash(),
                 framed_padding,
                 max_frame_bytes,
             }
@@ -2284,14 +2481,9 @@ mod run {
             // Decrypted payload may contain multiple Norito-framed messages.
             let mut offset = 0usize;
             while offset < decrypted_len {
-                let remaining = decrypted
-                    .get(offset..)
-                    .ok_or(Error::Format)?;
-                let frame_len = framed_message_len::<M>(
-                    remaining,
-                    self.framed_schema,
-                    self.framed_padding,
-                )?;
+                let remaining = decrypted.get(offset..).ok_or(Error::Format)?;
+                let frame_len =
+                    framed_message_len::<M>(remaining, self.framed_schema, self.framed_padding)?;
                 let frame = remaining.get(..frame_len).ok_or(Error::Format)?;
                 let decoded = match ncore::decode_from_bytes::<M>(frame) {
                     Ok(value) => value,
@@ -2416,7 +2608,14 @@ mod run {
                     // Control traffic should not be delayed behind other high batches.
                     if class == HighBatchClass::Control {
                         self.flush_plain_high()?;
-                        self.enqueue_encrypted(&self.buffer, Priority::High)?;
+                        Self::enqueue_encrypted_to_queue(
+                            &self.cryptographer,
+                            &self.buffer,
+                            &mut self.encrypted,
+                            &mut self.frame_pool,
+                            &mut self.queue_high,
+                            self.max_frame_bytes,
+                        )?;
                         return Ok(());
                     }
 
@@ -2427,11 +2626,7 @@ mod run {
 
                     let cap = Self::MAX_PLAINTEXT_BYTES_HI.min(max_plaintext);
                     let would_exceed_bytes = !self.plain_high.is_empty()
-                        && self
-                            .plain_high
-                            .len()
-                            .saturating_add(msg_len)
-                            > cap;
+                        && self.plain_high.len().saturating_add(msg_len) > cap;
                     let would_exceed_msgs = self.plain_high_msgs >= Self::MAX_PLAINTEXT_MSGS_HI;
                     if would_exceed_bytes || would_exceed_msgs {
                         self.flush_plain_high()?;
@@ -2439,7 +2634,14 @@ mod run {
 
                     // If the single message exceeds the high cap, still send it as its own frame.
                     if self.plain_high.is_empty() && msg_len > cap {
-                        self.enqueue_encrypted(&self.buffer, Priority::High)?;
+                        Self::enqueue_encrypted_to_queue(
+                            &self.cryptographer,
+                            &self.buffer,
+                            &mut self.encrypted,
+                            &mut self.frame_pool,
+                            &mut self.queue_high,
+                            self.max_frame_bytes,
+                        )?;
                         return Ok(());
                     }
 
@@ -2449,18 +2651,21 @@ mod run {
                 Priority::Low => {
                     let cap = Self::MAX_PLAINTEXT_BYTES_LO.min(max_plaintext);
                     let would_exceed_bytes = !self.plain_low.is_empty()
-                        && self
-                            .plain_low
-                            .len()
-                            .saturating_add(msg_len)
-                            > cap;
+                        && self.plain_low.len().saturating_add(msg_len) > cap;
                     let would_exceed_msgs = self.plain_low_msgs >= Self::MAX_PLAINTEXT_MSGS_LO;
                     if would_exceed_bytes || would_exceed_msgs {
                         self.flush_plain_low()?;
                     }
 
                     if self.plain_low.is_empty() && msg_len > cap {
-                        self.enqueue_encrypted(&self.buffer, Priority::Low)?;
+                        Self::enqueue_encrypted_to_queue(
+                            &self.cryptographer,
+                            &self.buffer,
+                            &mut self.encrypted,
+                            &mut self.frame_pool,
+                            &mut self.queue_low,
+                            self.max_frame_bytes,
+                        )?;
                         return Ok(());
                     }
 
@@ -2513,8 +2718,17 @@ mod run {
             if self.plain_high.is_empty() {
                 return Ok(());
             }
-            self.enqueue_encrypted(&self.plain_high, Priority::High)?;
-            self.plain_high.clear();
+            let mut plaintext = core::mem::take(&mut self.plain_high);
+            Self::enqueue_encrypted_to_queue(
+                &self.cryptographer,
+                &plaintext,
+                &mut self.encrypted,
+                &mut self.frame_pool,
+                &mut self.queue_high,
+                self.max_frame_bytes,
+            )?;
+            plaintext.clear();
+            self.plain_high = plaintext;
             self.plain_high_msgs = 0;
             self.plain_high_class = None;
             Ok(())
@@ -2524,22 +2738,36 @@ mod run {
             if self.plain_low.is_empty() {
                 return Ok(());
             }
-            self.enqueue_encrypted(&self.plain_low, Priority::Low)?;
-            self.plain_low.clear();
+            let mut plaintext = core::mem::take(&mut self.plain_low);
+            Self::enqueue_encrypted_to_queue(
+                &self.cryptographer,
+                &plaintext,
+                &mut self.encrypted,
+                &mut self.frame_pool,
+                &mut self.queue_low,
+                self.max_frame_bytes,
+            )?;
+            plaintext.clear();
+            self.plain_low = plaintext;
             self.plain_low_msgs = 0;
             Ok(())
         }
 
-        fn enqueue_encrypted(&mut self, plaintext: &[u8], priority: Priority) -> Result<(), Error> {
-            let encrypted = self
-                .cryptographer
-                .encrypt_into(plaintext, &mut self.encrypted)?;
+        fn enqueue_encrypted_to_queue(
+            cryptographer: &Cryptographer<E>,
+            plaintext: &[u8],
+            encrypted: &mut Vec<u8>,
+            frame_pool: &mut Vec<BytesMut>,
+            queue: &mut VecDeque<BytesMut>,
+            max_frame_bytes: usize,
+        ) -> Result<(), Error> {
+            let encrypted = cryptographer.encrypt_into(plaintext, encrypted)?;
 
             let size = encrypted.len();
-            if size > self.max_frame_bytes {
+            if size > max_frame_bytes {
                 return Err(Error::FrameTooLarge);
             }
-            let mut frame = self.frame_pool.pop().unwrap_or_default();
+            let mut frame = frame_pool.pop().unwrap_or_default();
             frame.clear();
             let needed = size.saturating_add(Self::U32_SIZE);
             if frame.capacity() < needed {
@@ -2548,10 +2776,7 @@ mod run {
             #[allow(clippy::cast_possible_truncation)]
             frame.put_u32(size as u32);
             frame.put_slice(encrypted);
-            match priority {
-                Priority::High => self.queue_high.push_back(frame),
-                Priority::Low => self.queue_low.push_back(frame),
-            }
+            queue.push_back(frame);
             Ok(())
         }
 
@@ -2704,6 +2929,8 @@ mod run {
         #[derive(Encode, Decode, Clone, Debug)]
         struct Dummy;
 
+        impl ClassifyTopic for Dummy {}
+
         impl<'a> ncore::DecodeFromSlice<'a> for Dummy {
             fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
                 ncore::decode_field_canonical::<Self>(bytes)
@@ -2712,6 +2939,8 @@ mod run {
 
         #[derive(Encode, Decode, Clone, Debug)]
         struct Blob(Vec<u8>);
+
+        impl ClassifyTopic for Blob {}
 
         impl<'a> ncore::DecodeFromSlice<'a> for Blob {
             fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
@@ -2865,15 +3094,16 @@ mod run {
                 Bytes::from(buffer.clone())
             };
             let read: Box<dyn AsyncRead + Send + Unpin> = Box::new(FakeRead { data, pos: 0 });
-            let mut reader = MessageReader::new(read, reader_cryptographer, 1024);
+            let mut reader: MessageReader<ChaCha20Poly1305, Message<Blob>> =
+                MessageReader::new(read, reader_cryptographer, 1024);
 
             let (first, _) = reader
-                .read_message::<Message<Blob>>()
+                .read_message()
                 .await
                 .expect("read first")
                 .expect("first frame");
             let (second, _) = reader
-                .read_message::<Message<Blob>>()
+                .read_message()
                 .await
                 .expect("read second")
                 .expect("second frame");
@@ -2886,6 +3116,54 @@ mod run {
                 Message::Data(blob) => assert_eq!(blob.0, vec![1u8]),
                 _ => panic!("expected low data frame"),
             }
+        }
+
+        #[tokio::test(flavor = "current_thread")]
+        async fn message_reader_decodes_batched_encrypted_frame() {
+            let buffer = Arc::new(Mutex::new(Vec::new()));
+            let writer = CollectingWrite {
+                buffer: Arc::clone(&buffer),
+            };
+            let cryptographer =
+                Cryptographer::<ChaCha20Poly1305>::new_with_raw_key_bytes(&[4u8; 32])
+                    .expect("valid key length");
+            let reader_cryptographer = cryptographer.clone();
+            let mut sender = MessageSender::new(Box::new(writer), cryptographer, 1024);
+
+            sender
+                .prepare_message(&Blob(vec![1u8]), Priority::Low)
+                .expect("prepare first");
+            sender
+                .prepare_message(&Blob(vec![2u8]), Priority::Low)
+                .expect("prepare second");
+
+            while sender.ready() {
+                sender.send().await.expect("send");
+            }
+
+            let data = {
+                let buffer = buffer.lock().expect("buffer lock");
+                Bytes::from(buffer.clone())
+            };
+            let read: Box<dyn AsyncRead + Send + Unpin> = Box::new(FakeRead { data, pos: 0 });
+            let mut reader: MessageReader<ChaCha20Poly1305, Blob> =
+                MessageReader::new(read, reader_cryptographer, 1024);
+
+            let (first, _) = reader
+                .read_message()
+                .await
+                .expect("read first")
+                .expect("first message");
+            let (second, _) = reader
+                .read_message()
+                .await
+                .expect("read second")
+                .expect("second message");
+            assert_eq!(first.0, vec![1u8]);
+            assert_eq!(second.0, vec![2u8]);
+
+            let none = reader.read_message().await.expect("read none");
+            assert!(none.is_none());
         }
 
         #[test]
@@ -3075,10 +3353,11 @@ mod run {
                     &[1u8; 32],
                 )
                 .expect("valid key length");
-            let mut mr = MessageReader::new(read, crypt, 1024);
+            let mut mr: MessageReader<ChaCha20Poly1305, Dummy> =
+                MessageReader::new(read, crypt, 1024);
 
             // First attempt should yield an error due to malformed/cannot decrypt frame
-            let err = mr.read_message::<Dummy>().await.err();
+            let err = mr.read_message().await.err();
             assert!(err.is_some(), "expected read error from malformed frame");
 
             // Now simulate a flood of such errors and ensure our sampler would emit at most once
@@ -3110,8 +3389,9 @@ mod run {
                     &[2u8; 32],
                 )
                 .expect("valid key length");
-            let mut mr = MessageReader::new(read, crypt, 1024); // max_frame_bytes=1024
-            let err = mr.read_message::<Dummy>().await.err();
+            let mut mr: MessageReader<ChaCha20Poly1305, Dummy> =
+                MessageReader::new(read, crypt, 1024); // max_frame_bytes=1024
+            let err = mr.read_message().await.err();
             assert!(matches!(err, Some(Error::FrameTooLarge)));
         }
 
@@ -3123,12 +3403,13 @@ mod run {
                     &[3u8; 32],
                 )
                 .expect("valid key length");
-            let mut mr = MessageReader::new(read, crypt, 8192);
+            let mut mr: MessageReader<ChaCha20Poly1305, Dummy> =
+                MessageReader::new(read, crypt, 8192);
             let declared: u32 = 4096;
             mr.buffer.extend_from_slice(&declared.to_be_bytes());
             let before = mr.buffer.capacity();
             mr.reserve_for_frame().expect("reserve");
-            let needed = (declared as usize) + MessageReader::<ChaCha20Poly1305>::U32_SIZE;
+            let needed = (declared as usize) + MessageReader::<ChaCha20Poly1305, Dummy>::U32_SIZE;
             assert!(mr.buffer.capacity() >= needed);
             assert!(mr.buffer.capacity() >= before);
         }
@@ -3637,6 +3918,12 @@ mod state {
         pub prefer_ws_fallback: bool,
         pub trust_gossip: bool,
         pub relay_role: RelayRole,
+        pub dial_timeout: Duration,
+        pub happy_eyeballs_stagger: Duration,
+        pub tcp_nodelay: bool,
+        pub tcp_keepalive: Option<Duration>,
+        pub proxy_policy: crate::transport::ProxyPolicy,
+        pub quic_dialer: Option<crate::transport::QuicDialer>,
     }
 
     impl Connecting {
@@ -3657,305 +3944,330 @@ mod state {
                 prefer_ws_fallback,
                 trust_gossip,
                 relay_role,
+                dial_timeout,
+                happy_eyeballs_stagger,
+                tcp_nodelay,
+                tcp_keepalive,
+                proxy_policy,
+                quic_dialer,
             }: Self,
         ) -> Result<ConnectedTo, crate::Error> {
-            let connection = match &peer_addr {
-                iroha_primitives::addr::SocketAddr::Host(host) => {
-                    #[cfg(feature = "p2p_ws")]
-                    if prefer_ws_fallback {
-                        let endpoint = format!("{}:{}", host.host.as_ref(), host.port);
-                        if let Ok(ws) = crate::transport::ws::connect_wss(&endpoint)
-                            .await
-                            .or_else(|_| async {
-                                crate::transport::ws::connect_ws(&endpoint).await
-                            })
-                            .await
-                        {
-                            crate::network::inc_ws_outbound();
-                            let (r, w) = tokio::io::split(ws);
-                            return Ok(ConnectedTo {
-                                connection: Connection::from_split(connection_id, r, w),
-                                our_public_address,
-                                key_pair,
-                                chain_id,
-                                consensus_caps,
-                                confidential_caps,
-                                crypto_caps,
-                                soranet_handshake,
-                                trust_gossip,
-                                relay_role,
-                                trust_gossip,
-                            });
+            let tcp_opts = crate::transport::TcpConnectOptions {
+                proxy: proxy_policy,
+                tcp_nodelay,
+                tcp_keepalive,
+            };
+            #[cfg(feature = "p2p_ws")]
+            async fn dial_ws(
+                endpoint: &str,
+                connection_id: ConnectionId,
+                dial_timeout: Duration,
+            ) -> Option<Connection> {
+                let wss =
+                    tokio::time::timeout(dial_timeout, crate::transport::ws::connect_wss(endpoint))
+                        .await;
+                if let Ok(Ok(ws)) = wss {
+                    crate::network::inc_ws_outbound();
+                    let (r, w) = tokio::io::split(ws);
+                    return Some(Connection::from_split(connection_id, r, w));
+                }
+                let ws =
+                    tokio::time::timeout(dial_timeout, crate::transport::ws::connect_ws(endpoint))
+                        .await;
+                if let Ok(Ok(ws)) = ws {
+                    crate::network::inc_ws_outbound();
+                    let (r, w) = tokio::io::split(ws);
+                    return Some(Connection::from_split(connection_id, r, w));
+                }
+                None
+            }
+
+            async fn dial_tcp_plain(
+                peer_addr: &iroha_primitives::addr::SocketAddr,
+                opts: &crate::transport::TcpConnectOptions,
+                dial_timeout: Duration,
+            ) -> Result<TcpStream, crate::Error> {
+                match tokio::time::timeout(dial_timeout, crate::transport::connect(peer_addr, opts))
+                    .await
+                {
+                    Ok(Ok(stream)) => Ok(stream),
+                    Ok(Err(e)) => Err(e.into()),
+                    Err(_) => Err(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "dial timeout",
+                    )
+                    .into()),
+                }
+            }
+
+            async fn dial_tcp_like(
+                peer_addr: &iroha_primitives::addr::SocketAddr,
+                opts: &crate::transport::TcpConnectOptions,
+                dial_timeout: Duration,
+                connection_id: ConnectionId,
+                tls_enabled: bool,
+            ) -> Result<Connection, crate::Error> {
+                #[cfg(feature = "p2p_tls")]
+                if tls_enabled {
+                    let sni_host = match peer_addr {
+                        iroha_primitives::addr::SocketAddr::Host(host) => host.host.as_ref(),
+                        _ => "iroha-p2p",
+                    };
+
+                    let tls = tokio::time::timeout(dial_timeout, async {
+                        let tcp = crate::transport::connect(peer_addr, opts).await?;
+                        crate::transport::tls::connect_tls(sni_host, tcp).await
+                    })
+                    .await;
+
+                    match tls {
+                        Ok(Ok(tls)) => {
+                            let (read_half, write_half) = tokio::io::split(tls);
+                            return Ok(Connection::from_split(
+                                connection_id,
+                                read_half,
+                                write_half,
+                            ));
                         }
-                    }
-                    #[cfg(feature = "quic")]
-                    if quic_enabled {
-                        let server_name = host.host.as_ref();
-                        let addr = format!("{}:{}", server_name, host.port);
-                        match crate::transport::quic::connect_and_open_bi(server_name, &addr).await
-                        {
-                            Ok((_conn, send, recv)) => {
-                                Connection::from_quic(connection_id, send, recv)
-                            }
-                            Err(e) => {
-                                iroha_logger::warn!(%e, "QUIC connect failed; falling back to TCP");
-                                match crate::transport::connect(&peer_addr).await {
-                                    Ok(stream) => Connection::new(connection_id, stream),
-                                    Err(err) => {
-                                        crate::network::inc_dns_resolution_fail();
-                                        return Err(err.into());
-                                    }
-                                }
-                            }
+                        Ok(Err(e)) => {
+                            iroha_logger::warn!(%e, addr=%peer_addr, "TLS dial failed; falling back to TCP");
                         }
-                    } else {
-                        #[cfg(feature = "p2p_tls")]
-                        {
-                            if tls_enabled {
-                                let endpoint = format!("{}:{}", host.host.as_ref(), host.port);
-                                match crate::transport::tls::connect_tls(&endpoint).await {
-                                    Ok(tls) => {
-                                        let (read_half, write_half) = tokio::io::split(tls);
-                                        Connection::from_split(connection_id, read_half, write_half)
-                                    }
-                                    Err(e) => {
-                                        iroha_logger::warn!(%e, endpoint=%endpoint, "TLS connect failed; trying TCP then WSS (if enabled)");
-                                        match crate::transport::connect(&peer_addr).await {
-                                            Ok(stream) => Connection::new(connection_id, stream),
-                                            Err(tcp_err) => {
-                                                #[cfg(feature = "p2p_ws")]
-                                                {
-                                                    match crate::transport::ws::connect_wss(
-                                                        &endpoint,
-                                                    )
-                                                    .await
-                                                    {
-                                                        Ok(ws) => {
-                                                            let (r, w) = tokio::io::split(ws);
-                                                            Connection::from_split(
-                                                                connection_id,
-                                                                r,
-                                                                w,
-                                                            )
-                                                        }
-                                                        Err(ws_err) => {
-                                                            static CONNECT_ERR_SAMPLER:
-                                                                std::sync::OnceLock<
-                                                                    std::sync::Mutex<LogSampler>,
-                                                                > = std::sync::OnceLock::new();
-                                                            let sampler = CONNECT_ERR_SAMPLER
-                                                                .get_or_init(|| {
-                                                                    std::sync::Mutex::new(
-                                                                        LogSampler::new(),
-                                                                    )
-                                                                });
-                                                            if let Ok(mut s) = sampler.lock() {
-                                                                if let Some(supp) = s.should_log(tokio::time::Duration::from_millis(500)) {
-                                                                    iroha_logger::warn!(tcp_err=%tcp_err, ws_err=%ws_err, addr=%peer_addr, suppressed=supp, "TCP and WSS fallbacks failed");
-                                                                }
-                                                            }
-                                                            crate::network::inc_dns_resolution_fail(
-                                                            );
-                                                            return Err(tcp_err.into());
-                                                        }
-                                                    }
-                                                }
-                                                #[cfg(not(feature = "p2p_ws"))]
-                                                {
-                                                    static CONNECT_ERR_SAMPLER:
-                                                        std::sync::OnceLock<
-                                                            std::sync::Mutex<LogSampler>,
-                                                        > = std::sync::OnceLock::new();
-                                                    let sampler =
-                                                        CONNECT_ERR_SAMPLER.get_or_init(|| {
-                                                            std::sync::Mutex::new(LogSampler::new())
-                                                        });
-                                                    if let Ok(mut s) = sampler.lock() {
-                                                        if let Some(supp) = s.should_log(
-                                                            tokio::time::Duration::from_millis(500),
-                                                        ) {
-                                                            iroha_logger::warn!(%tcp_err, addr=%peer_addr, suppressed=supp, "TCP fallback failed");
-                                                        }
-                                                    }
-                                                    crate::network::inc_dns_resolution_fail();
-                                                    return Err(tcp_err.into());
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            } else {
-                                match crate::transport::connect(&peer_addr).await {
-                                    Ok(stream) => Connection::new(connection_id, stream),
-                                    Err(err) => {
-                                        static CONNECT_ERR_SAMPLER: std::sync::OnceLock<
-                                            std::sync::Mutex<LogSampler>,
-                                        > = std::sync::OnceLock::new();
-                                        let sampler = CONNECT_ERR_SAMPLER.get_or_init(|| {
-                                            std::sync::Mutex::new(LogSampler::new())
-                                        });
-                                        if let Ok(mut s) = sampler.lock() {
-                                            if let Some(supp) = s
-                                                .should_log(tokio::time::Duration::from_millis(500))
-                                            {
-                                                iroha_logger::warn!(%err, addr=%peer_addr, suppressed=supp, "TCP connect failed");
-                                            }
-                                        }
-                                        crate::network::inc_dns_resolution_fail();
-                                        return Err(err.into());
-                                    }
-                                }
-                            }
-                        }
-                        #[cfg(not(feature = "p2p_tls"))]
-                        {
-                            match crate::transport::connect(&peer_addr).await {
-                                Ok(stream) => Connection::new(connection_id, stream),
-                                Err(err) => {
-                                    #[cfg(feature = "p2p_ws")]
-                                    {
-                                        let endpoint =
-                                            format!("{}:{}", host.host.as_ref(), host.port);
-                                        match crate::transport::ws::connect_wss(&endpoint)
-                                            .await
-                                            .or_else(|_| async {
-                                                crate::transport::ws::connect_ws(&endpoint).await
-                                            })
-                                            .await
-                                        {
-                                            Ok(ws) => {
-                                                let (r, w) = tokio::io::split(ws);
-                                                Connection::from_split(connection_id, r, w)
-                                            }
-                                            Err(ws_err) => {
-                                                static CONNECT_ERR_SAMPLER: std::sync::OnceLock<
-                                                    std::sync::Mutex<LogSampler>,
-                                                > = std::sync::OnceLock::new();
-                                                let sampler =
-                                                    CONNECT_ERR_SAMPLER.get_or_init(|| {
-                                                        std::sync::Mutex::new(LogSampler::new())
-                                                    });
-                                                if let Ok(mut s) = sampler.lock() {
-                                                    if let Some(supp) = s.should_log(
-                                                        tokio::time::Duration::from_millis(500),
-                                                    ) {
-                                                        iroha_logger::warn!(%err, ws_err=%ws_err, addr=%peer_addr, suppressed=supp, "TCP and WS fallbacks failed");
-                                                    }
-                                                }
-                                                crate::network::inc_dns_resolution_fail();
-                                                return Err(err.into());
-                                            }
-                                        }
-                                    }
-                                    #[cfg(not(feature = "p2p_ws"))]
-                                    {
-                                        static CONNECT_ERR_SAMPLER: std::sync::OnceLock<
-                                            std::sync::Mutex<LogSampler>,
-                                        > = std::sync::OnceLock::new();
-                                        let sampler = CONNECT_ERR_SAMPLER.get_or_init(|| {
-                                            std::sync::Mutex::new(LogSampler::new())
-                                        });
-                                        if let Ok(mut s) = sampler.lock() {
-                                            if let Some(supp) = s
-                                                .should_log(tokio::time::Duration::from_millis(500))
-                                            {
-                                                iroha_logger::warn!(%err, addr=%peer_addr, suppressed=supp, "TCP connect failed");
-                                            }
-                                        }
-                                        crate::network::inc_dns_resolution_fail();
-                                        return Err(err.into());
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    #[cfg(not(feature = "quic"))]
-                    {
-                        #[cfg(feature = "p2p_tls")]
-                        {
-                            if tls_enabled {
-                                let endpoint = format!("{}:{}", host.host.as_ref(), host.port);
-                                match crate::transport::tls::connect_tls(&endpoint).await {
-                                    Ok(tls) => {
-                                        let (read_half, write_half) = tokio::io::split(tls);
-                                        Connection::from_split(connection_id, read_half, write_half)
-                                    }
-                                    Err(e) => {
-                                        iroha_logger::warn!(%e, endpoint=%endpoint, "TLS connect failed; falling back to TCP");
-                                        match crate::transport::connect(&peer_addr).await {
-                                            Ok(stream) => Connection::new(connection_id, stream),
-                                            Err(err) => {
-                                                static CONNECT_ERR_SAMPLER: std::sync::OnceLock<
-                                                    std::sync::Mutex<LogSampler>,
-                                                > = std::sync::OnceLock::new();
-                                                let sampler =
-                                                    CONNECT_ERR_SAMPLER.get_or_init(|| {
-                                                        std::sync::Mutex::new(LogSampler::new())
-                                                    });
-                                                if let Ok(mut s) = sampler.lock() {
-                                                    if let Some(supp) = s.should_log(
-                                                        tokio::time::Duration::from_millis(500),
-                                                    ) {
-                                                        iroha_logger::warn!(%err, addr=%peer_addr, suppressed=supp, "TCP connect failed");
-                                                    }
-                                                }
-                                                crate::network::inc_dns_resolution_fail();
-                                                return Err(err.into());
-                                            }
-                                        }
-                                    }
-                                }
-                            } else {
-                                match crate::transport::connect(&peer_addr).await {
-                                    Ok(stream) => Connection::new(connection_id, stream),
-                                    Err(err) => {
-                                        static CONNECT_ERR_SAMPLER: std::sync::OnceLock<
-                                            std::sync::Mutex<LogSampler>,
-                                        > = std::sync::OnceLock::new();
-                                        let sampler = CONNECT_ERR_SAMPLER.get_or_init(|| {
-                                            std::sync::Mutex::new(LogSampler::new())
-                                        });
-                                        if let Ok(mut s) = sampler.lock() {
-                                            if let Some(supp) = s
-                                                .should_log(tokio::time::Duration::from_millis(500))
-                                            {
-                                                iroha_logger::warn!(%err, addr=%peer_addr, suppressed=supp, "TCP connect failed");
-                                            }
-                                        }
-                                        crate::network::inc_dns_resolution_fail();
-                                        return Err(err.into());
-                                    }
-                                }
-                            }
-                        }
-                        #[cfg(not(feature = "p2p_tls"))]
-                        {
-                            match crate::transport::connect(&peer_addr).await {
-                                Ok(stream) => Connection::new(connection_id, stream),
-                                Err(err) => {
-                                    static CONNECT_ERR_SAMPLER: std::sync::OnceLock<
-                                        std::sync::Mutex<LogSampler>,
-                                    > = std::sync::OnceLock::new();
-                                    let sampler = CONNECT_ERR_SAMPLER
-                                        .get_or_init(|| std::sync::Mutex::new(LogSampler::new()));
-                                    if let Ok(mut s) = sampler.lock() {
-                                        if let Some(supp) =
-                                            s.should_log(tokio::time::Duration::from_millis(500))
-                                        {
-                                            iroha_logger::warn!(%err, addr=%peer_addr, suppressed=supp, "TCP connect failed");
-                                        }
-                                    }
-                                    crate::network::inc_dns_resolution_fail();
-                                    return Err(err.into());
-                                }
-                            }
+                        Err(_) => {
+                            iroha_logger::warn!(addr=%peer_addr, timeout=?dial_timeout, "TLS dial timed out; falling back to TCP");
                         }
                     }
                 }
-                _ => {
-                    let stream = crate::transport::connect(&peer_addr).await?;
-                    let _ = stream.set_nodelay(true);
-                    Connection::new(connection_id, stream)
+
+                let tcp = dial_tcp_plain(peer_addr, opts, dial_timeout).await?;
+                Ok(Connection::new(connection_id, tcp))
+            }
+
+            #[cfg(feature = "quic")]
+            async fn dial_quic_like(
+                peer_addr: &iroha_primitives::addr::SocketAddr,
+                dialer: &crate::transport::QuicDialer,
+                dial_timeout: Duration,
+                connection_id: ConnectionId,
+            ) -> Result<Connection, crate::Error> {
+                use tokio::time::Instant;
+
+                const QUIC_SERVER_NAME: &str = "iroha-quic";
+
+                let deadline = Instant::now() + dial_timeout;
+
+                let targets: Vec<std::net::SocketAddr> = match peer_addr {
+                    iroha_primitives::addr::SocketAddr::Ipv4(v4) => vec![std::net::SocketAddr::V4(
+                        std::net::SocketAddrV4::new(v4.ip.into(), v4.port),
+                    )],
+                    iroha_primitives::addr::SocketAddr::Ipv6(v6) => vec![std::net::SocketAddr::V6(
+                        std::net::SocketAddrV6::new(v6.ip.into(), v6.port, 0, 0),
+                    )],
+                    iroha_primitives::addr::SocketAddr::Host(host) => {
+                        let lookup = tokio::time::timeout_at(
+                            deadline,
+                            tokio::net::lookup_host((host.host.as_ref(), host.port)),
+                        )
+                        .await
+                        .map_err(|_| {
+                            std::io::Error::new(std::io::ErrorKind::TimedOut, "dial timeout")
+                        })??;
+                        lookup.collect()
+                    }
+                };
+
+                if targets.is_empty() {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        "no socket addrs for peer",
+                    )
+                    .into());
+                }
+
+                let mut last_err: Option<std::io::Error> = None;
+                for target in targets {
+                    let now = Instant::now();
+                    if now >= deadline {
+                        break;
+                    }
+                    let remaining = deadline - now;
+
+                    let res = tokio::time::timeout(remaining, async {
+                        let conn = dialer.connect(target, QUIC_SERVER_NAME).await?;
+                        let (send_hi, recv_hi) = conn
+                            .open_bi()
+                            .await
+                            .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
+                        let lo = tokio::time::timeout_at(deadline, conn.open_bi()).await;
+                        let (send_low, recv_low) = match lo {
+                            Ok(Ok((s, r))) => (Some(s), Some(r)),
+                            Ok(Err(e)) => {
+                                iroha_logger::debug!(%e, addr=%target, "QUIC low-priority stream open failed; continuing with single stream");
+                                (None, None)
+                            }
+                            Err(_) => (None, None),
+                        };
+                        Ok::<_, std::io::Error>(Connection::from_quic(
+                            connection_id,
+                            send_hi,
+                            recv_hi,
+                            send_low,
+                            recv_low,
+                            Some(conn.remote_address()),
+                        ))
+                    })
+                    .await;
+
+                    match res {
+                        Ok(Ok(conn)) => return Ok(conn),
+                        Ok(Err(e)) => last_err = Some(e),
+                        Err(_) => {
+                            last_err = Some(std::io::Error::new(
+                                std::io::ErrorKind::TimedOut,
+                                "dial timeout",
+                            ))
+                        }
+                    }
+                }
+
+                Err(last_err
+                    .unwrap_or_else(|| {
+                        std::io::Error::new(std::io::ErrorKind::Other, "quic dial failed")
+                    })
+                    .into())
+            }
+
+            #[cfg(feature = "p2p_ws")]
+            let mut ws_tried = false;
+            #[cfg(not(feature = "p2p_ws"))]
+            let ws_tried = true;
+
+            if let iroha_primitives::addr::SocketAddr::Host(host) = &peer_addr {
+                #[cfg(feature = "p2p_ws")]
+                if prefer_ws_fallback {
+                    ws_tried = true;
+                    let endpoint = format!("{}:{}", host.host.as_ref(), host.port);
+                    if let Some(conn) = dial_ws(&endpoint, connection_id, dial_timeout).await {
+                        return Ok(ConnectedTo {
+                            our_public_address,
+                            key_pair,
+                            connection: conn,
+                            chain_id,
+                            consensus_caps,
+                            confidential_caps,
+                            crypto_caps,
+                            soranet_handshake,
+                            trust_gossip,
+                            relay_role,
+                        });
+                    }
+                }
+            }
+
+            let tcp_fut = dial_tcp_like(
+                &peer_addr,
+                &tcp_opts,
+                dial_timeout,
+                connection_id,
+                tls_enabled,
+            );
+            tokio::pin!(tcp_fut);
+
+            let connection_result: Result<Connection, crate::Error> = {
+                #[cfg(feature = "quic")]
+                {
+                    if quic_enabled {
+                        if let Some(dialer) = &quic_dialer {
+                            let quic_fut =
+                                dial_quic_like(&peer_addr, dialer, dial_timeout, connection_id);
+                            tokio::pin!(quic_fut);
+
+                            // Phase 1: give QUIC a head start, but don't stall on blocked UDP.
+                            let mut stagger = tokio::time::sleep(happy_eyeballs_stagger);
+                            tokio::pin!(stagger);
+                            tokio::select! {
+                                res = &mut quic_fut => match res {
+                                    Ok(conn) => Ok(conn),
+                                    Err(e) => {
+                                        iroha_logger::warn!(%e, addr=%peer_addr, "QUIC dial failed; falling back to TCP-like");
+                                        tcp_fut.await
+                                    }
+                                },
+                                _ = &mut stagger => {
+                                    let mut quic_err: Option<crate::Error> = None;
+                                    let mut tcp_err: Option<crate::Error> = None;
+                                    loop {
+                                        tokio::select! {
+                                            res = &mut quic_fut, if quic_err.is_none() => match res {
+                                                Ok(conn) => break Ok(conn),
+                                                Err(e) => {
+                                                    iroha_logger::debug!(%e, addr=%peer_addr, "QUIC dial failed while racing TCP-like");
+                                                    quic_err = Some(e);
+                                                    if tcp_err.is_some() {
+                                                        break Err(quic_err.take().unwrap());
+                                                    }
+                                                }
+                                            },
+                                            res = &mut tcp_fut, if tcp_err.is_none() => match res {
+                                                Ok(conn) => break Ok(conn),
+                                                Err(e) => {
+                                                    iroha_logger::debug!(%e, addr=%peer_addr, "TCP-like dial failed while racing QUIC");
+                                                    tcp_err = Some(e);
+                                                    if quic_err.is_some() {
+                                                        break Err(tcp_err.take().unwrap());
+                                                    }
+                                                }
+                                            },
+                                            else => {
+                                                break Err(tcp_err.or(quic_err).unwrap_or_else(|| {
+                                                    std::io::Error::new(std::io::ErrorKind::Other, "dial failed").into()
+                                                }));
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        } else {
+                            tcp_fut.await
+                        }
+                    } else {
+                        tcp_fut.await
+                    }
+                }
+
+                #[cfg(not(feature = "quic"))]
+                {
+                    tcp_fut.await
+                }
+            };
+
+            let connection = match connection_result {
+                Ok(conn) => conn,
+                Err(err) => {
+                    #[cfg(feature = "p2p_ws")]
+                    if !ws_tried {
+                        if let iroha_primitives::addr::SocketAddr::Host(host) = &peer_addr {
+                            let endpoint = format!("{}:{}", host.host.as_ref(), host.port);
+                            if let Some(conn) =
+                                dial_ws(&endpoint, connection_id, dial_timeout).await
+                            {
+                                return Ok(ConnectedTo {
+                                    our_public_address,
+                                    key_pair,
+                                    connection: conn,
+                                    chain_id,
+                                    consensus_caps,
+                                    confidential_caps,
+                                    crypto_caps,
+                                    soranet_handshake,
+                                    trust_gossip,
+                                    relay_role,
+                                });
+                            }
+                        }
+                    }
+
+                    crate::network::inc_dns_resolution_fail();
+                    return Err(err);
                 }
             };
             Ok(ConnectedTo {
@@ -5249,6 +5561,10 @@ pub struct Connection {
     pub read: Box<dyn AsyncRead + Send + Unpin>,
     /// Writer half of the stream
     pub write: Box<dyn AsyncWrite + Send + Unpin>,
+    /// Optional low-priority reader half (e.g., second QUIC stream).
+    pub read_low: Option<Box<dyn AsyncRead + Send + Unpin>>,
+    /// Optional low-priority writer half (e.g., second QUIC stream).
+    pub write_low: Option<Box<dyn AsyncWrite + Send + Unpin>>,
     /// Remote addr, for logging purpose.
     pub remote_addr: Option<SocketAddr>,
 }
@@ -5262,6 +5578,8 @@ impl Connection {
             id,
             read: Box::new(read_half),
             write: Box::new(write_half),
+            read_low: None,
+            write_low: None,
             remote_addr,
         }
     }
@@ -5276,18 +5594,35 @@ impl Connection {
             id,
             read: Box::new(read),
             write: Box::new(write),
+            read_low: None,
+            write_low: None,
             remote_addr: None,
         }
     }
 
     /// Instantiate connection from QUIC streams.
     #[cfg(feature = "quic")]
-    pub fn from_quic(id: ConnectionId, send: quinn::SendStream, recv: quinn::RecvStream) -> Self {
+    pub fn from_quic(
+        id: ConnectionId,
+        send_hi: quinn::SendStream,
+        recv_hi: quinn::RecvStream,
+        send_low: Option<quinn::SendStream>,
+        recv_low: Option<quinn::RecvStream>,
+        remote_addr: Option<SocketAddr>,
+    ) -> Self {
         Connection {
             id,
-            read: Box::new(recv),
-            write: Box::new(send),
-            remote_addr: None,
+            read: Box::new(recv_hi),
+            write: Box::new(send_hi),
+            read_low: recv_low.map(|s| {
+                let boxed: Box<dyn AsyncRead + Send + Unpin> = Box::new(s);
+                boxed
+            }),
+            write_low: send_low.map(|s| {
+                let boxed: Box<dyn AsyncWrite + Send + Unpin> = Box::new(s);
+                boxed
+            }),
+            remote_addr,
         }
     }
 }

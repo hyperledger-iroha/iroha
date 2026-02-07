@@ -176,7 +176,7 @@ async fn app_api_router_smoke() {
 
     // 5) App API: POST /v1/webhooks — create a webhook (write path)
     let body = r#"{
-  "url": "http://localhost:18080/callback",
+  "url": "https://example.com/callback",
   "secret": null,
   "active": true
 }"#;

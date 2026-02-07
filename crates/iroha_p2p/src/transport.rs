@@ -9,39 +9,189 @@ pub mod quic {
     #![allow(clippy::missing_errors_doc)]
     //! QUIC transport integration (feature-gated, optional).
     //!
-    //! This module provides a minimal QUIC connector that establishes a
-    //! client connection to a remote endpoint and opens a bidirectional
-    //! stream. Full integration with the peer networking code will
-    //! require IO abstraction; this module focuses on establishing the
-    //! connection and stream.
+    //! This module provides a QUIC dialer that can be reused across many
+    //! outbound dials. Peer authentication remains at the application
+    //! layer (signed handshake), so certificate verification is intentionally
+    //! permissive and ALPN is fixed.
 
-    /// Establish a QUIC connection and open a bidirectional stream.
-    ///
-    /// Note: certificate verification policy must be defined by the
-    /// caller. For P2P with application-level authentication, it is
-    /// common to accept self-signed certs and authenticate the peer at
-    /// the handshake layer.
-    #[allow(dead_code)]
-    pub async fn connect_and_open_bi(
-        server_name: &str,
-        addr: &str,
-    ) -> std::io::Result<(quinn::Connection, quinn::SendStream, quinn::RecvStream)> {
-        use std::io::Error;
+    use std::{io, sync::Arc, time::Duration};
 
-        let endpoint = quinn::Endpoint::client("0.0.0.0:0".parse().unwrap())
-            .map_err(|e| Error::other(e.to_string()))?;
+    use quinn::{
+        ClientConfig, Connection, Endpoint, IdleTimeout, RecvStream, SendStream, TransportConfig,
+        crypto::rustls::QuicClientConfig as QuinnRustlsClientConfig,
+    };
+    use rustls::{
+        DigitallySignedStruct, Error as RustlsError, SignatureScheme,
+        client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier},
+        pki_types::{CertificateDer, ServerName, UnixTime},
+    };
 
-        let conn = endpoint
-            .connect(addr.parse().unwrap(), server_name)
-            .map_err(|e| Error::other(e.to_string()))?;
-        let connection = conn.await.map_err(|e| Error::other(e.to_string()))?;
-        let (send, recv) = connection
-            .open_bi()
-            .await
-            .map_err(|e| Error::other(e.to_string()))?;
-        Ok((connection, send, recv))
+    /// ALPN negotiated for Iroha P2P QUIC connections.
+    pub const P2P_ALPN: &[u8] = b"iroha-p2p/1";
+
+    #[derive(Debug)]
+    struct NoCertificateVerification;
+
+    impl ServerCertVerifier for NoCertificateVerification {
+        fn verify_server_cert(
+            &self,
+            _end_entity: &CertificateDer<'_>,
+            _intermediates: &[CertificateDer<'_>],
+            _server_name: &ServerName<'_>,
+            _ocsp_response: &[u8],
+            _now: UnixTime,
+        ) -> Result<ServerCertVerified, RustlsError> {
+            Ok(ServerCertVerified::assertion())
+        }
+
+        fn verify_tls12_signature(
+            &self,
+            _message: &[u8],
+            _cert: &CertificateDer<'_>,
+            _dss: &DigitallySignedStruct,
+        ) -> Result<HandshakeSignatureValid, RustlsError> {
+            Ok(HandshakeSignatureValid::assertion())
+        }
+
+        fn verify_tls13_signature(
+            &self,
+            _message: &[u8],
+            _cert: &CertificateDer<'_>,
+            _dss: &DigitallySignedStruct,
+        ) -> Result<HandshakeSignatureValid, RustlsError> {
+            Ok(HandshakeSignatureValid::assertion())
+        }
+
+        fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+            vec![
+                SignatureScheme::ECDSA_NISTP256_SHA256,
+                SignatureScheme::ECDSA_NISTP384_SHA384,
+                SignatureScheme::ED25519,
+                SignatureScheme::RSA_PSS_SHA256,
+                SignatureScheme::RSA_PKCS1_SHA256,
+            ]
+        }
+    }
+
+    /// QUIC transport tuning for outbound dials.
+    #[derive(Clone, Copy, Debug)]
+    pub struct DialerConfig {
+        /// QUIC idle timeout (transport-level), if set.
+        pub max_idle_timeout: Option<Duration>,
+        /// QUIC keep-alive interval, if set.
+        pub keep_alive_interval: Option<Duration>,
+    }
+
+    impl Default for DialerConfig {
+        fn default() -> Self {
+            Self {
+                max_idle_timeout: None,
+                // A small keep-alive keeps common NAT mappings fresh and reduces idle drops.
+                keep_alive_interval: Some(Duration::from_secs(10)),
+            }
+        }
+    }
+
+    /// Reusable outbound QUIC dialer.
+    #[derive(Clone, Debug)]
+    pub struct Dialer {
+        endpoint: Endpoint,
+    }
+
+    impl Dialer {
+        /// Create a QUIC dialer bound to `bind_addr` (usually `0.0.0.0:0`).
+        pub fn bind(bind_addr: std::net::SocketAddr, cfg: DialerConfig) -> io::Result<Self> {
+            let mut endpoint = Endpoint::client(bind_addr)?;
+
+            let verifier: Arc<dyn ServerCertVerifier> = Arc::new(NoCertificateVerification);
+            let mut tls = rustls::ClientConfig::builder()
+                .dangerous()
+                .with_custom_certificate_verifier(verifier)
+                .with_no_client_auth();
+            tls.enable_early_data = true;
+            tls.alpn_protocols = vec![P2P_ALPN.to_vec()];
+            let tls = Arc::new(tls);
+            let crypto = QuinnRustlsClientConfig::try_from(tls)
+                .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+
+            let mut client = ClientConfig::new(Arc::new(crypto));
+            let transport = build_transport_config(cfg)?;
+            client.transport_config(transport);
+            endpoint.set_default_client_config(client);
+
+            Ok(Self { endpoint })
+        }
+
+        /// Connect to `remote` and return an established connection.
+        pub async fn connect(
+            &self,
+            remote: std::net::SocketAddr,
+            server_name: &str,
+        ) -> io::Result<Connection> {
+            let connecting = self
+                .endpoint
+                .connect(remote, server_name)
+                .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+            connecting
+                .await
+                .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))
+        }
+
+        /// Connect and open a single bi-directional stream.
+        pub async fn connect_and_open_bi(
+            &self,
+            remote: std::net::SocketAddr,
+            server_name: &str,
+        ) -> io::Result<(Connection, SendStream, RecvStream)> {
+            let connection = self.connect(remote, server_name).await?;
+            let (send, recv) = connection
+                .open_bi()
+                .await
+                .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+            Ok((connection, send, recv))
+        }
+
+        /// Connect and open two bi-directional streams (recommended for separating priorities).
+        pub async fn connect_and_open_two_bi(
+            &self,
+            remote: std::net::SocketAddr,
+            server_name: &str,
+        ) -> io::Result<(
+            Connection,
+            (SendStream, RecvStream),
+            (SendStream, RecvStream),
+        )> {
+            let connection = self.connect(remote, server_name).await?;
+            let hi = connection
+                .open_bi()
+                .await
+                .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+            let lo = connection
+                .open_bi()
+                .await
+                .map_err(|e| io::Error::new(io::ErrorKind::Other, e.to_string()))?;
+            Ok((connection, hi, lo))
+        }
+    }
+
+    fn build_transport_config(cfg: DialerConfig) -> io::Result<Arc<TransportConfig>> {
+        let mut transport = TransportConfig::default();
+        if let Some(timeout) = cfg.max_idle_timeout {
+            let idle = IdleTimeout::try_from(timeout)
+                .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e.to_string()))?;
+            transport.max_idle_timeout(Some(idle));
+        }
+        transport.keep_alive_interval(cfg.keep_alive_interval);
+        Ok(Arc::new(transport))
     }
 }
+
+/// QUIC dialer handle type.
+#[cfg(feature = "quic")]
+pub type QuicDialer = quic::Dialer;
+/// Stub QUIC dialer type when QUIC support is not compiled in.
+#[cfg(not(feature = "quic"))]
+pub type QuicDialer = ();
 
 #[cfg(feature = "p2p_tls")]
 pub mod tls {
@@ -105,13 +255,11 @@ pub mod tls {
         }
     }
 
-    /// Establish a TLS-over-TCP connection to `endpoint` (host:port).
-    pub async fn connect_tls(endpoint: &str) -> tokio::io::Result<TlsStream<TcpStream>> {
-        // Split host and port for SNI and TCP connect
-        let (host, _port) = endpoint.rsplit_once(':').ok_or_else(|| {
-            tokio::io::Error::new(tokio::io::ErrorKind::InvalidInput, "expected host:port")
-        })?;
-
+    /// Upgrade an already-connected TCP stream to TLS 1.3.
+    pub async fn connect_tls(
+        host: &str,
+        tcp: TcpStream,
+    ) -> tokio::io::Result<TlsStream<TcpStream>> {
         // Build a permissive client config
         let verifier: Arc<dyn ServerCertVerifier> = Arc::new(NoCertificateVerification);
         let config = ClientConfig::builder()
@@ -121,8 +269,6 @@ pub mod tls {
         let config = Arc::new(config);
         let connector = TlsConnector::from(config);
 
-        // Connect TCP then upgrade to TLS
-        let tcp = TcpStream::connect(endpoint).await?;
         let server_name = ServerName::try_from(host)
             .map_err(|_| tokio::io::Error::new(tokio::io::ErrorKind::InvalidInput, "invalid SNI"))?
             .to_owned();
@@ -134,9 +280,12 @@ pub mod tls {
 #[cfg(feature = "p2p_ws")]
 pub mod ws {
     //! WebSocket fallback transport (client-side) over WSS to Torii `/p2p`.
-    use futures::{SinkExt, StreamExt};
-    use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-    use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest};
+    use futures::{Sink as _, Stream as _};
+    use tokio::io::{AsyncRead, AsyncWrite};
+    use tokio_tungstenite::{
+        MaybeTlsStream,
+        tungstenite::{Message, client::IntoClientRequest},
+    };
 
     /// A duplex adaptor that implements `AsyncRead`/`AsyncWrite` over a WebSocket stream.
     /// Bytes written are sent as a single Binary frame on `poll_flush`. Bytes are read by
@@ -160,7 +309,10 @@ pub mod ws {
         }
     }
 
-    impl<S: Unpin> AsyncRead for WsDuplex<S> {
+    impl<S> AsyncRead for WsDuplex<S>
+    where
+        S: AsyncRead + AsyncWrite + Unpin,
+    {
         fn poll_read(
             mut self: std::pin::Pin<&mut Self>,
             cx: &mut std::task::Context<'_>,
@@ -174,14 +326,15 @@ pub mod ws {
             // Pull next Binary frame
             match futures::ready!(std::pin::Pin::new(&mut self.inner).poll_next(cx)) {
                 Some(Ok(Message::Binary(b))) => {
-                    self.read_buf = bytes::Bytes::from(b);
+                    self.read_buf = b;
                     let n = std::cmp::min(self.read_buf.len(), buf.remaining());
                     buf.put_slice(&self.read_buf.split_to(n));
                     std::task::Poll::Ready(Ok(()))
                 }
                 Some(Ok(Message::Text(_)))
                 | Some(Ok(Message::Ping(_)))
-                | Some(Ok(Message::Pong(_))) => {
+                | Some(Ok(Message::Pong(_)))
+                | Some(Ok(Message::Frame(_))) => {
                     // Ignore control/text frames and read next
                     cx.waker().wake_by_ref();
                     std::task::Poll::Pending
@@ -195,7 +348,10 @@ pub mod ws {
         }
     }
 
-    impl<S: Unpin> AsyncWrite for WsDuplex<S> {
+    impl<S> AsyncWrite for WsDuplex<S>
+    where
+        S: AsyncRead + AsyncWrite + Unpin,
+    {
         fn poll_write(
             mut self: std::pin::Pin<&mut Self>,
             _cx: &mut std::task::Context<'_>,
@@ -214,50 +370,57 @@ pub mod ws {
             }
             let data = std::mem::take(&mut self.write_buf);
             let mut sink = std::pin::Pin::new(&mut self.inner);
-            match futures::ready!(
-                sink.as_mut()
-                    .start_send(Message::Binary(data))
-                    .map_err(|e| {
-                        std::io::Error::new(
-                            std::io::ErrorKind::Other,
-                            format!("ws send error: {e}"),
-                        )
-                    })
-            ) {
-                () => {}
-            }
-            match futures::ready!(sink.as_mut().poll_flush(cx).map_err(|e| {
+            futures::ready!(sink.as_mut().poll_ready(cx).map_err(|e| {
+                std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    format!("ws poll_ready error: {e}"),
+                )
+            }))?;
+            sink.as_mut()
+                .start_send(Message::Binary(data.into()))
+                .map_err(|e| {
+                    std::io::Error::new(std::io::ErrorKind::Other, format!("ws send error: {e}"))
+                })?;
+            futures::ready!(sink.as_mut().poll_flush(cx).map_err(|e| {
                 std::io::Error::new(std::io::ErrorKind::Other, format!("ws flush error: {e}"))
-            })) {
-                () => std::task::Poll::Ready(Ok(())),
-            }
+            }))?;
+            std::task::Poll::Ready(Ok(()))
         }
 
         fn poll_shutdown(
             mut self: std::pin::Pin<&mut Self>,
             cx: &mut std::task::Context<'_>,
         ) -> std::task::Poll<std::io::Result<()>> {
-            let mut sink = std::pin::Pin::new(&mut self.inner);
-            match futures::ready!(sink.as_mut().start_send(Message::Close(None)).map_err(|e| {
-                std::io::Error::new(std::io::ErrorKind::Other, format!("ws close error: {e}"))
-            })) {
-                () => {}
+            if !self.write_buf.is_empty() {
+                // Flush any buffered payload first.
+                futures::ready!(self.as_mut().poll_flush(cx))?;
             }
-            match futures::ready!(sink.as_mut().poll_flush(cx).map_err(|e| {
+            let mut sink = std::pin::Pin::new(&mut self.inner);
+            futures::ready!(sink.as_mut().poll_ready(cx).map_err(|e| {
+                std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    format!("ws close poll_ready error: {e}"),
+                )
+            }))?;
+            sink.as_mut()
+                .start_send(Message::Close(None))
+                .map_err(|e| {
+                    std::io::Error::new(std::io::ErrorKind::Other, format!("ws close error: {e}"))
+                })?;
+            futures::ready!(sink.as_mut().poll_flush(cx).map_err(|e| {
                 std::io::Error::new(
                     std::io::ErrorKind::Other,
                     format!("ws close flush error: {e}"),
                 )
-            })) {
-                () => std::task::Poll::Ready(Ok(())),
-            }
+            }))?;
+            std::task::Poll::Ready(Ok(()))
         }
     }
 
     /// Connect a WSS endpoint `wss://host:port/p2p` and return a duplex stream.
     pub async fn connect_wss(
         endpoint: &str,
-    ) -> std::io::Result<WsDuplex<tokio_tungstenite::ConnectorStream>> {
+    ) -> std::io::Result<WsDuplex<MaybeTlsStream<tokio::net::TcpStream>>> {
         let url = format!("wss://{endpoint}/p2p");
         let req = url.into_client_request().map_err(|e| {
             std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("bad url: {e}"))
@@ -271,7 +434,7 @@ pub mod ws {
     /// Connect a WS endpoint `ws://host:port/p2p` and return a duplex stream.
     pub async fn connect_ws(
         endpoint: &str,
-    ) -> std::io::Result<WsDuplex<tokio_tungstenite::ConnectorStream>> {
+    ) -> std::io::Result<WsDuplex<MaybeTlsStream<tokio::net::TcpStream>>> {
         let url = format!("ws://{endpoint}/p2p");
         let req = url.into_client_request().map_err(|e| {
             std::io::Error::new(std::io::ErrorKind::InvalidInput, format!("bad url: {e}"))
@@ -448,10 +611,7 @@ pub trait TransportConnector {
     fn dial(endpoint: &str) -> tokio::io::Result<Self::Stream>;
 }
 
-use std::{
-    env,
-    sync::{Mutex, OnceLock},
-};
+use std::sync::{Mutex, OnceLock};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use iroha_primitives::addr::SocketAddr;
@@ -462,6 +622,111 @@ use tokio::{
 
 use crate::sampler::LogSampler;
 
+/// HTTP CONNECT proxy configuration for outbound TCP dials.
+#[derive(Debug, Clone, Default)]
+pub struct ProxyPolicy {
+    proxy: Option<Proxy>,
+    no_proxy: Vec<String>,
+}
+
+impl ProxyPolicy {
+    /// Disable proxying entirely.
+    #[must_use]
+    pub const fn disabled() -> Self {
+        Self {
+            proxy: None,
+            no_proxy: Vec::new(),
+        }
+    }
+
+    /// Build a proxy policy from config values.
+    ///
+    /// # Errors
+    /// Returns an error if `proxy_url` is present but cannot be parsed.
+    pub fn from_config(proxy_url: Option<String>, no_proxy: Vec<String>) -> io::Result<Self> {
+        let proxy = proxy_url
+            .as_deref()
+            .map(parse_proxy_value)
+            .transpose()
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
+
+        let no_proxy = normalize_no_proxy(no_proxy);
+
+        Ok(Self { proxy, no_proxy })
+    }
+
+    fn should_bypass_proxy(&self, target_host: &str) -> bool {
+        self.no_proxy.iter().any(|entry| {
+            if entry.is_empty() {
+                return false;
+            }
+            target_host.ends_with(entry)
+        })
+    }
+
+    fn pick_proxy_for_target(&self, target: &SocketAddr) -> Option<&Proxy> {
+        let proxy = self.proxy.as_ref()?;
+        // Resolve target host string for NO_PROXY checks
+        match target {
+            SocketAddr::Host(h) => {
+                let host = h.host.as_ref();
+                if self.should_bypass_proxy(host) {
+                    None
+                } else {
+                    Some(proxy)
+                }
+            }
+            SocketAddr::Ipv4(v4) => {
+                let host = format!("{}.{}.{}.{}", v4.ip[0], v4.ip[1], v4.ip[2], v4.ip[3]);
+                if self.should_bypass_proxy(&host) {
+                    None
+                } else {
+                    Some(proxy)
+                }
+            }
+            SocketAddr::Ipv6(v6) => {
+                // Represent as canonical without brackets.
+                let host = v6.ip.to_string();
+                if self.should_bypass_proxy(&host) {
+                    None
+                } else {
+                    Some(proxy)
+                }
+            }
+        }
+    }
+}
+
+fn normalize_no_proxy(mut list: Vec<String>) -> Vec<String> {
+    for entry in &mut list {
+        // Keep ASCII; no unicode normalization needed.
+        *entry = entry.trim().to_string();
+    }
+    list.retain(|s| !s.is_empty());
+    list
+}
+
+/// TCP socket options applied to outbound dials.
+#[derive(Debug, Clone)]
+pub struct TcpConnectOptions {
+    /// Proxy policy for this dial.
+    pub proxy: ProxyPolicy,
+    /// Whether to enable TCP_NODELAY for reduced latency.
+    pub tcp_nodelay: bool,
+    /// Optional keepalive idle time. When `None`, keepalive is disabled.
+    pub tcp_keepalive: Option<std::time::Duration>,
+}
+
+impl Default for TcpConnectOptions {
+    fn default() -> Self {
+        Self {
+            proxy: ProxyPolicy::disabled(),
+            tcp_nodelay: true,
+            tcp_keepalive: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct Proxy {
     host: String,
@@ -469,24 +734,7 @@ struct Proxy {
     auth: Option<(String, String)>,
 }
 
-fn should_bypass_proxy(target_host: &str) -> bool {
-    let no_proxy = env::var("NO_PROXY")
-        .ok()
-        .or_else(|| env::var("no_proxy").ok());
-    if let Some(list) = no_proxy {
-        for entry in list.split(',').map(str::trim) {
-            if entry.is_empty() {
-                continue;
-            }
-            if target_host.ends_with(entry) {
-                return true;
-            }
-        }
-    }
-    false
-}
-
-fn parse_proxy_value(raw: &str) -> Option<Proxy> {
+fn parse_proxy_value(raw: &str) -> std::result::Result<Proxy, String> {
     let mut s = raw;
     if let Some(rest) = s.strip_prefix("http://") {
         s = rest;
@@ -505,56 +753,23 @@ fn parse_proxy_value(raw: &str) -> Option<Proxy> {
             auth = Some((user, pass));
         }
     }
-    let (host, port_str) = s.split_once(':')?;
-    let port: u16 = port_str.parse().ok()?;
-    Some(Proxy {
+    let (host, port_str) = s
+        .split_once(':')
+        .ok_or_else(|| "proxy URL missing port".to_string())?;
+    if host.is_empty() {
+        return Err("proxy URL missing host".to_string());
+    }
+    let port: u16 = port_str
+        .parse()
+        .map_err(|_| "proxy URL has invalid port".to_string())?;
+    Ok(Proxy {
         host: host.to_string(),
         port,
         auth,
     })
 }
 
-fn parse_proxy_var(var: &str) -> Option<Proxy> {
-    let raw = env::var(var).ok()?;
-    parse_proxy_value(&raw)
-}
-
-fn pick_proxy_for_target(target: &SocketAddr) -> Option<Proxy> {
-    // Resolve target host string for NO_PROXY checks
-    let host = match target {
-        SocketAddr::Host(h) => h.host.as_ref(),
-        SocketAddr::Ipv4(v4) => {
-            // Render IPv4 dotted quad
-            return if should_bypass_proxy(&format!(
-                "{}.{}.{}.{}",
-                v4.ip[0], v4.ip[1], v4.ip[2], v4.ip[3]
-            )) {
-                None
-            } else {
-                // Prefer HTTPS_PROXY, then HTTP_PROXY
-                parse_proxy_var("HTTPS_PROXY")
-                    .or_else(|| parse_proxy_var("https_proxy"))
-                    .or_else(|| parse_proxy_var("HTTP_PROXY"))
-                    .or_else(|| parse_proxy_var("http_proxy"))
-            };
-        }
-        SocketAddr::Ipv6(_v6) => {
-            // For NO_PROXY matching on IPv6, skip and rely on explicit NO_PROXY entries.
-            // Prefer HTTPS proxy if set.
-            return parse_proxy_var("HTTPS_PROXY")
-                .or_else(|| parse_proxy_var("https_proxy"))
-                .or_else(|| parse_proxy_var("HTTP_PROXY"))
-                .or_else(|| parse_proxy_var("http_proxy"));
-        }
-    };
-    if should_bypass_proxy(host) {
-        return None;
-    }
-    parse_proxy_var("HTTPS_PROXY")
-        .or_else(|| parse_proxy_var("https_proxy"))
-        .or_else(|| parse_proxy_var("HTTP_PROXY"))
-        .or_else(|| parse_proxy_var("http_proxy"))
-}
+// ---- TCP socket option helpers ----
 
 fn build_connect_request(target: &str, proxy: &Proxy) -> String {
     let mut headers =
@@ -578,9 +793,9 @@ fn build_connect_request(target: &str, proxy: &Proxy) -> String {
 /// # Errors
 ///
 /// Returns an `io::Error` if TCP connect fails, proxy handshake fails, or I/O operations error.
-pub async fn connect(addr: &SocketAddr) -> Result<TcpStream> {
+pub async fn connect(addr: &SocketAddr, opts: &TcpConnectOptions) -> Result<TcpStream> {
     // If a proxy is configured and the target is not in NO_PROXY, tunnel via HTTP CONNECT.
-    if let Some(proxy) = pick_proxy_for_target(addr) {
+    if let Some(proxy) = opts.proxy.pick_proxy_for_target(addr) {
         let mut stream = match TcpStream::connect(format!("{}:{}", proxy.host, proxy.port)).await {
             Ok(s) => s,
             Err(e) => {
@@ -594,6 +809,7 @@ pub async fn connect(addr: &SocketAddr) -> Result<TcpStream> {
                 return Err(e);
             }
         };
+        apply_tcp_socket_options(&stream, opts.tcp_nodelay, opts.tcp_keepalive);
         let target = addr.to_string();
         let req = build_connect_request(&target, &proxy);
         stream.write_all(req.as_bytes()).await?;
@@ -628,7 +844,10 @@ pub async fn connect(addr: &SocketAddr) -> Result<TcpStream> {
         Ok(stream)
     } else {
         match TcpStream::connect(addr.to_string()).await {
-            Ok(s) => Ok(s),
+            Ok(stream) => {
+                apply_tcp_socket_options(&stream, opts.tcp_nodelay, opts.tcp_keepalive);
+                Ok(stream)
+            }
             Err(e) => {
                 static DIRECT_CONNECT_SAMPLER: OnceLock<Mutex<LogSampler>> = OnceLock::new();
                 let sampler = DIRECT_CONNECT_SAMPLER.get_or_init(|| Mutex::new(LogSampler::new()));
@@ -641,6 +860,17 @@ pub async fn connect(addr: &SocketAddr) -> Result<TcpStream> {
             }
         }
     }
+}
+
+pub(crate) fn apply_tcp_socket_options(
+    stream: &TcpStream,
+    tcp_nodelay: bool,
+    tcp_keepalive: Option<std::time::Duration>,
+) {
+    let _ = stream.set_nodelay(tcp_nodelay);
+    // Keepalive tuning would require `unsafe`/platform-specific socket options.
+    // We intentionally keep the default TCP behavior in the safe Rust surface.
+    let _ = tcp_keepalive;
 }
 
 #[cfg(test)]

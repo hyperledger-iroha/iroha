@@ -80,8 +80,6 @@ fn run(args: Args) -> Result<()> {
     let fixtures_value: Value = json::from_str(&fixtures_text).context("invalid fixtures JSON")?;
     let raw_fixtures = parse_fixtures(&fixtures_value)?;
     let keypair = signing_keypair()?;
-    let (_, pk_bytes) = keypair.public_key().to_bytes();
-    let public_key_hex = hex::encode(pk_bytes);
 
     let check_hints = !args.write_fixtures;
     let mut fixtures = Vec::with_capacity(raw_fixtures.len());
@@ -105,7 +103,7 @@ fn run(args: Args) -> Result<()> {
     } else {
         args.out_dir.join(&args.manifest)
     };
-    let manifest_value = build_manifest(&fixtures, &public_key_hex);
+    let manifest_value = build_manifest(&fixtures);
     let manifest_json = json::to_json_pretty(&manifest_value).expect("manifest serialization");
     fs::write(&manifest_path, format!("{manifest_json}\n"))
         .with_context(|| format!("failed to write {}", manifest_path.display()))?;

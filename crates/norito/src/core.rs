@@ -1922,11 +1922,30 @@ where
         let mut out = Vec::new();
         out.try_reserve(len).map_err(|_| Error::LengthMismatch)?;
         if use_packed_seq() {
-            let header = bytes.get(offset..).ok_or(Error::LengthMismatch)?;
-            let (offsets, header_used, data_len, tail_len) =
-                decode_packed_offsets_slice(header, len)?;
+            // Avoid allocating the offsets vector by streaming offsets directly.
+            let entries = len.checked_add(1).ok_or(Error::LengthMismatch)?;
+            let header_bytes = entries.checked_mul(8).ok_or(Error::LengthMismatch)?;
+            let offsets_slice = bytes
+                .get(offset..)
+                .and_then(|slice| slice.get(..header_bytes))
+                .ok_or(Error::LengthMismatch)?;
+
+            let mut buf = [0u8; 8];
+            buf.copy_from_slice(&offsets_slice[..8]);
+            if u64::from_le_bytes(buf) != 0 {
+                return Err(Error::LengthMismatch);
+            }
+
+            let last_off_pos = header_bytes.checked_sub(8).ok_or(Error::LengthMismatch)?;
+            buf.copy_from_slice(
+                offsets_slice
+                    .get(last_off_pos..last_off_pos + 8)
+                    .ok_or(Error::LengthMismatch)?,
+            );
+            let data_len = len_u64_to_usize(u64::from_le_bytes(buf))?;
+
             offset = offset
-                .checked_add(header_used)
+                .checked_add(header_bytes)
                 .ok_or(Error::LengthMismatch)?;
             let data_start = offset;
             let data_end = data_start
@@ -1935,13 +1954,25 @@ where
             if data_end > bytes.len() {
                 return Err(Error::LengthMismatch);
             }
-            for window in offsets.windows(2) {
-                let start = data_start
-                    .checked_add(window[0])
+
+            let mut prev = 0usize;
+            for idx in 0..len {
+                let next_pos = idx
+                    .checked_add(1)
+                    .and_then(|v| v.checked_mul(8))
                     .ok_or(Error::LengthMismatch)?;
-                let end = data_start
-                    .checked_add(window[1])
-                    .ok_or(Error::LengthMismatch)?;
+                buf.copy_from_slice(
+                    offsets_slice
+                        .get(next_pos..next_pos + 8)
+                        .ok_or(Error::LengthMismatch)?,
+                );
+                let next = len_u64_to_usize(u64::from_le_bytes(buf))?;
+                if next < prev {
+                    return Err(Error::LengthMismatch);
+                }
+
+                let start = data_start.checked_add(prev).ok_or(Error::LengthMismatch)?;
+                let end = data_start.checked_add(next).ok_or(Error::LengthMismatch)?;
                 if end > data_end || start > end {
                     return Err(Error::LengthMismatch);
                 }
@@ -1953,16 +1984,12 @@ where
                     return Err(Error::LengthMismatch);
                 }
                 out.push(value);
+                prev = next;
             }
-            offset = data_end;
-            if tail_len != 0 {
-                let tail_end = offset.checked_add(tail_len).ok_or(Error::LengthMismatch)?;
-                if tail_end > bytes.len() {
-                    return Err(Error::LengthMismatch);
-                }
-                offset = tail_end;
+            if prev != data_len {
+                return Err(Error::LengthMismatch);
             }
-            return Ok((out, offset));
+            return Ok((out, data_end));
         }
         for _ in 0..len {
             let (elem_len, header_len) = read_len_dyn_slice(&bytes[offset..])?;

@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
+import re
 import subprocess
 import tempfile
 import threading
@@ -130,6 +132,27 @@ def count_rate_limit_hits(output: str) -> int:
     hits = output.count("status: 429")
     hits += output.lower().count("too many requests")
     return hits
+
+
+PING_SUBMIT_RE = re.compile(r"Submitted\s+(?P<submitted>\d+)\s*/\s*(?P<attempted>\d+)\s+ping transactions", re.IGNORECASE)
+
+
+def parse_ping_submitted(output: str) -> Optional[tuple[int, int]]:
+    """Return (submitted, attempted) for `iroha ledger transaction ping` output."""
+    if not output:
+        return None
+    last = None
+    for line in output.splitlines():
+        match = PING_SUBMIT_RE.search(line)
+        if not match:
+            continue
+        try:
+            submitted = int(match.group("submitted"))
+            attempted = int(match.group("attempted"))
+        except (TypeError, ValueError):
+            continue
+        last = (submitted, attempted)
+    return last
 
 
 def main() -> int:
@@ -449,12 +472,12 @@ def main() -> int:
         timed_out = False
         start = time.monotonic()
 
-        def run_batch(batch_count: int) -> subprocess.CompletedProcess[str]:
+        def run_batch(batch_count: int, parallel: int) -> subprocess.CompletedProcess[str]:
             cmd = ping_cmd + [
                 "--count",
                 str(batch_count),
                 "--parallel",
-                str(shard.parallel),
+                str(parallel),
             ]
             timeout = None if args.cli_timeout <= 0 else args.cli_timeout
             try:
@@ -483,28 +506,79 @@ def main() -> int:
                     stderr=stderr,
                 )
 
+        def extract_submitted(
+            combined_output: str,
+            attempted: int,
+            returncode: int,
+        ) -> int:
+            parsed = parse_ping_submitted(combined_output)
+            if parsed is not None:
+                submitted_count, attempted_count = parsed
+                # Trust the CLI when present, but keep it within reasonable bounds.
+                if attempted_count > 0:
+                    return max(0, min(submitted_count, attempted_count))
+            if returncode == 0:
+                return attempted
+            return 0
+
         if shard.batch_size > 0 and shard.batch_interval > 0:
-            remaining = shard.count
-            while remaining > 0:
+            parallel = shard.parallel
+            attempted = 0
+            planned_batches = int(math.ceil(shard.count / shard.batch_size))
+            while attempted < shard.count:
                 if not wait_for_queue(shard):
                     returncode = 2
                     break
-                batch = min(shard.batch_size, remaining)
+                batch = min(shard.batch_size, shard.count - attempted)
+                attempted += batch
                 batch_start = time.monotonic()
-                result = run_batch(batch)
-                stdout_chunks.append(result.stdout or "")
-                stderr_chunks.append(result.stderr or "")
-                combined = (result.stdout or "") + (result.stderr or "")
-                rate_limit_hits += count_rate_limit_hits(combined)
-                if result.returncode != 0:
-                    if result.returncode == 124:
-                        timed_out = True
+                result = run_batch(batch, parallel)
+                stdout = result.stdout or ""
+                stderr = result.stderr or ""
+                stdout_chunks.append(stdout)
+                stderr_chunks.append(stderr)
+                combined = stdout + stderr
+                batch_rate_limits = count_rate_limit_hits(combined)
+                rate_limit_hits += batch_rate_limits
+                batch_submitted = extract_submitted(combined, batch, result.returncode)
+                submitted += batch_submitted
+                if result.returncode == 124:
+                    timed_out = True
+                if returncode == 0 and result.returncode != 0:
                     returncode = result.returncode
-                    break
-                submitted += batch
-                remaining -= batch
-                if remaining <= 0:
-                    break
+
+                missing = batch - batch_submitted
+                if (
+                    missing > 0
+                    and batch_rate_limits == 0
+                    and result.returncode not in (124, 2)
+                    and parallel > 1
+                ):
+                    retry_parallel = max(1, parallel // 2)
+                    retry = run_batch(missing, retry_parallel)
+                    r_stdout = retry.stdout or ""
+                    r_stderr = retry.stderr or ""
+                    stdout_chunks.append(r_stdout)
+                    stderr_chunks.append(r_stderr)
+                    r_combined = r_stdout + r_stderr
+                    r_limits = count_rate_limit_hits(r_combined)
+                    rate_limit_hits += r_limits
+                    r_submitted = extract_submitted(r_combined, missing, retry.returncode)
+                    submitted += r_submitted
+                    missing -= r_submitted
+                    if retry.returncode == 124:
+                        timed_out = True
+                    if returncode == 0 and retry.returncode != 0:
+                        returncode = retry.returncode
+                    # If the retry also fails, reduce parallelism for subsequent batches.
+                    if missing > 0 and retry_parallel > 1:
+                        parallel = retry_parallel
+
+                if missing > 0 and planned_batches > 0:
+                    # We do not extend the run; load windows are time-based. Missing txs stay
+                    # missing to avoid turning perf runs into multi-hour retries.
+                    pass
+
                 elapsed = time.monotonic() - batch_start
                 sleep_for = shard.batch_interval - elapsed
                 if sleep_for > 0:
@@ -513,16 +587,39 @@ def main() -> int:
             if not wait_for_queue(shard):
                 returncode = 2
             else:
-                result = run_batch(shard.count)
-                stdout_chunks.append(result.stdout or "")
-                stderr_chunks.append(result.stderr or "")
-                combined = (result.stdout or "") + (result.stderr or "")
-                rate_limit_hits += count_rate_limit_hits(combined)
+                parallel = shard.parallel
+                result = run_batch(shard.count, parallel)
+                stdout = result.stdout or ""
+                stderr = result.stderr or ""
+                stdout_chunks.append(stdout)
+                stderr_chunks.append(stderr)
+                combined = stdout + stderr
+                batch_rate_limits = count_rate_limit_hits(combined)
+                rate_limit_hits += batch_rate_limits
                 returncode = result.returncode
-                if returncode == 0:
-                    submitted = shard.count
-                elif returncode == 124:
+                submitted = extract_submitted(combined, shard.count, result.returncode)
+                if result.returncode == 124:
                     timed_out = True
+                missing = shard.count - submitted
+                if (
+                    missing > 0
+                    and batch_rate_limits == 0
+                    and result.returncode not in (124, 2)
+                    and parallel > 1
+                ):
+                    retry_parallel = max(1, parallel // 2)
+                    retry = run_batch(missing, retry_parallel)
+                    r_stdout = retry.stdout or ""
+                    r_stderr = retry.stderr or ""
+                    stdout_chunks.append(r_stdout)
+                    stderr_chunks.append(r_stderr)
+                    r_combined = r_stdout + r_stderr
+                    rate_limit_hits += count_rate_limit_hits(r_combined)
+                    submitted += extract_submitted(r_combined, missing, retry.returncode)
+                    if retry.returncode == 124:
+                        timed_out = True
+                    if returncode == 0 and retry.returncode != 0:
+                        returncode = retry.returncode
 
         elapsed = time.monotonic() - start
         return LoadShardResult(
