@@ -698,6 +698,29 @@ impl IntoResponse for SnsError {
     }
 }
 
+fn metric_suffix_from_literal(selector_literal: &str) -> String {
+    selector_literal
+        .trim()
+        .rsplit_once('.')
+        .map(|(_, suffix)| suffix.trim().to_ascii_lowercase())
+        .filter(|suffix| !suffix.is_empty())
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+fn metric_suffix_from_suffix_id(registry: &Registry, suffix_id: SuffixId) -> String {
+    registry
+        .policy(suffix_id)
+        .map(|policy| policy.suffix_key())
+        .unwrap_or_else(|_| suffix_id.to_string())
+}
+
+fn record_registrar_status<T>(app: &SharedAppState, suffix: &str, outcome: &Result<T, SnsError>) {
+    let result = if outcome.is_ok() { "ok" } else { "error" };
+    app.telemetry.with_metrics(|telemetry| {
+        telemetry.inc_sns_registrar_status(result, suffix);
+    });
+}
+
 /// Handle `POST /v1/sns/registrations`.
 #[axum::debug_handler(state = SharedAppState)]
 pub async fn handle_register(
@@ -705,7 +728,10 @@ pub async fn handle_register(
     crate::JsonOnly(request): crate::JsonOnly<RegisterNameRequestV1>,
 ) -> Result<impl IntoResponse, SnsError> {
     let registry = app.sns_registry.as_ref();
-    let record = registry.register(request)?;
+    let suffix = metric_suffix_from_suffix_id(registry, request.selector.suffix_id);
+    let outcome = registry.register(request);
+    record_registrar_status(&app, &suffix, &outcome);
+    let record = outcome?;
     Ok((
         StatusCode::CREATED,
         JsonBody(RegisterNameResponseV1 {
@@ -731,7 +757,10 @@ pub async fn handle_renew_registration(
     crate::JsonOnly(request): crate::JsonOnly<RenewNameRequestV1>,
 ) -> Result<impl IntoResponse, SnsError> {
     let registry = app.sns_registry.as_ref();
-    let record = registry.renew(&selector, request)?;
+    let suffix = metric_suffix_from_literal(&selector);
+    let outcome = registry.renew(&selector, request);
+    record_registrar_status(&app, &suffix, &outcome);
+    let record = outcome?;
     Ok(JsonBody(record))
 }
 
@@ -742,7 +771,10 @@ pub async fn handle_transfer_registration(
     crate::JsonOnly(request): crate::JsonOnly<TransferNameRequestV1>,
 ) -> Result<impl IntoResponse, SnsError> {
     let registry = app.sns_registry.as_ref();
-    let record = registry.transfer(&selector, request)?;
+    let suffix = metric_suffix_from_literal(&selector);
+    let outcome = registry.transfer(&selector, request);
+    record_registrar_status(&app, &suffix, &outcome);
+    let record = outcome?;
     Ok(JsonBody(record))
 }
 
@@ -753,7 +785,10 @@ pub async fn handle_update_controllers(
     crate::JsonOnly(request): crate::JsonOnly<UpdateControllersRequestV1>,
 ) -> Result<impl IntoResponse, SnsError> {
     let registry = app.sns_registry.as_ref();
-    let record = registry.update_controllers(&selector, request)?;
+    let suffix = metric_suffix_from_literal(&selector);
+    let outcome = registry.update_controllers(&selector, request);
+    record_registrar_status(&app, &suffix, &outcome);
+    let record = outcome?;
     Ok(JsonBody(record))
 }
 
@@ -764,7 +799,10 @@ pub async fn handle_freeze_registration(
     crate::JsonOnly(request): crate::JsonOnly<FreezeNameRequestV1>,
 ) -> Result<impl IntoResponse, SnsError> {
     let registry = app.sns_registry.as_ref();
-    let record = registry.freeze(&selector, request)?;
+    let suffix = metric_suffix_from_literal(&selector);
+    let outcome = registry.freeze(&selector, request);
+    record_registrar_status(&app, &suffix, &outcome);
+    let record = outcome?;
     Ok(JsonBody(record))
 }
 
@@ -775,7 +813,10 @@ pub async fn handle_unfreeze_registration(
     crate::JsonOnly(governance): crate::JsonOnly<GovernanceHookV1>,
 ) -> Result<impl IntoResponse, SnsError> {
     let registry = app.sns_registry.as_ref();
-    let record = registry.unfreeze(&selector, governance)?;
+    let suffix = metric_suffix_from_literal(&selector);
+    let outcome = registry.unfreeze(&selector, governance);
+    record_registrar_status(&app, &suffix, &outcome);
+    let record = outcome?;
     Ok(JsonBody(record))
 }
 

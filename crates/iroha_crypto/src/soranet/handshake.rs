@@ -586,6 +586,28 @@ fn negotiate_handshake_suite(
     }
 }
 
+fn negotiate_handshake_suite_with_telemetry(
+    client_caps: &[CapabilityTlv],
+    relay_caps: &[CapabilityTlv],
+    kem_id: u8,
+    sig_id: u8,
+) -> Result<HandshakeSuiteNegotiation, HarnessError> {
+    negotiate_handshake_suite(client_caps, relay_caps).map_err(|error| match error {
+        HarnessError::Downgrade {
+            warnings,
+            telemetry,
+        } => {
+            let telemetry =
+                telemetry.or_else(|| build_telemetry_payload(kem_id, sig_id, &warnings).ok());
+            HarnessError::Downgrade {
+                warnings,
+                telemetry,
+            }
+        }
+        other => other,
+    })
+}
+
 fn encode_signature(prefix: &str, bytes: &[u8]) -> String {
     let encoded_len = 4 * bytes.len().div_ceil(3);
     let mut buffer = vec![0u8; encoded_len];
@@ -1222,7 +1244,12 @@ pub fn simulate_handshake(params: &SimulationParams<'_>) -> Result<SimulationRes
     let HandshakeSuiteNegotiation {
         selected: handshake_suite,
         mut warnings,
-    } = negotiate_handshake_suite(&client_caps, &relay_caps)?;
+    } = negotiate_handshake_suite_with_telemetry(
+        &client_caps,
+        &relay_caps,
+        params.kem_id,
+        params.sig_id,
+    )?;
     warnings.extend(diff_capabilities(&client_caps, &relay_caps));
 
     let client_static = validate_static_key("client", params.client_static_sk)?;
@@ -2238,7 +2265,12 @@ fn prepare_capability_context(spec: &InteropSpec) -> Result<CapabilityContext, H
     let HandshakeSuiteNegotiation {
         selected,
         mut warnings,
-    } = negotiate_handshake_suite(&client_tlvs, &relay_tlvs)?;
+    } = negotiate_handshake_suite_with_telemetry(
+        &client_tlvs,
+        &relay_tlvs,
+        spec.kem_id,
+        spec.sig_id,
+    )?;
     if selected != spec.suite {
         return Err(HarnessError::Validation(format!(
             "interop spec {} expected {}, negotiated {}",
@@ -3403,7 +3435,7 @@ fn handle_nk2_client_finish(
     let HandshakeSuiteNegotiation {
         selected,
         mut warnings,
-    } = negotiate_handshake_suite(&client_caps, &relay_caps)?;
+    } = negotiate_handshake_suite_with_telemetry(&client_caps, &relay_caps, kem_id, sig_id)?;
     warnings.extend(diff_capabilities(&client_caps, &relay_caps));
     if selected != HandshakeSuite::Nk2Hybrid {
         warnings.push(suite_warning(format!(
@@ -3481,7 +3513,7 @@ fn ensure_nk3_negotiation(
     let HandshakeSuiteNegotiation {
         selected,
         mut warnings,
-    } = negotiate_handshake_suite(&client_caps, &relay_caps)?;
+    } = negotiate_handshake_suite_with_telemetry(&client_caps, &relay_caps, kem_id, sig_id)?;
     warnings.extend(diff_capabilities(&client_caps, &relay_caps));
     if selected != HandshakeSuite::Nk3PqForwardSecure {
         warnings.push(suite_warning(format!(
@@ -3947,7 +3979,7 @@ fn verify_capabilities_alignment(
     let HandshakeSuiteNegotiation {
         selected,
         mut warnings,
-    } = negotiate_handshake_suite(&client_caps, &relay_caps)?;
+    } = negotiate_handshake_suite_with_telemetry(&client_caps, &relay_caps, kem_id, sig_id)?;
     warnings.extend(diff_capabilities(&client_caps, &relay_caps));
     if warnings.is_empty() {
         Ok((selected, warnings))
@@ -6180,11 +6212,19 @@ mod tests {
         .expect("simulate");
 
         let json = simulation_report_json(&result, None).expect("json");
-        assert!(json.contains(r#""transcript_hash_hex": "fd92a86d""#));
-        assert!(json.contains(r#""handshake_suite": "nk2.hybrid""#));
-        assert!(json.contains(r#""client_capabilities""#));
-        assert!(json.contains(r#""relay_capabilities""#));
-        assert!(json.contains(r#""handshake_steps""#));
+        let value: Value = norito::json::from_str(&json).expect("json parse");
+        let transcript_hash = value
+            .get("transcript_hash_hex")
+            .and_then(Value::as_str)
+            .expect("transcript hash");
+        assert!(transcript_hash.starts_with("fd92a86d"));
+        assert_eq!(
+            value.get("handshake_suite").and_then(Value::as_str),
+            Some("nk2.hybrid")
+        );
+        assert!(value.get("client_capabilities").is_some());
+        assert!(value.get("relay_capabilities").is_some());
+        assert!(value.get("handshake_steps").is_some());
     }
 
     #[test]

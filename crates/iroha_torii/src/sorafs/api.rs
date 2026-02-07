@@ -2071,7 +2071,12 @@ pub(crate) async fn handle_get_sorafs_storage_manifest(
         return storage_disabled_response();
     }
 
-    let stored = match state.sorafs_node.manifest_metadata(&manifest_id_hex) {
+    let storage_manifest_id = match resolve_manifest_storage_id(&state, &manifest_id_hex) {
+        Ok(manifest_id) => manifest_id,
+        Err(response) => return response,
+    };
+
+    let stored = match state.sorafs_node.manifest_metadata(&storage_manifest_id) {
         Ok(manifest) => manifest,
         Err(err) => return node_storage_error_response(err),
     };
@@ -2131,7 +2136,12 @@ pub(crate) async fn handle_get_sorafs_storage_plan(
         return storage_disabled_response();
     }
 
-    let stored = match state.sorafs_node.manifest_metadata(&manifest_id_hex) {
+    let storage_manifest_id = match resolve_manifest_storage_id(&state, &manifest_id_hex) {
+        Ok(manifest_id) => manifest_id,
+        Err(response) => return response,
+    };
+
+    let stored = match state.sorafs_node.manifest_metadata(&storage_manifest_id) {
         Ok(manifest) => manifest,
         Err(err) => return node_storage_error_response(err),
     };
@@ -2815,19 +2825,18 @@ pub(crate) async fn handle_post_sorafs_storage_pin(
     };
 
     let mut reader = &payload[..];
-    let manifest_id = match state.sorafs_node.ingest_manifest_with_layout(
+    if let Err(err) = state.sorafs_node.ingest_manifest_with_layout(
         &manifest,
         &plan,
         &mut reader,
         stripe_layout,
         chunk_roles,
     ) {
-        Ok(id) => id,
-        Err(err) => return node_storage_error_response(err),
-    };
+        return node_storage_error_response(err);
+    }
 
     let response = StoragePinResponseDto {
-        manifest_id_hex: manifest_id,
+        manifest_id_hex: hex::encode(&manifest.root_cid),
         payload_digest_hex: hex::encode(plan.payload_digest.as_bytes()),
         content_length: plan.content_length,
     };
@@ -2858,7 +2867,12 @@ pub(crate) async fn handle_post_sorafs_storage_fetch(
         );
     }
 
-    let manifest = match state.sorafs_node.manifest_metadata(&req.manifest_id_hex) {
+    let storage_manifest_id = match resolve_manifest_storage_id(&state, &req.manifest_id_hex) {
+        Ok(manifest_id) => manifest_id,
+        Err(response) => return response,
+    };
+
+    let manifest = match state.sorafs_node.manifest_metadata(&storage_manifest_id) {
         Ok(manifest) => manifest,
         Err(err) => return node_storage_error_response(err),
     };
@@ -2914,7 +2928,7 @@ pub(crate) async fn handle_post_sorafs_storage_fetch(
     let length = req.length as usize;
     let data = match state
         .sorafs_node
-        .read_payload_range(&req.manifest_id_hex, req.offset, length)
+        .read_payload_range(&storage_manifest_id, req.offset, length)
     {
         Ok(bytes) => bytes,
         Err(err) => return node_storage_error_response(err),
@@ -2985,7 +2999,12 @@ pub(crate) async fn handle_post_sorafs_storage_token(
         None => return json_error(StatusCode::BAD_REQUEST, "missing X-SoraFS-Nonce header"),
     };
 
-    let manifest = match state.sorafs_node.manifest_metadata(&req.manifest_id_hex) {
+    let storage_manifest_id = match resolve_manifest_storage_id(&state, &req.manifest_id_hex) {
+        Ok(manifest_id) => manifest_id,
+        Err(response) => return response,
+    };
+
+    let manifest = match state.sorafs_node.manifest_metadata(&storage_manifest_id) {
         Ok(manifest) => manifest,
         Err(err) => return node_storage_error_response(err),
     };
@@ -3607,6 +3626,46 @@ fn resolve_manifest_request(
         manifest_id,
         blinded_b64: Some(trimmed.to_owned()),
     })
+}
+
+fn resolve_manifest_storage_id(
+    state: &SharedAppState,
+    manifest_reference: &str,
+) -> Result<String, Response> {
+    let reference = manifest_reference.trim();
+    if reference.is_empty() {
+        return Err(json_error(
+            StatusCode::BAD_REQUEST,
+            "manifest_id_hex must not be empty",
+        ));
+    }
+
+    let storage = state
+        .sorafs_node
+        .storage()
+        .ok_or_else(storage_disabled_response)?;
+    let manifests = storage.manifests();
+
+    if let Some(stored) = manifests
+        .iter()
+        .find(|stored| stored.manifest_id().eq_ignore_ascii_case(reference))
+    {
+        return Ok(stored.manifest_id().to_owned());
+    }
+
+    if let Ok(cid_bytes) = hex::decode(reference)
+        && let Some(stored) = manifests
+            .iter()
+            .find(|stored| stored.manifest_cid() == cid_bytes.as_slice())
+    {
+        return Ok(stored.manifest_id().to_owned());
+    }
+
+    Err(storage_backend_error(
+        StorageBackendError::ManifestNotFound {
+            manifest_id: reference.to_owned(),
+        },
+    ))
 }
 
 fn gateway_client_fingerprint(remote: SocketAddr, headers: &HeaderMap) -> ClientFingerprint {
@@ -4342,6 +4401,10 @@ pub(crate) async fn handle_get_sorafs_storage_car_range(
         Err(response) => return response,
     };
     let manifest_id_hex = manifest_id;
+    let storage_manifest_id = match resolve_manifest_storage_id(&state, &manifest_id_hex) {
+        Ok(manifest_id) => manifest_id,
+        Err(response) => return response,
+    };
 
     let request_timer = Instant::now();
     let request_wall_start = SystemTime::now();
@@ -4359,7 +4422,7 @@ pub(crate) async fn handle_get_sorafs_storage_car_range(
         Err(_) => return json_error(StatusCode::BAD_REQUEST, "Range header must be valid ASCII"),
     };
 
-    let manifest = match state.sorafs_node.manifest_metadata(&manifest_id_hex) {
+    let manifest = match state.sorafs_node.manifest_metadata(&storage_manifest_id) {
         Ok(manifest) => manifest,
         Err(err) => return node_storage_error_response(err),
     };
@@ -4440,7 +4503,7 @@ pub(crate) async fn handle_get_sorafs_storage_car_range(
         None => return json_error(StatusCode::BAD_REQUEST, "missing X-SoraFS-Chunker header"),
     };
 
-    let manifest = match state.sorafs_node.manifest_metadata(&manifest_id_hex) {
+    let manifest = match state.sorafs_node.manifest_metadata(&storage_manifest_id) {
         Ok(manifest) => manifest,
         Err(err) => return node_storage_error_response(err),
     };
@@ -4652,7 +4715,7 @@ pub(crate) async fn handle_get_sorafs_storage_car_range(
     };
 
     let range_payload = match state.sorafs_node.read_payload_range(
-        &manifest_id_hex,
+        &storage_manifest_id,
         byte_range.start,
         length as usize,
     ) {
@@ -4813,9 +4876,10 @@ pub(crate) async fn handle_get_sorafs_storage_car_range(
             header_value(blinded_value, "Sora-Req-Blinded-CID"),
         );
     }
+    let manifest_content_cid_hex = hex::encode(manifest.manifest_cid());
     response_headers.insert(
         HeaderName::from_static(HEADER_SORA_CONTENT_CID),
-        header_value(&manifest_id_hex, "Sora-Content-CID"),
+        header_value(&manifest_content_cid_hex, "Sora-Content-CID"),
     );
 
     let response_status = StatusCode::PARTIAL_CONTENT;
@@ -4919,6 +4983,10 @@ pub(crate) async fn handle_get_sorafs_storage_chunk(
         Err(response) => return response,
     };
     let manifest_id_hex = manifest_id;
+    let storage_manifest_id = match resolve_manifest_storage_id(&state, &manifest_id_hex) {
+        Ok(manifest_id) => manifest_id,
+        Err(response) => return response,
+    };
 
     let request_timer = Instant::now();
     let request_wall_start = SystemTime::now();
@@ -4932,7 +5000,7 @@ pub(crate) async fn handle_get_sorafs_storage_chunk(
         None => return json_error(StatusCode::BAD_REQUEST, "missing X-SoraFS-Nonce header"),
     };
 
-    let manifest = match state.sorafs_node.manifest_metadata(&manifest_id_hex) {
+    let manifest = match state.sorafs_node.manifest_metadata(&storage_manifest_id) {
         Ok(manifest) => manifest,
         Err(err) => return node_storage_error_response(err),
     };
@@ -4979,7 +5047,10 @@ pub(crate) async fn handle_get_sorafs_storage_chunk(
         Err(message) => return json_error(StatusCode::BAD_REQUEST, message),
     };
 
-    let record = match state.sorafs_node.chunk_by_digest(&manifest_id_hex, &digest) {
+    let record = match state
+        .sorafs_node
+        .chunk_by_digest(&storage_manifest_id, &digest)
+    {
         Ok(record) => record,
         Err(err) => return node_storage_error_response(err),
     };
@@ -5035,7 +5106,7 @@ pub(crate) async fn handle_get_sorafs_storage_chunk(
 
     let (_, bytes) = match state
         .sorafs_node
-        .read_chunk_by_digest(&manifest_id_hex, &digest)
+        .read_chunk_by_digest(&storage_manifest_id, &digest)
     {
         Ok(result) => result,
         Err(err) => return node_storage_error_response(err),
@@ -5090,9 +5161,10 @@ pub(crate) async fn handle_get_sorafs_storage_chunk(
             header_value(blinded_value, "Sora-Req-Blinded-CID"),
         );
     }
+    let manifest_content_cid_hex = hex::encode(manifest.manifest_cid());
     response_headers.insert(
         HeaderName::from_static(HEADER_SORA_CONTENT_CID),
-        header_value(&manifest_id_hex, "Sora-Content-CID"),
+        header_value(&manifest_content_cid_hex, "Sora-Content-CID"),
     );
 
     let response_status = StatusCode::OK;
@@ -5198,7 +5270,12 @@ pub(crate) async fn handle_post_sorafs_storage_por_sample(
         );
     }
 
-    let manifest = match state.sorafs_node.manifest_metadata(&req.manifest_id_hex) {
+    let storage_manifest_id = match resolve_manifest_storage_id(&state, &req.manifest_id_hex) {
+        Ok(manifest_id) => manifest_id,
+        Err(response) => return response,
+    };
+
+    let manifest = match state.sorafs_node.manifest_metadata(&storage_manifest_id) {
         Ok(manifest) => manifest,
         Err(err) => return node_storage_error_response(err),
     };
@@ -5216,7 +5293,7 @@ pub(crate) async fn handle_post_sorafs_storage_por_sample(
 
     let samples = match state
         .sorafs_node
-        .sample_por(&req.manifest_id_hex, count, seed)
+        .sample_por(&storage_manifest_id, count, seed)
     {
         Ok(samples) => samples,
         Err(err) => return node_storage_error_response(err),
@@ -5361,7 +5438,7 @@ pub(crate) async fn handle_post_sorafs_proof_stream(
             let start = Instant::now();
             let samples = match state
                 .sorafs_node
-                .sample_por(&manifest_root_cid_hex, count, seed)
+                .sample_por(manifest.manifest_id(), count, seed)
             {
                 Ok(samples) => samples,
                 Err(err) => {
@@ -10184,10 +10261,17 @@ mod advert_tests {
             .and_then(Value::as_str)
             .expect("manifest id")
             .to_string();
+        assert_eq!(
+            manifest_id_hex,
+            hex::encode(&manifest.root_cid),
+            "pin response should expose the manifest root CID"
+        );
+        let storage_manifest_id = resolve_manifest_storage_id(&state, &manifest_id_hex)
+            .expect("resolve storage manifest id");
 
         let stored = state
             .sorafs_node
-            .manifest_metadata(&manifest_id_hex)
+            .manifest_metadata(&storage_manifest_id)
             .expect("stored manifest");
         assert_eq!(stored.stripe_layout(), Some(&stripe_layout));
         for (idx, role) in chunk_roles.iter().enumerate() {
@@ -10989,12 +11073,13 @@ mod advert_tests {
             "unexpected TLS state header: {tls_state}"
         );
 
+        let expected_content_cid_hex = hex::encode(manifest.manifest_cid());
         assert_eq!(
             headers
                 .get(HeaderName::from_static(HEADER_SORA_CONTENT_CID))
                 .and_then(|value| value.to_str().ok()),
-            Some(context.manifest_id_hex.as_str()),
-            "Sora-Content-CID must match manifest id"
+            Some(expected_content_cid_hex.as_str()),
+            "Sora-Content-CID must match manifest root CID"
         );
     }
 

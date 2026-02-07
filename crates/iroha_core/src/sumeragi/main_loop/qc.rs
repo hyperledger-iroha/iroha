@@ -118,10 +118,22 @@ impl Actor {
             return false;
         }
         let needs_validation = match self.pending.pending_blocks.get(&hash) {
-            Some(pending) => {
-                !pending.aborted && pending.validation_status == ValidationStatus::Pending
+            Some(pending)
+                if !pending.aborted && pending.validation_status == ValidationStatus::Pending =>
+            {
+                let (state_height, tip_hash) = {
+                    let view = self.state.view();
+                    (view.height(), view.latest_block_hash())
+                };
+                pending_extends_tip(
+                    pending.height,
+                    pending.block.header().prev_block_hash(),
+                    state_height,
+                    tip_hash,
+                )
             }
             None => return false,
+            Some(_) => false,
         };
         if !needs_validation {
             return false;
@@ -1080,6 +1092,16 @@ impl Actor {
         let allow_broadcast = !self.is_observer();
         let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(height);
         let signature_topology = topology_for_view(topology, height, view, mode_tag, prf_seed);
+        let canonical_roster = if matches!(phase, crate::sumeragi::consensus::Phase::NewView) {
+            self.roster_for_new_view_with_mode(block_hash, height, view, consensus_mode)
+        } else {
+            self.roster_for_vote_with_mode(block_hash, height, view, consensus_mode)
+        };
+        let canonical_topology = if canonical_roster.is_empty() {
+            topology.clone()
+        } else {
+            super::network_topology::Topology::new(canonical_roster)
+        };
         let required = signature_topology.min_votes_for_commit();
         let voting_len = signature_topology.as_ref().len();
         if let Some(existing) = self.qc_cache.get(&(phase, block_hash, height, view, epoch)) {
@@ -1291,7 +1313,7 @@ impl Actor {
         let canonical_signers = super::normalize_signer_indices_to_canonical(
             &snapshot.signers,
             &signature_topology,
-            topology,
+            &canonical_topology,
         );
         if canonical_signers.len() != snapshot.signers.len() {
             warn!(
@@ -1332,7 +1354,7 @@ impl Actor {
                 highest_qc,
             },
             &canonical_signers,
-            topology,
+            &canonical_topology,
             aggregate_signature,
             roots,
         );
@@ -2629,9 +2651,9 @@ impl Actor {
             missing_votes,
             present_signers,
         } = validation;
-        debug_assert_eq!(
-            missing_votes, 0,
-            "QC validation should fail when votes are missing"
+        debug_assert!(
+            missing_votes == 0 || matches!(consensus_mode, ConsensusMode::Npos),
+            "QC validation should fail when votes are missing in permissioned mode"
         );
         if matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit) {
             let signer_set: BTreeSet<_> = signer_indices.iter().copied().collect();
@@ -2720,7 +2742,18 @@ impl Actor {
                     );
                     self.state
                         .record_commit_roster(&qc, &checkpoint, stake_snapshot);
+                    super::status::record_commit_qc(qc.clone());
                 }
+                self.qc_cache.insert(
+                    (
+                        qc.phase,
+                        qc.subject_block_hash,
+                        qc.height,
+                        qc.view,
+                        qc.epoch,
+                    ),
+                    qc.clone(),
+                );
                 return Ok(());
             }
             CommittedQcDecision::Drop => return Ok(()),

@@ -32,7 +32,29 @@ const tryItAllowDefaultBearer = process.env.DOCS_TRYIT_ALLOW_DEFAULT_BEARER === 
 const includeStubLocales = process.env.DOCS_I18N_INCLUDE_STUBS === '1';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const allLocales = ['en', 'ja', 'he', 'es', 'pt', 'fr', 'ru', 'ar', 'ur'];
+const allLocales = [
+  'en',
+  'ja',
+  'he',
+  'es',
+  'pt',
+  'fr',
+  'ru',
+  'ar',
+  'ur',
+  'my',
+  'ka',
+  'hy',
+  'az',
+  'kk',
+  'ba',
+  'am',
+  'dz',
+  'uz',
+  'mn',
+  'zh-hant',
+  'zh-hans',
+];
 const publishedLocalesPath = path.resolve(__dirname, '..', 'i18n', 'published_locales.json');
 
 function loadPublishedLocales(filePath, knownLocales) {
@@ -133,6 +155,42 @@ const config = {
         ur: {
           label: 'اردو',
           direction: 'rtl'
+        },
+        my: {
+          label: 'မြန်မာ'
+        },
+        ka: {
+          label: 'ქართული'
+        },
+        hy: {
+          label: 'Հայերեն'
+        },
+        az: {
+          label: 'Azərbaycan dili'
+        },
+        kk: {
+          label: 'Қазақ тілі'
+        },
+        ba: {
+          label: 'Башҡорт теле'
+        },
+        am: {
+          label: 'አማርኛ'
+        },
+        dz: {
+          label: 'རྫོང་ཁ'
+        },
+        uz: {
+          label: 'Oʻzbekcha'
+        },
+        mn: {
+          label: 'Монгол'
+        },
+        'zh-hant': {
+          label: '繁體中文'
+        },
+        'zh-hans': {
+          label: '简体中文'
         }
       }).filter(([code]) => activeLocales.includes(code))
     )

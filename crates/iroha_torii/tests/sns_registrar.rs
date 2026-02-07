@@ -228,6 +228,26 @@ async fn sns_register_and_fetch_round_trip() {
     assert_eq!(policy_resp.status(), StatusCode::OK);
 }
 
+#[cfg(feature = "telemetry")]
+#[tokio::test]
+async fn sns_register_emits_status_metric() {
+    let metrics = torii_fixtures::reset_shared_metrics();
+    let app = test_router();
+    let counter = metrics
+        .sns_registrar_status_total
+        .with_label_values(&["ok", "sora"]);
+    let before = counter.get();
+
+    let _ = register_name(&app, build_register_request()).await;
+
+    let after = counter.get();
+    assert_eq!(
+        after,
+        before + 1,
+        "successful registration should increment sns_registrar_status_total{{result=\"ok\",suffix=\"sora\"}}"
+    );
+}
+
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn sns_renew_transfer_and_freeze_flow() {

@@ -289,8 +289,15 @@ impl<T: NoritoSerialize> NoritoSerialize for ConstVec<T> {
         let offsets_bytes = entries.checked_mul(8)?;
         total = total.checked_add(offsets_bytes)?;
         let mut data_total = 0usize;
+        let mut elem_buf = Vec::new();
         for item in slice {
-            let elem_exact = item.encoded_len_exact()?;
+            let elem_exact = if let Some(elem_exact) = item.encoded_len_exact() {
+                elem_exact
+            } else {
+                elem_buf.clear();
+                item.serialize(&mut elem_buf).ok()?;
+                elem_buf.len()
+            };
             data_total = data_total.checked_add(elem_exact)?;
         }
         total = total.checked_add(data_total)?;
@@ -301,21 +308,13 @@ impl<T: NoritoSerialize> NoritoSerialize for ConstVec<T> {
 impl<T: NoritoSerialize> ConstVec<T> {
     fn serialize_unpacked<W: Write>(slice: &[T], writer: &mut W) -> Result<(), ncore::Error> {
         let mut elem_buf = Vec::new();
-        #[cfg(feature = "compact-len")]
         let use_compact = ncore::use_compact_len();
         for item in slice {
             elem_buf.clear();
             item.serialize(&mut elem_buf)?;
-            #[cfg(feature = "compact-len")]
-            {
-                if use_compact {
-                    ncore::write_len(writer, elem_buf.len() as u64)?;
-                } else {
-                    writer.write_u64::<ncore::LittleEndian>(elem_buf.len() as u64)?;
-                }
-            }
-            #[cfg(not(feature = "compact-len"))]
-            {
+            if use_compact {
+                ncore::write_len(writer, elem_buf.len() as u64)?;
+            } else {
                 writer.write_u64::<ncore::LittleEndian>(elem_buf.len() as u64)?;
             }
             writer.write_all(&elem_buf)?;
@@ -375,7 +374,6 @@ impl<T: NoritoSerialize> ConstVec<T> {
         Ok((offsets, data))
     }
 
-    #[cfg(feature = "compact-len")]
     fn write_fixed_offsets<W: Write>(
         writer: &mut W,
         offsets: &[u64],
@@ -424,23 +422,6 @@ impl<T: NoritoSerialize> ConstVec<T> {
                 data.len(),
                 &offsets[..core::cmp::min(offsets.len(), 8)]
             );
-        }
-        writer.write_all(&offs_bytes)?;
-        writer.write_all(data)?;
-        Ok(())
-    }
-
-    #[cfg(not(feature = "compact-len"))]
-    fn write_fixed_offsets<W: Write>(
-        writer: &mut W,
-        offsets: &[u64],
-        data: &[u8],
-        _trace_enabled: bool,
-    ) -> Result<(), ncore::Error> {
-        ncore::note_fixed_offsets_emitted();
-        let mut offs_bytes = Vec::with_capacity(offsets.len() * 8);
-        for &off in offsets {
-            offs_bytes.extend_from_slice(&off.to_le_bytes());
         }
         writer.write_all(&offs_bytes)?;
         writer.write_all(data)?;
