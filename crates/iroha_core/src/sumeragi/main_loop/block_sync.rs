@@ -44,9 +44,9 @@ impl Actor {
         &mut self,
         peer: PeerId,
         msg: BlockMessage,
-        priority: FetchPendingBlockPriority,
+        bypass_queue: bool,
     ) {
-        if matches!(priority, FetchPendingBlockPriority::Consensus) {
+        if bypass_queue {
             let mut msg = BlockMessageWire::new(msg);
             if !self.prepare_background_block_message(&mut msg) {
                 return;
@@ -57,16 +57,9 @@ impl Actor {
         self.enqueue_fetch_pending_block_response(peer, msg);
     }
 
-    fn fetch_response_priority_for_highest_qc(
-        &self,
-        msg: &BlockMessage,
-        priority: FetchPendingBlockPriority,
-    ) -> FetchPendingBlockPriority {
-        if matches!(priority, FetchPendingBlockPriority::Consensus) {
-            return priority;
-        }
+    fn fetch_response_targets_highest_qc(&self, msg: &BlockMessage) -> bool {
         let Some(highest) = self.highest_qc else {
-            return priority;
+            return false;
         };
         let (block_hash, height, view) = match msg {
             BlockMessage::BlockSyncUpdate(update) => {
@@ -92,25 +85,44 @@ impl Actor {
                 u64::from(chunk.height),
                 u64::from(chunk.view),
             ),
-            _ => return priority,
+            _ => return false,
         };
-        if highest.subject_block_hash == block_hash
-            && highest.height == height
-            && highest.view == view
-        {
-            FetchPendingBlockPriority::Consensus
-        } else {
-            priority
-        }
+        highest.subject_block_hash == block_hash && highest.height == height && highest.view == view
+    }
+
+    fn fetch_response_should_bypass_queue(
+        &self,
+        msg: &BlockMessage,
+        allow_highest_qc_bypass: bool,
+    ) -> bool {
+        (allow_highest_qc_bypass && self.fetch_response_targets_highest_qc(msg))
+            || matches!(
+                msg,
+                BlockMessage::RbcInit(_)
+                    | BlockMessage::RbcChunk(_)
+                    | BlockMessage::RbcChunkCompact(_)
+                    | BlockMessage::RbcReady(_)
+                    | BlockMessage::RbcDeliver(_)
+            )
     }
 
     fn send_fetch_pending_block_response(
         &mut self,
         peer: PeerId,
         mut msg: BlockMessage,
-        priority: FetchPendingBlockPriority,
+        _priority: FetchPendingBlockPriority,
+        force_bypass_queue: bool,
+        allow_highest_qc_bypass: bool,
+        allow_hintless_block_sync_bypass: bool,
     ) {
-        let priority = self.fetch_response_priority_for_highest_qc(&msg, priority);
+        let hintless_block_sync = matches!(
+            &msg,
+            BlockMessage::BlockSyncUpdate(update)
+                if update.commit_qc.is_none() && update.validator_checkpoint.is_none()
+        );
+        let bypass_queue = force_bypass_queue
+            || self.fetch_response_should_bypass_queue(&msg, allow_highest_qc_bypass)
+            || (allow_hintless_block_sync_bypass && hintless_block_sync);
         if let BlockMessage::BlockSyncUpdate(update) = &mut msg {
             let block_hash = update.block.hash();
             let height = update.block.header().height().get();
@@ -152,11 +164,11 @@ impl Actor {
                     fallback_len,
                     "block sync response exceeds frame cap; sending BlockCreated instead"
                 );
-                self.dispatch_fetch_pending_block_response(peer, fallback, priority);
+                self.dispatch_fetch_pending_block_response(peer, fallback, bypass_queue);
                 return;
             }
         }
-        self.dispatch_fetch_pending_block_response(peer, msg, priority);
+        self.dispatch_fetch_pending_block_response(peer, msg, bypass_queue);
     }
 
     fn send_fetch_pending_block_rbc_init(
@@ -164,6 +176,9 @@ impl Actor {
         peer: PeerId,
         block: &SignedBlock,
         priority: FetchPendingBlockPriority,
+        force_bypass_queue: bool,
+        allow_highest_qc_bypass: bool,
+        allow_hintless_block_sync_bypass: bool,
     ) {
         if !self.runtime_da_enabled() {
             return;
@@ -180,8 +195,22 @@ impl Actor {
         };
         // Send RBC INIT alongside missing-block responses so peers can process READY/DELIVER.
         let peer_clone = peer.clone();
-        self.send_fetch_pending_block_response(peer, BlockMessage::RbcInit(init), priority);
-        self.send_fetch_pending_block_rbc_chunks(peer_clone, block, priority);
+        self.send_fetch_pending_block_response(
+            peer,
+            BlockMessage::RbcInit(init),
+            priority,
+            force_bypass_queue,
+            allow_highest_qc_bypass,
+            allow_hintless_block_sync_bypass,
+        );
+        self.send_fetch_pending_block_rbc_chunks(
+            peer_clone,
+            block,
+            priority,
+            force_bypass_queue,
+            allow_highest_qc_bypass,
+            allow_hintless_block_sync_bypass,
+        );
     }
 
     fn send_fetch_pending_block_rbc_chunks(
@@ -189,6 +218,9 @@ impl Actor {
         peer: PeerId,
         block: &SignedBlock,
         priority: FetchPendingBlockPriority,
+        force_bypass_queue: bool,
+        allow_highest_qc_bypass: bool,
+        allow_hintless_block_sync_bypass: bool,
     ) {
         if !self.runtime_da_enabled() {
             return;
@@ -228,6 +260,9 @@ impl Actor {
                 peer.clone(),
                 BlockMessage::RbcChunk(chunk),
                 priority,
+                force_bypass_queue,
+                allow_highest_qc_bypass,
+                allow_hintless_block_sync_bypass,
             );
         }
     }
@@ -303,24 +338,39 @@ impl Actor {
         &mut self,
         peers: BTreeMap<PeerId, FetchPendingBlockPriority>,
         block: &SignedBlock,
+        force_bypass_queue: bool,
+        allow_highest_qc_bypass: bool,
+        allow_hintless_block_sync_bypass: bool,
     ) {
         if peers.is_empty() {
             return;
         }
         let msg = self.build_fetch_pending_block_payload(block);
+        let hintless_block_sync = matches!(
+            &msg,
+            BlockMessage::BlockSyncUpdate(update)
+                if update.commit_qc.is_none() && update.validator_checkpoint.is_none()
+        );
+        let bypass_rosterless_created = allow_hintless_block_sync_bypass
+            && matches!(msg, BlockMessage::BlockCreated(_));
         if matches!(msg, BlockMessage::BlockSyncUpdate(_)) {
             let created = BlockMessage::BlockCreated(super::message::BlockCreated::from(block));
             let created_len =
                 super::consensus_block_wire_len(self.common_config.peer.id(), &created);
-            if created_len <= self.consensus_payload_frame_cap {
+            let send_created_copy =
+                !(allow_hintless_block_sync_bypass && hintless_block_sync);
+            if send_created_copy && created_len <= self.consensus_payload_frame_cap {
                 for (peer, priority) in peers.iter() {
                     self.send_fetch_pending_block_response(
                         peer.clone(),
                         created.clone(),
                         *priority,
+                        force_bypass_queue || bypass_rosterless_created,
+                        allow_highest_qc_bypass,
+                        allow_hintless_block_sync_bypass,
                     );
                 }
-            } else {
+            } else if send_created_copy {
                 let header = block.header();
                 warn!(
                     height = header.height().get(),
@@ -333,15 +383,35 @@ impl Actor {
             }
         }
         for (peer, priority) in peers {
-            self.send_fetch_pending_block_response(peer.clone(), msg.clone(), priority);
-            self.send_fetch_pending_block_rbc_init(peer, block, priority);
+            self.send_fetch_pending_block_response(
+                peer.clone(),
+                msg.clone(),
+                priority,
+                force_bypass_queue || bypass_rosterless_created,
+                allow_highest_qc_bypass,
+                allow_hintless_block_sync_bypass,
+            );
+            self.send_fetch_pending_block_rbc_init(
+                peer,
+                block,
+                priority,
+                force_bypass_queue || bypass_rosterless_created,
+                allow_highest_qc_bypass,
+                allow_hintless_block_sync_bypass,
+            );
         }
     }
 
     pub(super) fn flush_pending_fetch_requests(&mut self, block: &SignedBlock) {
         let block_hash = block.hash();
         let requesters = self.take_pending_fetch_requesters(&block_hash);
-        self.send_fetch_pending_block_responses(requesters, block);
+        self.send_fetch_pending_block_responses(
+            requesters,
+            block,
+            /*force_bypass_queue*/ false,
+            /*allow_highest_qc_bypass*/ false,
+            /*allow_hintless_block_sync_bypass*/ false,
+        );
     }
 
     pub(super) fn should_drop_future_block_sync_update(
@@ -2171,6 +2241,7 @@ impl Actor {
         let request_priority = request
             .priority
             .unwrap_or(FetchPendingBlockPriority::Background);
+        let force_bypass_queue = false;
         let mut responded_any = false;
         let mut invalid_payload = false;
 
@@ -2203,7 +2274,13 @@ impl Actor {
                 .entry(peer.clone())
                 .and_modify(|stored| *stored = (*stored).max(request_priority))
                 .or_insert(request_priority);
-            self.send_fetch_pending_block_responses(requesters, &block);
+            self.send_fetch_pending_block_responses(
+                requesters,
+                &block,
+                force_bypass_queue,
+                /*allow_highest_qc_bypass*/ true,
+                /*allow_hintless_block_sync_bypass*/ false,
+            );
             return Ok(());
         }
 
@@ -2227,7 +2304,13 @@ impl Actor {
                 .entry(peer.clone())
                 .and_modify(|stored| *stored = (*stored).max(request_priority))
                 .or_insert(request_priority);
-            self.send_fetch_pending_block_responses(requesters, &block);
+            self.send_fetch_pending_block_responses(
+                requesters,
+                &block,
+                force_bypass_queue,
+                /*allow_highest_qc_bypass*/ true,
+                /*allow_hintless_block_sync_bypass*/ false,
+            );
             return Ok(());
         }
 
@@ -2239,7 +2322,13 @@ impl Actor {
                     .entry(peer.clone())
                     .and_modify(|stored| *stored = (*stored).max(request_priority))
                     .or_insert(request_priority);
-                self.send_fetch_pending_block_responses(requesters, block);
+                self.send_fetch_pending_block_responses(
+                    requesters,
+                    block,
+                    force_bypass_queue,
+                    /*allow_highest_qc_bypass*/ true,
+                    /*allow_hintless_block_sync_bypass*/ true,
+                );
                 return Ok(());
             }
         }
@@ -2276,12 +2365,18 @@ impl Actor {
                     peer.clone(),
                     BlockMessage::RbcInit(init),
                     request_priority,
+                    force_bypass_queue,
+                    /*allow_highest_qc_bypass*/ true,
+                    /*allow_hintless_block_sync_bypass*/ false,
                 );
                 for chunk in chunks {
                     self.send_fetch_pending_block_response(
                         peer.clone(),
                         BlockMessage::RbcChunk(chunk),
                         request_priority,
+                        force_bypass_queue,
+                        /*allow_highest_qc_bypass*/ true,
+                        /*allow_hintless_block_sync_bypass*/ false,
                     );
                 }
                 responded_any = true;

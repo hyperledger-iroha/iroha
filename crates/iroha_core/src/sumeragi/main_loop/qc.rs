@@ -118,10 +118,22 @@ impl Actor {
             return false;
         }
         let needs_validation = match self.pending.pending_blocks.get(&hash) {
-            Some(pending) => {
-                !pending.aborted && pending.validation_status == ValidationStatus::Pending
+            Some(pending)
+                if !pending.aborted && pending.validation_status == ValidationStatus::Pending =>
+            {
+                let (state_height, tip_hash) = {
+                    let view = self.state.view();
+                    (view.height(), view.latest_block_hash())
+                };
+                pending_extends_tip(
+                    pending.height,
+                    pending.block.header().prev_block_hash(),
+                    state_height,
+                    tip_hash,
+                )
             }
             None => return false,
+            Some(_) => false,
         };
         if !needs_validation {
             return false;

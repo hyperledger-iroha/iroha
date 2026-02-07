@@ -837,6 +837,14 @@ pub(super) fn evaluate_deliver_acceptance(
     session: &RbcSession,
     required_ready: usize,
 ) -> DeliverAcceptance {
+    evaluate_deliver_acceptance_with_policy(session, required_ready, false)
+}
+
+pub(super) fn evaluate_deliver_acceptance_with_policy(
+    session: &RbcSession,
+    required_ready: usize,
+    allow_missing_chunks: bool,
+) -> DeliverAcceptance {
     if required_ready != 0 && session.ready_signatures.len() < required_ready {
         return DeliverAcceptance::DeferReady {
             ready_count: session.ready_signatures.len(),
@@ -846,7 +854,7 @@ pub(super) fn evaluate_deliver_acceptance(
 
     let received = session.received_chunks();
     let total = session.total_chunks();
-    if total != 0 && received < total {
+    if !allow_missing_chunks && total != 0 && received < total {
         return DeliverAcceptance::DeferChunks { received, total };
     }
 
@@ -4021,6 +4029,7 @@ impl Actor {
         session: &mut RbcSession,
         key: SessionKey,
         deliver: &crate::sumeragi::consensus::RbcDeliver,
+        allow_missing_chunks: bool,
     ) -> (
         bool,
         bool,
@@ -4083,7 +4092,12 @@ impl Actor {
             );
         }
         if !session.is_invalid() {
-            match evaluate_deliver_acceptance(session, deliver_quorum) {
+            let acceptance = if allow_missing_chunks {
+                evaluate_deliver_acceptance_with_policy(session, deliver_quorum, true)
+            } else {
+                evaluate_deliver_acceptance(session, deliver_quorum)
+            };
+            match acceptance {
                 DeliverAcceptance::DeferReady {
                     ready_count,
                     required,
@@ -4670,6 +4684,7 @@ impl Actor {
             }
         }
         let deliver_quorum = self.rbc_deliver_quorum(&topology);
+        let allow_missing_chunks = self.runtime_da_enabled();
         let (
             ignored,
             first_deliver,
@@ -4694,7 +4709,13 @@ impl Actor {
             for (sender, signature) in ready_to_record {
                 session.record_ready(sender, signature);
             }
-            Self::evaluate_rbc_deliver_outcome(deliver_quorum, session, key, &deliver)
+            Self::evaluate_rbc_deliver_outcome(
+                deliver_quorum,
+                session,
+                key,
+                &deliver,
+                allow_missing_chunks,
+            )
         };
         if chunk_root_mismatch {
             self.record_consensus_message_handling(

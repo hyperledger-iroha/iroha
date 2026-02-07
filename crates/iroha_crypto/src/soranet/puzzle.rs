@@ -416,7 +416,6 @@ mod tests {
 
     const DESCRIPTOR: [u8; 32] = [0x11; 32];
     const RELAY: [u8; 32] = [0x22; 32];
-    const OTHER_RELAY: [u8; 32] = [0x99; 32];
 
     fn test_parameters() -> Parameters {
         Parameters::new(
@@ -431,6 +430,57 @@ mod tests {
 
     fn binding() -> ChallengeBinding<'static> {
         ChallengeBinding::new(&DESCRIPTOR, &RELAY, None)
+    }
+
+    fn first_invalid_solution(
+        ticket: Ticket,
+        binding: &ChallengeBinding<'_>,
+        params: &Parameters,
+    ) -> [u8; 32] {
+        for idx in 0..ticket.solution.len() {
+            for bit in 0..8 {
+                let mut candidate = ticket.solution;
+                candidate[idx] ^= 1u8 << bit;
+                let challenge = derive_challenge(binding, ticket.client_nonce, ticket.expires_at);
+                let digest = derive_solution_digest(&challenge, &candidate, params)
+                    .expect("digest derivation should succeed");
+                if !leading_zero_bits_at_least(&digest, params.difficulty) {
+                    return candidate;
+                }
+            }
+        }
+        panic!("failed to construct an invalid solution candidate")
+    }
+
+    fn first_invalid_relay_id(
+        ticket: &Ticket,
+        params: &Parameters,
+        base: &ChallengeBinding<'_>,
+    ) -> [u8; 32] {
+        for seed in 0u8..=u8::MAX {
+            let mut relay = [0u8; 32];
+            for (idx, byte) in relay.iter_mut().enumerate() {
+                *byte = seed.wrapping_add(idx as u8);
+            }
+            if relay.as_slice() == base.relay_id {
+                continue;
+            }
+            let candidate =
+                ChallengeBinding::new(base.descriptor_commit, &relay, base.transcript_hash);
+            let challenge = derive_challenge(&candidate, ticket.client_nonce, ticket.expires_at);
+            let digest = derive_solution_digest(&challenge, &ticket.solution, params)
+                .expect("digest derivation should succeed");
+            if !leading_zero_bits_at_least(&digest, params.difficulty) {
+                return relay;
+            }
+        }
+        panic!("failed to construct an invalid relay binding candidate")
+    }
+
+    fn stable_verify_time(ticket: &Ticket, params: &Parameters) -> SystemTime {
+        let ttl_floor = params.min_ticket_ttl().as_secs();
+        let now_secs = ticket.expires_at.saturating_sub(ttl_floor);
+        UNIX_EPOCH + Duration::from_secs(now_secs)
     }
 
     #[test]
@@ -450,8 +500,14 @@ mod tests {
         let binding = binding();
         let mut ticket =
             mint_ticket(&params, &binding, Duration::from_secs(10), &mut rng).expect("mint");
-        ticket.solution[0] ^= 0xFF;
-        let err = verify(&ticket, &binding, &params).expect_err("should fail");
+        ticket.solution = first_invalid_solution(ticket, &binding, &params);
+        let err = verify_at(
+            &ticket,
+            &binding,
+            &params,
+            stable_verify_time(&ticket, &params),
+        )
+        .expect_err("should fail");
         assert!(matches!(err, Error::InvalidSolution));
     }
 
@@ -507,8 +563,19 @@ mod tests {
         let ticket =
             mint_ticket(&params, &binding, Duration::from_secs(10), &mut rng).expect("mint");
 
-        let mismatched = ChallengeBinding::new(binding.descriptor_commit, &OTHER_RELAY, None);
-        let err = verify(&ticket, &mismatched, &params).expect_err("relay binding should fail");
+        let mismatched_relay = first_invalid_relay_id(&ticket, &params, &binding);
+        let mismatched = ChallengeBinding::new(
+            binding.descriptor_commit,
+            &mismatched_relay,
+            binding.transcript_hash,
+        );
+        let err = verify_at(
+            &ticket,
+            &mismatched,
+            &params,
+            stable_verify_time(&ticket, &params),
+        )
+        .expect_err("relay binding should fail");
         assert!(matches!(err, Error::InvalidSolution));
     }
 }
