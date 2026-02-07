@@ -140,6 +140,20 @@ impl StreamingCarVerifier {
                 return Ok(bytes.len());
             }
 
+            // The CARv2 index lives after the CARv1 data region. Once we've consumed the full
+            // data region, we stop parsing sections and switch to `State::Complete` so the
+            // remaining bytes are simply hashed and consumed.
+            //
+            // This must happen before the byte-by-byte hashing below; otherwise we'd hash the
+            // first index byte twice (once here, once in the `State::Complete` fast-path),
+            // corrupting the archive digest.
+            if matches!(self.state, State::SectionLen { buffered: 0 })
+                && self.current_data_read == self.data_size
+            {
+                self.transition(State::Complete);
+                continue;
+            }
+
             let b = bytes[consumed];
             // We hash byte by byte for simplicity in this loop structure,
             // optimization would block-hash.
@@ -238,25 +252,6 @@ impl StreamingCarVerifier {
                     }
                 }
                 State::SectionLen { buffered } => {
-                    // Check if we are done with CARv1 data?
-                    if self.current_data_read >= self.data_size {
-                        // We reached the end of the data section designated in Characteristics.
-                        // Transition to Complete.
-                        // But wait, we just consumed a byte 'b' that might be part of Index or padding.
-                        // We effectively "peeked" it or consumed it?
-                        // We consumed it into archive hasher and updated consumed counter.
-                        // But if `current_data_read > data_size`, then this byte is NOT part of data.
-                        // My `current_data_read` increment happened below.
-
-                        // Let's adjust logic.
-                    }
-
-                    // If we haven't started buffering a varint yet (buffered == 0), check limit.
-                    if *buffered == 0 && self.current_data_read == self.data_size {
-                        self.transition(State::Complete);
-                        continue; // Re-evaluate loop with State::Complete logic
-                    }
-
                     self.buffer.push(b);
                     *buffered += 1;
                     consumed += 1;

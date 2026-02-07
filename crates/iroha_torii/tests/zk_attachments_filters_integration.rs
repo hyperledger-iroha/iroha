@@ -44,43 +44,31 @@ async fn attachments_list_filters_and_count() {
     iroha_torii::zk_attachments::init_persistence();
 
     let tenant = iroha_torii::zk_attachments::AttachmentTenant::anonymous();
-    let app =
-        Router::new()
-            .route(
-                "/v1/zk/attachments",
-                get(
-                    {
-                        let tenant = tenant.clone();
-                        move |_headers: axum::http::HeaderMap,
-                     q: iroha_torii::NoritoQuery<
-                        iroha_torii::zk_attachments::AttachmentListQuery,
-                    >| async move {
-                            iroha_torii::zk_attachments::handle_list_attachments_filtered(
-                                tenant.clone(),
-                                q,
-                            )
-                            .await
-                        }
-                    },
-                ),
-            )
-            .route(
-                "/v1/zk/attachments/count",
-                get(
-                    {
-                        let tenant = tenant.clone();
-                        move |q: iroha_torii::NoritoQuery<
-                        iroha_torii::zk_attachments::AttachmentListQuery,
-                    >| async move {
-                            iroha_torii::zk_attachments::handle_count_attachments(
-                                tenant.clone(),
-                                q,
-                            )
-                            .await
-                        }
-                    },
-                ),
-            );
+    let app = Router::new()
+        .route(
+            "/v1/zk/attachments",
+            get({
+                let tenant = tenant.clone();
+                move |_headers: axum::http::HeaderMap,
+                      q: iroha_torii::NoritoQuery<
+                    iroha_torii::zk_attachments::AttachmentListQuery,
+                >| async move {
+                    iroha_torii::zk_attachments::handle_list_attachments_filtered(tenant.clone(), q)
+                        .await
+                }
+            }),
+        )
+        .route(
+            "/v1/zk/attachments/count",
+            get({
+                let tenant = tenant.clone();
+                move |q: iroha_torii::NoritoQuery<
+                    iroha_torii::zk_attachments::AttachmentListQuery,
+                >| async move {
+                    iroha_torii::zk_attachments::handle_count_attachments(tenant.clone(), q).await
+                }
+            }),
+        );
 
     // Seed two different attachments by calling POST handler directly
     let id1 = {

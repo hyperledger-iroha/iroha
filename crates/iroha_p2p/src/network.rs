@@ -3321,11 +3321,11 @@ mod accept_stream_tests {
 
     #[tokio::test(flavor = "current_thread")]
     #[allow(clippy::too_many_lines)]
-	    async fn peer_message_over_cap_increments_violation_counter() {
-	        use crate::network::cap_violations_consensus;
-	        let _guard = cap_violation_test_guard();
+    async fn peer_message_over_cap_increments_violation_counter() {
+        use crate::network::cap_violations_consensus;
+        let _guard = cap_violation_test_guard();
 
-	        let key_pair = KeyPair::random();
+        let key_pair = KeyPair::random();
 
         let std_listener = match std::net::TcpListener::bind("127.0.0.1:0") {
             Ok(listener) => listener,
@@ -3504,11 +3504,11 @@ mod accept_stream_tests {
 
     #[tokio::test(flavor = "current_thread")]
     #[allow(clippy::too_many_lines)]
-	    async fn peer_message_consensus_payload_uses_block_sync_cap() {
-	        use crate::network::cap_violations_consensus;
-	        let _guard = cap_violation_test_guard();
+    async fn peer_message_consensus_payload_uses_block_sync_cap() {
+        use crate::network::cap_violations_consensus;
+        let _guard = cap_violation_test_guard();
 
-	        let key_pair = KeyPair::random();
+        let key_pair = KeyPair::random();
 
         let std_listener = match std::net::TcpListener::bind("127.0.0.1:0") {
             Ok(listener) => listener,
@@ -3704,11 +3704,11 @@ mod accept_stream_tests {
 
     #[tokio::test(flavor = "current_thread")]
     #[allow(clippy::too_many_lines)]
-	    async fn peer_message_consensus_chunk_uses_block_sync_cap() {
-	        use crate::network::cap_violations_block_sync;
-	        let _guard = cap_violation_test_guard();
+    async fn peer_message_consensus_chunk_uses_block_sync_cap() {
+        use crate::network::cap_violations_block_sync;
+        let _guard = cap_violation_test_guard();
 
-	        let key_pair = KeyPair::random();
+        let key_pair = KeyPair::random();
 
         let std_listener = match std::net::TcpListener::bind("127.0.0.1:0") {
             Ok(listener) => listener,

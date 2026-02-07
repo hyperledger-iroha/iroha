@@ -14,7 +14,7 @@ use iroha_config::parameters::actual::{
     DataspaceGossip, DataspaceGossipFallback, LaneConfig as LaneGeometry, Network as NetworkConfig,
     RestrictedPublicPayload, TransactionGossiper as Config,
 };
-use iroha_crypto::{Hash, HashOf, KeyPair};
+use iroha_crypto::{HashOf, KeyPair};
 use iroha_data_model::{
     ChainId, DataSpaceId,
     account::AccountId,
@@ -625,6 +625,9 @@ impl TransactionGossiper {
                 None,
                 None,
             );
+            // Re-enqueue sent hashes when we gossip to a capped target set so the batch can
+            // continue spreading to other peers in subsequent rounds.
+            self.defer_gossip_hashes(sent_hashes);
         } else {
             iroha_logger::debug!(
                 tx_count = message.txs.len(),
@@ -656,8 +659,6 @@ impl TransactionGossiper {
                 None,
             );
         }
-        // Re-enqueue sent hashes so gossip keeps circulating until the transaction is committed.
-        self.defer_gossip_hashes(sent_hashes);
     }
 
     #[allow(clippy::too_many_lines)]
@@ -1663,6 +1664,35 @@ pub struct GossipTransaction {
 
 const GOSSIP_TX_DECODE_CACHE_LIMIT: usize = 2048;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct GossipTxDecodeCacheKey {
+    len: u32,
+    prefix: u128,
+    suffix: u128,
+}
+
+impl GossipTxDecodeCacheKey {
+    fn from_bytes(bytes: &[u8]) -> Self {
+        let len = u32::try_from(bytes.len()).unwrap_or(u32::MAX);
+        let mut prefix_bytes = [0u8; 16];
+        let mut suffix_bytes = [0u8; 16];
+
+        let prefix_len = bytes.len().min(prefix_bytes.len());
+        prefix_bytes[..prefix_len].copy_from_slice(&bytes[..prefix_len]);
+
+        let suffix_len = bytes.len().min(suffix_bytes.len());
+        if suffix_len > 0 {
+            suffix_bytes[..suffix_len].copy_from_slice(&bytes[bytes.len() - suffix_len..]);
+        }
+
+        Self {
+            len,
+            prefix: u128::from_le_bytes(prefix_bytes),
+            suffix: u128::from_le_bytes(suffix_bytes),
+        }
+    }
+}
+
 struct GossipTxDecodeCacheEntry {
     signed: Arc<SignedTransaction>,
     encoded: Arc<Vec<u8>>,
@@ -1670,7 +1700,7 @@ struct GossipTxDecodeCacheEntry {
 }
 
 struct GossipTxDecodeCache {
-    map: HashMap<Hash, GossipTxDecodeCacheEntry>,
+    map: HashMap<GossipTxDecodeCacheKey, GossipTxDecodeCacheEntry>,
 }
 
 impl GossipTxDecodeCache {
@@ -1680,11 +1710,11 @@ impl GossipTxDecodeCache {
         }
     }
 
-    fn get(&self, key: &Hash) -> Option<&GossipTxDecodeCacheEntry> {
+    fn get(&self, key: &GossipTxDecodeCacheKey) -> Option<&GossipTxDecodeCacheEntry> {
         self.map.get(key)
     }
 
-    fn insert(&mut self, key: Hash, entry: GossipTxDecodeCacheEntry) {
+    fn insert(&mut self, key: GossipTxDecodeCacheKey, entry: GossipTxDecodeCacheEntry) {
         if self.map.len() >= GOSSIP_TX_DECODE_CACHE_LIMIT {
             // Simple bounded cache: clear rather than paying LRU bookkeeping cost.
             self.map.clear();
@@ -1701,15 +1731,22 @@ thread_local! {
 fn decode_gossip_transaction_payload(
     bytes: &[u8],
 ) -> Result<(Arc<SignedTransaction>, Arc<Vec<u8>>, usize), ncore::Error> {
-    let key = Hash::new(bytes);
     if let Some(hit) = GOSSIP_TX_DECODE_CACHE.with(|cache| {
         let cache = cache.borrow();
-        cache.get(&key).map(|entry| {
-            (
-                Arc::clone(&entry.signed),
-                Arc::clone(&entry.encoded),
-                entry.consumed,
-            )
+        let key = GossipTxDecodeCacheKey::from_bytes(bytes);
+        cache.get(&key).and_then(|entry| {
+            // Key collisions must not produce incorrect transactions. Confirm the actual bytes
+            // match the cached encoded payload before reusing it.
+            if entry.consumed <= bytes.len() && entry.encoded.as_slice() == &bytes[..entry.consumed]
+            {
+                Some((
+                    Arc::clone(&entry.signed),
+                    Arc::clone(&entry.encoded),
+                    entry.consumed,
+                ))
+            } else {
+                None
+            }
         })
     }) {
         return Ok(hit);
@@ -1723,6 +1760,7 @@ fn decode_gossip_transaction_payload(
         encoded: encoded.clone(),
         consumed,
     };
+    let key = GossipTxDecodeCacheKey::from_bytes(bytes);
     GOSSIP_TX_DECODE_CACHE.with(|cache| cache.borrow_mut().insert(key, entry));
     Ok((signed, encoded, consumed))
 }
@@ -3099,11 +3137,11 @@ mod tests {
             lane_id: LaneId::SINGLE,
             dataspace_id: DataSpaceId::GLOBAL,
         };
-        gossiper.handle_transaction_gossip(TransactionGossip {
+        gossiper.handle_transaction_gossip(Arc::new(TransactionGossip {
             txs: vec![invalid_signed.into(), valid_signed.into()],
             routes: vec![invalid_route, valid_route],
             plane: GossipPlane::Public,
-        });
+        }));
 
         assert_eq!(queue.queued_len(), 1);
         shutdown.send();
@@ -3191,11 +3229,11 @@ mod tests {
             lane_id: LaneId::SINGLE,
             dataspace_id: DataSpaceId::GLOBAL,
         };
-        gossiper.handle_transaction_gossip(TransactionGossip {
+        gossiper.handle_transaction_gossip(Arc::new(TransactionGossip {
             txs: vec![signed.into()],
             routes: vec![route],
             plane: GossipPlane::Public,
-        });
+        }));
 
         assert_eq!(queue.queued_len(), 0);
         shutdown.send();
@@ -3323,11 +3361,11 @@ mod tests {
             lane_id: restricted_lane,
             dataspace_id: restricted_dataspace,
         };
-        gossiper.handle_transaction_gossip(TransactionGossip {
+        gossiper.handle_transaction_gossip(Arc::new(TransactionGossip {
             txs: vec![signed.into()],
             routes: vec![route],
             plane: GossipPlane::Restricted,
-        });
+        }));
 
         assert_eq!(queue.queued_len(), 1);
         shutdown.send();

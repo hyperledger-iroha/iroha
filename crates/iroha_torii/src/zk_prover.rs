@@ -314,7 +314,9 @@ fn attachments_root_dir() -> PathBuf {
 
 fn attachment_meta_path(tenant_key: Option<&str>, id: &str) -> PathBuf {
     match tenant_key {
-        Some(key) => attachments_root_dir().join(key).join(format!("{}.json", id)),
+        Some(key) => attachments_root_dir()
+            .join(key)
+            .join(format!("{}.json", id)),
         None => attachments_root_dir().join(format!("{}.json", id)),
     }
 }
@@ -336,7 +338,9 @@ fn list_attachment_locations() -> Vec<AttachmentLocation> {
         for e in rd.flatten() {
             let Ok(ft) = e.file_type() else { continue };
             let file_name = e.file_name();
-            let Some(name) = file_name.to_str() else { continue };
+            let Some(name) = file_name.to_str() else {
+                continue;
+            };
             if ft.is_dir() {
                 let Some(tenant_key) = sanitize_tenant_key(name) else {
                     continue;
@@ -344,7 +348,9 @@ fn list_attachment_locations() -> Vec<AttachmentLocation> {
                 if let Ok(trd) = fs::read_dir(attachments_root_dir().join(&tenant_key)) {
                     for te in trd.flatten() {
                         let file_name = te.file_name();
-                        let Some(tname) = file_name.to_str() else { continue };
+                        let Some(tname) = file_name.to_str() else {
+                            continue;
+                        };
                         let Some(id) = tname.strip_suffix(".json") else {
                             continue;
                         };
@@ -393,7 +399,9 @@ fn find_attachment_location(id: &str) -> Option<AttachmentLocation> {
                 continue;
             }
             let file_name = e.file_name();
-            let Some(name) = file_name.to_str() else { continue };
+            let Some(name) = file_name.to_str() else {
+                continue;
+            };
             let Some(tenant_key) = sanitize_tenant_key(name) else {
                 continue;
             };
@@ -1466,7 +1474,8 @@ mod tests {
     }
 
     fn ensure_tenant_dir(tenant_key: &str) {
-        fs::create_dir_all(attachments_root_dir().join(tenant_key)).expect("attachments tenant dir");
+        fs::create_dir_all(attachments_root_dir().join(tenant_key))
+            .expect("attachments tenant dir");
     }
 
     #[test]
@@ -1530,7 +1539,11 @@ mod tests {
                 tenant: Some(tenant_key.clone()),
                 provenance: None,
             };
-            fs::write(attachment_bin_path(Some(&tenant_key), &id), vec![b'A'; size]).unwrap();
+            fs::write(
+                attachment_bin_path(Some(&tenant_key), &id),
+                vec![b'A'; size],
+            )
+            .unwrap();
             fs::write(
                 attachment_meta_path(Some(&tenant_key), &id),
                 norito::json::to_json_pretty(&meta).unwrap(),

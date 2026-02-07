@@ -2300,15 +2300,18 @@ mod run {
             cryptographer: Cryptographer<E>,
             max_frame_bytes: usize,
         ) -> Self {
+            let prealloc = max_frame_bytes.min(DEFAULT_MESSAGE_PREALLOC_CAP);
+            let capacity = DEFAULT_BUFFER_CAPACITY.max(prealloc);
+            let batch_capacity = capacity.max(Self::MAX_BATCH_BYTES);
             Self {
                 write,
                 cryptographer,
-                buffer: Vec::with_capacity(DEFAULT_BUFFER_CAPACITY),
-                encrypted: Vec::with_capacity(DEFAULT_BUFFER_CAPACITY),
+                buffer: Vec::with_capacity(capacity),
+                encrypted: Vec::with_capacity(capacity),
                 frame_pool: Vec::new(),
                 queue_high: VecDeque::new(),
                 queue_low: VecDeque::new(),
-                batch: BytesMut::with_capacity(DEFAULT_BUFFER_CAPACITY),
+                batch: BytesMut::with_capacity(batch_capacity),
                 batch_offset: 0,
                 max_frame_bytes,
             }
@@ -2332,7 +2335,7 @@ mod run {
             frame.clear();
             let needed = size.saturating_add(Self::U32_SIZE);
             if frame.capacity() < needed {
-                frame.reserve(needed - frame.capacity());
+                frame.reserve(needed.saturating_sub(frame.len()));
             }
             #[allow(clippy::cast_possible_truncation)]
             frame.put_u32(size as u32);
@@ -2398,7 +2401,8 @@ mod run {
                     &mut self.queue_low
                 };
                 let frame_len = queue.front().map(BytesMut::len).unwrap_or(0);
-                if frames_added > 0 && self.batch.len().saturating_add(frame_len) > Self::MAX_BATCH_BYTES
+                if frames_added > 0
+                    && self.batch.len().saturating_add(frame_len) > Self::MAX_BATCH_BYTES
                 {
                     break;
                 }
@@ -2456,10 +2460,10 @@ mod run {
             task::{Context, Poll},
         };
 
-	        use bytes::Bytes;
-	        use iroha_crypto::encryption::ChaCha20Poly1305;
-	        use norito::codec::{Decode, Encode};
-	        use tokio::io::{AsyncRead, AsyncWrite};
+        use bytes::Bytes;
+        use iroha_crypto::encryption::ChaCha20Poly1305;
+        use norito::codec::{Decode, Encode};
+        use tokio::io::{AsyncRead, AsyncWrite};
 
         use crate::Priority;
 
@@ -2474,17 +2478,17 @@ mod run {
             }
         }
 
-	        #[derive(Encode, Decode, Clone, Debug)]
-	        struct Blob(Vec<u8>);
+        #[derive(Encode, Decode, Clone, Debug)]
+        struct Blob(Vec<u8>);
 
-	        impl<'a> ncore::DecodeFromSlice<'a> for Blob {
-	            fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
-	                ncore::decode_field_canonical::<Self>(bytes)
-	            }
-	        }
-	        #[derive(Default)]
-	        struct WriteStats {
-	            writes: usize,
+        impl<'a> ncore::DecodeFromSlice<'a> for Blob {
+            fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), ncore::Error> {
+                ncore::decode_field_canonical::<Self>(bytes)
+            }
+        }
+        #[derive(Default)]
+        struct WriteStats {
+            writes: usize,
             flushes: usize,
         }
 

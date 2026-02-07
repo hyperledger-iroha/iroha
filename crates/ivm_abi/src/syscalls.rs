@@ -132,6 +132,31 @@ pub const SYSCALL_NUMERIC_GT: u32 = 0x75;
 /// Numeric greater-or-equal: r10 = &NoritoBytes(lhs), r11 = &NoritoBytes(rhs)
 /// -> r10 = 1 if lhs >= rhs else 0.
 pub const SYSCALL_NUMERIC_GE: u32 = 0x76;
+/// Return payload length for a pointer-ABI TLV.
+///
+/// Args: r10 = &TLV
+/// Ret:  r10 = payload length (u64)
+pub const SYSCALL_TLV_LEN: u32 = 0x77;
+
+/// JSON object field getters.
+///
+/// All JSON_GET_* syscalls expect the root JSON value to be an object and the
+/// field to exist. Missing keys or type mismatches return a VM error.
+///
+/// Args: r10 = &Json, r11 = &Name key
+/// Ret:  r10 = value (either pointer in INPUT or integer)
+pub const SYSCALL_JSON_GET_I64: u32 = 0x78;
+/// Args: r10 = &Json, r11 = &Name key -> r10 = &Json (INPUT pointer)
+pub const SYSCALL_JSON_GET_JSON: u32 = 0x79;
+/// Args: r10 = &Json, r11 = &Name key -> r10 = &Name (INPUT pointer)
+pub const SYSCALL_JSON_GET_NAME: u32 = 0x7A;
+/// Args: r10 = &Json, r11 = &Name key -> r10 = &AccountId (INPUT pointer)
+pub const SYSCALL_JSON_GET_ACCOUNT_ID: u32 = 0x7B;
+/// Args: r10 = &Json, r11 = &Name key -> r10 = &NftId (INPUT pointer)
+pub const SYSCALL_JSON_GET_NFT_ID: u32 = 0x7C;
+/// Args: r10 = &Json, r11 = &Name key -> r10 = &Blob (INPUT pointer)
+pub const SYSCALL_JSON_GET_BLOB_HEX: u32 = 0x7D;
+
 /// Build a state path from a base Name and an integer key: returns a new `&Name` TLV
 /// in INPUT with the canonical form "<base>/<key>" (decimal).
 ///
@@ -375,6 +400,15 @@ pub fn syscalls_for_policy(policy: crate::SyscallPolicy) -> &'static [u32] {
         // Codec helpers
         v.push(SYSCALL_JSON_ENCODE);
         v.push(SYSCALL_JSON_DECODE);
+        v.push(SYSCALL_TLV_LEN);
+        v.extend_from_slice(&[
+            SYSCALL_JSON_GET_I64,
+            SYSCALL_JSON_GET_JSON,
+            SYSCALL_JSON_GET_NAME,
+            SYSCALL_JSON_GET_ACCOUNT_ID,
+            SYSCALL_JSON_GET_NFT_ID,
+            SYSCALL_JSON_GET_BLOB_HEX,
+        ]);
         v.push(SYSCALL_SCHEMA_ENCODE);
         v.push(SYSCALL_SCHEMA_DECODE);
         v.push(SYSCALL_SCHEMA_INFO);
@@ -612,6 +646,13 @@ pub fn syscall_name(number: u32) -> Option<&'static str> {
         // Codec helpers (dev)
         SYSCALL_JSON_ENCODE => "JSON_ENCODE",
         SYSCALL_JSON_DECODE => "JSON_DECODE",
+        SYSCALL_TLV_LEN => "TLV_LEN",
+        SYSCALL_JSON_GET_I64 => "JSON_GET_I64",
+        SYSCALL_JSON_GET_JSON => "JSON_GET_JSON",
+        SYSCALL_JSON_GET_NAME => "JSON_GET_NAME",
+        SYSCALL_JSON_GET_ACCOUNT_ID => "JSON_GET_ACCOUNT_ID",
+        SYSCALL_JSON_GET_NFT_ID => "JSON_GET_NFT_ID",
+        SYSCALL_JSON_GET_BLOB_HEX => "JSON_GET_BLOB_HEX",
         SYSCALL_SCHEMA_ENCODE => "SCHEMA_ENCODE",
         SYSCALL_SCHEMA_DECODE => "SCHEMA_DECODE",
         SYSCALL_SCHEMA_INFO => "SCHEMA_INFO",

@@ -1,0 +1,19 @@
+{
+  "car_cid_hex": "01551f20ae5bb8b4a865ad70cbc10cbfebf5e401c5f50d94daf566bceba915c9133c71b7",
+  "car_digest_hex": "ae5bb8b4a865ad70cbc10cbfebf5e401c5f50d94daf566bceba915c9133c71b7",
+  "car_payload_digest_hex": "9f1749501735b04e02ebf5a790015289afc2a4f05534977203ff0f62ec845df8",
+  "car_size": 576,
+  "chunk_count": 1,
+  "chunker_handle": "sorafs.sf1@1.0.0",
+  "chunker_profile_canonical": "sorafs.sf1@1.0.0",
+  "chunker_profile_id": 1,
+  "file_count": 1,
+  "input_bytes": 201,
+  "input_kind": "file",
+  "input_path": "fixtures/sorafs_manifest/ci_sample/payload.txt",
+  "output_car": "fixtures/sorafs_manifest/ci_sample/payload.car",
+  "payload_bytes": 201,
+  "root_cids_hex": [
+    "01711f20afa75d37145ffadc47028831f40f884dd75630d4dc633e5661369db9c7a0d3f0"
+  ]
+}

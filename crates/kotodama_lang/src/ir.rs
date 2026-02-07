@@ -569,6 +569,47 @@ pub enum Instr {
         dest: Temp,
         blob: Temp,
     },
+    /// Return the payload length of an arbitrary pointer-ABI TLV.
+    TlvLen {
+        dest: Temp,
+        value: Temp,
+    },
+    /// JSON getters: (&Json, &Name key) -> int
+    JsonGetInt {
+        dest: Temp,
+        json: Temp,
+        key: Temp,
+    },
+    /// JSON getters: (&Json, &Name key) -> &Json
+    JsonGetJson {
+        dest: Temp,
+        json: Temp,
+        key: Temp,
+    },
+    /// JSON getters: (&Json, &Name key) -> &Name
+    JsonGetName {
+        dest: Temp,
+        json: Temp,
+        key: Temp,
+    },
+    /// JSON getters: (&Json, &Name key) -> &AccountId
+    JsonGetAccountId {
+        dest: Temp,
+        json: Temp,
+        key: Temp,
+    },
+    /// JSON getters: (&Json, &Name key) -> &NftId
+    JsonGetNftId {
+        dest: Temp,
+        json: Temp,
+        key: Temp,
+    },
+    /// JSON getters: (&Json, &Name key) -> &Blob
+    JsonGetBlobHex {
+        dest: Temp,
+        json: Temp,
+        key: Temp,
+    },
     /// Decode Name from NoritoBytes via host
     NameDecode {
         dest: Temp,
@@ -1807,6 +1848,78 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                     let b = lower_expr(ctx, &args[0], vars);
                     let d = ctx.new_temp();
                     ctx.current_instr(Instr::JsonDecode { dest: d, blob: b });
+                    d
+                }
+                "tlv_len" => {
+                    let v = lower_expr(ctx, &args[0], vars);
+                    let d = ctx.new_temp();
+                    ctx.current_instr(Instr::TlvLen { dest: d, value: v });
+                    d
+                }
+                "json_get_int" => {
+                    let j = lower_expr(ctx, &args[0], vars);
+                    let k = lower_expr(ctx, &args[1], vars);
+                    let d = ctx.new_temp();
+                    ctx.current_instr(Instr::JsonGetInt {
+                        dest: d,
+                        json: j,
+                        key: k,
+                    });
+                    d
+                }
+                "json_get_json" => {
+                    let j = lower_expr(ctx, &args[0], vars);
+                    let k = lower_expr(ctx, &args[1], vars);
+                    let d = ctx.new_temp();
+                    ctx.current_instr(Instr::JsonGetJson {
+                        dest: d,
+                        json: j,
+                        key: k,
+                    });
+                    d
+                }
+                "json_get_name" => {
+                    let j = lower_expr(ctx, &args[0], vars);
+                    let k = lower_expr(ctx, &args[1], vars);
+                    let d = ctx.new_temp();
+                    ctx.current_instr(Instr::JsonGetName {
+                        dest: d,
+                        json: j,
+                        key: k,
+                    });
+                    d
+                }
+                "json_get_account_id" => {
+                    let j = lower_expr(ctx, &args[0], vars);
+                    let k = lower_expr(ctx, &args[1], vars);
+                    let d = ctx.new_temp();
+                    ctx.current_instr(Instr::JsonGetAccountId {
+                        dest: d,
+                        json: j,
+                        key: k,
+                    });
+                    d
+                }
+                "json_get_nft_id" => {
+                    let j = lower_expr(ctx, &args[0], vars);
+                    let k = lower_expr(ctx, &args[1], vars);
+                    let d = ctx.new_temp();
+                    ctx.current_instr(Instr::JsonGetNftId {
+                        dest: d,
+                        json: j,
+                        key: k,
+                    });
+                    d
+                }
+                "json_get_blob_hex" => {
+                    let j = lower_expr(ctx, &args[0], vars);
+                    let k = lower_expr(ctx, &args[1], vars);
+                    let d = ctx.new_temp();
+                    ctx.current_instr(Instr::JsonGetBlobHex {
+                        dest: d,
+                        json: j,
+                        key: k,
+                    });
                     d
                 }
                 "encode_schema" => {

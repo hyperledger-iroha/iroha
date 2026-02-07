@@ -3090,6 +3090,153 @@ impl IVMHost for WsvHost {
                 vm.set_register(10, p);
                 Ok(0)
             }
+            crate::syscalls::SYSCALL_TLV_LEN => {
+                let addr = vm.register(10);
+                if addr == 0 {
+                    vm.set_register(10, 0);
+                    return Ok(0);
+                }
+                let tlv = vm.memory.validate_tlv(addr)?;
+                let policy = vm.syscall_policy();
+                if !pointer_abi::is_type_allowed_for_policy(policy, tlv.type_id) {
+                    return Err(VMError::AbiTypeNotAllowed {
+                        abi: vm.abi_version(),
+                        type_id: tlv.type_id as u16,
+                    });
+                }
+                vm.set_register(10, tlv.payload.len() as u64);
+                Ok(0)
+            }
+            crate::syscalls::SYSCALL_JSON_GET_I64
+            | crate::syscalls::SYSCALL_JSON_GET_JSON
+            | crate::syscalls::SYSCALL_JSON_GET_NAME
+            | crate::syscalls::SYSCALL_JSON_GET_ACCOUNT_ID
+            | crate::syscalls::SYSCALL_JSON_GET_NFT_ID
+            | crate::syscalls::SYSCALL_JSON_GET_BLOB_HEX => {
+                let json_tlv = vm.memory.validate_tlv(vm.register(10))?;
+                let key_tlv = vm.memory.validate_tlv(vm.register(11))?;
+                if json_tlv.type_id != PointerType::Json || key_tlv.type_id != PointerType::Name {
+                    return Err(VMError::NoritoInvalid);
+                }
+                let policy = vm.syscall_policy();
+                if !pointer_abi::is_type_allowed_for_policy(policy, json_tlv.type_id) {
+                    return Err(VMError::AbiTypeNotAllowed {
+                        abi: vm.abi_version(),
+                        type_id: json_tlv.type_id as u16,
+                    });
+                }
+                if !pointer_abi::is_type_allowed_for_policy(policy, key_tlv.type_id) {
+                    return Err(VMError::AbiTypeNotAllowed {
+                        abi: vm.abi_version(),
+                        type_id: key_tlv.type_id as u16,
+                    });
+                }
+
+                let json: Json =
+                    decode_from_bytes(json_tlv.payload).map_err(|_| VMError::DecodeError)?;
+                let value: njson::Value = json
+                    .try_into_any_norito()
+                    .map_err(|_| VMError::DecodeError)?;
+                let obj = value.as_object().ok_or(VMError::DecodeError)?;
+                let key_name: Name =
+                    decode_from_bytes(key_tlv.payload).map_err(|_| VMError::DecodeError)?;
+                let field = obj.get(key_name.as_ref()).ok_or(VMError::DecodeError)?;
+
+                match number {
+                    crate::syscalls::SYSCALL_JSON_GET_I64 => {
+                        let n = match field {
+                            njson::Value::Number(njson::native::Number::I64(v)) => *v,
+                            njson::Value::Number(njson::native::Number::U64(v)) => {
+                                i64::try_from(*v).map_err(|_| VMError::DecodeError)?
+                            }
+                            _ => return Err(VMError::DecodeError),
+                        };
+                        vm.set_register(10, n as u64);
+                        Ok(0)
+                    }
+                    crate::syscalls::SYSCALL_JSON_GET_JSON => {
+                        let out_json =
+                            Json::from_norito_value_ref(field).map_err(|_| VMError::DecodeError)?;
+                        let body =
+                            norito::to_bytes(&out_json).map_err(|_| VMError::NoritoInvalid)?;
+                        let mut out = Vec::with_capacity(7 + body.len() + 32);
+                        out.extend_from_slice(&(PointerType::Json as u16).to_be_bytes());
+                        out.push(1);
+                        out.extend_from_slice(&(body.len() as u32).to_be_bytes());
+                        out.extend_from_slice(&body);
+                        let h: [u8; 32] = CryptoHash::new(&body).into();
+                        out.extend_from_slice(&h);
+                        let p = vm.alloc_input_tlv(&out)?;
+                        vm.set_register(10, p);
+                        Ok(0)
+                    }
+                    crate::syscalls::SYSCALL_JSON_GET_NAME => {
+                        let raw = field.as_str().ok_or(VMError::DecodeError)?;
+                        let nm = Name::from_str(raw).map_err(|_| VMError::DecodeError)?;
+                        let body = norito::to_bytes(&nm).map_err(|_| VMError::NoritoInvalid)?;
+                        let mut out = Vec::with_capacity(7 + body.len() + 32);
+                        out.extend_from_slice(&(PointerType::Name as u16).to_be_bytes());
+                        out.push(1);
+                        out.extend_from_slice(&(body.len() as u32).to_be_bytes());
+                        out.extend_from_slice(&body);
+                        let h: [u8; 32] = CryptoHash::new(&body).into();
+                        out.extend_from_slice(&h);
+                        let p = vm.alloc_input_tlv(&out)?;
+                        vm.set_register(10, p);
+                        Ok(0)
+                    }
+                    crate::syscalls::SYSCALL_JSON_GET_ACCOUNT_ID => {
+                        let raw = field.as_str().ok_or(VMError::DecodeError)?;
+                        let acct = AccountId::from_str(raw).map_err(|_| VMError::DecodeError)?;
+                        let body = norito::to_bytes(&acct).map_err(|_| VMError::NoritoInvalid)?;
+                        let mut out = Vec::with_capacity(7 + body.len() + 32);
+                        out.extend_from_slice(&(PointerType::AccountId as u16).to_be_bytes());
+                        out.push(1);
+                        out.extend_from_slice(&(body.len() as u32).to_be_bytes());
+                        out.extend_from_slice(&body);
+                        let h: [u8; 32] = CryptoHash::new(&body).into();
+                        out.extend_from_slice(&h);
+                        let p = vm.alloc_input_tlv(&out)?;
+                        vm.set_register(10, p);
+                        Ok(0)
+                    }
+                    crate::syscalls::SYSCALL_JSON_GET_NFT_ID => {
+                        let raw = field.as_str().ok_or(VMError::DecodeError)?;
+                        let nft = NftId::from_str(raw).map_err(|_| VMError::DecodeError)?;
+                        let body = norito::to_bytes(&nft).map_err(|_| VMError::NoritoInvalid)?;
+                        let mut out = Vec::with_capacity(7 + body.len() + 32);
+                        out.extend_from_slice(&(PointerType::NftId as u16).to_be_bytes());
+                        out.push(1);
+                        out.extend_from_slice(&(body.len() as u32).to_be_bytes());
+                        out.extend_from_slice(&body);
+                        let h: [u8; 32] = CryptoHash::new(&body).into();
+                        out.extend_from_slice(&h);
+                        let p = vm.alloc_input_tlv(&out)?;
+                        vm.set_register(10, p);
+                        Ok(0)
+                    }
+                    crate::syscalls::SYSCALL_JSON_GET_BLOB_HEX => {
+                        let raw = field.as_str().ok_or(VMError::DecodeError)?;
+                        let raw = raw.strip_prefix("0x").unwrap_or(raw);
+                        if raw.len() % 2 != 0 {
+                            return Err(VMError::DecodeError);
+                        }
+                        let bytes = hex::decode(raw).map_err(|_| VMError::DecodeError)?;
+                        let mut out = Vec::with_capacity(7 + bytes.len() + 32);
+                        out.extend_from_slice(&(PointerType::Blob as u16).to_be_bytes());
+                        out.push(1);
+                        out.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
+                        out.extend_from_slice(&bytes);
+                        let h: [u8; 32] = CryptoHash::new(&bytes).into();
+                        out.extend_from_slice(&h);
+                        let p = vm.alloc_input_tlv(&out)?;
+                        vm.set_register(10, p);
+                        Ok(0)
+                    }
+                    _ => Err(VMError::UnknownSyscall(number)),
+                }
+            }
+
             crate::syscalls::SYSCALL_NAME_DECODE => {
                 // r10 = &NoritoBytes (Norito-framed Name) -> r10 = &Name
                 let addr = vm.register(10);

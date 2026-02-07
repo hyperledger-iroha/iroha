@@ -1,0 +1,15 @@
+{
+  "bundle_path": "fixtures/sorafs_manifest/ci_sample/manifest.bundle.json",
+  "bundle_token_hash_blake3_hex": "ba45ccab7bd538b3dd3a99e8bb97238fab27e9b6164e22bb38789766b0e933a6",
+  "bundle_token_source": "inline",
+  "chunk_digest_sha3_256_hex": "d2ea766eacaf9b2eab29bc6d04f31080e96af19be6194ff5dcf97c34a3fa1f04",
+  "chunk_plan_chunk_count": 1,
+  "chunk_plan_source": "fixtures/sorafs_manifest/ci_sample/chunk_plan.json",
+  "manifest_blake3_hex": "ce8d3996435aeaa15e2685d48ba095911cf78b80ab291fb0a4aeaa36b657e8e0",
+  "manifest_path": "fixtures/sorafs_manifest/ci_sample/manifest.to",
+  "public_key_hex": "7d8382abaa60016c86234d098cdb0f216bcd67cd05a55ca1dee1fcfb176e7e1f",
+  "public_key_source": "bundle:fixtures/sorafs_manifest/ci_sample/manifest.bundle.json",
+  "signature_hex": "994cd4edc5dbc049209c1bf2a6f7321616d81fcb0db7b6710019491e9d9d2815add62318d7ba2a86a44c195de0656220080b127a05604c5810fd478b4f2e300f",
+  "signature_source": "bundle:fixtures/sorafs_manifest/ci_sample/manifest.bundle.json",
+  "verification_status": "ok"
+}

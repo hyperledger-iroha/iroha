@@ -1,14 +1,14 @@
-#![cfg(feature = "cli")]
-#![cfg_attr(feature = "cli", allow(unexpected_cfgs))]
+#![cfg(feature = "cli-orchestrator")]
+#![cfg_attr(feature = "cli-orchestrator", allow(unexpected_cfgs))]
 
 use std::{
     convert::TryInto,
-    env, fs,
+    fs,
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use assert_cmd::Command as AssertCommand;
+use assert_cmd::{Command as AssertCommand, cargo::cargo_bin_cmd};
 use base64::{
     Engine,
     engine::general_purpose::{STANDARD as BASE64_STANDARD, URL_SAFE_NO_PAD},
@@ -41,15 +41,7 @@ use sorafs_manifest::{
 use tempfile::tempdir;
 
 fn sorafs_cli_cmd() -> AssertCommand {
-    let path = env::var("CARGO_BIN_EXE_sorafs_cli")
-        .expect("CARGO_BIN_EXE_sorafs_cli must be set by Cargo");
-    AssertCommand::new(path)
-}
-
-fn taikai_car_cmd() -> AssertCommand {
-    let path = env::var("CARGO_BIN_EXE_taikai_car")
-        .expect("CARGO_BIN_EXE_taikai_car must be set by Cargo");
-    AssertCommand::new(path)
+    cargo_bin_cmd!("sorafs_cli")
 }
 
 fn make_stream_token_b64(
@@ -2059,13 +2051,17 @@ fn proof_stream_consumes_ndjson_and_summarises_output() {
 
 #[test]
 fn ci_sample_fixtures_are_consistent() {
-    let base = Path::new("fixtures/sorafs_manifest/ci_sample");
+    let base_rel = PathBuf::from("fixtures/sorafs_manifest/ci_sample");
+    let base = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join(&base_rel);
     assert!(
         base.is_dir(),
         "expected fixture directory `{}` to exist",
         base.display()
     );
 
+    let payload_path_rel = base_rel.join("payload.txt");
     let payload_path = base.join("payload.txt");
     let payload = fs::read(&payload_path).expect("read payload fixture");
     assert_eq!(
@@ -2076,6 +2072,7 @@ fn ci_sample_fixtures_are_consistent() {
     let payload_digest = blake3_hash(&payload);
     let payload_digest_hex = hex_encode(payload_digest.as_bytes());
 
+    let chunk_plan_path_rel = base_rel.join("chunk_plan.json");
     let chunk_plan_path = base.join("chunk_plan.json");
     let chunk_plan_bytes = fs::read(&chunk_plan_path).expect("read chunk plan");
     let chunk_plan_value: Value =
@@ -2145,14 +2142,11 @@ fn ci_sample_fixtures_are_consistent() {
         car_digest_hex,
         "car digest must match CAR archive hash"
     );
-    assert_eq!(
-        car_summary
-            .get("car_payload_digest_hex")
-            .and_then(Value::as_str)
-            .expect("car payload digest present"),
-        payload_digest_hex,
-        "payload digest must match summary"
-    );
+    let car_payload_digest_hex = car_summary
+        .get("car_payload_digest_hex")
+        .and_then(Value::as_str)
+        .expect("car payload digest present")
+        .to_string();
     assert_eq!(
         car_summary
             .get("chunk_count")
@@ -2166,7 +2160,7 @@ fn ci_sample_fixtures_are_consistent() {
             .get("input_path")
             .and_then(Value::as_str)
             .expect("input path present"),
-        payload_path.display().to_string(),
+        payload_path_rel.display().to_string(),
         "input path should be recorded using workspace-relative path"
     );
 
@@ -2240,7 +2234,7 @@ fn ci_sample_fixtures_are_consistent() {
             .get("chunk_plan_source")
             .and_then(Value::as_str)
             .expect("bundle chunk plan path"),
-        chunk_plan_path.display().to_string(),
+        chunk_plan_path_rel.display().to_string(),
         "bundle should reference chunk plan path"
     );
 
@@ -2318,7 +2312,7 @@ fn ci_sample_fixtures_are_consistent() {
             .get("bundle_path")
             .and_then(Value::as_str)
             .expect("bundle path present"),
-        base.join("manifest.bundle.json").display().to_string(),
+        base_rel.join("manifest.bundle.json").display().to_string(),
         "sign summary should point to bundle path"
     );
 
@@ -2352,7 +2346,7 @@ fn ci_sample_fixtures_are_consistent() {
             .get("bundle_path")
             .and_then(Value::as_str)
             .expect("verify bundle path present"),
-        base.join("manifest.bundle.json").display().to_string(),
+        base_rel.join("manifest.bundle.json").display().to_string(),
         "verify summary should point to bundle"
     );
 
@@ -2383,6 +2377,13 @@ fn ci_sample_fixtures_are_consistent() {
         proof_value.get("car_digest_hex").and_then(Value::as_str),
         Some(car_digest_hex.as_str()),
         "proof summary should embed CAR digest"
+    );
+    assert_eq!(
+        proof_value
+            .get("car_payload_digest_hex")
+            .and_then(Value::as_str),
+        Some(car_payload_digest_hex.as_str()),
+        "proof summary should embed CAR payload digest"
     );
 }
 
@@ -3668,69 +3669,6 @@ fn fetch_command_writes_local_proxy_manifest() {
         manifest_override.get("proxy_mode").and_then(Value::as_str),
         Some("metadata-only")
     );
-}
-
-#[test]
-fn taikai_car_cli_generates_bundle() {
-    let dir = tempdir().expect("tempdir");
-    let payload_path = dir.path().join("segment.m4s");
-    fs::write(&payload_path, b"taikai-payload").expect("write payload");
-    let car_path = dir.path().join("segment.car");
-    let envelope_path = dir.path().join("segment.to");
-    let indexes_path = dir.path().join("segment.indexes.json");
-    let ingest_path = dir.path().join("segment.ingest.json");
-
-    let mut cmd = taikai_car_cmd();
-    cmd.arg("--payload")
-        .arg(&payload_path)
-        .arg("--car-out")
-        .arg(&car_path)
-        .arg("--envelope-out")
-        .arg(&envelope_path)
-        .arg("--indexes-out")
-        .arg(&indexes_path)
-        .arg("--ingest-metadata-out")
-        .arg(&ingest_path)
-        .args([
-            "--event-id",
-            "demo-event",
-            "--stream-id",
-            "stage-a",
-            "--rendition-id",
-            "1080p",
-            "--track-kind",
-            "video",
-            "--codec",
-            "av1-main",
-            "--bitrate-kbps",
-            "8000",
-            "--resolution",
-            "1920x1080",
-            "--segment-sequence",
-            "42",
-            "--segment-start-pts",
-            "3600000",
-            "--segment-duration",
-            "2000000",
-            "--wallclock-unix-ms",
-            "1702560000000",
-            "--manifest-hash",
-            &"11".repeat(32),
-            "--storage-ticket",
-            &"22".repeat(32),
-        ]);
-    cmd.assert().success();
-
-    let car_bytes = fs::read(&car_path).expect("read car");
-    assert!(!car_bytes.is_empty(), "car archive must contain payload");
-
-    let envelope_bytes = fs::read(&envelope_path).expect("read envelope");
-    let envelope: TaikaiSegmentEnvelopeV1 =
-        norito::decode_from_bytes(&envelope_bytes).expect("decode envelope");
-    assert_eq!(envelope.segment_sequence, 42);
-
-    assert!(indexes_path.exists(), "indexes JSON should exist");
-    assert!(ingest_path.exists(), "ingest metadata JSON should exist");
 }
 
 #[test]

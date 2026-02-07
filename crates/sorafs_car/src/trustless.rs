@@ -192,7 +192,7 @@ impl TrustlessVerificationOutcome {
     /// Hex-encoded payload digest.
     #[must_use]
     pub fn payload_digest_hex(&self) -> String {
-        hex_encode(self.report.stats.car_payload_digest.as_bytes())
+        hex_encode(self.report.chunk_store.payload_digest().as_bytes())
     }
 
     /// Hex-encoded chunk plan digest (SHA3-256).
