@@ -31,10 +31,10 @@ pub(super) fn canonicalize_roster_for_mode(
     consensus_mode: ConsensusMode,
 ) -> Vec<PeerId> {
     match consensus_mode {
-        // Permissioned roster hashes stay canonicalized for deterministic commit-QC validation.
-        ConsensusMode::Permissioned => canonicalize_roster(roster),
-        // NPoS bootstrap/recovery follows active topology ordering.
-        ConsensusMode::Npos => dedup_preserving_order(roster),
+        // Permissioned commit-QC roll-forward keeps active membership ordering stable.
+        ConsensusMode::Permissioned => dedup_preserving_order(roster),
+        // NPoS roster hashes remain canonicalized for deterministic stake-quorum validation.
+        ConsensusMode::Npos => canonicalize_roster(roster),
     }
 }
 
@@ -565,7 +565,7 @@ mod tests {
     }
 
     #[test]
-    fn canonicalize_roster_for_permissioned_sorts() {
+    fn canonicalize_roster_for_permissioned_preserves_order() {
         let first = PeerId::new(
             KeyPair::from_seed(b"roster-a".to_vec(), Algorithm::BlsNormal)
                 .public_key()
@@ -580,8 +580,7 @@ mod tests {
         let roster = vec![second.clone(), first.clone()];
         let canonical = canonicalize_roster_for_mode(roster, ConsensusMode::Permissioned);
 
-        let mut expected = vec![first, second];
-        expected.sort();
+        let expected = vec![second, first];
         assert_eq!(canonical, expected);
     }
 

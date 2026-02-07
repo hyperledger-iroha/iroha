@@ -32,7 +32,7 @@ use quinn::{
 };
 use rustls::{
     client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier},
-    pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer},
+    pki_types::{CertificateDer, PrivatePkcs8KeyDer},
 };
 use thiserror::Error;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -213,17 +213,16 @@ impl StreamingServer {
     /// Bind a QUIC listener on `addr` using the provided transport settings.
     pub async fn bind(addr: SocketAddr, settings: TransportConfigSettings) -> Result<Self> {
         let rcgen::CertifiedKey { cert, signing_key } =
-            rcgen::generate_simple_self_signed(vec!["nsc.local".into()])
+            rcgen::generate_simple_self_signed(["nsc.local".to_owned()])
                 .map_err(|e| Error::TlsServer(e.to_string()))?;
-        let cert_der = cert.der().clone();
+        let cert_der = cert.der().clone().into_owned();
+        let priv_key = PrivatePkcs8KeyDer::from(signing_key.serialize_der());
 
-        let cert_chain = vec![cert_der];
-        let priv_key: PrivateKeyDer<'static> =
-            PrivateKeyDer::from(PrivatePkcs8KeyDer::from(signing_key.serialize_der())).clone_key();
-
-        let mut rustls_config = rustls::ServerConfig::builder()
+        let mut rustls_config = rustls::ServerConfig::builder_with_protocol_versions(&[
+            &rustls::version::TLS13,
+        ])
             .with_no_client_auth()
-            .with_single_cert(cert_chain, priv_key)
+            .with_single_cert(vec![cert_der], priv_key.into())
             .map_err(|e| Error::TlsServer(e.to_string()))?;
         rustls_config.max_early_data_size = u32::MAX;
         rustls_config.alpn_protocols = vec![ALPN.to_vec()];
@@ -253,7 +252,10 @@ impl StreamingServer {
             .accept()
             .await
             .ok_or_else(|| Error::ProtocolViolation("listener closed".into()))?;
-        let connection = incoming.await?;
+        let connecting = incoming
+            .accept()
+            .map_err(|e| std::io::Error::other(format!("listener accept failed: {e}")))?;
+        let connection = connecting.await?;
         StreamingConnection::new(connection, EndpointRole::Publisher, self.settings).await
     }
 
@@ -724,7 +726,10 @@ fn parse_multiaddr(addr: &str) -> Result<ParsedMultiaddr> {
             Ok(ParsedMultiaddr {
                 host: IpAddr::V4(ip),
                 port,
-                server_name: host.to_string(),
+                // Use a stable SNI value. The streaming transport currently uses a self-signed
+                // certificate and disables certificate verification, so SNI is advisory but must
+                // still be a syntactically valid DNS name for the QUIC stack.
+                server_name: "nsc.local".to_string(),
             })
         }
         "ip6" => {
@@ -738,7 +743,7 @@ fn parse_multiaddr(addr: &str) -> Result<ParsedMultiaddr> {
             Ok(ParsedMultiaddr {
                 host: IpAddr::V6(ip),
                 port,
-                server_name: host.to_string(),
+                server_name: "nsc.local".to_string(),
             })
         }
         other => Err(Error::UnsupportedProtocol(other.into())),
@@ -820,8 +825,10 @@ impl ServerCertVerifier for NoCertificateVerification {
     fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
         vec![
             rustls::SignatureScheme::ECDSA_NISTP256_SHA256,
+            rustls::SignatureScheme::ECDSA_NISTP384_SHA384,
             rustls::SignatureScheme::ED25519,
             rustls::SignatureScheme::RSA_PSS_SHA256,
+            rustls::SignatureScheme::RSA_PKCS1_SHA256,
         ]
     }
 }
@@ -909,7 +916,17 @@ mod tests {
         let server_task = {
             let server = server.clone();
             async move {
-                let mut conn = within("server.accept", server.accept()).await.expect("accept");
+                let incoming = within("endpoint.accept", server.endpoint.accept())
+                    .await
+                    .expect("incoming");
+                let connecting = incoming.accept().expect("incoming.accept");
+                let connection = within("server.handshake", connecting).await.expect("handshake");
+                let mut conn = within(
+                    "server.streaming_conn",
+                    StreamingConnection::new(connection, EndpointRole::Publisher, settings),
+                )
+                .await
+                .expect("streaming conn");
                 let publisher_caps = TransportCapabilities {
                     max_segment_datagram_size: settings.max_datagram_size as u16,
                     ..TransportCapabilities::kyber768_default()
@@ -969,15 +986,41 @@ mod tests {
         };
 
         let viewer_task = async {
-            let mut client = within(
-                "client.connect",
-                StreamingClient::connect(
-                    &format!("/ip4/127.0.0.1/udp/{}/quic", listen_addr.port()),
-                    settings,
-                ),
+            let multiaddr = format!("/ip4/127.0.0.1/udp/{}/quic", listen_addr.port());
+            let parsed = parse_multiaddr(&multiaddr).expect("multiaddr");
+            let mut endpoint = Endpoint::client("0.0.0.0:0".parse().unwrap()).expect("endpoint");
+
+            let verifier: Arc<dyn ServerCertVerifier> = Arc::new(NoCertificateVerification);
+            let mut tls_config = rustls::ClientConfig::builder()
+                .dangerous()
+                .with_custom_certificate_verifier(verifier)
+                .with_no_client_auth();
+            tls_config.enable_early_data = true;
+            tls_config.alpn_protocols = vec![ALPN.to_vec()];
+            let tls_config = Arc::new(tls_config);
+            let crypto = QuinnRustlsClientConfig::try_from(Arc::clone(&tls_config))
+                .expect("tls config");
+            let mut client_config = ClientConfig::new(Arc::new(crypto));
+            let transport = build_transport_config(settings).expect("transport");
+            client_config.transport_config(transport);
+            endpoint.set_default_client_config(client_config);
+
+            let server_addr = SocketAddr::new(parsed.host, parsed.port);
+            let connecting = endpoint
+                .connect(server_addr, &parsed.server_name)
+                .expect("connect start");
+            let connection = within("client.handshake", connecting).await.expect("handshake");
+            let connection = within(
+                "client.streaming_conn",
+                StreamingConnection::new(connection, EndpointRole::Viewer, settings),
             )
             .await
-            .expect("client");
+            .expect("streaming conn");
+
+            let mut client = StreamingClient {
+                endpoint,
+                connection,
+            };
 
             let recorded_hash = Arc::new(std::sync::Mutex::new(None));
             let max_size =

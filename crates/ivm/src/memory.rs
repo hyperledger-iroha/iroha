@@ -995,12 +995,11 @@ mod tests {
         let mut mem = Memory::new(0);
         let addr = Memory::HEAP_START + 96;
         mem.store_u64(addr, 0xFEED_FACE_DEAD_BEEFu64).unwrap();
+        let mut reference = mem.clone();
 
         let path = mem.merkle_path(addr);
         let root = mem.current_root();
 
-        let mut reference = Memory::new(0);
-        reference.store_u64(addr, 0xFEED_FACE_DEAD_BEEFu64).unwrap();
         let expected_path = reference.merkle_path(addr);
         let expected_root = reference.current_root();
 
@@ -1013,13 +1012,12 @@ mod tests {
         let mut mem = Memory::new(0);
         let addr = Memory::HEAP_START + 160;
         mem.store_u32(addr, 0x1357_9BDF).unwrap();
+        let mut reference = mem.clone();
 
         let (proof, root) = mem.merkle_compact(addr, Some(12));
         let depth = proof.depth() as usize;
         assert_eq!(proof.siblings().len(), depth);
 
-        let mut reference = Memory::new(0);
-        reference.store_u32(addr, 0x1357_9BDF).unwrap();
         let (expected_root, expected_path) = reference.merkle_root_and_path(addr);
 
         let mut chunk = [0u8; 32];

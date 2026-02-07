@@ -80,22 +80,6 @@ const VOTE_VERIFY_POP_CACHE_MAX: usize = 64;
 const VOTE_VERIFY_TOPOLOGY_CACHE_MAX: usize = 64;
 
 impl Actor {
-    fn align_roster_to_active_membership(
-        &self,
-        roster: Vec<PeerId>,
-        active: &[PeerId],
-    ) -> Vec<PeerId> {
-        if roster.len() != active.len() {
-            return roster;
-        }
-        let roster_set: BTreeSet<_> = roster.iter().cloned().collect();
-        let active_set: BTreeSet<_> = active.iter().cloned().collect();
-        if roster_set != active_set {
-            return roster;
-        }
-        active.to_vec()
-    }
-
     pub(super) fn cached_vote_verify_pops(
         &mut self,
         roster: &Vec<PeerId>,
@@ -2119,8 +2103,6 @@ impl Actor {
             return None;
         }
         roster = super::roster::canonicalize_roster_for_mode(roster, consensus_mode);
-        let active = self.active_topology_with_genesis_fallback(&view, consensus_mode);
-        roster = self.align_roster_to_active_membership(roster, &active);
         Some(roster)
     }
 
@@ -2222,8 +2204,6 @@ impl Actor {
                     return None;
                 }
                 roster = super::roster::canonicalize_roster_for_mode(roster, consensus_mode);
-                let active = self.active_topology_with_genesis_fallback(&view, consensus_mode);
-                roster = self.align_roster_to_active_membership(roster, &active);
                 return Some(roster);
             }
             current_hash = hash_for_height(current_height)?;

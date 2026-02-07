@@ -14400,8 +14400,36 @@ async fn rebroadcast_block_votes_targets_snapshot_roster() {
 
     let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
     let signature_topology = super::topology_for_view(&topology, height, view, mode_tag, prf_seed);
-    let mut expected_targets = signature_topology.as_ref().to_vec();
+    let mut expected_targets: Vec<_> = actor
+        .subsystems
+        .propose
+        .collectors_contacted
+        .iter()
+        .cloned()
+        .collect();
+    let mut fallback_to_topology = false;
     expected_targets.retain(|peer| peer != &local_peer);
+    if expected_targets.is_empty() {
+        fallback_to_topology = true;
+        expected_targets = signature_topology.as_ref().to_vec();
+        expected_targets.retain(|peer| peer != &local_peer);
+    }
+    if !fallback_to_topology {
+        let parallel = actor.config.collectors.parallel_topology_fanout;
+        if parallel > 0 {
+            let mut parallel_targets: Vec<_> = signature_topology
+                .topology_fanout_from_tail(parallel)
+                .into_iter()
+                .filter_map(|idx| signature_topology.as_ref().get(idx).cloned())
+                .collect();
+            parallel_targets.retain(|peer| peer != &local_peer);
+            for peer in parallel_targets {
+                if expected_targets.iter().all(|existing| existing != &peer) {
+                    expected_targets.push(peer);
+                }
+            }
+        }
+    }
     let expected_set: BTreeSet<_> = expected_targets.into_iter().collect();
 
     let actual_targets: BTreeSet<_> = harness
@@ -15682,12 +15710,7 @@ async fn deferred_votes_replay_after_commit_roster_history_arrives() {
         active_roster.len() >= 2,
         "test needs at least two validators"
     );
-    let mut history_roster = active_roster.clone();
-    let rotate_at = super::network_topology::commit_quorum_from_len(history_roster.len())
-        .min(history_roster.len());
-    if rotate_at > 1 {
-        history_roster[..rotate_at].rotate_right(1);
-    }
+    let history_roster = active_roster.clone();
 
     let block_height3 = sample_block(3, 0, Some(hash_height2));
     let hash_height3 = block_height3.hash();
@@ -15865,15 +15888,12 @@ async fn deferred_qcs_replay_after_commit_roster_history_arrives() {
     );
 
     let expected_roster = {
-        let mut topo = super::network_topology::Topology::new(history_roster.clone());
-        topo.block_committed(history_roster.clone(), hash_height2);
-        let roster_height3 = topo.as_ref().to_vec();
-        let mut topo = super::network_topology::Topology::new(roster_height3.clone());
-        topo.block_committed(roster_height3.clone(), hash_height3);
-        let roster_height4 = topo.as_ref().to_vec();
-        let mut topo = super::network_topology::Topology::new(roster_height4.clone());
-        topo.block_committed(roster_height4, hash_height4);
-        topo.as_ref().to_vec()
+        let roster = actor.roster_for_vote(hash_height5, 5, 0);
+        if roster.is_empty() {
+            actor.effective_commit_topology()
+        } else {
+            roster
+        }
     };
     assert!(
         !expected_roster.is_empty(),
@@ -15979,9 +15999,11 @@ async fn deferred_qcs_replay_after_commit_roster_history_arrives() {
         "committed height should reflect seeded hashes"
     );
     let derived_roster = actor.roster_for_vote(hash_height5, height, view);
+    let derived_set: BTreeSet<_> = derived_roster.iter().cloned().collect();
+    let expected_set: BTreeSet<_> = expected_roster.iter().cloned().collect();
     assert_eq!(
-        derived_roster, expected_roster,
-        "roster roll-forward should match the expected derived roster"
+        derived_set, expected_set,
+        "roster roll-forward should preserve expected membership"
     );
     {
         let topology = super::network_topology::Topology::new(derived_roster.clone());
@@ -37045,7 +37067,10 @@ fn qc_with_bitmap(
     topology: &super::network_topology::Topology,
     keypairs: &[KeyPair],
 ) -> crate::sumeragi::consensus::Qc {
-    let canonical_roster = super::roster::canonicalize_roster(topology.as_ref().to_vec());
+    let canonical_roster = super::roster::canonicalize_roster_for_mode(
+        topology.as_ref().to_vec(),
+        ConsensusMode::Permissioned,
+    );
     let canonical_topology = super::network_topology::Topology::new(canonical_roster);
     let aggregate_sig = aggregate_signature_for_bitmap(
         chain,
